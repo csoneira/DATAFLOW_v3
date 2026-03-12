@@ -134,6 +134,7 @@ try:
         _derived_feature_columns as _shared_derived_feature_columns,
         _normalize_derived_physics_features,
         estimate_from_dataframes,
+        load_distance_definition,
         resolve_inverse_mapping_cfg,
     )
     from feature_columns_config import (  # noqa: E402
@@ -1749,7 +1750,7 @@ def _plot_flux_recovery_story_real(
     flux_reference_label: str,
     out_path: Path,
 ) -> None:
-    """STEP 3.3-like story using real-data inferred quantities, prefixed by best distance."""
+    """Match STEP 3.3 diagnostics scheme for real data (no simulated/reference curves)."""
 
     def _apply_striped_background(ax: plt.Axes, y_vals: np.ndarray) -> None:
         y_min, y_max = ax.get_ylim()
@@ -1783,6 +1784,21 @@ def _plot_flux_recovery_story_real(
             idx += 1
         ax.set_ylim(y_min, y_max)
 
+    from matplotlib.ticker import FuncFormatter, MaxNLocator
+
+    def _eff_display_name(col: str) -> str:
+        text = str(col).strip()
+        for prefix in ("est_", "corrected_", "true_"):
+            if text.startswith(prefix):
+                text = text[len(prefix):]
+        match = re.match(r"^eff_sim_(\d+)$", text)
+        if match is not None:
+            return f"Eff {match.group(1)}"
+        return text.replace("_", " ")
+
+    # Kept in signature for backward compatibility; intentionally not used in real-data story.
+    del flux_reference_series, flux_reference_label
+
     xv = x.to_numpy()
     distance = (
         pd.to_numeric(distance_series, errors="coerce").to_numpy(dtype=float)
@@ -1808,18 +1824,12 @@ def _plot_flux_recovery_story_real(
         if flux_unc_series is not None
         else None
     )
-    flux_ref = (
-        pd.to_numeric(flux_reference_series, errors="coerce").to_numpy(dtype=float)
-        if flux_reference_series is not None
-        else None
-    )
 
     valid_any = (
         np.isfinite(distance).any()
         or eff_any_finite
         or np.isfinite(rate).any()
         or np.isfinite(flux_est).any()
-        or (flux_ref is not None and np.isfinite(flux_ref).any())
     )
     if not valid_any:
         _plot_placeholder(
@@ -1832,15 +1842,15 @@ def _plot_flux_recovery_story_real(
     fig, axes = plt.subplots(
         4,
         1,
-        figsize=(11.6, 9.8),
+        figsize=(11.6, 10.6),
         sharex=True,
-        gridspec_kw={"height_ratios": [0.9, 1.0, 1.0, 1.15]},
+        gridspec_kw={"height_ratios": [0.85, 1.0, 1.05, 1.25]},
     )
     for ax in axes:
         ax.set_facecolor("#FFFFFF")
         ax.grid(True, alpha=0.24)
 
-    # 1) Best dictionary distance.
+    # 1) Feature-space distance quality metric.
     m_dist = np.isfinite(xv) & np.isfinite(distance)
     if np.any(m_dist):
         order = np.argsort(xv[m_dist])
@@ -1849,100 +1859,124 @@ def _plot_flux_recovery_story_real(
         axes[0].plot(
             xd,
             yd,
-            color="#9467BD",
-            linewidth=1.15,
-            marker="o",
-            markersize=2.8,
-            markerfacecolor="#9467BD",
-            markeredgewidth=0.0,
-            alpha=0.88,
-            label=f"Best dictionary distance ({distance_label})",
+            color="#6A3D9A",
+            linewidth=2.1,
+            alpha=0.95,
+            solid_capstyle="round",
+            label=(distance_label if str(distance_label).strip() else "distance"),
         )
+        _apply_striped_background(axes[0], yd)
+        axes[0].legend(loc="best", fontsize=8, framealpha=0.92, facecolor="white")
     else:
-        axes[0].text(0.5, 0.5, f"No finite values for {distance_label}", ha="center", va="center")
-    axes[0].set_ylabel("Best distance")
-    _apply_striped_background(axes[0], distance)
-    _legend_if_labeled(axes[0], loc="best", fontsize=8)
+        axes[0].text(0.5, 0.5, "No finite distance values", ha="center", va="center")
+    axes[0].set_ylabel("Distance")
+    axes[0].set_title(
+        f"Feature-space distance (quality) [{distance_label}]"
+        if str(distance_label).strip()
+        else "Feature-space distance (quality)"
+    )
 
-    # 2) Estimated efficiencies (all available planes).
-    eff_colors = ["#FF7F0E", "#1F77B4", "#2CA02C", "#9467BD", "#8C564B", "#17BECF"]
-    n_eff_drawn = 0
-    for i, (label, eff_vals) in enumerate(eff_curves):
-        m_eff = np.isfinite(xv) & np.isfinite(eff_vals)
-        if not np.any(m_eff):
-            continue
-        order = np.argsort(xv[m_eff])
-        xe = xv[m_eff][order]
-        ye = eff_vals[m_eff][order]
-        axes[1].plot(
-            xe,
-            ye,
-            color=eff_colors[i % len(eff_colors)],
-            linewidth=1.05,
-            marker="o",
-            markersize=2.7,
-            markerfacecolor="white",
-            markeredgewidth=0.60,
-            alpha=0.90,
-            label=f"Estimated efficiency ({label})",
-        )
-        n_eff_drawn += 1
-    if n_eff_drawn == 0:
-        axes[1].text(0.5, 0.5, "No finite estimated efficiency values", ha="center", va="center")
-    axes[1].set_ylabel("Estimated eff")
-    _apply_striped_background(axes[1], eff_bg)
-    _legend_if_labeled(axes[1], loc="best", fontsize=8, ncol=2)
-
-    # 3) Global rate.
+    # 2) Global rate.
+    rate_bg: list[np.ndarray] = []
     m_rate = np.isfinite(xv) & np.isfinite(rate)
     if np.any(m_rate):
         order = np.argsort(xv[m_rate])
         xr = xv[m_rate][order]
         yr = rate[m_rate][order]
-        axes[2].plot(
+        rate_bg.append(yr)
+        axes[1].plot(
             xr,
             yr,
             color="#2E8B57",
-            linewidth=2.4,
-            alpha=0.46,
+            linewidth=2.6,
+            alpha=0.95,
             solid_capstyle="round",
             label=f"Global rate ({global_rate_label})",
         )
     else:
-        axes[2].text(0.5, 0.5, f"No finite values for {global_rate_label}", ha="center", va="center")
-    axes[2].set_ylabel("Global rate")
-    _apply_striped_background(axes[2], rate)
-    _legend_if_labeled(axes[2], loc="best", fontsize=8)
+        axes[1].text(0.5, 0.5, f"No finite values for {global_rate_label}", ha="center", va="center")
+    axes[1].set_ylabel("Global rate [Hz]")
+    axes[1].set_title("Global rate time series")
+    if rate_bg:
+        _apply_striped_background(axes[1], np.concatenate(rate_bg))
+    axes[1].yaxis.set_major_locator(MaxNLocator(integer=True))
+    axes[1].yaxis.set_major_formatter(FuncFormatter(lambda v, _pos: f"{int(np.rint(v))}"))
+    _legend_if_labeled(axes[1], loc="best", fontsize=8, framealpha=0.92, facecolor="white")
 
-    # 4) Estimated flux (+ uncertainty), with optional real-data-derived reference.
-    m_flux = np.isfinite(xv) & np.isfinite(flux_est)
-    if np.any(m_flux):
-        order = np.argsort(xv[m_flux])
-        xf = xv[m_flux][order]
-        yf = flux_est[m_flux][order]
-        axes[3].plot(
-            xf,
-            yf,
-            color="#D62728",
-            linewidth=1.3,
+    # 3) Efficiencies: estimated (all available planes).
+    eff_palette = ["#1F77B4", "#FF7F0E", "#2CA02C", "#9467BD", "#8C564B", "#17BECF"]
+    eff_bg: list[np.ndarray] = []
+    for idx, (eff_col, eff_vals) in enumerate(eff_curves):
+        color = eff_palette[idx % len(eff_palette)]
+        eff_name = _eff_display_name(eff_col)
+        m_est = np.isfinite(xv) & np.isfinite(eff_vals)
+        if not np.any(m_est):
+            continue
+        order = np.argsort(xv[m_est])
+        xs = xv[m_est][order]
+        ys = eff_vals[m_est][order]
+        eff_bg.append(ys)
+        axes[2].plot(
+            xs,
+            ys,
+            color=color,
+            linewidth=1.9,
+            linestyle="-",
+            alpha=0.97,
             marker="o",
-            markersize=3.0,
-            markerfacecolor="#D62728",
-            markeredgewidth=0.0,
-            alpha=0.88,
-            label="Estimated reconstructed flux",
+            markersize=2.7,
+            markerfacecolor=color,
+            markeredgecolor="white",
+            markeredgewidth=0.35,
+            label=f"{eff_name} est",
+        )
+    axes[2].set_ylabel("Efficiency")
+    axes[2].set_title("Efficiencies: estimated")
+    if eff_bg:
+        _apply_striped_background(axes[2], np.concatenate(eff_bg))
+    _legend_if_labeled(
+        axes[2],
+        loc="best",
+        fontsize=7,
+        ncol=4,
+        framealpha=0.92,
+        facecolor="white",
+        columnspacing=1.1,
+        handlelength=2.2,
+    )
+
+    # 4) Flux: estimated.
+    flux_color = "#D62728"
+    m_est_flux = np.isfinite(xv) & np.isfinite(flux_est)
+    flux_bg: list[np.ndarray] = [flux_est]
+    if np.any(m_est_flux):
+        order = np.argsort(xv[m_est_flux])
+        xe = xv[m_est_flux][order]
+        ye = flux_est[m_est_flux][order]
+        axes[3].plot(
+            xe,
+            ye,
+            color=flux_color,
+            linewidth=2.8,
+            marker="o",
+            markersize=4.4,
+            markerfacecolor=flux_color,
+            markeredgecolor="white",
+            markeredgewidth=0.45,
+            alpha=0.99,
+            label="Estimated flux",
             zorder=3,
         )
         if flux_unc is not None and len(flux_unc) == len(xv):
-            uf = np.abs(np.asarray(flux_unc, dtype=float)[m_flux][order])
-            valid_uf = np.isfinite(uf)
-            if np.any(valid_uf):
+            ue = np.abs(np.asarray(flux_unc, dtype=float)[m_est_flux][order])
+            valid_ue = np.isfinite(ue)
+            if np.any(valid_ue):
                 axes[3].fill_between(
-                    xf[valid_uf],
-                    yf[valid_uf] - uf[valid_uf],
-                    yf[valid_uf] + uf[valid_uf],
-                    color="#D62728",
-                    alpha=0.16,
+                    xe[valid_ue],
+                    ye[valid_ue] - ue[valid_ue],
+                    ye[valid_ue] + ue[valid_ue],
+                    color=flux_color,
+                    alpha=0.14,
                     linewidth=0.0,
                     label="Estimated ± uncertainty",
                     zorder=2,
@@ -1950,30 +1984,12 @@ def _plot_flux_recovery_story_real(
     else:
         axes[3].text(0.5, 0.5, "No finite estimated flux values", ha="center", va="center")
 
-    if flux_ref is not None and len(flux_ref) == len(xv):
-        m_ref = np.isfinite(xv) & np.isfinite(flux_ref)
-        if np.any(m_ref):
-            order = np.argsort(xv[m_ref])
-            xr = xv[m_ref][order]
-            yr = flux_ref[m_ref][order]
-            axes[3].plot(
-                xr,
-                yr,
-                color="#1F77B4",
-                linewidth=1.0,
-                linestyle="--",
-                alpha=0.62,
-                label=flux_reference_label,
-                zorder=1,
-            )
-
-    axes[3].set_ylabel("Estimated flux")
+    axes[3].set_ylabel("Flux")
     axes[3].set_xlabel(xlabel)
-    _apply_striped_background(
-        axes[3],
-        flux_est if np.isfinite(flux_est).any() else (flux_ref if flux_ref is not None else np.array([])),
-    )
-    _legend_if_labeled(axes[3], loc="best", fontsize=8)
+    axes[3].set_title("Flux: estimated")
+    if any(np.isfinite(arr).any() for arr in flux_bg):
+        _apply_striped_background(axes[3], np.concatenate([arr[np.isfinite(arr)] for arr in flux_bg if arr.size > 0]))
+    _legend_if_labeled(axes[3], loc="best", fontsize=8, framealpha=0.92, facecolor="white")
 
     if not has_time_axis and len(xv) > 0:
         xmin = float(np.nanmin(xv))
@@ -1982,7 +1998,7 @@ def _plot_flux_recovery_story_real(
             ax.set_xlim(xmin, xmax)
 
     fig.suptitle(
-        "Real-data story: best distance -> estimated efficiency -> global-rate response -> reconstructed flux",
+        "Feature-space quality and reconstruction diagnostics",
         fontsize=11,
     )
     fig.tight_layout()
@@ -2866,6 +2882,21 @@ def main() -> int:
             str(derived_tt_only_aggregation),
         )
 
+    dd = load_distance_definition(feature_columns)
+    if dd["available"]:
+        log.info(
+            "Loaded STEP 1.5 distance definition: %s (p=%.1f, k=%d, λ=%.2g, %d/%d active)",
+            dd["selected_mode"], dd["p_norm"], dd["optimal_k"],
+            dd["optimal_lambda"],
+            int(np.sum(dd["weights"] > 0)), len(feature_columns),
+        )
+        if interpolation_k is None or interpolation_k != dd["optimal_k"]:
+            log.info("Overriding interpolation_k %s → %d from distance definition.", interpolation_k, dd["optimal_k"])
+            interpolation_k = dd["optimal_k"]
+    else:
+        log.warning("STEP 1.5 distance definition not available: %s", dd.get("reason"))
+        dd = None
+
     est_df = estimate_from_dataframes(
         dict_df=dict_work,
         data_df=real_work,
@@ -2876,6 +2907,7 @@ def main() -> int:
         global_rate_col=global_rate_col,
         exclude_same_file=exclude_same_file,
         inverse_mapping_cfg=inverse_mapping_cfg_runtime,
+        distance_definition=dd,
     )
     eff_oos_masking_summary = est_df.attrs.get(
         "efficiency_feature_out_of_support_masking"
@@ -3353,6 +3385,8 @@ def main() -> int:
         "uncertainty_lut_csv": str(lut_path),
         "matching_criteria_source": "step_2_1",
         "distance_metric": distance_metric,
+        "distance_definition_used": dd is not None,
+        "distance_definition_mode": dd["selected_mode"] if dd is not None else None,
         "interpolation_k": interpolation_k,
         "inverse_mapping": inverse_mapping_cfg,
         "inverse_mapping_runtime_applied": inverse_mapping_cfg_runtime,

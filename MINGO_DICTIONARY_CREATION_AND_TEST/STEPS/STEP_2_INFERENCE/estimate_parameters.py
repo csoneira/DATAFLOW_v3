@@ -16,6 +16,7 @@ Notes: Keep behavior configuration-driven and reproducible.
 from __future__ import annotations
 
 from itertools import combinations
+import json
 import logging
 from pathlib import Path
 import re
@@ -27,6 +28,66 @@ import pandas as pd
 from feature_columns_config import parse_explicit_feature_columns
 
 log = logging.getLogger("estimate_parameters")
+
+# Default location of the STEP 1.5 distance-definition artifact,
+# relative to the STEP_2_INFERENCE directory (i.e. this file's parent).
+_INFERENCE_DIR = Path(__file__).resolve().parent
+_PIPELINE_DIR = _INFERENCE_DIR.parent
+DEFAULT_DISTANCE_DEFINITION_PATH = (
+    _PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_5_TUNE_DISTANCE_DEFINITION"
+    / "OUTPUTS" / "FILES" / "distance_definition.json"
+)
+
+
+def load_distance_definition(
+    feature_columns: list[str],
+    *,
+    path: Path | str | None = None,
+) -> dict:
+    """Load the STEP 1.5 distance-definition artifact and validate against *feature_columns*.
+
+    Returns a dict with keys:
+      available       – bool
+      center          – np.ndarray (only when available)
+      scale           – np.ndarray
+      weights         – np.ndarray
+      p_norm          – float
+      optimal_k       – int
+      optimal_lambda  – float
+      selected_mode   – str
+      reason          – str (only when *not* available)
+    """
+    dd_path = Path(path) if path is not None else DEFAULT_DISTANCE_DEFINITION_PATH
+    if not dd_path.exists():
+        return {"available": False, "reason": f"file_not_found ({dd_path})"}
+
+    dist_def = json.loads(dd_path.read_text(encoding="utf-8"))
+    dd_cols = dist_def.get("feature_columns", [])
+    dd_center = np.asarray(dist_def["center"], dtype=float)
+    dd_scale = np.asarray(dist_def["scale"], dtype=float)
+    dd_weights = np.asarray(
+        dist_def.get("weights", [1.0] * len(dd_cols)), dtype=float
+    )
+
+    if list(dd_cols) != list(feature_columns) or len(dd_center) != len(feature_columns):
+        return {
+            "available": False,
+            "reason": (
+                f"feature_mismatch: artifact has {len(dd_cols)} columns "
+                f"vs requested {len(feature_columns)}"
+            ),
+        }
+
+    return {
+        "available": True,
+        "center": dd_center,
+        "scale": dd_scale,
+        "weights": dd_weights,
+        "p_norm": float(dist_def.get("p_norm", 2.0)),
+        "optimal_k": int(dist_def.get("optimal_k", 5)),
+        "optimal_lambda": float(dist_def.get("optimal_lambda", 1e6)),
+        "selected_mode": dist_def.get("selected_mode", "unknown"),
+    }
 
 
 # =====================================================================
@@ -135,6 +196,45 @@ DISTANCE_FNS_MANY = {
     "chi2": _chi2_many,
     "poisson": _poisson_many,
 }
+
+
+def _weighted_lp_many(
+    sample: np.ndarray,
+    candidates: np.ndarray,
+    *,
+    weights: np.ndarray,
+    p_norm: float,
+    min_valid_dims: int = 2,
+) -> np.ndarray:
+    """Weighted Lp distance from one sample to many candidates.
+
+    ``weights`` and ``p_norm`` come from the STEP 1.5 distance-definition
+    artifact.  The formula is:
+
+        d = (Σ_i  w_i · |x_i − y_i|^p )^(1/p)
+
+    Features with zero weight are excluded.
+    """
+    mask = np.isfinite(sample)[None, :] & np.isfinite(candidates)
+    w = np.asarray(weights, dtype=float)
+    # Ignore features with zero weight
+    mask &= (w > 0.0)[None, :]
+    valid_counts = np.sum(mask, axis=1)
+    diff_abs = np.where(mask, np.abs(candidates - sample[None, :]), 0.0)
+    if p_norm == 1.0:
+        out = np.sum(w[None, :] * diff_abs, axis=1)
+    elif p_norm == 2.0:
+        out = np.sqrt(np.sum(w[None, :] * diff_abs * diff_abs, axis=1))
+    else:
+        out = np.power(
+            np.sum(w[None, :] * np.power(diff_abs, p_norm), axis=1),
+            1.0 / p_norm,
+        )
+    out = out.astype(float, copy=False)
+    min_dims = max(int(min_valid_dims), 1)
+    out[valid_counts < min_dims] = np.nan
+    return out
+
 
 RATE_HISTOGRAM_BIN_RE = re.compile(r"^events_per_second_(?P<bin>\d+)_rate_hz")
 
@@ -298,17 +398,37 @@ def compute_candidate_distances(
     histogram_distance_weight: float,
     histogram_distance_blend_mode: str,
     min_valid_non_hist_dims: int = 2,
+    dd_weights: np.ndarray | None = None,
+    dd_p_norm: float | None = None,
 ) -> np.ndarray:
     """
     Compute candidate distances with the same feature+histogram composition used
     by the estimator.
+
+    When *dd_weights* and *dd_p_norm* are supplied (from the STEP 1.5
+    distance-definition artifact), the weighted Lp metric is used for the
+    non-histogram features instead of the default ``distance_metric`` function.
     """
-    base = _distance_many(
-        sample_scaled_non_hist,
-        candidates_scaled_non_hist,
-        distance_metric=distance_metric,
-        min_valid_dims=max(int(min_valid_non_hist_dims), 1),
-    )
+    if (
+        dd_weights is not None
+        and dd_p_norm is not None
+        and sample_scaled_non_hist is not None
+        and candidates_scaled_non_hist is not None
+    ):
+        base = _weighted_lp_many(
+            sample_scaled_non_hist,
+            candidates_scaled_non_hist,
+            weights=dd_weights,
+            p_norm=dd_p_norm,
+            min_valid_dims=max(int(min_valid_non_hist_dims), 1),
+        )
+    else:
+        base = _distance_many(
+            sample_scaled_non_hist,
+            candidates_scaled_non_hist,
+            distance_metric=distance_metric,
+            min_valid_dims=max(int(min_valid_non_hist_dims), 1),
+        )
     hist = None
     if sample_hist_raw is not None and candidates_hist_raw is not None:
         hist = _histogram_emd_many(
@@ -1853,6 +1973,7 @@ def estimate_from_dataframes(
     derived_physics_features: Sequence[str] | str | bool | None = None,
     histogram_distance_weight: float = 1.0,
     histogram_distance_blend_mode: str = "normalized",
+    distance_definition: dict | None = None,
 ) -> pd.DataFrame:
     """Same as estimate_parameters but accepts DataFrames directly."""
 
@@ -2178,9 +2299,32 @@ def estimate_from_dataframes(
     dict_feature_raw_np = dict_features.to_numpy(dtype=float)
     data_feature_raw_np = data_features.to_numpy(dtype=float)
 
+    # ── Distance-definition artifact (STEP 1.5) ─────────────────────
+    dd_center: np.ndarray | None = None
+    dd_scale: np.ndarray | None = None
+    dd_weights: np.ndarray | None = None
+    dd_p_norm: float | None = None
+    _dd_non_hist_weights: np.ndarray | None = None  # weights restricted to non-hist features
+
+    if distance_definition is not None and distance_definition.get("available"):
+        dd_center = np.asarray(distance_definition["center"], dtype=float)
+        dd_scale = np.asarray(distance_definition["scale"], dtype=float)
+        dd_weights = np.asarray(distance_definition["weights"], dtype=float)
+        dd_p_norm = float(distance_definition["p_norm"])
+        n_active = int(np.sum(dd_weights > 0))
+        mode_name = distance_definition.get("selected_mode", "unknown")
+        log.info(
+            "Using STEP 1.5 distance definition: %s (p=%.1f, %d/%d active features)",
+            mode_name, dd_p_norm, n_active, len(feature_cols),
+        )
+
     # ── Scaling ──────────────────────────────────────────────────────
-    use_zscore = distance_metric == "l2_zscore"
-    if use_zscore:
+    if dd_center is not None and dd_scale is not None:
+        # Use STEP 1.5 center/scale instead of auto z-score
+        safe_scale = np.where(np.abs(dd_scale) > 1e-15, dd_scale, np.nan)
+        dict_scaled = ((dict_feature_raw_np - dd_center) / safe_scale)
+        data_scaled = ((data_feature_raw_np - dd_center) / safe_scale)
+    elif distance_metric == "l2_zscore":
         # Compute means and stds from the DICTIONARY (reference distribution)
         means = dict_features.mean(axis=0, skipna=True)
         stds = dict_features.std(axis=0, skipna=True).replace({0.0: np.nan})
@@ -2201,6 +2345,8 @@ def estimate_from_dataframes(
     if non_hist_feature_idx:
         dict_scaled_base = dict_scaled[:, non_hist_feature_idx]
         data_scaled_base = data_scaled[:, non_hist_feature_idx]
+        if dd_weights is not None:
+            _dd_non_hist_weights = dd_weights[non_hist_feature_idx]
     else:
         dict_scaled_base = np.empty((len(dict_df), 0), dtype=float)
         data_scaled_base = np.empty((len(data_df), 0), dtype=float)
@@ -2518,6 +2664,11 @@ def estimate_from_dataframes(
             )
             else None
         )
+        # Subset dd weights when using STEP 1.5 artifact
+        local_dd_weights = None
+        local_dd_p_norm = dd_p_norm
+        if _dd_non_hist_weights is not None and base_feature_idx_local.size > 0:
+            local_dd_weights = _dd_non_hist_weights[base_feature_idx_local]
         return compute_candidate_distances(
             distance_metric=distance_metric,
             sample_scaled_non_hist=sample_scaled_non_hist_local,
@@ -2527,6 +2678,8 @@ def estimate_from_dataframes(
             histogram_distance_weight=hist_distance_weight,
             histogram_distance_blend_mode=hist_distance_blend_mode,
             min_valid_non_hist_dims=1,
+            dd_weights=local_dd_weights,
+            dd_p_norm=local_dd_p_norm,
         )
 
     def _compute_stage2_candidate_distances(
@@ -2564,6 +2717,11 @@ def estimate_from_dataframes(
         if stage2_rate_feature_idx.size == 0 and sample_hist_local is None:
             return np.full(len(cand_indices_local), np.nan, dtype=float)
 
+        # Stage 2 uses rate-feature weights from STEP 1.5 if available
+        local_dd_weights_s2 = None
+        local_dd_p_norm_s2 = dd_p_norm
+        if _dd_non_hist_weights is not None and stage2_rate_feature_idx.size > 0:
+            local_dd_weights_s2 = _dd_non_hist_weights[stage2_rate_feature_idx]
         return compute_candidate_distances(
             distance_metric=distance_metric,
             sample_scaled_non_hist=sample_scaled_non_hist_local,
@@ -2573,6 +2731,8 @@ def estimate_from_dataframes(
             histogram_distance_weight=max(hist_weight_local, 0.0),
             histogram_distance_blend_mode=hist_distance_blend_mode,
             min_valid_non_hist_dims=1,
+            dd_weights=local_dd_weights_s2,
+            dd_p_norm=local_dd_p_norm_s2,
         )
 
     # ── Estimate for each dataset entry ──────────────────────────────

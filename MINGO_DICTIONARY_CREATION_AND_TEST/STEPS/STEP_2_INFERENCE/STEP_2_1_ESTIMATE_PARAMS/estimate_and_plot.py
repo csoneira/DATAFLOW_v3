@@ -26,6 +26,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from scipy.spatial import Delaunay
 
 # ── Paths ────────────────────────────────────────────────────────────
 STEP_DIR = Path(__file__).resolve().parent
@@ -293,11 +294,15 @@ def estimate(
 # =====================================================================
 
 def _plot_true_vs_estimated(result_df: pd.DataFrame, param_cols: list[str]) -> None:
-    """Scatter plot of true vs estimated for each parameter, in a single column."""
+    """Scatter plot of true vs estimated for each parameter, coloured by hull membership."""
     plot_cols = [pc for pc in param_cols
                  if f"est_{pc}" in result_df.columns and f"true_{pc}" in result_df.columns]
     if not plot_cols:
         return
+
+    has_hull = "in_coverage" in result_df.columns
+    if has_hull:
+        in_hull = result_df["in_coverage"].astype(bool).values
 
     n = len(plot_cols)
     fig, axes = plt.subplots(n, 1, figsize=(5, 4.5 * n), squeeze=False)
@@ -312,7 +317,18 @@ def _plot_true_vs_estimated(result_df: pd.DataFrame, param_cols: list[str]) -> N
             ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
             continue
 
-        ax.scatter(t[m], e[m], s=8, alpha=0.4, edgecolors="none")
+        if has_hull:
+            m_in = m & in_hull
+            m_out = m & ~in_hull
+            if np.any(m_in):
+                ax.scatter(t[m_in], e[m_in], s=8, alpha=0.4, color="#59A14F",
+                           edgecolors="none", label="In hull", zorder=1)
+            if np.any(m_out):
+                ax.scatter(t[m_out], e[m_out], s=12, alpha=0.7, color="#E15759",
+                           marker="x", linewidths=0.8, label="Outside hull", zorder=2)
+        else:
+            ax.scatter(t[m], e[m], s=8, alpha=0.4, edgecolors="none")
+
         lo = min(float(np.nanmin(t[m])), float(np.nanmin(e[m])))
         hi = max(float(np.nanmax(t[m])), float(np.nanmax(e[m])))
         pad = 0.05 * (hi - lo) if hi > lo else 0.1
@@ -332,6 +348,8 @@ def _plot_true_vs_estimated(result_df: pd.DataFrame, param_cols: list[str]) -> N
         ax.text(0.03, 0.97, f"RMSE={rmse:.4g}\nMAE={mae:.4g}",
                 transform=ax.transAxes, fontsize=7, va="top",
                 bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
+        if has_hull and i == 0:
+            ax.legend(fontsize=7, loc="lower right")
 
     fig.suptitle("True vs Estimated parameters", fontsize=11, y=1.0)
     fig.tight_layout()
@@ -363,12 +381,99 @@ def _plot_distance_distribution(result_df: pd.DataFrame) -> None:
     plt.close(fig)
 
 
+def _plot_hull_coverage(
+    dict_df: pd.DataFrame,
+    data_df: pd.DataFrame,
+    result_df: pd.DataFrame,
+    param_cols: list[str],
+) -> None:
+    """Lower-triangular pairwise scatter of parameters showing dictionary,
+    dataset-inside-hull, and dataset-outside-hull."""
+    if "in_coverage" not in result_df.columns:
+        return
+
+    in_mask = result_df["in_coverage"].astype(bool).values
+    out_mask = ~in_mask
+
+    # Use one row per param_set_id for dataset to avoid overplotting
+    data_plot = data_df.copy()
+    data_plot["_in_cov"] = in_mask
+    if "param_set_id" in data_plot.columns:
+        data_plot = data_plot.groupby("param_set_id").first().reset_index()
+        in_mask_plot = data_plot["_in_cov"].values
+        out_mask_plot = ~in_mask_plot
+    else:
+        in_mask_plot = in_mask
+        out_mask_plot = out_mask
+
+    n = len(param_cols)
+    fig, axes = plt.subplots(n - 1, n - 1, figsize=(3.2 * (n - 1), 3.2 * (n - 1)),
+                             squeeze=False)
+
+    # Hide upper triangle and diagonal
+    for r in range(n - 1):
+        for c in range(n - 1):
+            if c >= r + 1:
+                axes[r, c].set_visible(False)
+
+    for r in range(1, n):
+        for c in range(r):
+            ax = axes[r - 1, c]
+            yp = param_cols[r]
+            xp = param_cols[c]
+            # Dictionary
+            dx = pd.to_numeric(dict_df[xp], errors="coerce").values
+            dy = pd.to_numeric(dict_df[yp], errors="coerce").values
+            ax.scatter(dx, dy, s=18, alpha=0.5, color="#4C78A8",
+                       edgecolors="none", label="Dictionary", zorder=2)
+            # Dataset inside hull
+            sx_in = pd.to_numeric(data_plot.loc[in_mask_plot, xp], errors="coerce").values
+            sy_in = pd.to_numeric(data_plot.loc[in_mask_plot, yp], errors="coerce").values
+            ax.scatter(sx_in, sy_in, s=12, alpha=0.4, color="#59A14F",
+                       edgecolors="none", label="Dataset (in hull)", zorder=1)
+            # Dataset outside hull
+            sx_out = pd.to_numeric(data_plot.loc[out_mask_plot, xp], errors="coerce").values
+            sy_out = pd.to_numeric(data_plot.loc[out_mask_plot, yp], errors="coerce").values
+            ax.scatter(sx_out, sy_out, s=20, alpha=0.8, color="#E15759",
+                       marker="x", linewidths=1.0, label="Dataset (outside hull)", zorder=3)
+
+            ax.tick_params(labelsize=6)
+            ax.grid(True, alpha=0.12)
+            if r == n - 1:
+                ax.set_xlabel(xp.replace("_", " "), fontsize=7)
+            else:
+                ax.set_xticklabels([])
+            if c == 0:
+                ax.set_ylabel(yp.replace("_", " "), fontsize=7)
+            else:
+                ax.set_yticklabels([])
+
+    # Single legend
+    handles, labels = axes[n - 2, 0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper right", fontsize=8, framealpha=0.9)
+
+    n_in = int(in_mask_plot.sum()) if "param_set_id" in data_df.columns else int(in_mask.sum())
+    n_out = int(out_mask_plot.sum()) if "param_set_id" in data_df.columns else int(out_mask.sum())
+    fig.suptitle(
+        f"Parameter-space convex hull coverage\n"
+        f"Dictionary: {len(dict_df)}, Dataset inside: {n_in}, outside: {n_out}",
+        fontsize=10, y=1.02,
+    )
+    fig.tight_layout()
+    _save_figure(fig, PLOTS_DIR / "hull_coverage_params.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def _plot_error_vs_distance(result_df: pd.DataFrame, param_cols: list[str]) -> None:
-    """Scatter of estimation error vs best distance for each parameter."""
+    """Scatter of estimation error vs best distance for each parameter, coloured by hull membership."""
     plot_cols = [pc for pc in param_cols
                  if f"est_{pc}" in result_df.columns and f"true_{pc}" in result_df.columns]
     if not plot_cols:
         return
+
+    has_hull = "in_coverage" in result_df.columns
+    if has_hull:
+        in_hull = result_df["in_coverage"].astype(bool).values
 
     d = pd.to_numeric(result_df["best_distance"], errors="coerce").to_numpy(dtype=float)
     n = len(plot_cols)
@@ -384,12 +489,25 @@ def _plot_error_vs_distance(result_df: pd.DataFrame, param_cols: list[str]) -> N
             ax.set_title(pc, fontsize=9)
             continue
 
-        ax.scatter(d[m], err[m], s=8, alpha=0.4, edgecolors="none")
+        if has_hull:
+            m_in = m & in_hull
+            m_out = m & ~in_hull
+            if np.any(m_in):
+                ax.scatter(d[m_in], err[m_in], s=8, alpha=0.4, color="#59A14F",
+                           edgecolors="none", label="In hull", zorder=1)
+            if np.any(m_out):
+                ax.scatter(d[m_out], err[m_out], s=12, alpha=0.7, color="#E15759",
+                           marker="x", linewidths=0.8, label="Outside hull", zorder=2)
+        else:
+            ax.scatter(d[m], err[m], s=8, alpha=0.4, edgecolors="none")
+
         ax.set_xlabel("Best-match distance", fontsize=8)
         ax.set_ylabel(f"|Error| in {pc}", fontsize=8)
         ax.set_title(pc, fontsize=9)
         ax.tick_params(labelsize=7)
         ax.grid(True, alpha=0.15)
+        if has_hull and i == 0:
+            ax.legend(fontsize=7, loc="upper right")
 
     fig.suptitle("Estimation error vs best-match distance", fontsize=10, y=1.0)
     fig.tight_layout()
@@ -470,6 +588,7 @@ def main() -> int:
     dist_weights: np.ndarray | None = None
     dist_p_norm: float = 2.0
     dist_mode_name: str = "l2_standard_zscore_fallback"
+
     if DEFAULT_DISTANCE_DEFINITION.exists():
         dist_def = json.loads(DEFAULT_DISTANCE_DEFINITION.read_text(encoding="utf-8"))
         dd_cols = dist_def.get("feature_columns", [])
@@ -513,6 +632,25 @@ def main() -> int:
         k=k, idw_power=idw_power, ridge_lambda=ridge_lambda,
         center=dist_center, scale=dist_scale, weights=dist_weights, p_norm=dist_p_norm,
     )
+
+    # Flag entries outside dictionary convex hull in parameter space
+    dict_params_hull = dict_df[param_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+    data_params_hull = data_df[param_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+    try:
+        hull_delaunay = Delaunay(dict_params_hull)
+        simplex_ids = hull_delaunay.find_simplex(data_params_hull)
+        result_df["in_coverage"] = simplex_ids >= 0
+        n_out = int((simplex_ids < 0).sum())
+        if n_out > 0:
+            log.info(
+                "Coverage flag: %d / %d dataset entries are outside the dictionary convex hull in parameter space.",
+                n_out, len(result_df),
+            )
+        else:
+            log.info("All %d dataset entries are inside the dictionary convex hull.", len(result_df))
+    except Exception as exc:
+        log.warning("Convex hull computation failed (%s); skipping coverage flag.", exc)
+        hull_delaunay = None
 
     # Attach truth columns for validation
     truth_cols = [
@@ -559,6 +697,7 @@ def main() -> int:
     _plot_true_vs_estimated(result_df, param_cols)
     _plot_distance_distribution(result_df)
     _plot_error_vs_distance(result_df, param_cols)
+    _plot_hull_coverage(dict_df, data_df, result_df, param_cols)
 
     log.info("Done. %d OK, %d failed.", n_ok, n_fail)
     return 0

@@ -2,15 +2,12 @@
 """
 DATAFLOW_v3 Script Header v1
 Script: MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_1_TIME_SERIES_CREATION/create_time_series.py
-Purpose: STEP 3.1 — Random complete trajectory + event-based discretization.
+Purpose: STEP 3.1 — Generate smooth parameter-space trajectory and event-discretized time series.
 Owner: DATAFLOW_v3 contributors
 Sign-off: csoneira <csoneira@ucm.es>
-Last Updated: 2026-03-02
+Last Updated: 2026-03-12
 Runtime: python3
 Usage: python3 MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_1_TIME_SERIES_CREATION/create_time_series.py [options]
-Inputs: CLI args, config files, environment variables, and/or upstream files.
-Outputs: Files, logs, plots, or stdout/stderr side effects.
-Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations
@@ -18,57 +15,50 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import re
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.tri import LinearTriInterpolator, Triangulation
 import numpy as np
 import pandas as pd
 
+
 # ── Paths ────────────────────────────────────────────────────────────────
 STEP_DIR = Path(__file__).resolve().parent
-# Support both layouts:
-#   - <pipeline>/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_1_TIME_SERIES_CREATION
-#   - <pipeline>/STEPS/STEP_3_SYNTHETIC_TIME_SERIES/STEP_3_1_TIME_SERIES_CREATION
 if STEP_DIR.parents[1].name == "STEPS":
     PIPELINE_DIR = STEP_DIR.parents[2]
 else:
     PIPELINE_DIR = STEP_DIR.parents[1]
+
 if (PIPELINE_DIR / "STEP_1_SETUP").exists() and (PIPELINE_DIR / "STEP_2_INFERENCE").exists():
     STEP_ROOT = PIPELINE_DIR
 else:
     STEP_ROOT = PIPELINE_DIR / "STEPS"
-DEFAULT_CONFIG = PIPELINE_DIR / "config_method.json"
 
+DEFAULT_CONFIG = PIPELINE_DIR / "config_method.json"
 DEFAULT_DATASET = (
-    STEP_ROOT / "STEP_1_SETUP" / "STEP_1_4_ENSURE_CONTINUITY_DICTIONARY"
-    / "OUTPUTS" / "FILES" / "dataset.csv"
+    STEP_ROOT
+    / "STEP_1_SETUP"
+    / "STEP_1_4_ENSURE_CONTINUITY_DICTIONARY"
+    / "OUTPUTS"
+    / "FILES"
+    / "dataset.csv"
 )
 DEFAULT_DICTIONARY = (
-    STEP_ROOT / "STEP_1_SETUP" / "STEP_1_4_ENSURE_CONTINUITY_DICTIONARY"
-    / "OUTPUTS" / "FILES" / "dictionary.csv"
+    STEP_ROOT
+    / "STEP_1_SETUP"
+    / "STEP_1_4_ENSURE_CONTINUITY_DICTIONARY"
+    / "OUTPUTS"
+    / "FILES"
+    / "dictionary.csv"
 )
 
 FILES_DIR = STEP_DIR / "OUTPUTS" / "FILES"
 PLOTS_DIR = STEP_DIR / "OUTPUTS" / "PLOTS"
 FILES_DIR.mkdir(parents=True, exist_ok=True)
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
-
-_FIGURE_COUNTER = 0
-FIGURE_STEP_PREFIX = "3_1"
-
-
-def _save_figure(fig: plt.Figure, path: Path, **kwargs) -> None:
-    """Save figure with a per-script sequential numeric prefix."""
-    global _FIGURE_COUNTER
-    _FIGURE_COUNTER += 1
-    out_path = Path(path)
-    out_path = out_path.with_name(f"{FIGURE_STEP_PREFIX}_{_FIGURE_COUNTER}_{out_path.name}")
-    fig.savefig(out_path, **kwargs)
-
 
 _PLOT_EXTENSIONS = {
     ".png",
@@ -84,31 +74,32 @@ _PLOT_EXTENSIONS = {
     ".webp",
 }
 
-CANONICAL_TT_LABELS = frozenset(
-    {
-        "0",
-        "1",
-        "2",
-        "3",
-        "4",
-        "12",
-        "13",
-        "14",
-        "23",
-        "24",
-        "34",
-        "123",
-        "124",
-        "134",
-        "234",
-        "1234",
-    }
-)
-TT_RATE_COLUMN_RE = re.compile(r"^(?P<prefix>.+_tt)_(?P<label>[^_]+)_rate_hz$")
+_FIGURE_COUNTER = 0
+FIGURE_STEP_PREFIX = "3_1"
+
+logging.basicConfig(format="[%(levelname)s] STEP_3.1 — %(message)s", level=logging.INFO)
+log = logging.getLogger("STEP_3.1")
+
+CANONICAL_FLUX_COLUMN = "flux_cm2_min"
+CANONICAL_EFF_COLUMN = "eff_sim_1"
+DEFAULT_PARAM_CURVE_COLS = [
+    "flux_cm2_min",
+    "eff_sim_1",
+    "eff_sim_2",
+    "eff_sim_3",
+    "eff_sim_4",
+]
+
+
+def _save_figure(fig: plt.Figure, path: Path, **kwargs) -> None:
+    global _FIGURE_COUNTER
+    _FIGURE_COUNTER += 1
+    out = Path(path)
+    out = out.with_name(f"{FIGURE_STEP_PREFIX}_{_FIGURE_COUNTER}_{out.name}")
+    fig.savefig(out, **kwargs)
 
 
 def _clear_plots_dir() -> None:
-    """Remove previously generated plot files from the plots directory."""
     removed = 0
     for candidate in PLOTS_DIR.iterdir():
         if candidate.is_file() and candidate.suffix.lower() in _PLOT_EXTENSIONS:
@@ -119,21 +110,13 @@ def _clear_plots_dir() -> None:
                 log.warning("Could not remove old plot file %s: %s", candidate, exc)
     log.info("Cleared %d plot file(s) from %s", removed, PLOTS_DIR)
 
-logging.basicConfig(
-    format="[%(levelname)s] STEP_3.1 — %(message)s", level=logging.INFO
-)
-log = logging.getLogger("STEP_3.1")
-
-CANONICAL_FLUX_COLUMN = "flux_cm2_min"
-CANONICAL_EFF_COLUMN = "eff_sim_1"
-
 
 def _load_config(path: Path) -> dict:
-    def _merge_dicts(base: dict, override: dict) -> dict:
+    def _merge(base: dict, override: dict) -> dict:
         out = dict(base)
         for k, v in override.items():
             if isinstance(v, dict) and isinstance(out.get(k), dict):
-                out[k] = _merge_dicts(out[k], v)
+                out[k] = _merge(out[k], v)
             else:
                 out[k] = v
         return out
@@ -145,31 +128,27 @@ def _load_config(path: Path) -> dict:
         log.warning("Config file not found: %s", path)
 
     plots_path = path.with_name("config_plots.json")
-    if plots_path != path and plots_path.exists():
-        plots_cfg = json.loads(plots_path.read_text(encoding="utf-8"))
-        cfg = _merge_dicts(cfg, plots_cfg)
+    if plots_path.exists() and plots_path != path:
+        cfg = _merge(cfg, json.loads(plots_path.read_text(encoding="utf-8")))
         log.info("Loaded plot config: %s", plots_path)
 
     runtime_path = path.with_name("config_runtime.json")
     if runtime_path.exists():
-        runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
-        cfg = _merge_dicts(cfg, runtime_cfg)
+        cfg = _merge(cfg, json.loads(runtime_path.read_text(encoding="utf-8")))
         log.info("Loaded runtime overrides: %s", runtime_path)
+
     return cfg
 
+
 def _safe_float(value: object, default: float) -> float:
-    """Convert value to float, with default fallback."""
     try:
         out = float(value)
     except (TypeError, ValueError):
         return float(default)
-    if np.isfinite(out):
-        return out
-    return float(default)
+    return out if np.isfinite(out) else float(default)
 
 
 def _safe_int(value: object, default: int, minimum: int | None = None) -> int:
-    """Convert value to int, with optional lower bound."""
     try:
         out = int(value)
     except (TypeError, ValueError):
@@ -180,18 +159,16 @@ def _safe_int(value: object, default: int, minimum: int | None = None) -> int:
 
 
 def _as_bool(value: object, default: bool = False) -> bool:
-    """Parse booleans from config-like values."""
     if isinstance(value, bool):
         return value
     if value is None:
         return bool(default)
     if isinstance(value, (int, float)):
         return value != 0
-    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+    return str(value).strip().lower() in {"1", "true", "t", "yes", "y", "on"}
 
 
 def _resolve_input_path(path_like: str | Path) -> Path:
-    """Resolve path relative to pipeline when not absolute."""
     p = Path(path_like).expanduser()
     if p.is_absolute():
         return p
@@ -205,152 +182,67 @@ def _resolve_input_path(path_like: str | Path) -> Path:
 
 
 def _choose_eff_column(df: pd.DataFrame, preferred: str) -> str:
-    """Return efficiency column to use from source table."""
     if preferred in df.columns:
         return preferred
-    for candidate in ("eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4",
-                      "eff_empirical_1", "eff_empirical_2", "eff_empirical_3", "eff_empirical_4"):
-        if candidate in df.columns:
-            return candidate
-    raise KeyError("No efficiency column found in source table.")
-
-
-def _mask_sim_eff_within_tolerance_band(
-    df: pd.DataFrame,
-    tolerance_pct: float,
-) -> np.ndarray:
-    """Rows where eff_sim_1..4 are finite and lie inside one tolerance band."""
-    n_rows = len(df)
-    if n_rows == 0:
-        return np.zeros(0, dtype=bool)
-    eff_cols = [f"eff_sim_{i}" for i in range(1, 5)]
-    if not all(col in df.columns for col in eff_cols):
-        return np.zeros(n_rows, dtype=bool)
-
-    tol_pct = float(tolerance_pct)
-    if not np.isfinite(tol_pct):
-        tol_pct = 10.0
-    tol_pct = max(0.0, tol_pct)
-    tol_abs = tol_pct / 100.0
-
-    eff_mat = np.column_stack(
-        [pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=float) for col in eff_cols]
-    )
-    finite = np.isfinite(eff_mat).all(axis=1)
-    if not np.any(finite):
-        return np.zeros(n_rows, dtype=bool)
-    span = np.full(n_rows, np.nan, dtype=float)
-    eff_finite = eff_mat[finite]
-    span[finite] = np.max(eff_finite, axis=1) - np.min(eff_finite, axis=1)
-    return finite & (span <= (tol_abs + 1e-12))
-
-
-def _normalize_tt_label(label: object) -> str:
-    text = str(label).strip()
-    if not text:
-        return ""
-    try:
-        value = float(text)
-    except (TypeError, ValueError):
-        return text
-    if not np.isfinite(value):
-        return ""
-    if float(value).is_integer():
-        return str(int(value))
-    return text
-
-
-def _derive_global_rate_from_tt_sum(
-    df: pd.DataFrame,
-    *,
-    target_col: str = "events_per_second_global_rate",
-) -> str | None:
-    by_prefix: dict[str, list[str]] = {}
-    for col in df.columns:
-        match = TT_RATE_COLUMN_RE.match(str(col))
-        if match is None:
-            continue
-        prefix = str(match.group("prefix")).strip()
-        label = _normalize_tt_label(match.group("label"))
-        if label not in CANONICAL_TT_LABELS:
-            continue
-        by_prefix.setdefault(prefix, []).append(col)
-
-    if not by_prefix:
-        return None
-
-    prefix_priority = [
-        "post_tt",
-        "fit_tt",
-        "list_tt",
-        "cal_tt",
-        "clean_tt",
-        "raw_tt",
-    ]
-    selected_prefix: str | None = None
-    for prefix in prefix_priority:
-        if prefix in by_prefix and by_prefix[prefix]:
-            selected_prefix = prefix
-            break
-    if selected_prefix is None:
-        selected_prefix = min(by_prefix.keys(), key=lambda p: (-len(by_prefix[p]), p))
-
-    cols = sorted(set(by_prefix[selected_prefix]))
-    if not cols:
-        return None
-
-    summed = pd.Series(0.0, index=df.index, dtype=float)
-    valid_any = pd.Series(False, index=df.index)
-    for col in cols:
-        numeric = pd.to_numeric(df[col], errors="coerce")
-        summed = summed + numeric.fillna(0.0)
-        valid_any = valid_any | numeric.notna()
-
-    df[target_col] = summed.where(valid_any, np.nan)
-    return target_col
+    for c in (
+        "eff_sim_1",
+        "eff_sim_2",
+        "eff_sim_3",
+        "eff_sim_4",
+        "eff_empirical_1",
+        "eff_empirical_2",
+        "eff_empirical_3",
+        "eff_empirical_4",
+    ):
+        if c in df.columns:
+            return c
+    raise KeyError("No efficiency column found in table.")
 
 
 def _pick_rate_column(df: pd.DataFrame, preferred: str) -> str | None:
-    """Resolve a usable global-rate column, deriving it as TT-rate sum when needed."""
-    ordered_candidates: list[str] = []
+    candidates: list[str] = []
     preferred_clean = str(preferred).strip()
     if preferred_clean:
-        ordered_candidates.append(preferred_clean)
-    ordered_candidates.extend(
-        [
-            "events_per_second_global_rate",
-            "global_rate_hz",
-            "global_rate_hz_mean",
-        ]
-    )
+        candidates.append(preferred_clean)
+    candidates.extend([
+        "events_per_second_global_rate",
+        "global_rate_hz_mean",
+        "global_rate_hz",
+    ])
 
     seen: set[str] = set()
-    candidates: list[str] = []
-    for col in ordered_candidates:
-        if col and col not in seen:
-            candidates.append(col)
-            seen.add(col)
+    ordered: list[str] = []
+    for c in candidates:
+        if c not in seen:
+            seen.add(c)
+            ordered.append(c)
 
-    for col in df.columns:
-        cl = str(col).strip().lower()
-        if not cl or col in seen:
+    for c in ordered:
+        if c not in df.columns:
             continue
-        if "global_rate" in cl and ("hz" in cl or cl.endswith("_rate")):
-            candidates.append(col)
-            seen.add(col)
-
-    for col in candidates:
-        if col not in df.columns:
-            continue
-        vals = pd.to_numeric(df[col], errors="coerce")
+        vals = pd.to_numeric(df[c], errors="coerce")
         if vals.notna().any():
-            return col
+            return c
 
-    for col in candidates:
-        if col in df.columns:
-            return col
+    tt_cols = [
+        c
+        for c in df.columns
+        if "_tt_" in str(c).lower() and str(c).lower().endswith("_rate_hz")
+    ]
+    if tt_cols:
+        summed = pd.Series(0.0, index=df.index, dtype=float)
+        valid_any = pd.Series(False, index=df.index)
+        for c in sorted(tt_cols):
+            v = pd.to_numeric(df[c], errors="coerce")
+            summed = summed + v.fillna(0.0)
+            valid_any = valid_any | v.notna()
+        derived_col = "events_per_second_global_rate"
+        df[derived_col] = summed.where(valid_any, np.nan)
+        if pd.to_numeric(df[derived_col], errors="coerce").notna().any():
+            log.info("Derived global rate from %d TT rate columns.", len(tt_cols))
+            return derived_col
 
-    return _derive_global_rate_from_tt_sum(df, target_col="events_per_second_global_rate")
+    return None
 
 
 def _resolve_numeric_range(
@@ -358,7 +250,6 @@ def _resolve_numeric_range(
     fallback_min: float,
     fallback_max: float,
 ) -> tuple[float, float]:
-    """Resolve [min, max] range from config, or fallback to source bounds."""
     lo = float(fallback_min)
     hi = float(fallback_max)
     if isinstance(cfg_value, (list, tuple)) and len(cfg_value) == 2:
@@ -366,17 +257,15 @@ def _resolve_numeric_range(
         hi = _safe_float(cfg_value[1], hi)
     if lo > hi:
         lo, hi = hi, lo
-    return float(lo), float(hi)
+    return (float(lo), float(hi))
 
 
 def _normalised_axis(n_points: int) -> np.ndarray:
-    """Build normalized axis in [0, 1) with n_points samples."""
     n = max(2, int(n_points))
     return np.linspace(0.0, 1.0, n, endpoint=False, dtype=float)
 
 
-def _smooth_with_moving_average(values: np.ndarray, window_points: int) -> np.ndarray:
-    """Smooth series with edge-preserving moving average."""
+def _moving_average(values: np.ndarray, window_points: int) -> np.ndarray:
     arr = np.asarray(values, dtype=float)
     w = max(1, int(window_points))
     if w % 2 == 0:
@@ -397,28 +286,28 @@ def _random_smooth_unit_series(
     smoothing_window_points: int,
     smoothing_passes: int,
 ) -> np.ndarray:
-    """Generate smooth random series normalized to [0, 1]."""
     y = np.zeros_like(u, dtype=float)
     two_pi = 2.0 * np.pi
+
     n_h = max(1, int(n_harmonics))
     rough = max(0.1, float(roughness))
 
     for k in range(1, n_h + 1):
         amp = rng.uniform(0.3, 1.0) / (k ** rough)
-        freq_s = max(0.15, float(k) + rng.uniform(-0.35, 0.35))
-        freq_c = max(0.15, float(k) + rng.uniform(-0.35, 0.35))
-        phase_s = rng.uniform(0.0, two_pi)
-        phase_c = rng.uniform(0.0, two_pi)
-        y += amp * np.sin(two_pi * freq_s * u + phase_s)
-        y += 0.5 * amp * np.cos(two_pi * freq_c * u + phase_c)
+        fs = max(0.15, float(k) + rng.uniform(-0.35, 0.35))
+        fc = max(0.15, float(k) + rng.uniform(-0.35, 0.35))
+        ps = rng.uniform(0.0, two_pi)
+        pc = rng.uniform(0.0, two_pi)
+        y += amp * np.sin(two_pi * fs * u + ps)
+        y += 0.5 * amp * np.cos(two_pi * fc * u + pc)
 
-    # Add low-order drift to avoid near-periodic closure.
+    # Non-periodic drift.
     du = u - 0.5
     y += rng.normal(0.0, 0.8) * du
     y += rng.normal(0.0, 0.4) * du * du
 
     for _ in range(max(0, int(smoothing_passes))):
-        y = _smooth_with_moving_average(y, smoothing_window_points)
+        y = _moving_average(y, smoothing_window_points)
 
     y_min = float(np.nanmin(y))
     y_max = float(np.nanmax(y))
@@ -428,7 +317,7 @@ def _random_smooth_unit_series(
     else:
         unit = (y - y_min) / span
 
-    # Ensure start/end are not artificially identical.
+    # Avoid near-closure between first and last values.
     if len(unit) >= 2 and abs(float(unit[-1]) - float(unit[0])) < 0.03:
         delta = (0.03 - abs(float(unit[-1]) - float(unit[0])))
         if rng.random() < 0.5:
@@ -446,125 +335,253 @@ def _random_smooth_unit_series(
 
 
 def _map_unit_to_range(unit: np.ndarray, value_range: tuple[float, float]) -> np.ndarray:
-    """Map unit-interval values to numeric range, supporting constant ranges."""
     lo, hi = float(value_range[0]), float(value_range[1])
     if np.isclose(lo, hi, atol=0.0):
         return np.full_like(unit, lo, dtype=float)
     return lo + (hi - lo) * np.asarray(unit, dtype=float)
 
 
-def _build_random_curve(
+def _resolve_parameter_curve_columns(rate_df: pd.DataFrame, cfg_31: dict) -> list[str]:
+    raw = cfg_31.get("parameter_curve_columns", DEFAULT_PARAM_CURVE_COLS)
+    if not isinstance(raw, (list, tuple)):
+        raw = DEFAULT_PARAM_CURVE_COLS
+
+    cols = [str(c) for c in raw if str(c) in rate_df.columns]
+    cols = list(dict.fromkeys(cols))
+
+    if CANONICAL_FLUX_COLUMN in rate_df.columns and CANONICAL_FLUX_COLUMN not in cols:
+        cols = [CANONICAL_FLUX_COLUMN] + cols
+    if not cols:
+        raise ValueError("No valid parameter_curve_columns found in rate dictionary.")
+
+    if CANONICAL_FLUX_COLUMN in cols:
+        cols = [CANONICAL_FLUX_COLUMN] + [c for c in cols if c != CANONICAL_FLUX_COLUMN]
+
+    if len(cols) < 2:
+        raise ValueError("At least two parameter curve columns are required for STEP 3.1.")
+
+    return cols
+
+
+def _resolve_parameter_ranges(
+    param_cols: list[str],
+    source_df: pd.DataFrame,
+    rate_df: pd.DataFrame,
+    cfg_31: dict,
+) -> dict[str, tuple[float, float]]:
+    ranges: dict[str, tuple[float, float]] = {}
+
+    ranges_cfg_raw = cfg_31.get("parameter_ranges", {})
+    ranges_cfg = ranges_cfg_raw if isinstance(ranges_cfg_raw, dict) else {}
+
+    flux_range_cfg = cfg_31.get("flux_range", None)
+    eff_range_cfg = cfg_31.get("eff_range", None)
+
+    for col in param_cols:
+        if col in source_df.columns:
+            base_series = pd.to_numeric(source_df[col], errors="coerce")
+        else:
+            base_series = pd.to_numeric(rate_df.get(col), errors="coerce")
+
+        base_series = base_series.dropna()
+        if base_series.empty:
+            raise ValueError(f"Cannot resolve value range for parameter '{col}' (no finite values).")
+
+        lo = float(base_series.min())
+        hi = float(base_series.max())
+
+        if col in ranges_cfg and isinstance(ranges_cfg[col], (list, tuple)) and len(ranges_cfg[col]) == 2:
+            lo, hi = _resolve_numeric_range(ranges_cfg[col], lo, hi)
+        elif col == CANONICAL_FLUX_COLUMN and flux_range_cfg is not None:
+            lo, hi = _resolve_numeric_range(flux_range_cfg, lo, hi)
+        elif col.startswith("eff_sim_") and eff_range_cfg is not None:
+            lo, hi = _resolve_numeric_range(eff_range_cfg, lo, hi)
+
+        ranges[col] = (lo, hi)
+
+    return ranges
+
+
+def _build_parameter_curve(
     u: np.ndarray,
-    flux_range: tuple[float, float],
-    eff_range: tuple[float, float],
+    param_cols: list[str],
+    param_ranges: dict[str, tuple[float, float]],
     rng: np.random.Generator,
     cfg_31: dict,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Build smooth random flux and efficiency trajectories."""
+    identical_efficiencies: bool,
+    reference_df: pd.DataFrame | None = None,
+) -> tuple[dict[str, np.ndarray], dict[str, object]]:
     n_harmonics = _safe_int(cfg_31.get("n_harmonics", 4), 4, minimum=1)
     roughness = _safe_float(cfg_31.get("roughness", 1.6), 1.6)
-    smoothing_window_points = _safe_int(
-        cfg_31.get("smoothing_window_points", 11), 11, minimum=1
-    )
+    smoothing_window_points = _safe_int(cfg_31.get("smoothing_window_points", 11), 11, minimum=1)
     smoothing_passes = _safe_int(cfg_31.get("smoothing_passes", 2), 2, minimum=0)
 
-    flux_u = _random_smooth_unit_series(
-        u=u,
-        rng=rng,
-        n_harmonics=n_harmonics,
-        roughness=roughness,
-        smoothing_window_points=smoothing_window_points,
-        smoothing_passes=smoothing_passes,
-    )
-    eff_u = _random_smooth_unit_series(
-        u=u,
-        rng=rng,
-        n_harmonics=n_harmonics,
-        roughness=roughness,
-        smoothing_window_points=smoothing_window_points,
-        smoothing_passes=smoothing_passes,
-    )
-    flux = _map_unit_to_range(flux_u, flux_range)
-    eff = _map_unit_to_range(eff_u, eff_range)
-    return flux.astype(float), eff.astype(float)
+    mode_raw = str(cfg_31.get("curve_generation_mode", "convex_hull")).strip().lower()
+    use_convex_hull = mode_raw in {"convex_hull", "convex", "hull", "dictionary_convex_hull"}
 
+    # Recommended mode: smooth convex combinations of dictionary points.
+    if use_convex_hull and reference_df is not None and not reference_df.empty:
+        ref_df = reference_df[param_cols].apply(pd.to_numeric, errors="coerce")
+        valid = ref_df.notna().all(axis=1)
+        ref_vals = ref_df.loc[valid].to_numpy(dtype=float)
+        if ref_vals.size > 0:
+            n_ref = int(ref_vals.shape[0])
+            n_anchor_default = min(12, n_ref)
+            n_anchors = _safe_int(
+                cfg_31.get("convex_hull_n_anchors", n_anchor_default),
+                n_anchor_default,
+                minimum=1,
+            )
+            n_anchors = max(1, min(n_anchors, n_ref))
 
-def _build_rate_model(
-    rate_df: pd.DataFrame,
-    flux_col: str,
-    eff_col: str,
-    rate_col: str,
-) -> dict:
-    """Build interpolation model for global rate in flux-eff plane."""
-    x = pd.to_numeric(rate_df.get(flux_col), errors="coerce").to_numpy(dtype=float)
-    y = pd.to_numeric(rate_df.get(eff_col), errors="coerce").to_numpy(dtype=float)
-    z = pd.to_numeric(rate_df.get(rate_col), errors="coerce").to_numpy(dtype=float)
-    mask = np.isfinite(x) & np.isfinite(y) & np.isfinite(z)
-    x = x[mask]
-    y = y[mask]
-    z = z[mask]
-    if len(x) < 1:
-        raise ValueError("Not enough valid points to build global-rate interpolation.")
+            if n_anchors == n_ref:
+                anchor_idx = np.arange(n_ref, dtype=int)
+            else:
+                anchor_idx = np.sort(rng.choice(n_ref, size=n_anchors, replace=False).astype(int))
+            anchors = ref_vals[anchor_idx, :]
 
-    tri = None
-    interp = None
-    try:
-        tri = Triangulation(x, y)
-        interp = LinearTriInterpolator(tri, z)
-    except Exception as exc:
-        log.warning("Triangulation/interpolation failed; using nearest fallback only: %s", exc)
+            raw_w = np.zeros((len(u), n_anchors), dtype=float)
+            for j in range(n_anchors):
+                unit = _random_smooth_unit_series(
+                    u=u,
+                    rng=rng,
+                    n_harmonics=n_harmonics,
+                    roughness=roughness,
+                    smoothing_window_points=smoothing_window_points,
+                    smoothing_passes=smoothing_passes,
+                )
+                raw_w[:, j] = np.clip(unit, 0.0, 1.0)
 
-    return {
-        "x": x.astype(float),
-        "y": y.astype(float),
-        "z": z.astype(float),
-        "tri": tri,
-        "interp": interp,
+            weight_floor = max(0.0, _safe_float(cfg_31.get("convex_hull_weight_floor", 1e-3), 1e-3))
+            raw_w = np.where(np.isfinite(raw_w), raw_w, 0.0) + weight_floor
+            w_sum = raw_w.sum(axis=1, keepdims=True)
+            w = np.divide(
+                raw_w,
+                w_sum,
+                out=np.full_like(raw_w, 1.0 / float(n_anchors)),
+                where=w_sum > 0.0,
+            )
+            curve_matrix = w @ anchors
+
+            curve = {
+                col: np.asarray(curve_matrix[:, i], dtype=float)
+                for i, col in enumerate(param_cols)
+            }
+
+            if identical_efficiencies:
+                eff_cols = [c for c in param_cols if c.startswith("eff_sim_")]
+                if eff_cols:
+                    base_col = "eff_sim_1" if "eff_sim_1" in curve else eff_cols[0]
+                    base_values = curve[base_col].copy()
+                    for col in eff_cols:
+                        curve[col] = base_values.copy()
+
+            info = {
+                "mode": "convex_hull",
+                "n_reference_points": n_ref,
+                "n_anchor_points": int(n_anchors),
+                "anchor_indices_in_valid_reference": anchor_idx.tolist(),
+            }
+            return curve, info
+
+    # Fallback mode: independent smooth per-parameter trajectories in configured ranges.
+    curve = {}
+    for col in param_cols:
+        unit = _random_smooth_unit_series(
+            u=u,
+            rng=rng,
+            n_harmonics=n_harmonics,
+            roughness=roughness,
+            smoothing_window_points=smoothing_window_points,
+            smoothing_passes=smoothing_passes,
+        )
+        curve[col] = _map_unit_to_range(unit, param_ranges[col]).astype(float)
+
+    if identical_efficiencies:
+        eff_cols = [c for c in param_cols if c.startswith("eff_sim_")]
+        if eff_cols:
+            base_col = "eff_sim_1" if "eff_sim_1" in curve else eff_cols[0]
+            base_values = curve[base_col].copy()
+            for col in eff_cols:
+                curve[col] = base_values.copy()
+
+    info = {
+        "mode": "independent_ranges_fallback",
+        "n_reference_points": None,
+        "n_anchor_points": None,
+        "anchor_indices_in_valid_reference": [],
     }
+    return curve, info
 
 
-def _predict_rate(
-    model: dict,
-    flux_values: np.ndarray,
-    eff_values: np.ndarray,
-    min_rate_hz: float = 1e-6,
+def _normalize_to_unit_interval(values: np.ndarray) -> np.ndarray:
+    arr = np.asarray(values, dtype=float)
+    out = np.full(arr.shape, 0.5, dtype=float)
+    finite = np.isfinite(arr)
+    if not np.any(finite):
+        return out
+    lo = float(np.nanmin(arr[finite]))
+    hi = float(np.nanmax(arr[finite]))
+    span = hi - lo
+    if np.isfinite(span) and span > 1e-12:
+        out[finite] = (arr[finite] - lo) / span
+    return np.clip(out, 0.0, 1.0)
+
+
+def _resolve_global_rate_range_hz(
+    rate_df: pd.DataFrame,
+    rate_col: str,
+    cfg_31: dict,
+) -> tuple[float, float]:
+    rate_vals = pd.to_numeric(rate_df.get(rate_col), errors="coerce").dropna()
+    if rate_vals.empty:
+        raise ValueError(f"Rate column '{rate_col}' has no finite values.")
+    lo_default = float(rate_vals.min())
+    hi_default = float(rate_vals.max())
+    return _resolve_numeric_range(
+        cfg_31.get("global_rate_range_hz", cfg_31.get("rate_range_hz", None)),
+        lo_default,
+        hi_default,
+    )
+
+
+def _build_global_rate_curve_from_parameters(
+    curve: dict[str, np.ndarray],
+    param_cols: list[str],
+    cfg_31: dict,
+    rate_range_hz: tuple[float, float],
 ) -> np.ndarray:
-    """Predict global rate at query points with interpolation + nearest fallback."""
-    xq = np.asarray(flux_values, dtype=float)
-    yq = np.asarray(eff_values, dtype=float)
-    shape = xq.shape
-    qx = xq.ravel()
-    qy = yq.ravel()
+    n_points = len(next(iter(curve.values()))) if curve else 0
+    if n_points <= 0:
+        return np.zeros(0, dtype=float)
 
-    zq = np.full(qx.shape, np.nan, dtype=float)
-    interp = model.get("interp")
-    if interp is not None:
-        zi = interp(qx, qy)
-        zq = np.asarray(np.ma.filled(zi, np.nan), dtype=float)
+    flux = np.asarray(curve.get(CANONICAL_FLUX_COLUMN, np.full(n_points, np.nan, dtype=float)), dtype=float)
+    flux_unit = _normalize_to_unit_interval(flux)
 
-    missing = ~np.isfinite(zq)
-    if missing.any():
-        x = model["x"]
-        y = model["y"]
-        z = model["z"]
-        qx_m = qx[missing]
-        qy_m = qy[missing]
-        out = np.empty(len(qx_m), dtype=float)
-        chunk = 4096
-        for s in range(0, len(qx_m), chunk):
-            e = min(len(qx_m), s + chunk)
-            dx = qx_m[s:e, None] - x[None, :]
-            dy = qy_m[s:e, None] - y[None, :]
-            idx = np.argmin(dx * dx + dy * dy, axis=1)
-            out[s:e] = z[idx]
-        zq[missing] = out
+    eff_cols = [c for c in param_cols if c.startswith("eff_sim_") and c in curve]
+    if eff_cols:
+        eff_matrix = np.column_stack([np.asarray(curve[c], dtype=float) for c in eff_cols])
+        eff_mean = np.nanmean(eff_matrix, axis=1)
+        eff_unit = _normalize_to_unit_interval(eff_mean)
+    else:
+        eff_unit = np.full(n_points, 0.5, dtype=float)
 
-    zq = np.maximum(zq, float(max(min_rate_hz, 0.0)))
-    return zq.reshape(shape)
+    flux_weight = _safe_float(cfg_31.get("rate_from_flux_weight", 0.70), 0.70)
+    flux_weight = min(1.0, max(0.0, flux_weight))
+    proxy = flux_weight * flux_unit + (1.0 - flux_weight) * eff_unit
+
+    smooth_window = _safe_int(cfg_31.get("rate_smoothing_window_points", 15), 15, minimum=1)
+    smooth_passes = _safe_int(cfg_31.get("rate_smoothing_passes", 1), 1, minimum=0)
+    for _ in range(smooth_passes):
+        proxy = _moving_average(proxy, smooth_window)
+
+    rate_unit = _normalize_to_unit_interval(proxy)
+    rate_hz = _map_unit_to_range(rate_unit, rate_range_hz)
+    rate_hz = np.maximum(np.asarray(rate_hz, dtype=float), 1e-6)
+    return rate_hz
 
 
 def _cumulative_events(dense_time_s: np.ndarray, dense_rate_hz: np.ndarray) -> np.ndarray:
-    """Cumulative expected counts along dense trajectory."""
     dt = np.diff(dense_time_s)
     seg_events = 0.5 * (dense_rate_hz[:-1] + dense_rate_hz[1:]) * dt
     seg_events = np.clip(seg_events, 0.0, None)
@@ -573,16 +590,13 @@ def _cumulative_events(dense_time_s: np.ndarray, dense_rate_hz: np.ndarray) -> n
 
 def _discretize_curve_by_events(
     dense_time_s: np.ndarray,
-    dense_flux: np.ndarray,
-    dense_eff: np.ndarray,
     dense_rate_hz: np.ndarray,
+    dense_tracks: dict[str, np.ndarray],
     events_per_file: int,
     include_partial_last_file: bool,
 ) -> tuple[pd.DataFrame, float]:
-    """Split dense trajectory into variable-duration synthetic files by events."""
     cum_events = _cumulative_events(dense_time_s, dense_rate_hz)
     total_events = float(cum_events[-1])
-
     if total_events <= 0.0:
         raise ValueError("Total expected events is zero; cannot discretize trajectory.")
 
@@ -603,12 +617,7 @@ def _discretize_curve_by_events(
 
     e0 = cum_events[idx]
     e1 = cum_events[idx + 1]
-    frac = np.divide(
-        thr - e0,
-        e1 - e0,
-        out=np.zeros_like(thr, dtype=float),
-        where=(e1 - e0) > 0,
-    )
+    frac = np.divide(thr - e0, e1 - e0, out=np.zeros_like(thr, dtype=float), where=(e1 - e0) > 0)
 
     t_b = dense_time_s[idx] + frac * (dense_time_s[idx + 1] - dense_time_s[idx])
 
@@ -618,308 +627,211 @@ def _discretize_curve_by_events(
     events_expected = thr[1:] - thr[:-1]
     t_mid = 0.5 * (t_start + t_end)
 
-    flux_mid = np.interp(t_mid, dense_time_s, dense_flux)
-    eff_mid = np.interp(t_mid, dense_time_s, dense_eff)
-    rate_mid = np.interp(t_mid, dense_time_s, dense_rate_hz)
-    rate_mean = events_expected / duration_s
+    out = pd.DataFrame(
+        {
+            "file_index": np.arange(1, len(t_mid) + 1, dtype=int),
+            "elapsed_seconds_start": t_start,
+            "elapsed_seconds_end": t_end,
+            "elapsed_seconds": t_mid,
+            "elapsed_hours_start": t_start / 3600.0,
+            "elapsed_hours_end": t_end / 3600.0,
+            "elapsed_hours": t_mid / 3600.0,
+            "duration_seconds": duration_s,
+            "n_events_expected": events_expected,
+            "n_events": np.rint(events_expected).astype(int),
+            "target_events_per_file": int(events_per_file),
+            "global_rate_hz_mid": np.interp(t_mid, dense_time_s, dense_rate_hz),
+            "global_rate_hz_mean": events_expected / duration_s,
+        }
+    )
 
-    out = pd.DataFrame({
-        "file_index": np.arange(1, len(t_mid) + 1, dtype=int),
-        "elapsed_seconds_start": t_start,
-        "elapsed_seconds_end": t_end,
-        "elapsed_seconds": t_mid,
-        "elapsed_hours_start": t_start / 3600.0,
-        "elapsed_hours_end": t_end / 3600.0,
-        "elapsed_hours": t_mid / 3600.0,
-        "duration_seconds": duration_s,
-        "n_events_expected": events_expected,
-        "n_events": np.rint(events_expected).astype(int),
-        "target_events_per_file": int(events_per_file),
-        "global_rate_hz_mid": rate_mid,
-        "global_rate_hz_mean": rate_mean,
-        "flux": flux_mid,
-        "eff": eff_mid,
-    })
-    out["flux_cm2_min"] = out["flux"]
-    out["eff_sim_1"] = out["eff"]
+    for col, values in dense_tracks.items():
+        arr = np.asarray(values, dtype=float)
+        out[col] = np.interp(t_mid, dense_time_s, arr)
+
     return out, total_events
 
 
-def _plot_curve_flux_vs_eff(
-    source_df: pd.DataFrame,
-    source_flux_col: str,
-    source_eff_col: str,
-    dense_flux: np.ndarray,
-    dense_eff: np.ndarray,
-    file_df: pd.DataFrame,
-    rate_model: dict,
-    contour_rate_model: dict | None,
-    events_per_file: int,
-    contour_grid_points: int,
-    contour_eff_band_tolerance_pct: float,
-    contour_model_points: int,
-    path: Path,
-) -> None:
-    """Plot trajectory on semitransparent contour map of global rate."""
-    fig, ax = plt.subplots(figsize=(9, 7))
+def _plot_time_series(dense_df: pd.DataFrame, file_df: pd.DataFrame, path: Path) -> None:
+    x_dense = pd.to_numeric(dense_df.get("elapsed_hours"), errors="coerce").to_numpy(dtype=float)
+    x_disc = pd.to_numeric(file_df.get("elapsed_hours"), errors="coerce").to_numpy(dtype=float)
 
-    bg_model = contour_rate_model
-    model_for_bounds = bg_model if bg_model is not None else rate_model
-    x_ref = np.asarray(model_for_bounds["x"], dtype=float)
-    y_ref = np.asarray(model_for_bounds["y"], dtype=float)
-    src_flux = pd.to_numeric(source_df.get(source_flux_col), errors="coerce").to_numpy(dtype=float)
-    src_eff = pd.to_numeric(source_df.get(source_eff_col), errors="coerce").to_numpy(dtype=float)
+    fig, axes = plt.subplots(2, 1, figsize=(10.0, 6.4), sharex=True)
 
-    x_all = np.concatenate([
-        x_ref[np.isfinite(x_ref)],
-        np.asarray(dense_flux, dtype=float)[np.isfinite(dense_flux)],
-        src_flux[np.isfinite(src_flux)],
-    ])
-    y_all = np.concatenate([
-        y_ref[np.isfinite(y_ref)],
-        np.asarray(dense_eff, dtype=float)[np.isfinite(dense_eff)],
-        src_eff[np.isfinite(src_eff)],
-    ])
-
-    flux_lo = float(np.nanmin(x_all))
-    flux_hi = float(np.nanmax(x_all))
-    eff_lo = float(np.nanmin(y_all))
-    eff_hi = float(np.nanmax(y_all))
-    x_span = max(flux_hi - flux_lo, 1e-6)
-    y_span = max(eff_hi - eff_lo, 1e-6)
-    flux_lo -= 0.03 * x_span
-    flux_hi += 0.03 * x_span
-    eff_lo -= 0.03 * y_span
-    eff_hi += 0.03 * y_span
-
-    g = max(40, int(contour_grid_points))
-    xi = np.linspace(flux_lo, flux_hi, g, dtype=float)
-    yi = np.linspace(eff_lo, eff_hi, g, dtype=float)
-    Xi, Yi = np.meshgrid(xi, yi)
-    if bg_model is not None:
-        Zi = _predict_rate(bg_model, Xi, Yi, min_rate_hz=1e-6)
-        finite_z = Zi[np.isfinite(Zi)]
-        z_min = float(np.nanmin(finite_z)) if finite_z.size else np.nan
-        z_max = float(np.nanmax(finite_z)) if finite_z.size else np.nan
-        if finite_z.size >= 2 and np.isfinite(z_min) and np.isfinite(z_max) and z_max > z_min:
-            levels = np.linspace(z_min, z_max, 16)
-            cf = ax.contourf(Xi, Yi, Zi, levels=levels, cmap="viridis", alpha=0.35, zorder=0)
-            cbar = fig.colorbar(cf, ax=ax, pad=0.02, fraction=0.048)
-            cbar.set_label("Global rate [Hz]")
-            ax.contour(Xi, Yi, Zi, levels=levels[::2], colors="k", linewidths=0.35, alpha=0.25, zorder=1)
-
-    src_flux_s = pd.Series(src_flux)
-    src_eff_s = pd.Series(src_eff)
-    src_mask = src_flux_s.notna() & src_eff_s.notna()
-    if src_mask.any():
-        ax.scatter(
-            src_flux_s[src_mask],
-            src_eff_s[src_mask],
-            s=10,
-            alpha=0.18,
-            color="#606060",
-            zorder=1,
-            label="Reference points",
-        )
-
-    ax.plot(dense_flux, dense_eff, linewidth=1.8, color="#1f77b4", alpha=0.9, zorder=3, label="Complete trajectory")
-    ax.scatter(
-        file_df["flux"],
-        file_df["eff"],
-        s=26,
+    axes[0].plot(
+        x_dense,
+        pd.to_numeric(dense_df.get("flux"), errors="coerce"),
+        color="#1f77b4",
+        lw=1.2,
+        alpha=0.85,
+        label="Complete",
+    )
+    axes[0].scatter(
+        x_disc,
+        pd.to_numeric(file_df.get("flux"), errors="coerce"),
+        s=22,
         facecolor="white",
-        edgecolor="black",
-        linewidth=0.6,
-        zorder=4,
-        label="Discretized file points",
+        edgecolor="#1f77b4",
+        lw=0.7,
+        label="Discretized",
     )
+    axes[0].set_ylabel("flux_cm2_min")
+    axes[0].set_title("Flux")
+    axes[0].grid(True, alpha=0.25)
+    axes[0].legend(loc="best", fontsize=8)
 
-    start_x = float(dense_flux[0])
-    start_y = float(dense_eff[0])
-    end_x = float(dense_flux[-1])
-    end_y = float(dense_eff[-1])
-    ax.scatter([start_x], [start_y], color="#2CA02C", marker="o", s=80, edgecolor="black", linewidth=0.8, zorder=5)
-    ax.scatter([end_x], [end_y], color="#D62728", marker="X", s=95, edgecolor="black", linewidth=0.8, zorder=5)
-
-    if len(dense_flux) >= 3:
-        i = min(len(dense_flux) - 2, max(0, int(0.85 * len(dense_flux))))
-        ax.annotate(
-            "",
-            xy=(dense_flux[i + 1], dense_eff[i + 1]),
-            xytext=(dense_flux[i], dense_eff[i]),
-            arrowprops={"arrowstyle": "->", "color": "black", "lw": 1.2},
-            zorder=5,
+    eff_cols = [f"eff_sim_{i}" for i in range(1, 5)]
+    eff_cols_present = [
+        col
+        for col in eff_cols
+        if (
+            col in dense_df.columns
+            and np.isfinite(pd.to_numeric(dense_df.get(col), errors="coerce")).any()
         )
+        or (
+            col in file_df.columns
+            and np.isfinite(pd.to_numeric(file_df.get(col), errors="coerce")).any()
+        )
+    ]
+    eff_palette = ["#ff7f0e", "#d62728", "#9467bd", "#8c564b"]
 
-    ax.set_xlim(flux_lo, flux_hi)
-    ax.set_ylim(eff_lo, eff_hi)
-    ax.set_xlabel("flux_cm2_min")
-    ax.set_ylabel("eff")
-    ax.set_title(
-        f"STEP 3.1 trajectory with global-rate contours\n"
-        f"event discretization target: {events_per_file:,} events/file | "
-        f"4-eff band <= {float(contour_eff_band_tolerance_pct):.2f}% "
-        f"(n={int(contour_model_points)})"
-    )
-    ax.grid(True, alpha=0.2)
-    ax.legend(loc="best", fontsize=8)
+    if eff_cols_present:
+        for idx, col in enumerate(eff_cols_present):
+            color = eff_palette[idx % len(eff_palette)]
+            dense_eff = pd.to_numeric(dense_df.get(col), errors="coerce")
+            file_eff = pd.to_numeric(file_df.get(col), errors="coerce")
+            axes[1].plot(
+                x_dense,
+                dense_eff,
+                color=color,
+                lw=1.2,
+                alpha=0.9,
+                label=f"{col} (Complete)",
+            )
+            axes[1].scatter(
+                x_disc,
+                file_eff,
+                s=20,
+                facecolor="white",
+                edgecolor=color,
+                lw=0.7,
+                label=f"{col} (Discretized)",
+            )
+        axes[1].set_ylabel("efficiency")
+        axes[1].set_title("Efficiencies")
+    else:
+        axes[1].plot(
+            x_dense,
+            pd.to_numeric(dense_df.get("eff"), errors="coerce"),
+            color="#ff7f0e",
+            lw=1.2,
+            alpha=0.85,
+            label="Complete",
+        )
+        axes[1].scatter(
+            x_disc,
+            pd.to_numeric(file_df.get("eff"), errors="coerce"),
+            s=22,
+            facecolor="white",
+            edgecolor="#ff7f0e",
+            lw=0.7,
+            label="Discretized",
+        )
+        axes[1].set_ylabel("eff_sim_1")
+        axes[1].set_title("Efficiency")
+
+    axes[1].grid(True, alpha=0.25)
+    axes[1].legend(loc="best", fontsize=7, ncol=2)
+
+    axes[1].set_xlabel("Elapsed time [hours]")
+
     fig.tight_layout()
     _save_figure(fig, path, dpi=160)
     plt.close(fig)
 
 
-def _plot_time_series(
+def _plot_parameter_space_lower_triangle(
+    reference_df: pd.DataFrame,
     dense_df: pd.DataFrame,
     file_df: pd.DataFrame,
+    param_cols: list[str],
     path: Path,
 ) -> None:
-    """Plot complete and discretized time series in the same figure."""
-    x_dense = dense_df["elapsed_hours"].to_numpy(dtype=float)
-    x_disc = file_df["elapsed_hours"].to_numpy(dtype=float)
+    n = len(param_cols)
+    fig, axes = plt.subplots(n, n, figsize=(3.0 * n, 3.0 * n), squeeze=False)
 
-    def _apply_striped_background(ax: plt.Axes, y_vals: np.ndarray) -> None:
-        """Apply stripes at 1%-of-mean increments, uniformly across the y-axis."""
-        y_min, y_max = ax.get_ylim()
-        if not (np.isfinite(y_min) and np.isfinite(y_max)):
-            return
-        span = y_max - y_min
-        if span <= 0.0:
-            return
+    for i, y_col in enumerate(param_cols):
+        for j, x_col in enumerate(param_cols):
+            ax = axes[i, j]
 
-        valid = np.isfinite(y_vals)
-        if not np.any(valid):
-            return
-        mean_val = float(np.mean(y_vals[valid]))
+            if i < j:
+                ax.axis("off")
+                continue
 
-        band = abs(mean_val) * 0.01
-        if not np.isfinite(band) or band <= 0.0:
-            band = span * 0.01
-        if band <= 0.0:
-            return
+            x_ref = pd.to_numeric(reference_df.get(x_col), errors="coerce")
+            y_ref = pd.to_numeric(reference_df.get(y_col), errors="coerce")
+            x_dense = pd.to_numeric(dense_df.get(x_col), errors="coerce")
+            y_dense = pd.to_numeric(dense_df.get(y_col), errors="coerce")
+            x_file = pd.to_numeric(file_df.get(x_col), errors="coerce")
+            y_file = pd.to_numeric(file_df.get(y_col), errors="coerce")
 
-        ax.set_facecolor("#FFFFFF")
-        idx = int(np.floor((y_min - mean_val) / band))
-        y0 = mean_val + idx * band
-        while y0 < y_max:
-            y1 = y0 + band
-            lo = max(y0, y_min)
-            hi = min(y1, y_max)
-            color = "#FFFFFF" if (idx % 2 == 0) else "#D8DDE4"
-            if hi > lo:
-                ax.axhspan(lo, hi, facecolor=color, alpha=1.0, linewidth=0.0, zorder=0)
-            y0 = y1
-            idx += 1
-        ax.set_ylim(y_min, y_max)
+            if i == j:
+                xr = x_ref.dropna()
+                xd = x_dense.dropna()
+                if not xr.empty:
+                    ax.hist(xr, bins=35, color="#808080", alpha=0.33, label="Dictionary")
+                if not xd.empty:
+                    ax.hist(xd, bins=35, color="#1f77b4", alpha=0.35, label="Curve")
+                if i == 0 and j == 0:
+                    ax.legend(loc="best", fontsize=7)
+                ax.set_ylabel("count")
+            else:
+                mask_ref = x_ref.notna() & y_ref.notna()
+                if mask_ref.any():
+                    ax.scatter(
+                        x_ref[mask_ref],
+                        y_ref[mask_ref],
+                        s=6,
+                        color="#7a7a7a",
+                        alpha=0.15,
+                        linewidths=0,
+                        zorder=1,
+                    )
+                mask_dense = x_dense.notna() & y_dense.notna()
+                if mask_dense.any():
+                    ax.plot(
+                        x_dense[mask_dense],
+                        y_dense[mask_dense],
+                        color="#1f77b4",
+                        lw=1.2,
+                        alpha=0.9,
+                        zorder=2,
+                    )
+                mask_file = x_file.notna() & y_file.notna()
+                if mask_file.any():
+                    ax.scatter(
+                        x_file[mask_file],
+                        y_file[mask_file],
+                        s=16,
+                        facecolor="white",
+                        edgecolor="black",
+                        linewidth=0.5,
+                        zorder=3,
+                    )
 
-    fig, axes = plt.subplots(3, 1, figsize=(10, 8.4), sharex=True)
+            ax.grid(True, alpha=0.20)
+            if i == n - 1:
+                ax.set_xlabel(x_col)
+            if j == 0 and i > 0:
+                ax.set_ylabel(y_col)
 
-    # Flux
-    flux_dense = dense_df["flux"].to_numpy(dtype=float)
-    axes[0].plot(
-        x_dense,
-        flux_dense,
-        color="#1f77b4",
-        linewidth=1.3,
-        alpha=0.85,
-        label="Complete curve",
-    )
-    axes[0].plot(
-        x_disc,
-        file_df["flux"].to_numpy(dtype=float),
-        color="#1f77b4",
-        linewidth=0.9,
-        linestyle="--",
-        alpha=0.65,
-    )
-    axes[0].scatter(
-        x_disc,
-        file_df["flux"].to_numpy(dtype=float),
-        s=22,
-        facecolor="white",
-        edgecolor="#1f77b4",
-        linewidth=0.7,
-        label="Discretized points",
-    )
-    axes[0].set_ylabel("flux_cm2_min")
-    axes[0].set_title("Flux: complete curve + discretized points")
-    _apply_striped_background(axes[0], flux_dense)
-    axes[0].grid(True, alpha=0.25)
-    axes[0].legend(loc="best", fontsize=8)
-
-    # Efficiency
-    eff_dense = dense_df["eff"].to_numpy(dtype=float)
-    axes[1].plot(
-        x_dense,
-        eff_dense,
-        color="#FF7F0E",
-        linewidth=1.3,
-        alpha=0.85,
-        label="Complete curve",
-    )
-    axes[1].plot(
-        x_disc,
-        file_df["eff"].to_numpy(dtype=float),
-        color="#FF7F0E",
-        linewidth=0.9,
-        linestyle="--",
-        alpha=0.65,
-    )
-    axes[1].scatter(
-        x_disc,
-        file_df["eff"].to_numpy(dtype=float),
-        s=22,
-        facecolor="white",
-        edgecolor="#FF7F0E",
-        linewidth=0.7,
-        label="Discretized points",
-    )
-    axes[1].set_ylabel("eff")
-    axes[1].set_title("Efficiency: complete curve + discretized points")
-    _apply_striped_background(axes[1], eff_dense)
-    axes[1].grid(True, alpha=0.25)
-    axes[1].legend(loc="best", fontsize=8)
-
-    # Global rate
-    rate_dense = dense_df["global_rate_hz"].to_numpy(dtype=float)
-    axes[2].plot(
-        x_dense,
-        rate_dense,
-        color="#2CA02C",
-        linewidth=1.3,
-        alpha=0.85,
-        label="Complete curve",
-    )
-    axes[2].plot(
-        x_disc,
-        file_df["global_rate_hz_mean"].to_numpy(dtype=float),
-        color="#2CA02C",
-        linewidth=0.9,
-        linestyle="--",
-        alpha=0.65,
-    )
-    axes[2].scatter(
-        x_disc,
-        file_df["global_rate_hz_mean"].to_numpy(dtype=float),
-        s=22,
-        facecolor="white",
-        edgecolor="#2CA02C",
-        linewidth=0.7,
-        label="Discretized points",
-    )
-    axes[2].set_xlabel("Elapsed time [hours]")
-    axes[2].set_ylabel("global rate [Hz]")
-    axes[2].set_title("Global rate: complete curve + discretized points")
-    _apply_striped_background(axes[2], rate_dense)
-    axes[2].grid(True, alpha=0.25)
-    axes[2].legend(loc="best", fontsize=8)
-
-    fig.tight_layout()
-    _save_figure(fig, path, dpi=160)
+    fig.suptitle("STEP 3.1 parameter-space trajectory (lower triangular)", fontsize=12)
+    fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.98])
+    _save_figure(fig, path, dpi=170)
     plt.close(fig)
 
 
 def _resolve_seed(cfg_31: dict) -> int:
-    """Resolve seed from config or generate one when missing/invalid."""
     raw = cfg_31.get("random_seed", None)
     if raw is not None:
         try:
@@ -930,17 +842,27 @@ def _resolve_seed(cfg_31: dict) -> int:
 
 
 def main() -> int:
-    """Run STEP 3.1 with event-based discretization."""
     parser = argparse.ArgumentParser(
-        description="Step 3.1: Create random complete (flux, eff) time series."
+        description="Step 3.1: Create complete and discretized parameter-space time series."
     )
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))
     parser.add_argument("--source-csv", default=None)
     args = parser.parse_args()
 
-    config = _load_config(Path(args.config))
     _clear_plots_dir()
+    config = _load_config(Path(args.config))
     cfg_31 = config.get("step_3_1", {})
+    deprecated_weighting_keys = (
+        "weighted_feature_columns",
+        "weighting_top_k",
+        "weighting_power",
+    )
+    for key in deprecated_weighting_keys:
+        if cfg_31.get(key) is not None:
+            log.warning(
+                "Deprecated key step_3_1.%s is ignored. STEP 3.2 owns dictionary weighting.",
+                key,
+            )
 
     source_table = str(cfg_31.get("source_table", "dataset")).strip().lower()
     if args.source_csv:
@@ -951,6 +873,7 @@ def main() -> int:
         source_path = DEFAULT_DICTIONARY
     else:
         source_path = DEFAULT_DATASET
+
     if not source_path.exists():
         log.error("Source CSV not found: %s", source_path)
         return 1
@@ -960,130 +883,93 @@ def main() -> int:
         log.error("Source CSV is empty: %s", source_path)
         return 1
 
-    if cfg_31.get("flux_column") is not None or cfg_31.get("eff_column") is not None:
-        log.warning(
-            "Deprecated keys step_3_1.flux_column/eff_column detected; ignored. "
-            "Using fixed columns %s/%s.",
-            CANONICAL_FLUX_COLUMN,
-            CANONICAL_EFF_COLUMN,
-        )
-
-    flux_col = CANONICAL_FLUX_COLUMN
-    if flux_col not in source_df.columns:
-        log.error("Flux column '%s' not found in source table.", flux_col)
-        return 1
-    preferred_eff_col = CANONICAL_EFF_COLUMN
-    try:
-        eff_col = _choose_eff_column(source_df, preferred_eff_col)
-    except KeyError as exc:
-        log.error("%s", exc)
-        return 1
-
-    src_flux = pd.to_numeric(source_df[flux_col], errors="coerce")
-    src_eff = pd.to_numeric(source_df[eff_col], errors="coerce")
-    valid = src_flux.notna() & src_eff.notna()
-    if valid.sum() < 3:
-        log.error("Not enough valid rows in source table for %s and %s.", flux_col, eff_col)
-        return 1
-
-    flux_range = _resolve_numeric_range(
-        cfg_31.get("flux_range"),
-        float(src_flux[valid].min()),
-        float(src_flux[valid].max()),
-    )
-    eff_range = _resolve_numeric_range(
-        cfg_31.get("eff_range"),
-        float(src_eff[valid].min()),
-        float(src_eff[valid].max()),
-    )
-
-    # Rate reference table (usually dictionary)
     if cfg_31.get("rate_dictionary_csv"):
         rate_path = _resolve_input_path(str(cfg_31.get("rate_dictionary_csv")))
     else:
         rate_path = DEFAULT_DICTIONARY
+
     if not rate_path.exists():
         log.error("Rate dictionary CSV not found: %s", rate_path)
         return 1
+
     rate_df = pd.read_csv(rate_path, low_memory=False)
     if rate_df.empty:
         log.error("Rate dictionary CSV is empty: %s", rate_path)
         return 1
 
-    rate_flux_col = str(cfg_31.get("rate_flux_column", flux_col))
-    if rate_flux_col not in rate_df.columns:
-        log.warning("rate_flux_column '%s' missing; using '%s'.", rate_flux_col, flux_col)
-        rate_flux_col = flux_col
+    # Resolve canonical columns and rate source.
+    if CANONICAL_FLUX_COLUMN not in rate_df.columns:
+        log.error("Rate dictionary must contain '%s'.", CANONICAL_FLUX_COLUMN)
+        return 1
 
-    rate_eff_cfg = str(cfg_31.get("rate_eff_column", eff_col))
-    if rate_eff_cfg in rate_df.columns:
-        rate_eff_col = rate_eff_cfg
-    else:
-        try:
-            rate_eff_col = _choose_eff_column(rate_df, rate_eff_cfg)
-        except KeyError as exc:
-            log.error("%s", exc)
-            return 1
+    try:
+        _ = _choose_eff_column(rate_df, CANONICAL_EFF_COLUMN)
+    except KeyError as exc:
+        log.error("%s", exc)
+        return 1
 
     rate_col_requested = str(cfg_31.get("rate_column", "events_per_second_global_rate"))
     rate_col = _pick_rate_column(rate_df, rate_col_requested)
     if rate_col is None:
-        log.error(
-            "Global-rate column not found in rate dictionary (requested='%s').",
-            rate_col_requested,
-        )
+        log.error("Could not find/derive rate column in rate dictionary (requested='%s').", rate_col_requested)
         return 1
-    if rate_col != rate_col_requested:
-        log.info(
-            "Global-rate column '%s' missing/unusable; using '%s'.",
-            rate_col_requested,
-            rate_col,
-        )
-
-    contour_eff_band_tol_cfg = cfg_31.get(
-        "iso_rate_efficiency_band_tolerance_pct",
-        config.get("iso_rate_efficiency_band_tolerance_pct", 10.0),
-    )
-    contour_eff_band_tolerance_pct = max(
-        0.0,
-        _safe_float(contour_eff_band_tol_cfg, 10.0),
-    )
-    contour_band_mask = _mask_sim_eff_within_tolerance_band(rate_df, contour_eff_band_tolerance_pct)
-    n_rate_rows_total = int(len(rate_df))
-    n_rate_rows_contour = int(np.count_nonzero(contour_band_mask))
-    if n_rate_rows_contour == 0:
-        log.warning(
-            "No rate-dictionary rows satisfy 4-eff band tolerance (<= %.3f%%). "
-            "Contour background will be disabled.",
-            contour_eff_band_tolerance_pct,
-        )
-    elif n_rate_rows_contour < 3:
-        log.warning(
-            "Only %d rows satisfy 4-eff band tolerance (<= %.3f%%); "
-            "contours may be weakly constrained.",
-            n_rate_rows_contour,
-            contour_eff_band_tolerance_pct,
-        )
-
     try:
-        rate_model = _build_rate_model(rate_df, rate_flux_col, rate_eff_col, rate_col)
+        rate_range_hz = _resolve_global_rate_range_hz(
+            rate_df=rate_df,
+            rate_col=rate_col,
+            cfg_31=cfg_31,
+        )
     except ValueError as exc:
         log.error("%s", exc)
         return 1
-    contour_rate_model: dict | None = None
-    if n_rate_rows_contour >= 1:
-        rate_df_contour = rate_df.loc[contour_band_mask].copy()
-        try:
-            contour_rate_model = _build_rate_model(rate_df_contour, rate_flux_col, rate_eff_col, rate_col)
-        except ValueError:
-            contour_rate_model = None
 
-    # Counts per synthetic file
+    # Parameter-space curve configuration.
+    try:
+        param_cols = _resolve_parameter_curve_columns(rate_df, cfg_31)
+    except ValueError as exc:
+        log.error("%s", exc)
+        return 1
+
+    try:
+        param_ranges = _resolve_parameter_ranges(param_cols, source_df, rate_df, cfg_31)
+    except ValueError as exc:
+        log.error("%s", exc)
+        return 1
+
+    identical_efficiencies = _as_bool(cfg_31.get("identical_efficiencies", False), default=False)
+    eff_spread_raw = cfg_31.get("efficiency_spread", cfg_31.get("eff_spread", None))
+    eff_spread_requested: float | None = None
+    if eff_spread_raw not in (None, "", "null", "None"):
+        eff_spread_requested = max(0.0, _safe_float(eff_spread_raw, 0.0))
+    if identical_efficiencies and eff_spread_requested is not None and eff_spread_requested > 0.0:
+        log.warning(
+            "step_3_1.efficiency_spread=%.4g ignored because identical_efficiencies=true.",
+            eff_spread_requested,
+        )
+    elif eff_spread_requested is not None and eff_spread_requested > 0.0:
+        log.warning(
+            "step_3_1.efficiency_spread=%.4g is currently ignored. "
+            "STEP 3.1 now keeps curve generation inside dictionary convex hull.",
+            eff_spread_requested,
+        )
+    eff_cols_cfg = [c for c in param_cols if c.startswith("eff_sim_")]
+    curve_generation_mode = str(cfg_31.get("curve_generation_mode", "convex_hull")).strip().lower()
+    if eff_cols_cfg:
+        eff_ranges_used = {c: [float(param_ranges[c][0]), float(param_ranges[c][1])] for c in eff_cols_cfg}
+        log.info(
+            "Efficiency ranges: %s | spread requested (ignored): %s | curve_generation_mode=%s",
+            eff_ranges_used,
+            ("None" if eff_spread_requested is None else f"{eff_spread_requested:.6g}"),
+            curve_generation_mode,
+        )
+
+    # Time/discretization configuration.
     default_events_per_file = 50000
     if "n_events" in source_df.columns:
-        m = pd.to_numeric(source_df["n_events"], errors="coerce").dropna()
-        if not m.empty:
-            default_events_per_file = int(max(1.0, float(m.median())))
+        med = pd.to_numeric(source_df["n_events"], errors="coerce").dropna()
+        if not med.empty:
+            default_events_per_file = int(max(1.0, float(med.median())))
+
     events_per_file = _safe_int(
         cfg_31.get("events_per_file", default_events_per_file),
         default_events_per_file,
@@ -1091,13 +977,13 @@ def main() -> int:
     )
     include_partial_last_file = _as_bool(cfg_31.get("include_partial_last_file", True), default=True)
 
-    # Dense trajectory for robust event integration
     duration_hours = max(1e-6, _safe_float(cfg_31.get("duration_hours", 72.0), 72.0))
     duration_seconds = duration_hours * 3600.0
-    dense_points_default = 4000
+
+    dense_default = 4000
     if "n_points" in cfg_31:
-        dense_points_default = max(dense_points_default, 20 * _safe_int(cfg_31.get("n_points"), 240, minimum=2))
-    dense_points = _safe_int(cfg_31.get("dense_points", dense_points_default), dense_points_default, minimum=200)
+        dense_default = max(dense_default, 20 * _safe_int(cfg_31.get("n_points"), 240, minimum=2))
+    dense_points = _safe_int(cfg_31.get("dense_points", dense_default), dense_default, minimum=200)
 
     start_time_raw = str(cfg_31.get("start_time_utc", "2026-01-01T00:00:00Z"))
     start_time = pd.to_datetime(start_time_raw, utc=True, errors="coerce")
@@ -1109,47 +995,84 @@ def main() -> int:
     rng = np.random.default_rng(seed)
     log.info("Using random seed: %d", seed)
 
+    # Keep only valid dictionary rows for parameter-space reference plotting.
+    dict_param_df = rate_df[param_cols].apply(pd.to_numeric, errors="coerce")
+    valid_dict = dict_param_df.notna().all(axis=1)
+    rate_work = rate_df.loc[valid_dict].reset_index(drop=True)
+    if rate_work.empty:
+        log.error("No valid dictionary rows in parameter-space columns: %s", param_cols)
+        return 1
+
+    # Build dense parameter-space trajectory.
     u = _normalised_axis(dense_points)
-    dense_flux, dense_eff = _build_random_curve(
+    curve, curve_build_info = _build_parameter_curve(
         u=u,
-        flux_range=flux_range,
-        eff_range=eff_range,
+        param_cols=param_cols,
+        param_ranges=param_ranges,
         rng=rng,
         cfg_31=cfg_31,
+        identical_efficiencies=identical_efficiencies,
+        reference_df=rate_work[param_cols],
     )
-    dense_time_s = np.linspace(0.0, duration_seconds, dense_points, dtype=float)
-    dense_rate_hz = _predict_rate(rate_model, dense_flux, dense_eff, min_rate_hz=1e-6)
-    dense_cum_events = _cumulative_events(dense_time_s, dense_rate_hz)
+    log.info(
+        "Curve generation: mode=%s, reference_points=%s, anchors=%s",
+        curve_build_info.get("mode"),
+        curve_build_info.get("n_reference_points"),
+        curve_build_info.get("n_anchor_points"),
+    )
 
+    dense_rate_hz = _build_global_rate_curve_from_parameters(
+        curve=curve,
+        param_cols=param_cols,
+        cfg_31=cfg_31,
+        rate_range_hz=rate_range_hz,
+    )
+
+    dense_time_s = np.linspace(0.0, duration_seconds, dense_points, dtype=float)
+    dense_cum_events = _cumulative_events(dense_time_s, dense_rate_hz)
     dense_time = start_time + pd.to_timedelta(dense_time_s, unit="s")
-    dense_df = pd.DataFrame({
-        "curve_index": np.arange(len(dense_time_s), dtype=int),
-        "time_utc": dense_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "elapsed_seconds": dense_time_s,
-        "elapsed_hours": dense_time_s / 3600.0,
-        "flux": dense_flux,
-        "eff": dense_eff,
-        "flux_cm2_min": dense_flux,
-        "eff_sim_1": dense_eff,
-        "global_rate_hz": dense_rate_hz,
-        "cumulative_events_expected": dense_cum_events,
-    })
+
+    dense_df = pd.DataFrame(
+        {
+            "curve_index": np.arange(len(dense_time_s), dtype=int),
+            "time_utc": dense_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "elapsed_seconds": dense_time_s,
+            "elapsed_hours": dense_time_s / 3600.0,
+        }
+    )
+
+    for col in param_cols:
+        dense_df[col] = np.asarray(curve[col], dtype=float)
+
+    # Canonical aliases expected by downstream tooling/plots.
+    if CANONICAL_FLUX_COLUMN in dense_df.columns:
+        dense_df["flux"] = pd.to_numeric(dense_df[CANONICAL_FLUX_COLUMN], errors="coerce")
+    elif "flux" not in dense_df.columns:
+        dense_df["flux"] = pd.to_numeric(dense_df[param_cols[0]], errors="coerce")
+
+    if CANONICAL_EFF_COLUMN in dense_df.columns:
+        dense_df["eff"] = pd.to_numeric(dense_df[CANONICAL_EFF_COLUMN], errors="coerce")
+    else:
+        eff_cols = [c for c in param_cols if c.startswith("eff_sim_")]
+        if eff_cols:
+            dense_df["eff"] = pd.to_numeric(dense_df[eff_cols[0]], errors="coerce")
+        else:
+            dense_df["eff"] = np.nan
 
     out_dense_csv = FILES_DIR / "complete_curve_time_series.csv"
     dense_df.to_csv(out_dense_csv, index=False)
     log.info("Wrote complete curve CSV: %s (%d rows)", out_dense_csv, len(dense_df))
 
-    stale_old_curve_csv = FILES_DIR / "original_curve_time_series.csv"
-    if stale_old_curve_csv.exists():
-        stale_old_curve_csv.unlink()
-        log.info("Removed deprecated CSV: %s", stale_old_curve_csv)
+    dense_tracks: dict[str, np.ndarray] = {}
+    for col in [*param_cols]:
+        if col in dense_df.columns and col not in dense_tracks:
+            dense_tracks[col] = pd.to_numeric(dense_df[col], errors="coerce").to_numpy(dtype=float)
 
     try:
         file_df, total_events = _discretize_curve_by_events(
             dense_time_s=dense_time_s,
-            dense_flux=dense_flux,
-            dense_eff=dense_eff,
             dense_rate_hz=dense_rate_hz,
+            dense_tracks=dense_tracks,
             events_per_file=events_per_file,
             include_partial_last_file=include_partial_last_file,
         )
@@ -1159,114 +1082,130 @@ def main() -> int:
 
     if len(file_df) < 3:
         log.warning(
-            "Only %d synthetic file(s) produced; consider increasing duration_hours "
-            "or decreasing events_per_file.",
+            "Only %d synthetic file(s) produced; consider increasing duration_hours or decreasing events_per_file.",
             len(file_df),
         )
+
+    # Canonical aliases.
+    if CANONICAL_FLUX_COLUMN in file_df.columns:
+        file_df["flux"] = pd.to_numeric(file_df[CANONICAL_FLUX_COLUMN], errors="coerce")
+    elif "flux" not in file_df.columns and param_cols:
+        file_df["flux"] = pd.to_numeric(file_df[param_cols[0]], errors="coerce")
+
+    if CANONICAL_EFF_COLUMN in file_df.columns:
+        file_df["eff"] = pd.to_numeric(file_df[CANONICAL_EFF_COLUMN], errors="coerce")
+    elif "eff" not in file_df.columns:
+        eff_cols = [c for c in param_cols if c.startswith("eff_sim_")]
+        if eff_cols:
+            file_df["eff"] = pd.to_numeric(file_df[eff_cols[0]], errors="coerce")
+        else:
+            file_df["eff"] = np.nan
 
     time_start = start_time + pd.to_timedelta(file_df["elapsed_seconds_start"], unit="s")
     time_end = start_time + pd.to_timedelta(file_df["elapsed_seconds_end"], unit="s")
     time_mid = start_time + pd.to_timedelta(file_df["elapsed_seconds"], unit="s")
+
     file_df["time_start_utc"] = time_start.dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     file_df["time_end_utc"] = time_end.dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     file_df["time_utc"] = time_mid.dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    out_cols = [
+    base_cols = [
         "file_index",
-        "time_start_utc", "time_end_utc", "time_utc",
-        "elapsed_hours_start", "elapsed_hours_end", "elapsed_hours",
+        "time_start_utc",
+        "time_end_utc",
+        "time_utc",
+        "elapsed_hours_start",
+        "elapsed_hours_end",
+        "elapsed_hours",
         "duration_seconds",
-        "target_events_per_file", "n_events_expected", "n_events",
-        "global_rate_hz_mid", "global_rate_hz_mean",
-        "flux", "eff", "flux_cm2_min", "eff_sim_1",
+        "target_events_per_file",
+        "n_events_expected",
+        "n_events",
+        "flux",
+        "eff",
+        "flux_cm2_min",
+        "eff_sim_1",
     ]
-    out_df = file_df[out_cols].copy()
 
+    extra_param_cols = [
+        c
+        for c in param_cols
+        if c not in {"flux", "eff", "flux_cm2_min", "eff_sim_1"}
+    ]
+    extra_cols = [c for c in extra_param_cols if c in file_df.columns]
+
+    out_cols = [c for c in base_cols if c in file_df.columns] + extra_cols
+    out_cols = list(dict.fromkeys(out_cols))
+
+    out_df = file_df[out_cols].copy()
     out_csv = FILES_DIR / "time_series.csv"
     out_df.to_csv(out_csv, index=False)
     log.info("Wrote time series CSV: %s (%d rows)", out_csv, len(out_df))
 
-    out_summary = FILES_DIR / "time_series_summary.json"
+    dense_eff_spread_stats: dict[str, float] = {}
+    file_eff_spread_stats: dict[str, float] = {}
+    eff_cols_for_stats = [
+        c for c in param_cols
+        if c.startswith("eff_sim_") and c in dense_df.columns and c in out_df.columns
+    ]
+    if len(eff_cols_for_stats) >= 2:
+        dense_eff_matrix = dense_df[eff_cols_for_stats].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+        dense_spread = np.nanmax(dense_eff_matrix, axis=1) - np.nanmin(dense_eff_matrix, axis=1)
+        dense_spread = dense_spread[np.isfinite(dense_spread)]
+        if dense_spread.size > 0:
+            dense_eff_spread_stats = {
+                "dense_eff_spread_min": float(np.min(dense_spread)),
+                "dense_eff_spread_median": float(np.median(dense_spread)),
+                "dense_eff_spread_max": float(np.max(dense_spread)),
+            }
+
+        file_eff_matrix = out_df[eff_cols_for_stats].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+        file_spread = np.nanmax(file_eff_matrix, axis=1) - np.nanmin(file_eff_matrix, axis=1)
+        file_spread = file_spread[np.isfinite(file_spread)]
+        if file_spread.size > 0:
+            file_eff_spread_stats = {
+                "file_eff_spread_min": float(np.min(file_spread)),
+                "file_eff_spread_median": float(np.median(file_spread)),
+                "file_eff_spread_max": float(np.max(file_spread)),
+            }
+
     summary = {
         "source_csv": str(source_path),
-        "source_rows": int(len(source_df)),
         "rate_dictionary_csv": str(rate_path),
-        "flux_column": flux_col,
-        "eff_column": eff_col,
-        "rate_flux_column": rate_flux_col,
-        "rate_eff_column": rate_eff_col,
-        "rate_column_requested": rate_col_requested,
-        "rate_column": rate_col,
-        "iso_rate_efficiency_band_tolerance_pct": float(contour_eff_band_tolerance_pct),
-        "rate_dictionary_rows_total": int(n_rate_rows_total),
-        "rate_dictionary_rows_for_iso_rate_contours": int(n_rate_rows_contour),
-        "generator": "random_complete",
+        "parameter_curve_columns": param_cols,
+        "parameter_ranges_used": {k: [float(v[0]), float(v[1])] for k, v in param_ranges.items()},
+        "identical_efficiencies": bool(identical_efficiencies),
+        "efficiency_spread_requested": eff_spread_requested,
+        "curve_generation_mode_requested": curve_generation_mode,
+        "curve_generation_mode_used": curve_build_info.get("mode"),
+        "curve_generation_reference_points": curve_build_info.get("n_reference_points"),
+        "curve_generation_anchor_points": curve_build_info.get("n_anchor_points"),
         "random_seed": int(seed),
-        "complete_sampling_points": int(dense_points),
-        "complete_curve_points": int(len(dense_df)),
         "duration_hours": float(duration_hours),
-        "start_time_utc": str(out_df["time_start_utc"].iloc[0]),
-        "end_time_utc": str(out_df["time_end_utc"].iloc[-1]),
-        "flux_range_used": [float(flux_range[0]), float(flux_range[1])],
-        "eff_range_used": [float(eff_range[0]), float(eff_range[1])],
+        "dense_points": int(dense_points),
         "events_per_file": int(events_per_file),
         "include_partial_last_file": bool(include_partial_last_file),
         "n_files": int(len(out_df)),
         "total_expected_events": float(total_events),
-        "total_expected_events_complete_integral": float(dense_cum_events[-1]),
+        "start_time_utc": str(out_df["time_start_utc"].iloc[0]),
+        "end_time_utc": str(out_df["time_end_utc"].iloc[-1]),
         "mean_file_duration_seconds": float(out_df["duration_seconds"].mean()),
-        "min_file_duration_seconds": float(out_df["duration_seconds"].min()),
-        "max_file_duration_seconds": float(out_df["duration_seconds"].max()),
-        "flux_generated_range": [
-            float(out_df["flux"].min()),
-            float(out_df["flux"].max()),
-        ],
-        "eff_generated_range": [
-            float(out_df["eff"].min()),
-            float(out_df["eff"].max()),
-        ],
-        "global_rate_generated_range_hz": [
-            float(out_df["global_rate_hz_mean"].min()),
-            float(out_df["global_rate_hz_mean"].max()),
-        ],
-        "n_harmonics": _safe_int(cfg_31.get("n_harmonics", 4), 4, minimum=1),
-        "roughness": float(_safe_float(cfg_31.get("roughness", 1.6), 1.6)),
-        "smoothing_window_points": _safe_int(
-            cfg_31.get("smoothing_window_points", 11), 11, minimum=1
-        ),
-        "smoothing_passes": _safe_int(cfg_31.get("smoothing_passes", 2), 2, minimum=0),
     }
+    summary.update(dense_eff_spread_stats)
+    summary.update(file_eff_spread_stats)
+    out_summary = FILES_DIR / "time_series_summary.json"
     with open(out_summary, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
     log.info("Wrote summary JSON: %s", out_summary)
 
-    out_ts_plot = PLOTS_DIR / "time_series_flux_eff.png"
-    _plot_time_series(dense_df, out_df, out_ts_plot)
-    log.info("Wrote plot: %s", out_ts_plot)
-
-    stale_old_plot = PLOTS_DIR / "original_curve_time_series_flux_eff.png"
-    if stale_old_plot.exists():
-        stale_old_plot.unlink()
-        log.info("Removed deprecated plot: %s", stale_old_plot)
-
-    contour_grid_points = _safe_int(cfg_31.get("contour_grid_points", 180), 180, minimum=40)
-    out_curve_plot = PLOTS_DIR / "curve_flux_vs_eff.png"
-    _plot_curve_flux_vs_eff(
-        source_df=source_df,
-        source_flux_col=flux_col,
-        source_eff_col=eff_col,
-        dense_flux=dense_flux,
-        dense_eff=dense_eff,
+    _plot_time_series(dense_df, out_df, PLOTS_DIR / "time_series_flux_eff.png")
+    _plot_parameter_space_lower_triangle(
+        reference_df=rate_work,
+        dense_df=dense_df,
         file_df=out_df,
-        rate_model=rate_model,
-        contour_rate_model=contour_rate_model,
-        events_per_file=events_per_file,
-        contour_grid_points=contour_grid_points,
-        contour_eff_band_tolerance_pct=contour_eff_band_tolerance_pct,
-        contour_model_points=n_rate_rows_contour,
-        path=out_curve_plot,
+        param_cols=param_cols,
+        path=PLOTS_DIR / "parameter_space_lower_triangle.png",
     )
-    log.info("Wrote plot: %s", out_curve_plot)
 
     log.info("Done.")
     return 0

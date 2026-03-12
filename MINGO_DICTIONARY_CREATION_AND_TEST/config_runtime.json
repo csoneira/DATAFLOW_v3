@@ -16,7 +16,14 @@
     "source_csv": null,
     "_source_csv_comment": "Optional source-table override for STEP 3.1. If null, use source_table selection (dataset/dictionary defaults).",
     "rate_dictionary_csv": null,
-    "_rate_dictionary_csv_comment": "Optional dictionary used for global-rate contour/rate model in STEP 3.1."
+    "_rate_dictionary_csv_comment": "Optional dictionary used for global-rate contour/rate model in STEP 3.1.",
+    "eff_range": [
+      0.6,
+      1.0
+    ],
+    "_eff_range_comment": "Efficiency value range for STEP 3.1 generated eff_sim_* curves.",
+    "efficiency_spread": 0.15,
+    "_efficiency_spread_comment": "Target max-min spread across eff_sim_1..4 along the generated curve (ignored when identical_efficiencies=true)."
   },
   "step_3_2": {
     "time_series_csv": null,

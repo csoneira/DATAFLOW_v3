@@ -20,12 +20,14 @@ from datetime import datetime, timedelta
 import json
 import logging
 import re
+import sys
 from pathlib import Path
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
 
@@ -52,6 +54,14 @@ DEFAULT_DICTIONARY = (
     / "FILES"
     / "dictionary.csv"
 )
+DEFAULT_STEP14_SELECTED_FEATURES = (
+    STEP_ROOT
+    / "STEP_1_SETUP"
+    / "STEP_1_4_ENSURE_CONTINUITY_DICTIONARY"
+    / "OUTPUTS"
+    / "FILES"
+    / "selected_feature_columns.json"
+)
 ONLINE_RUN_DICTIONARY_ROOT = (
     REPO_ROOT
     / "MASTER"
@@ -67,6 +77,7 @@ FILES_DIR.mkdir(parents=True, exist_ok=True)
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 
 PLOT_EVENT_HIST = PLOTS_DIR / "STEP_4_1_1_event_count_histogram.png"
+PLOT_FEATURE_MATRIX = PLOTS_DIR / "STEP_4_1_2_feature_scatter_matrix_real_vs_dictionary.png"
 PLOT_COMPARE_COLS = PLOTS_DIR / "STEP_4_1_3_comparison_columns_and_global_rate.png"
 
 _PLOT_EXTENSIONS = {
@@ -87,6 +98,33 @@ RATE_HIST_BIN_RE = re.compile(r"^events_per_second_(?P<bin>\d+)_rate_hz")
 
 logging.basicConfig(format="[%(levelname)s] STEP_4.1 - %(message)s", level=logging.INFO)
 log = logging.getLogger("STEP_4.1")
+
+STEP12_TRANSFORM_DIR = STEP_ROOT / "STEP_1_SETUP" / "STEP_1_2_TRANSFORM_FEATURE_SPACE"
+if str(STEP12_TRANSFORM_DIR) not in sys.path:
+    sys.path.insert(0, str(STEP12_TRANSFORM_DIR))
+try:
+    from transform_feature_space import (  # noqa: E402
+        CANONICAL_PREFIX_PRIORITY as STEP12_CANONICAL_PREFIX_PRIORITY,
+        RATE_HIST_PLACEHOLDER_COL as STEP12_RATE_HIST_PLACEHOLDER_COL,
+        RATE_HIST_PLACEHOLDER_LABEL as STEP12_RATE_HIST_PLACEHOLDER_LABEL,
+        _add_derived_physics_helper_columns as _step12_add_derived_physics_helper_columns,
+        _build_prefix_global_rate_columns as _step12_build_prefix_global_rate_columns,
+        _compute_empirical_efficiencies as _step12_compute_empirical_efficiencies,
+        _drop_non_best_tt_columns as _step12_drop_non_best_tt_columns,
+        _ensure_standard_task_prefix_rate_columns as _step12_ensure_standard_task_prefix_rate_columns,
+        _normalize_requested_columns as _step12_normalize_requested_columns,
+        _resolve_feature_matrix_plot_columns as _step12_resolve_feature_matrix_plot_columns,
+        _resolve_configured_keep_columns as _step12_resolve_configured_keep_columns,
+        _select_best_tt_prefix as _step12_select_best_tt_prefix,
+        _select_canonical_global_rate as _step12_select_canonical_global_rate,
+    )
+except Exception as exc:
+    log.error(
+        "Could not import STEP 1.2 transform helpers from %s: %s",
+        STEP12_TRANSFORM_DIR,
+        exc,
+    )
+    raise
 
 
 def _clear_plots_dir() -> None:
@@ -303,6 +341,23 @@ def _coalesce(primary: object, fallback: object) -> object:
     if primary in (None, "", "null", "None"):
         return fallback
     return primary
+
+
+def _safe_bool(value: object, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if not np.isfinite(float(value)):
+            return default
+        return bool(int(value))
+    text = str(value).strip().lower()
+    if text in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    return default
 
 
 def _resolve_input_path(path_like: str | Path) -> Path:
@@ -708,6 +763,69 @@ def _aggregate_latest(df: pd.DataFrame, timestamp_col: str) -> pd.DataFrame:
     return work.groupby("filename_base").tail(1)
 
 
+def _load_task_metadata_source_csv(
+    *,
+    task_id: int,
+    source_name: str,
+    path: Path,
+    metadata_agg: str,
+    timestamp_col: str,
+) -> pd.DataFrame:
+    """Load one task metadata source using the same equal-level pattern as STEP 1.1."""
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Missing required {source_name} metadata for task {task_id}: {path}"
+        )
+    log.info("Loading task %d %s metadata: %s", task_id, source_name, path)
+    meta_df = pd.read_csv(path, low_memory=False)
+    if "filename_base" not in meta_df.columns:
+        raise KeyError(
+            f"Task {task_id} {source_name} metadata has no 'filename_base' column: {path}"
+        )
+    if metadata_agg == "latest":
+        meta_df = _aggregate_latest(meta_df, timestamp_col=timestamp_col)
+    meta_df = meta_df.groupby("filename_base", sort=False).tail(1).reset_index(drop=True)
+    log.info(
+        "  %s rows (after aggregation): %d, columns=%d",
+        source_name,
+        len(meta_df),
+        len(meta_df.columns),
+    )
+    return meta_df
+
+
+def _merge_metadata_sources_equal_level(
+    *,
+    task_id: int,
+    ordered_sources: list[tuple[str, pd.DataFrame]],
+) -> tuple[pd.DataFrame, dict]:
+    """Merge task metadata sources at equal level (same architecture as STEP 1.1)."""
+    if not ordered_sources:
+        raise ValueError(f"No metadata sources were provided for task {task_id}.")
+    merged = ordered_sources[0][1].copy()
+    info: dict = {
+        "task_id": int(task_id),
+        "source_names": [name for name, _ in ordered_sources],
+        "rows_per_source_before_merge": {
+            name: int(len(df)) for name, df in ordered_sources
+        },
+        "renamed_overlap_columns": {},
+    }
+
+    for source_name, source_df in ordered_sources[1:]:
+        overlap = sorted(
+            set(merged.columns).intersection(set(source_df.columns)) - {"filename_base"}
+        )
+        renamed: dict[str, str] = {}
+        if overlap:
+            renamed = {col: f"{source_name}__{col}" for col in overlap}
+            source_df = source_df.rename(columns=renamed)
+        merged = merged.merge(source_df, on="filename_base", how="inner")
+        info["renamed_overlap_columns"][source_name] = renamed
+        info[f"rows_after_merge_with_{source_name}"] = int(len(merged))
+    return merged, info
+
+
 def _load_rate_histogram_bins(
     *,
     station_id: int,
@@ -799,6 +917,19 @@ def _pick_event_count_column(df: pd.DataFrame) -> str | None:
             values = pd.to_numeric(df[col], errors="coerce")
             if values.notna().any():
                 return col
+    for source in ("trigger_type", "rate_histogram", "specific"):
+        for base_col in (
+            "selected_rows",
+            "requested_rows",
+            "generated_events_count",
+            "num_events",
+            "event_count",
+        ):
+            col = f"{source}__{base_col}"
+            if col in df.columns:
+                values = pd.to_numeric(df[col], errors="coerce")
+                if values.notna().any():
+                    return col
 
     return None
 
@@ -827,6 +958,229 @@ def _pick_duration_seconds_column(df: pd.DataFrame) -> str | None:
     return None
 
 
+def _resolve_event_count_values(
+    df: pd.DataFrame,
+    *,
+    event_count_column: str = "auto",
+) -> tuple[pd.Series, str | None, str]:
+    """Resolve per-row event counts from explicit count columns or derived fallback."""
+    event_col_cfg = str(event_count_column).strip()
+    event_col: str | None
+    if event_col_cfg and event_col_cfg.lower() != "auto":
+        event_col = event_col_cfg if event_col_cfg in df.columns else None
+    else:
+        event_col = _pick_event_count_column(df)
+
+    if event_col is not None:
+        values = pd.to_numeric(df[event_col], errors="coerce")
+        if values.notna().any():
+            return (values, event_col, "column")
+
+    # Last-resort fallback: estimate counts from global rate and acquisition duration.
+    duration_col = _pick_duration_seconds_column(df)
+    global_rate_col = _pick_global_rate_column(df, preferred="events_per_second_global_rate")
+    if duration_col is not None and global_rate_col is not None:
+        duration = pd.to_numeric(df[duration_col], errors="coerce")
+        global_rate = pd.to_numeric(df[global_rate_col], errors="coerce")
+        values = duration * global_rate
+        if values.notna().any():
+            return (values, f"{global_rate_col} * {duration_col}", "derived_rate_x_duration")
+
+    return (
+        pd.Series(np.nan, index=df.index, dtype=float),
+        (event_col_cfg if event_col_cfg and event_col_cfg.lower() != "auto" else None),
+        "none",
+    )
+
+
+def _backfill_efficiency_columns_from_empirical(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """Backfill eff_p*/eff_sim_* from eff_empirical_* when sim efficiencies are absent."""
+    out = df.copy()
+    created = 0
+    for idx in (1, 2, 3, 4):
+        emp_col = f"eff_empirical_{idx}"
+        ep_col = f"eff_p{idx}"
+        es_col = f"eff_sim_{idx}"
+        if emp_col not in out.columns:
+            continue
+
+        emp_vals = pd.to_numeric(out[emp_col], errors="coerce")
+
+        if ep_col not in out.columns:
+            out[ep_col] = emp_vals
+            created += 1
+        else:
+            ep_vals = pd.to_numeric(out[ep_col], errors="coerce")
+            fill_ep = ep_vals.isna() & emp_vals.notna()
+            if bool(fill_ep.any()):
+                out.loc[fill_ep, ep_col] = emp_vals.loc[fill_ep]
+
+        ep_vals_now = pd.to_numeric(out[ep_col], errors="coerce")
+        if es_col not in out.columns:
+            out[es_col] = ep_vals_now
+            created += 1
+        else:
+            es_vals = pd.to_numeric(out[es_col], errors="coerce")
+            fill_es = es_vals.isna() & ep_vals_now.notna()
+            if bool(fill_es.any()):
+                out.loc[fill_es, es_col] = ep_vals_now.loc[fill_es]
+
+    return out, created
+
+
+def _apply_step12_feature_space_transform(
+    df: pd.DataFrame,
+    *,
+    cfg_12: dict,
+    identity_column: str | None = None,
+) -> tuple[pd.DataFrame, dict]:
+    """Apply STEP 1.2 feature-space transformation using STEP 1.2 definitions."""
+    requested_keep_patterns = _step12_normalize_requested_columns(
+        cfg_12.get("transform_keep_columns")
+    )
+    requested_keep_patterns_cfg = list(requested_keep_patterns)
+    if (
+        identity_column
+        and isinstance(identity_column, str)
+        and identity_column in df.columns
+        and identity_column not in requested_keep_patterns
+    ):
+        requested_keep_patterns = [*requested_keep_patterns, identity_column]
+    if not requested_keep_patterns:
+        raise ValueError(
+            "STEP 4.1 cannot apply STEP 1.2 transform: "
+            "step_1_2.transform_keep_columns is missing/empty."
+        )
+
+    preferred_prefixes_t = tuple(STEP12_CANONICAL_PREFIX_PRIORITY)
+    out, rate_col_by_prefix, tt_cols_by_prefix = _step12_build_prefix_global_rate_columns(df)
+    out, added_standard_rate_cols = _step12_ensure_standard_task_prefix_rate_columns(
+        out,
+        rate_col_by_prefix=rate_col_by_prefix,
+    )
+    out, canonical_source_counts = _step12_select_canonical_global_rate(
+        out,
+        rate_col_by_prefix=rate_col_by_prefix,
+        preferred_prefixes=preferred_prefixes_t,
+    )
+    out, empirical_selected_prefix, empirical_used_prefixes = _step12_compute_empirical_efficiencies(
+        out,
+        preferred_prefixes=preferred_prefixes_t,
+    )
+    out, helper_count = _step12_add_derived_physics_helper_columns(out)
+
+    try:
+        min_eff_sim = float(cfg_12.get("min_simulated_efficiency", 0.5))
+    except (TypeError, ValueError):
+        min_eff_sim = 0.5
+    try:
+        max_eff_spread = float(cfg_12.get("max_simulated_efficiency_spread", 0.15))
+    except (TypeError, ValueError):
+        max_eff_spread = 0.15
+
+    eff_sim_cols = [c for c in ("eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4") if c in out.columns]
+    rows_before_min_eff_filter = int(len(out))
+    rows_removed_min_eff_filter = 0
+    if eff_sim_cols and min_eff_sim > 0.0:
+        eff_vals = out[eff_sim_cols].apply(pd.to_numeric, errors="coerce")
+        keep_mask = (eff_vals >= min_eff_sim).all(axis=1)
+        rows_removed_min_eff_filter = int(np.count_nonzero(~keep_mask))
+        out = out.loc[keep_mask].reset_index(drop=True)
+
+    rows_before_spread_filter = int(len(out))
+    rows_removed_spread_filter = 0
+    if eff_sim_cols and max_eff_spread > 0.0:
+        eff_vals = out[eff_sim_cols].apply(pd.to_numeric, errors="coerce")
+        spread = eff_vals.max(axis=1) - eff_vals.min(axis=1)
+        keep_mask = spread <= max_eff_spread
+        rows_removed_spread_filter = int(np.count_nonzero(~keep_mask))
+        out = out.loc[keep_mask].reset_index(drop=True)
+
+    # Real-data path: materialize STEP 1 helper columns from empirical efficiencies
+    # when eff_p*/eff_sim_* are absent, so feature-space dimensionality stays aligned.
+    out, backfilled_eff_cols = _backfill_efficiency_columns_from_empirical(out)
+    out, helper_count_post = _step12_add_derived_physics_helper_columns(out)
+    helper_count += int(helper_count_post)
+    # Real data must not expose unknown simulation-efficiency coordinates.
+    nonobservable_eff_cols = [
+        c for c in (
+            "eff_p1", "eff_p2", "eff_p3", "eff_p4",
+            "eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4",
+        )
+        if c in out.columns
+    ]
+    if nonobservable_eff_cols:
+        out = out.drop(columns=nonobservable_eff_cols, errors="ignore")
+
+    curated_cols, unmatched_keep_patterns = _step12_resolve_configured_keep_columns(
+        out,
+        requested_patterns=requested_keep_patterns,
+    )
+    if unmatched_keep_patterns:
+        log.warning(
+            "STEP 4.1: STEP 1.2 keep patterns without matches on real data: %s",
+            unmatched_keep_patterns,
+        )
+    if not curated_cols:
+        raise ValueError(
+            "STEP 4.1 cannot apply STEP 1.2 transform: "
+            "no columns matched step_1_2.transform_keep_columns."
+        )
+    out = out[curated_cols].copy()
+    curated_cols_summary = [
+        c for c in curated_cols
+        if not (identity_column and isinstance(identity_column, str) and c == identity_column)
+    ]
+
+    available_tt_prefixes: set[str] = {
+        p for p, cols in tt_cols_by_prefix.items()
+        if any(c in out.columns for c in cols)
+    }
+    for prefix, rate_col in rate_col_by_prefix.items():
+        if rate_col in out.columns:
+            vals = pd.to_numeric(out[rate_col], errors="coerce")
+            if vals.notna().any():
+                available_tt_prefixes.add(prefix)
+
+    best_tt_prefix = _step12_select_best_tt_prefix(
+        available_tt_prefixes,
+        priority=preferred_prefixes_t,
+    )
+    out, dropped_tt_cols = _step12_drop_non_best_tt_columns(
+        out,
+        best_prefix=best_tt_prefix,
+        tt_cols_by_prefix=tt_cols_by_prefix,
+        rate_col_by_prefix=rate_col_by_prefix,
+    )
+
+    info = {
+        "step12_transform_keep_columns_requested": requested_keep_patterns_cfg,
+        "step12_transform_keep_columns_unmatched": unmatched_keep_patterns,
+        "step12_curated_columns": curated_cols_summary,
+        "step12_curated_column_count": int(len(curated_cols_summary)),
+        "step12_min_simulated_efficiency": float(min_eff_sim),
+        "step12_max_simulated_efficiency_spread": float(max_eff_spread),
+        "step12_eff_sim_columns_seen": eff_sim_cols,
+        "step12_rows_before_min_eff_filter": rows_before_min_eff_filter,
+        "step12_rows_removed_min_eff_filter": rows_removed_min_eff_filter,
+        "step12_rows_before_spread_filter": rows_before_spread_filter,
+        "step12_rows_removed_spread_filter": rows_removed_spread_filter,
+        "step12_global_rate_prefix_columns": rate_col_by_prefix,
+        "step12_standard_task_rate_columns_forced": added_standard_rate_cols,
+        "step12_tt_rate_columns_by_prefix": tt_cols_by_prefix,
+        "step12_canonical_global_rate_source_counts": canonical_source_counts,
+        "step12_empirical_efficiency_selected_prefix": empirical_selected_prefix,
+        "step12_empirical_efficiency_used_prefixes": empirical_used_prefixes,
+        "step12_backfilled_efficiency_columns_count": int(backfilled_eff_cols),
+        "step12_removed_nonobservable_eff_columns": nonobservable_eff_cols,
+        "step12_derived_helper_column_count_added": int(helper_count),
+        "step12_best_tt_prefix_selected": best_tt_prefix,
+        "step12_dropped_tt_columns_count": int(len(dropped_tt_cols)),
+        "step12_dropped_tt_columns": dropped_tt_cols,
+    }
+    return out, info
+
+
 def _plot_placeholder(path: Path, title: str, message: str) -> None:
     fig, ax = plt.subplots(figsize=(9, 4.6))
     ax.axis("off")
@@ -837,27 +1191,17 @@ def _plot_placeholder(path: Path, title: str, message: str) -> None:
     plt.close(fig)
 
 
-def _make_event_histogram(df: pd.DataFrame) -> str | None:
-    event_col = _pick_event_count_column(df)
-    source_label = event_col
-    source_mode = "column"
-    values = pd.Series(dtype=float)
-
-    if event_col is not None:
-        values = pd.to_numeric(df[event_col], errors="coerce").dropna()
-
-    # Last-resort fallback: estimate counts from global rate and acquisition duration.
-    if values.empty:
-        duration_col = _pick_duration_seconds_column(df)
-        global_rate_col = _pick_global_rate_column(df, preferred="events_per_second_global_rate")
-        if duration_col is not None and global_rate_col is not None:
-            duration = pd.to_numeric(df[duration_col], errors="coerce")
-            global_rate = pd.to_numeric(df[global_rate_col], errors="coerce")
-            values = (duration * global_rate).dropna()
-            if not values.empty:
-                source_label = f"{global_rate_col} * {duration_col}"
-                source_mode = "derived_rate_x_duration"
-
+def _make_event_histogram(
+    df: pd.DataFrame,
+    *,
+    event_count_column: str = "auto",
+    min_n_events: float | None = None,
+) -> str | None:
+    values_full, source_label, _source_mode = _resolve_event_count_values(
+        df,
+        event_count_column=event_count_column,
+    )
+    values = values_full.dropna()
     if values.empty:
         _plot_placeholder(
             PLOT_EVENT_HIST,
@@ -867,15 +1211,378 @@ def _make_event_histogram(df: pd.DataFrame) -> str | None:
         return None
 
     fig, ax = plt.subplots(figsize=(7, 4.5))
-    ax.hist(values, bins=40, alpha=0.5, color="#4C78A8", edgecolor="white")
+    ax.hist(values, bins=40, alpha=0.5, color="#4C78A8", edgecolor="white", label=f"All rows (n={len(values)})")
+    title = f"Event count distribution — {len(values)} rows"
+    if min_n_events is not None and np.isfinite(min_n_events):
+        cut = float(min_n_events)
+        kept = int((values > cut).sum())
+        removed = int((values <= cut).sum())
+        cut_label = f"{cut:.0f}" if np.isclose(cut, np.round(cut)) else f"{cut:g}"
+        ax.axvline(
+            cut,
+            color="#D62728",
+            linestyle="--",
+            linewidth=1.8,
+            alpha=0.95,
+            label=f"Cut: n_events > {cut_label}",
+        )
+        title = (
+            f"Event count distribution — all rows: {len(values)} "
+            f"(kept: {kept}, cut: {removed})"
+        )
+        ax.legend(loc="best", fontsize=8, framealpha=0.92, facecolor="white")
+
     ax.set_xlabel(f"Event count ({source_label})")
     ax.set_ylabel("Number of files")
-    ax.set_title(f"Event count distribution — {len(values)} collected files")
+    ax.set_title(title)
     ax.grid(True, alpha=0.2)
     fig.tight_layout()
     fig.savefig(PLOT_EVENT_HIST, dpi=150)
     plt.close(fig)
     return source_label
+
+
+def _load_selected_feature_columns(path: Path) -> list[str]:
+    """Load ordered feature list (STEP 1.4 selected_feature_columns.json format)."""
+    if not path.exists():
+        log.warning("Selected feature-columns JSON not found: %s", path)
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        log.warning("Could not parse selected feature-columns JSON %s: %s", path, exc)
+        return []
+
+    if isinstance(raw, dict):
+        values = raw.get("selected_feature_columns", [])
+    elif isinstance(raw, list):
+        values = raw
+    else:
+        values = []
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        text = str(item).strip()
+        if not text or text in seen:
+            continue
+        out.append(text)
+        seen.add(text)
+    return out
+
+
+def _resolve_feature_matrix_columns(
+    real_df: pd.DataFrame,
+    dict_df: pd.DataFrame,
+    *,
+    preferred_cols: list[str],
+    include_rate_histogram: bool,
+) -> tuple[list[str], list[str], bool]:
+    common_cols = set(real_df.columns) & set(dict_df.columns)
+    admin_exact = {
+        "filename_base",
+        "task_id",
+        "station_id",
+        "n_events",
+        "dataset_index",
+    }
+    admin_contains = (
+        "timestamp",
+        "execution_",
+        "online_z_",
+    )
+    feature_common = sorted(
+        c for c in common_cols
+        if (
+            c not in admin_exact
+            and not any(token in str(c).lower() for token in admin_contains)
+        )
+    )
+    if preferred_cols:
+        preferred = [c for c in preferred_cols if c in feature_common]
+        preferred_set = set(preferred)
+        extras = [c for c in feature_common if c not in preferred_set]
+        candidates = preferred + extras
+    else:
+        candidates = feature_common
+
+    out: list[str] = []
+    for col in candidates:
+        real_vals = pd.to_numeric(real_df[col], errors="coerce")
+        dict_vals = pd.to_numeric(dict_df[col], errors="coerce")
+        if not real_vals.notna().any():
+            continue
+        if not dict_vals.notna().any():
+            continue
+        out.append(col)
+    resolved_cols, hist_cols, suppressed = _step12_resolve_feature_matrix_plot_columns(
+        out,
+        include_rate_histogram=include_rate_histogram,
+    )
+    return resolved_cols, hist_cols, suppressed
+
+
+def _make_feature_scatter_matrix_real_vs_dictionary(
+    real_df: pd.DataFrame,
+    dict_df: pd.DataFrame,
+    *,
+    selected_features_path: Path,
+    sample_max_rows: int,
+    random_seed: int,
+    include_rate_histogram: bool,
+) -> dict:
+    selected_feature_cols = _load_selected_feature_columns(selected_features_path)
+    matrix_cols, rate_hist_cols, rate_hist_suppressed = _resolve_feature_matrix_columns(
+        real_df,
+        dict_df,
+        preferred_cols=selected_feature_cols,
+        include_rate_histogram=include_rate_histogram,
+    )
+    source_label = (
+        f"selected_feature_columns.json ({selected_features_path})"
+        if selected_feature_cols
+        else "numeric intersection fallback"
+    )
+
+    summary = {
+        "path": str(PLOT_FEATURE_MATRIX),
+        "selected_features_source": source_label,
+        "selected_features_requested_count": int(len(selected_feature_cols)),
+        "columns_used_count": int(len(matrix_cols)),
+        "columns_used": matrix_cols[:200],
+        "feature_matrix_plot_include_rate_histogram": bool(include_rate_histogram),
+        "rate_hist_columns_detected_count": int(len(rate_hist_cols)),
+        "rate_hist_columns_detected": rate_hist_cols[:200],
+        "rate_hist_block_suppressed": bool(rate_hist_suppressed),
+        "rows_real_total": int(len(real_df)),
+        "rows_dictionary_total": int(len(dict_df)),
+        "sample_max_rows": int(sample_max_rows),
+        "random_seed": int(random_seed),
+        "status": "ok",
+    }
+
+    if len(matrix_cols) < 2:
+        _plot_placeholder(
+            PLOT_FEATURE_MATRIX,
+            "Feature-space matrix: real vs dictionary",
+            "Not enough common numeric feature columns to draw the matrix.",
+        )
+        summary["status"] = "insufficient_columns"
+        summary["rows_real_plotted"] = 0
+        summary["rows_dictionary_plotted"] = 0
+        return summary
+
+    plot_data_cols = [c for c in matrix_cols if c != STEP12_RATE_HIST_PLACEHOLDER_COL]
+    real_plot = real_df[plot_data_cols].copy()
+    dict_plot = dict_df[plot_data_cols].copy()
+    if sample_max_rows > 0:
+        if len(real_plot) > sample_max_rows:
+            real_plot = real_plot.sample(n=sample_max_rows, random_state=random_seed)
+        if len(dict_plot) > sample_max_rows:
+            dict_plot = dict_plot.sample(n=sample_max_rows, random_state=random_seed)
+
+    n = len(matrix_cols)
+    if n > 40:
+        cap = 700
+    elif n > 24:
+        cap = 1200
+    else:
+        cap = 0
+    if cap > 0:
+        if len(real_plot) > cap:
+            real_plot = real_plot.sample(n=cap, random_state=random_seed)
+        if len(dict_plot) > cap:
+            dict_plot = dict_plot.sample(n=cap, random_state=random_seed)
+
+    summary["rows_real_plotted"] = int(len(real_plot))
+    summary["rows_dictionary_plotted"] = int(len(dict_plot))
+
+    if n <= 12:
+        cell = 2.4
+    elif n <= 24:
+        cell = 1.5
+    elif n <= 40:
+        cell = 1.0
+    else:
+        cell = 0.78
+
+    real_numeric = {
+        col: pd.to_numeric(real_plot[col], errors="coerce")
+        for col in plot_data_cols
+    }
+    dict_numeric = {
+        col: pd.to_numeric(dict_plot[col], errors="coerce")
+        for col in plot_data_cols
+    }
+
+    fig, axes = plt.subplots(n, n, figsize=(cell * n, cell * n), squeeze=False)
+    diag_bins = 28 if n <= 24 else 16
+    dict_color = "#7A7A7A"
+    real_color = "#1F77B4"
+    point_size = 7 if n <= 24 else 3
+    dict_alpha = 0.20
+    real_alpha = 0.30
+
+    for i, cy in enumerate(matrix_cols):
+        for j, cx in enumerate(matrix_cols):
+            ax = axes[i, j]
+            x_is_placeholder = (cx == STEP12_RATE_HIST_PLACEHOLDER_COL)
+            y_is_placeholder = (cy == STEP12_RATE_HIST_PLACEHOLDER_COL)
+            if i == j:
+                if x_is_placeholder:
+                    ax.set_facecolor("#F2F2F2")
+                    msg = "Rate-histogram block\nsuppressed for display"
+                    if len(rate_hist_cols) > 0:
+                        msg = f"Rate-histogram block suppressed\n({len(rate_hist_cols)} columns)"
+                    ax.text(
+                        0.5,
+                        0.5,
+                        msg,
+                        ha="center",
+                        va="center",
+                        fontsize=5.8,
+                        transform=ax.transAxes,
+                    )
+                    if i == n - 1:
+                        ax.set_xlabel(STEP12_RATE_HIST_PLACEHOLDER_LABEL, fontsize=5.3)
+                    else:
+                        ax.set_xticklabels([])
+                    if j == 0:
+                        ax.set_ylabel("Rows", fontsize=5.3)
+                    else:
+                        ax.set_yticklabels([])
+                    ax.tick_params(labelsize=4.8, length=1.5)
+                    ax.grid(True, alpha=0.12)
+                    continue
+                dvals = dict_numeric[cx].dropna()
+                rvals = real_numeric[cx].dropna()
+                if dvals.empty and rvals.empty:
+                    ax.set_visible(False)
+                    continue
+                if not dvals.empty:
+                    ax.hist(
+                        dvals.to_numpy(dtype=float),
+                        bins=diag_bins,
+                        color=dict_color,
+                        alpha=0.45,
+                    )
+                if not rvals.empty:
+                    ax.hist(
+                        rvals.to_numpy(dtype=float),
+                        bins=diag_bins,
+                        color=real_color,
+                        alpha=0.55,
+                    )
+            elif i > j:
+                if x_is_placeholder or y_is_placeholder:
+                    ax.set_facecolor("#F7F7F7")
+                    if i == n - 1:
+                        ax.set_xlabel(
+                            STEP12_RATE_HIST_PLACEHOLDER_LABEL if x_is_placeholder else cx,
+                            fontsize=5.3,
+                        )
+                    else:
+                        ax.set_xticklabels([])
+                    if j == 0:
+                        ax.set_ylabel(
+                            STEP12_RATE_HIST_PLACEHOLDER_LABEL if y_is_placeholder else cy,
+                            fontsize=5.3,
+                        )
+                    else:
+                        ax.set_yticklabels([])
+                    ax.tick_params(labelsize=4.8, length=1.5)
+                    ax.grid(True, alpha=0.10)
+                    continue
+                xd = dict_numeric[cx]
+                yd = dict_numeric[cy]
+                md = xd.notna() & yd.notna()
+                if md.any():
+                    ax.scatter(
+                        xd[md].to_numpy(dtype=float),
+                        yd[md].to_numpy(dtype=float),
+                        s=point_size,
+                        alpha=dict_alpha,
+                        color=dict_color,
+                        edgecolors="none",
+                        rasterized=True,
+                    )
+                xr = real_numeric[cx]
+                yr = real_numeric[cy]
+                mr = xr.notna() & yr.notna()
+                if mr.any():
+                    ax.scatter(
+                        xr[mr].to_numpy(dtype=float),
+                        yr[mr].to_numpy(dtype=float),
+                        s=point_size,
+                        alpha=real_alpha,
+                        color=real_color,
+                        edgecolors="none",
+                        rasterized=True,
+                    )
+            else:
+                ax.axis("off")
+                continue
+
+            if i == n - 1:
+                ax.set_xlabel(
+                    STEP12_RATE_HIST_PLACEHOLDER_LABEL if x_is_placeholder else cx,
+                    fontsize=5.3,
+                )
+            else:
+                ax.set_xticklabels([])
+            if j == 0:
+                ax.set_ylabel(
+                    (STEP12_RATE_HIST_PLACEHOLDER_LABEL if y_is_placeholder else (cy if i > 0 else "Rows")),
+                    fontsize=5.3,
+                )
+            else:
+                ax.set_yticklabels([])
+            ax.tick_params(labelsize=4.8, length=1.5)
+            ax.grid(True, alpha=0.12)
+
+    legend_handles = [
+        Line2D(
+            [0],
+            [0],
+            linestyle="none",
+            marker="o",
+            color=dict_color,
+            markerfacecolor=dict_color,
+            markeredgecolor="none",
+            markersize=5.0,
+            alpha=0.7,
+            label=f"Dictionary (n={len(dict_plot)})",
+        ),
+        Line2D(
+            [0],
+            [0],
+            linestyle="none",
+            marker="o",
+            color=real_color,
+            markerfacecolor=real_color,
+            markeredgecolor="none",
+            markersize=5.0,
+            alpha=0.8,
+            label=f"Real data (n={len(real_plot)})",
+        ),
+    ]
+    fig.legend(
+        handles=legend_handles,
+        loc="upper right",
+        fontsize=8,
+        frameon=True,
+        framealpha=0.92,
+        borderaxespad=0.6,
+    )
+    fig.suptitle(
+        "STEP 4.1 feature-space scatter matrix (lower-triangle): real vs dictionary",
+        y=0.998,
+        fontsize=12,
+    )
+    fig.tight_layout(rect=[0, 0, 1, 0.992])
+    fig.savefig(PLOT_FEATURE_MATRIX, dpi=140)
+    plt.close(fig)
+    return summary
 
 
 def _choose_timeline_column(df: pd.DataFrame) -> str | None:
@@ -885,6 +1592,63 @@ def _choose_timeline_column(df: pd.DataFrame) -> str | None:
     return None
 
 
+def _pick_feature_space_preview_columns(df: pd.DataFrame, *, max_lines: int = 8) -> list[str]:
+    """Pick a compact, readable set of feature-space columns for timeline preview."""
+    preferred = [
+        "eff_empirical_1",
+        "eff_empirical_2",
+        "eff_empirical_3",
+        "eff_empirical_4",
+        "efficiency_product_4planes",
+        "flux_proxy_rate_div_effprod",
+        "flux_proxy_rate_div_effprod_123",
+        "flux_proxy_rate_div_effprod_234",
+    ]
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _maybe_add(col: str) -> None:
+        if col in seen or col not in df.columns:
+            return
+        values = pd.to_numeric(df[col], errors="coerce")
+        if values.notna().sum() < 3:
+            return
+        out.append(col)
+        seen.add(col)
+
+    for col in preferred:
+        _maybe_add(col)
+
+    hist_cols: list[tuple[int, str]] = []
+    for col in df.columns:
+        m = RATE_HIST_BIN_RE.match(str(col))
+        if m is None:
+            continue
+        hist_cols.append((int(m.group("bin")), str(col)))
+    hist_cols.sort(key=lambda x: x[0])
+    if hist_cols:
+        pick_idx = sorted({0, len(hist_cols) // 2, len(hist_cols) - 1})
+        for i in pick_idx:
+            _maybe_add(hist_cols[i][1])
+
+    if len(out) < max_lines:
+        for col in df.columns:
+            if col in seen:
+                continue
+            cl = str(col).lower()
+            if col == "events_per_second_global_rate":
+                continue
+            if "timestamp" in cl or "filename" in cl or cl.startswith("online_z_"):
+                continue
+            if col in {"task_id", "station_id", "n_events"}:
+                continue
+            _maybe_add(str(col))
+            if len(out) >= max_lines:
+                break
+
+    return out[:max_lines]
+
+
 def _make_comparison_columns_plot(
     df: pd.DataFrame,
     *,
@@ -892,12 +1656,13 @@ def _make_comparison_columns_plot(
     comparison_strategy: str,
     global_rate_col: str | None,
 ) -> int:
-    """Plot global rate and selected comparison columns over data time."""
-    if not comparison_cols and global_rate_col is None:
+    """Plot global rate, feature-space traces, and STEP 4.2 comparison columns."""
+    feature_preview_cols = _pick_feature_space_preview_columns(df, max_lines=8)
+    if not comparison_cols and not feature_preview_cols and global_rate_col is None:
         _plot_placeholder(
             PLOT_COMPARE_COLS,
             "Comparison columns preview",
-            "No comparison rate columns or global-rate column available.",
+            "No global-rate, feature-space, or comparison columns available.",
         )
         return 0
 
@@ -914,7 +1679,13 @@ def _make_comparison_columns_plot(
             x = pd.Series(np.arange(len(df), dtype=float), index=df.index)
             x_label = "Row index"
 
-    fig, axes = plt.subplots(2, 1, figsize=(12.0, 8.4), sharex=True, height_ratios=[1.2, 1.0])
+    fig, axes = plt.subplots(
+        3,
+        1,
+        figsize=(12.0, 11.0),
+        sharex=True,
+        height_ratios=[1.2, 1.0, 1.0],
+    )
 
     # Panel 1: global rate
     ax0 = axes[0]
@@ -941,11 +1712,10 @@ def _make_comparison_columns_plot(
         ax0.set_ylabel("Global rate [Hz]")
     ax0.grid(True, alpha=0.22)
 
-    # Panel 2: standardized comparison feature traces
+    # Panel 2: standardized feature-space traces
     ax1 = axes[1]
-    shown = 0
-    max_lines = 8
-    for col in comparison_cols[:max_lines]:
+    shown_features = 0
+    for col in feature_preview_cols:
         if col not in df.columns:
             continue
         values = pd.to_numeric(df[col], errors="coerce")
@@ -966,20 +1736,58 @@ def _make_comparison_columns_plot(
             alpha=0.9,
             label=col,
         )
-        shown += 1
+        shown_features += 1
 
-    if shown == 0:
-        ax1.text(0.5, 0.5, "No finite comparison feature traces available", ha="center", va="center")
+    if shown_features == 0:
+        ax1.text(0.5, 0.5, "No finite feature-space traces available", ha="center", va="center")
     else:
         ax1.legend(loc="upper right", fontsize=7, ncol=2, frameon=True)
     ax1.axhline(0.0, color="black", linewidth=0.8, alpha=0.4)
-    ax1.set_ylabel("Standardized rate (z-score)")
-    ax1.set_xlabel(x_label)
+    ax1.set_ylabel("Feature value (z-score)")
     ax1.set_title(
+        f"Feature-space timeline preview (showing {shown_features}/{len(feature_preview_cols)} columns)"
+    )
+    ax1.grid(True, alpha=0.22)
+
+    # Panel 3: standardized comparison/matching traces used in STEP 4.2
+    ax2 = axes[2]
+    shown = 0
+    max_lines = 8
+    for col in comparison_cols[:max_lines]:
+        if col not in df.columns:
+            continue
+        values = pd.to_numeric(df[col], errors="coerce")
+        valid = values.notna()
+        if valid.sum() < 3:
+            continue
+        v = values[valid].to_numpy(dtype=float)
+        center = float(np.nanmedian(v))
+        scale = float(np.nanstd(v))
+        if not np.isfinite(scale) or scale <= 0.0:
+            z = np.zeros_like(v, dtype=float)
+        else:
+            z = (v - center) / scale
+        ax2.plot(
+            x[valid].to_numpy(),
+            z,
+            linewidth=1.0,
+            alpha=0.9,
+            label=col,
+        )
+        shown += 1
+
+    if shown == 0:
+        ax2.text(0.5, 0.5, "No finite STEP 4.2 matching-column traces available", ha="center", va="center")
+    else:
+        ax2.legend(loc="upper right", fontsize=7, ncol=2, frameon=True)
+    ax2.axhline(0.0, color="black", linewidth=0.8, alpha=0.4)
+    ax2.set_ylabel("Matching value (z-score)")
+    ax2.set_xlabel(x_label)
+    ax2.set_title(
         "Columns preview for STEP 4.2 matching "
         f"({comparison_strategy}; showing {shown}/{len(comparison_cols)})"
     )
-    ax1.grid(True, alpha=0.22)
+    ax2.grid(True, alpha=0.22)
 
     fig.tight_layout()
     fig.savefig(PLOT_COMPARE_COLS, dpi=150)
@@ -999,6 +1807,9 @@ def main() -> int:
     args = parser.parse_args()
 
     config = _load_config(Path(args.config))
+    cfg_12 = config.get("step_1_2", {})
+    if not isinstance(cfg_12, dict):
+        cfg_12 = {}
     cfg_41 = config.get("step_4_1", {})
     _clear_plots_dir()
 
@@ -1019,6 +1830,63 @@ def main() -> int:
     metadata_agg = str(config.get("metadata_agg", "latest")).strip().lower()
     dictionary_csv_cfg = cfg_41.get("dictionary_csv", None)
     global_rate_col_pref = str(cfg_41.get("global_rate_col", "events_per_second_global_rate"))
+    event_count_col_cfg = str(cfg_41.get("event_count_column", "auto")).strip()
+    selected_features_json_cfg = cfg_41.get("selected_feature_columns_json", None)
+    selected_features_path = _resolve_input_path(
+        selected_features_json_cfg or DEFAULT_STEP14_SELECTED_FEATURES
+    )
+    matrix_sample_max_raw = _coalesce(
+        cfg_41.get("feature_matrix_plot_sample_max_rows", None),
+        cfg_12.get("feature_space_plot_sample_max_rows", 25000),
+    )
+    try:
+        matrix_sample_max_rows = int(matrix_sample_max_raw)
+    except (TypeError, ValueError):
+        matrix_sample_max_rows = 25000
+    if matrix_sample_max_rows < 0:
+        matrix_sample_max_rows = 0
+    matrix_seed_raw = _coalesce(
+        cfg_41.get("feature_matrix_plot_random_seed", None),
+        cfg_12.get("feature_space_plot_random_seed", 1234),
+    )
+    try:
+        matrix_random_seed = int(matrix_seed_raw)
+    except (TypeError, ValueError):
+        matrix_random_seed = 1234
+    matrix_include_rate_hist_raw = _coalesce(
+        cfg_41.get("feature_matrix_plot_include_rate_histogram", None),
+        cfg_12.get("feature_matrix_plot_include_rate_histogram", True),
+    )
+    matrix_include_rate_histogram = _safe_bool(
+        matrix_include_rate_hist_raw,
+        default=True,
+    )
+    min_n_events_raw = cfg_41.get("min_n_events", 30000)
+    if min_n_events_raw in (None, "", "null", "None"):
+        min_n_events: float | None = None
+    else:
+        try:
+            min_n_events = float(min_n_events_raw)
+        except (TypeError, ValueError):
+            min_n_events = 30000.0
+            log.warning(
+                "Invalid step_4_1.min_n_events=%r; using default %.0f.",
+                min_n_events_raw,
+                min_n_events,
+            )
+        if not np.isfinite(min_n_events):
+            min_n_events = 30000.0
+            log.warning(
+                "Non-finite step_4_1.min_n_events=%r; using default %.0f.",
+                min_n_events_raw,
+                min_n_events,
+            )
+        if min_n_events < 0.0:
+            log.warning(
+                "Negative step_4_1.min_n_events=%r; clipping to 0.",
+                min_n_events_raw,
+            )
+            min_n_events = 0.0
 
     date_from_cfg = args.date_from if args.date_from is not None else cfg_41.get("date_from", config.get("date_from", None))
     date_to_cfg = args.date_to if args.date_to is not None else cfg_41.get("date_to", config.get("date_to", None))
@@ -1032,6 +1900,11 @@ def main() -> int:
         "Date range (applied to filename_base data-time): %s .. %s",
         date_from if date_from is not None else "None",
         date_to if date_to is not None else "None",
+    )
+    log.info(
+        "Event-count filter: event_count_column=%s min_n_events=%s (strictly greater-than).",
+        event_count_col_cfg if event_count_col_cfg else "auto",
+        ("disabled" if min_n_events is None else f"{min_n_events:.0f}"),
     )
 
     dict_path = _resolve_input_path(dictionary_csv_cfg or DEFAULT_DICTIONARY)
@@ -1107,6 +1980,7 @@ def main() -> int:
     for task_id in task_ids:
         specific_path = _task_specific_metadata_path(station_id, task_id)
         trigger_path = _task_trigger_type_metadata_path(station_id, task_id)
+        rate_hist_path = _task_rate_histogram_metadata_path(station_id, task_id)
         key = str(task_id)
         task_stats[key] = {
             "rows_read": 0,
@@ -1126,84 +2000,80 @@ def main() -> int:
             "rows_with_valid_timestamp": 0,
         }
 
-        meta_df: pd.DataFrame | None = None
+        try:
+            trigger_df = _load_task_metadata_source_csv(
+                task_id=task_id,
+                source_name="trigger_type",
+                path=trigger_path,
+                metadata_agg=metadata_agg,
+                timestamp_col=timestamp_col,
+            )
+            rate_hist_df = _load_task_metadata_source_csv(
+                task_id=task_id,
+                source_name="rate_histogram",
+                path=rate_hist_path,
+                metadata_agg=metadata_agg,
+                timestamp_col=timestamp_col,
+            )
+            specific_df = _load_task_metadata_source_csv(
+                task_id=task_id,
+                source_name="specific",
+                path=specific_path,
+                metadata_agg=metadata_agg,
+                timestamp_col=timestamp_col,
+            )
+        except (FileNotFoundError, KeyError) as exc:
+            log.error("%s", exc)
+            return 1
 
-        # Primary source: trigger_type metadata.
-        if trigger_path.exists():
-            log.info("Loading task %d trigger_type metadata: %s", task_id, trigger_path)
-            trigger_df = pd.read_csv(trigger_path, low_memory=False)
-            task_stats[key]["rows_read_trigger_type"] = int(len(trigger_df))
-            if "filename_base" not in trigger_df.columns:
-                log.warning("Task %d trigger_type metadata has no 'filename_base'; skipping trigger_type.", task_id)
-            else:
-                if metadata_agg == "latest":
-                    trigger_df = _aggregate_latest(trigger_df, timestamp_col=timestamp_col)
-                task_stats[key]["rows_after_latest_agg_trigger_type"] = int(len(trigger_df))
-                meta_df = trigger_df
-        else:
-            log.info("Task %d trigger_type metadata not found: %s", task_id, trigger_path)
-
-        # Fallback source: specific metadata only when trigger_type is unavailable.
-        if meta_df is None:
-            if specific_path.exists():
-                log.warning(
-                    "Using fallback specific metadata for task %d because trigger_type is unavailable: %s",
-                    task_id,
-                    specific_path,
-                )
-                specific_df = pd.read_csv(specific_path, low_memory=False)
-                task_stats[key]["rows_read_specific"] = int(len(specific_df))
-                if "filename_base" not in specific_df.columns:
-                    log.warning("Task %d specific metadata has no 'filename_base'; skipping specific.", task_id)
-                else:
-                    if metadata_agg == "latest":
-                        specific_df = _aggregate_latest(specific_df, timestamp_col=timestamp_col)
-                    task_stats[key]["rows_after_latest_agg_specific"] = int(len(specific_df))
-                    meta_df = specific_df
-            else:
-                log.warning("Task %d specific metadata not found: %s", task_id, specific_path)
-
-        rate_hist_df, rate_hist_cols = _load_rate_histogram_bins(
-            station_id=station_id,
-            task_id=task_id,
-            metadata_agg=metadata_agg,
-            timestamp_col=timestamp_col,
-        )
-        if rate_hist_df is not None:
-            task_stats[key]["rows_read_rate_histogram"] = int(len(rate_hist_df))
-            task_stats[key]["rows_after_latest_agg_rate_histogram"] = int(len(rate_hist_df))
-
+        task_stats[key]["rows_read_trigger_type"] = int(len(trigger_df))
+        task_stats[key]["rows_read_rate_histogram"] = int(len(rate_hist_df))
+        task_stats[key]["rows_read_specific"] = int(len(specific_df))
+        task_stats[key]["rows_after_latest_agg_trigger_type"] = int(len(trigger_df))
+        task_stats[key]["rows_after_latest_agg_rate_histogram"] = int(len(rate_hist_df))
+        task_stats[key]["rows_after_latest_agg_specific"] = int(len(specific_df))
         task_stats[key]["rows_read"] = int(
-            task_stats[key]["rows_read_specific"]
-            + task_stats[key]["rows_read_trigger_type"]
+            task_stats[key]["rows_read_trigger_type"]
             + task_stats[key]["rows_read_rate_histogram"]
+            + task_stats[key]["rows_read_specific"]
         )
 
-        if meta_df is None:
-            log.warning("Task %d has no usable trigger_type/specific metadata; skipping.", task_id)
-            continue
+        meta_df, merge_info = _merge_metadata_sources_equal_level(
+            task_id=task_id,
+            ordered_sources=[
+                ("trigger_type", trigger_df),
+                ("rate_histogram", rate_hist_df),
+                ("specific", specific_df),
+            ],
+        )
+        log.info(
+            "  Metadata merged at equal level for task %d: rows=%d, columns=%d.",
+            task_id,
+            len(meta_df),
+            len(meta_df.columns),
+        )
+        if merge_info.get("renamed_overlap_columns"):
+            overlap_counts = {
+                src: int(len(cols))
+                for src, cols in merge_info["renamed_overlap_columns"].items()
+                if isinstance(cols, dict)
+            }
+            log.info("  Metadata overlap columns renamed by source: %s", overlap_counts)
 
-        if rate_hist_df is not None and rate_hist_cols:
-            new_hist_cols = [c for c in rate_hist_cols if c not in meta_df.columns]
-            if new_hist_cols:
-                meta_df = meta_df.merge(
-                    rate_hist_df[["filename_base", *new_hist_cols]],
-                    on="filename_base",
-                    how="left",
-                )
-                task_stats[key]["rows_with_rate_histogram_after_merge"] = int(
-                    meta_df[new_hist_cols].notna().any(axis=1).sum()
-                )
-                log.info(
-                    "Task %d joined rate_histogram bins: %d columns, %d/%d rows with histogram values.",
-                    task_id,
-                    len(new_hist_cols),
-                    task_stats[key]["rows_with_rate_histogram_after_merge"],
-                    len(meta_df),
-                )
-            else:
-                task_stats[key]["rows_with_rate_histogram_after_merge"] = int(len(meta_df))
-                log.info("Task %d rate_histogram bins already present; merge skipped.", task_id)
+        hist_cols_merged = [
+            c
+            for c in meta_df.columns
+            if (
+                RATE_HIST_BIN_RE.match(str(c)) is not None
+                or str(c).startswith("rate_histogram__events_per_second_")
+            )
+        ]
+        if hist_cols_merged:
+            task_stats[key]["rows_with_rate_histogram_after_merge"] = int(
+                meta_df[hist_cols_merged].notna().any(axis=1).sum()
+            )
+        else:
+            task_stats[key]["rows_with_rate_histogram_after_merge"] = 0
 
         task_stats[key]["rows_after_latest_agg"] = int(len(meta_df))
         task_stats[key]["rows_after_metadata_merge"] = int(len(meta_df))
@@ -1260,6 +2130,40 @@ def main() -> int:
         return 1
 
     collected = pd.concat(all_frames, ignore_index=True)
+    collected_before_event_cut = collected.copy()
+    rows_before_event_cut = int(len(collected))
+    event_values, event_source_for_filter, event_source_mode_for_filter = _resolve_event_count_values(
+        collected,
+        event_count_column=event_count_col_cfg or "auto",
+    )
+    if event_values.notna().any():
+        collected["n_events"] = event_values.to_numpy(dtype=float)
+
+    event_cut_applied = False
+    rows_after_event_cut = rows_before_event_cut
+    if min_n_events is not None:
+        if event_values.notna().any():
+            keep_events = event_values > float(min_n_events)
+            rows_after_event_cut = int(keep_events.sum())
+            collected = collected.loc[keep_events].copy()
+            event_cut_applied = True
+            log.info(
+                "Applied event-count cut: %s > %.0f (kept %d/%d rows).",
+                (event_source_for_filter or "n_events"),
+                min_n_events,
+                rows_after_event_cut,
+                rows_before_event_cut,
+            )
+        else:
+            log.warning(
+                "Requested event-count cut (min_n_events=%.0f) but no finite event-count values were found. "
+                "Cut skipped.",
+                min_n_events,
+            )
+    if collected.empty:
+        log.error("No real rows left after STEP 4.1 event-count filtering.")
+        return 1
+
     if "file_timestamp_utc" in collected.columns:
         collected = collected.sort_values(
             by="file_timestamp_utc", kind="mergesort", na_position="last"
@@ -1269,11 +2173,65 @@ def main() -> int:
             by="execution_timestamp_utc", kind="mergesort", na_position="last"
         ).reset_index(drop=True)
 
+    step41_row_id_col = "__step41_row_id"
+    collected[step41_row_id_col] = np.arange(len(collected), dtype=int)
+    passthrough_cols = [
+        c for c in collected.columns
+        if (
+            c in {"filename_base", "task_id", "station_id", "n_events"}
+            or str(c).startswith("online_z_")
+            or ("timestamp" in str(c).lower())
+        )
+    ]
+    passthrough_cols = [c for c in passthrough_cols if c != step41_row_id_col]
+    passthrough_df = collected[[step41_row_id_col, *passthrough_cols]].copy()
+
+    rows_before_step12_transform = int(len(collected))
+    try:
+        collected, step12_transform_info = _apply_step12_feature_space_transform(
+            collected,
+            cfg_12=cfg_12,
+            identity_column=step41_row_id_col,
+        )
+    except ValueError as exc:
+        log.error("%s", exc)
+        return 1
+    restore_cols = [c for c in passthrough_cols if c not in collected.columns]
+    if restore_cols:
+        collected = collected.merge(
+            passthrough_df[[step41_row_id_col, *restore_cols]],
+            on=step41_row_id_col,
+            how="left",
+        )
+    collected = collected.drop(columns=[step41_row_id_col], errors="ignore")
+    rows_after_step12_transform = int(len(collected))
+    if collected.empty:
+        log.error("No real rows left after STEP 1.2 feature-space transformation in STEP 4.1.")
+        return 1
+    log.info(
+        "Applied STEP 1.2 feature-space transform in STEP 4.1: rows %d -> %d, columns=%d.",
+        rows_before_step12_transform,
+        rows_after_step12_transform,
+        int(len(collected.columns)),
+    )
+
     out_csv = FILES_DIR / "real_collected_data.csv"
     collected.to_csv(out_csv, index=False)
-    log.info("Wrote collected real data: %s (%d rows)", out_csv, len(collected))
+    log.info("Wrote collected real data (STEP 1.2 transformed): %s (%d rows)", out_csv, len(collected))
 
-    event_col = _make_event_histogram(collected)
+    event_col = _make_event_histogram(
+        collected_before_event_cut,
+        event_count_column=event_count_col_cfg or "auto",
+        min_n_events=min_n_events,
+    )
+    feature_matrix_info = _make_feature_scatter_matrix_real_vs_dictionary(
+        collected,
+        dict_df,
+        selected_features_path=selected_features_path,
+        sample_max_rows=matrix_sample_max_rows,
+        random_seed=matrix_random_seed,
+        include_rate_histogram=matrix_include_rate_histogram,
+    )
     timeline_col = _choose_timeline_column(collected)
 
     comparison_strategy, comparison_cols, comparison_map_preview = _resolve_comparison_preview(
@@ -1325,7 +2283,20 @@ def main() -> int:
         "global_rate_column_used": global_rate_col_used,
         "global_rate_column_preference": global_rate_col_pref,
         "dictionary_for_comparison_preview": str(dict_path),
+        "selected_feature_columns_json": str(selected_features_path),
+        "feature_matrix_plot": feature_matrix_info,
         "rows_total": int(len(collected)),
+        "rows_before_event_cut": rows_before_event_cut,
+        "rows_after_event_cut": rows_after_event_cut,
+        "event_cut_applied": bool(event_cut_applied),
+        "min_n_events": (float(min_n_events) if min_n_events is not None else None),
+        "event_count_column_config": (event_count_col_cfg if event_count_col_cfg else "auto"),
+        "event_count_source_for_filter": event_source_for_filter,
+        "event_count_source_mode_for_filter": event_source_mode_for_filter,
+        "rows_before_step12_transform": rows_before_step12_transform,
+        "rows_after_step12_transform": rows_after_step12_transform,
+        "step12_transform_applied": True,
+        "step12_transform": step12_transform_info,
         "rows_with_valid_file_timestamp": int(
             pd.to_datetime(collected.get("file_timestamp_utc"), errors="coerce", utc=True).notna().sum()
         )

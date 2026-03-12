@@ -605,6 +605,37 @@ def _select_parameter_set_column(df: pd.DataFrame, configured: str | None) -> st
     return None
 
 
+def _resolve_basis_events_column(
+    basis_df: pd.DataFrame,
+    configured: str | None,
+) -> tuple[str | None, str]:
+    """Resolve event-count column on basis table with robust fallbacks."""
+    requested = str(configured).strip() if configured is not None else ""
+
+    def _is_usable(col: str) -> bool:
+        if col not in basis_df.columns:
+            return False
+        vals = pd.to_numeric(basis_df[col], errors="coerce")
+        return bool(vals.notna().any())
+
+    if requested and _is_usable(requested):
+        return requested, "configured"
+
+    fallback_candidates = [
+        "n_events",
+        "selected_rows",
+        "requested_rows",
+        "generated_events_count",
+    ]
+    for col in fallback_candidates:
+        if _is_usable(col):
+            return col, "fallback"
+
+    if requested and requested in basis_df.columns:
+        return requested, "configured_non_numeric"
+    return None, "missing"
+
+
 def _build_one_per_parameter_set_mask(
     *,
     parameter_set_values: np.ndarray,
@@ -1351,8 +1382,8 @@ def _make_synthetic_dataset(
     *,
     flux_col: str,
     eff_col: str,
-    time_rate_col: str,
-    time_events_col: str,
+    time_rate_col: str | None,
+    time_events_col: str | None,
     time_duration_col: str,
     interpolation_aggregation: str,
     flux_output_values: np.ndarray | None = None,
@@ -1385,11 +1416,17 @@ def _make_synthetic_dataset(
     for col, values in numeric_values.items():
         out[col] = values
 
-    # Target truth overrides from STEP 3.1.
+    # Parameter-space target overrides from STEP 3.1.
     target_flux = pd.to_numeric(time_df[flux_col], errors="coerce")
     target_eff = pd.to_numeric(time_df[eff_col], errors="coerce")
-    target_rate = pd.to_numeric(time_df[time_rate_col], errors="coerce")
-    target_events = pd.to_numeric(time_df[time_events_col], errors="coerce")
+    if time_rate_col is not None and time_rate_col in time_df.columns:
+        target_rate_from_time = pd.to_numeric(time_df[time_rate_col], errors="coerce")
+    else:
+        target_rate_from_time = pd.Series(np.nan, index=time_df.index, dtype=float)
+    if time_events_col is not None and time_events_col in time_df.columns:
+        target_events_from_time = pd.to_numeric(time_df[time_events_col], errors="coerce")
+    else:
+        target_events_from_time = pd.Series(np.nan, index=time_df.index, dtype=float)
     target_duration = pd.to_numeric(time_df[time_duration_col], errors="coerce")
     output_flux = target_flux
     output_eff = target_eff
@@ -1398,30 +1435,68 @@ def _make_synthetic_dataset(
     if eff_output_values is not None and len(eff_output_values) == n_targets:
         output_eff = pd.Series(np.asarray(eff_output_values, dtype=float), index=time_df.index)
 
-    # Keep synthetic rate-like feature columns consistent with the known
-    # discretized target global-rate trajectory from STEP 3.1.
+    # Global rate is a weighted feature-space output from STEP 3.2.
+    weighted_rate = pd.Series(np.nan, index=out.index, dtype=float)
+    if "events_per_second_global_rate" in out.columns:
+        weighted_rate = pd.to_numeric(out["events_per_second_global_rate"], errors="coerce")
+    if weighted_rate.notna().sum() == 0:
+        tt_cols_for_rate = [c for c in out.columns if TT_RATE_COLUMN_RE.match(str(c))]
+        if tt_cols_for_rate:
+            tt_sum = np.zeros(len(out), dtype=float)
+            valid_any = np.zeros(len(out), dtype=bool)
+            for c in tt_cols_for_rate:
+                v = pd.to_numeric(out[c], errors="coerce").to_numpy(dtype=float)
+                finite = np.isfinite(v)
+                tt_sum[finite] += v[finite]
+                valid_any |= finite
+            weighted_rate = pd.Series(np.where(valid_any, tt_sum, np.nan), index=out.index, dtype=float)
+    if weighted_rate.notna().sum() == 0:
+        weighted_rate = target_rate_from_time.copy()
+    if weighted_rate.notna().sum() == 0:
+        fallback = 1.0
+        weighted_rate = pd.Series(np.full(len(out), fallback, dtype=float), index=out.index)
+
+    weighted_rate_arr = pd.to_numeric(weighted_rate, errors="coerce").to_numpy(dtype=float)
+    finite_rate = np.isfinite(weighted_rate_arr)
+    if np.any(finite_rate):
+        med_rate = float(np.nanmedian(weighted_rate_arr[finite_rate]))
+        if not np.isfinite(med_rate) or med_rate <= 0.0:
+            med_rate = 1.0
+    else:
+        med_rate = 1.0
+    weighted_rate_arr = np.where(np.isfinite(weighted_rate_arr), weighted_rate_arr, med_rate)
+    weighted_rate_arr = np.maximum(weighted_rate_arr, 1e-9)
+    weighted_rate = pd.Series(weighted_rate_arr, index=out.index, dtype=float)
+
+    # Keep synthetic rate-like feature columns internally consistent with the
+    # STEP 3.2 weighted global-rate trajectory.
     rate_consistency_info = _enforce_rate_consistency_constraints(
         out_df=out,
-        target_rate=target_rate.to_numpy(dtype=float),
+        target_rate=weighted_rate.to_numpy(dtype=float),
         tt_rate_columns=tt_rate_columns_for_consistency,
         histogram_rate_columns=histogram_rate_columns_for_consistency,
     )
 
-    if "flux_cm2_min" in out.columns:
-        out["flux_cm2_min"] = output_flux
-    if "flux" in out.columns:
-        out["flux"] = output_flux
-    if "eff_sim_1" in out.columns:
-        out["eff_sim_1"] = output_eff
-    if "eff" in out.columns:
-        out["eff"] = output_eff
-    if "events_per_second_global_rate" in out.columns:
-        out["events_per_second_global_rate"] = target_rate
-    if "n_events" in out.columns:
-        out["n_events"] = target_events
+    duration_arr = pd.to_numeric(target_duration, errors="coerce").to_numpy(dtype=float)
+    events_from_rate = np.rint(
+        np.clip(weighted_rate_arr, 0.0, None)
+        * np.where(np.isfinite(duration_arr), np.maximum(duration_arr, 0.0), 0.0)
+    )
+    events_from_rate = np.where(np.isfinite(events_from_rate), np.maximum(events_from_rate, 0.0), np.nan)
+    if np.isfinite(events_from_rate).any():
+        output_events = pd.Series(events_from_rate, index=time_df.index, dtype=float)
+    else:
+        output_events = target_events_from_time.copy()
+
+    out["flux_cm2_min"] = output_flux
+    out["flux"] = output_flux
+    out["eff_sim_1"] = output_eff
+    out["eff"] = output_eff
+    out["events_per_second_global_rate"] = weighted_rate
+    out["n_events"] = pd.to_numeric(output_events, errors="coerce").round().astype("Int64")
     for c in ("selected_rows", "requested_rows", "generated_events_count"):
         if c in out.columns:
-            out[c] = target_events
+            out[c] = pd.to_numeric(output_events, errors="coerce").round().astype("Int64")
     for c in ("count_rate_denominator_seconds", "events_per_second_total_seconds"):
         if c in out.columns:
             out[c] = target_duration
@@ -1451,7 +1526,7 @@ def _make_synthetic_dataset(
         "duration_seconds": target_duration,
         "target_events_per_file": pd.to_numeric(time_df.get("target_events_per_file"), errors="coerce").astype("Int64"),
         "n_events_expected": pd.to_numeric(time_df.get("n_events_expected"), errors="coerce"),
-        "global_rate_hz_source": target_rate,
+        "global_rate_hz_source": weighted_rate,
         "dominant_dictionary_index": dominant_idx,
     }, index=out.index)
     if "filename_base" in dictionary_df.columns:
@@ -1468,19 +1543,18 @@ def _plot_highlight_contributions(
     dictionary_df: pd.DataFrame,
     weights: np.ndarray,
     event_allowed_mask: np.ndarray | None,
-    flux_col: str,
-    eff_col_time: str,
-    eff_col_dict: str,
     basis_label: str,
     highlight_idx: int,
+    parameter_space_cols: list[str],
     path: Path,
 ) -> None:
-    """Plot highlighted point and dictionary contribution percentages."""
-    fig, ax = plt.subplots(1, 1, figsize=(8.2, 6.2))
+    """Plot one-event weighted dictionary contributions in lower-triangle parameter space."""
+    n = len(parameter_space_cols)
+    if n <= 0:
+        return
 
-    # Base layer: dictionary contribution cloud for selected target point.
-    dx_s = pd.to_numeric(dictionary_df.get(flux_col), errors="coerce")
-    dy_s = pd.to_numeric(dictionary_df.get(eff_col_dict), errors="coerce")
+    fig, axes = plt.subplots(n, n, figsize=(3.0 * n, 3.0 * n), squeeze=False)
+
     contrib_all = weights[highlight_idx] * 100.0
     if event_allowed_mask is None:
         event_allowed = np.ones_like(contrib_all, dtype=bool)
@@ -1488,127 +1562,159 @@ def _plot_highlight_contributions(
         event_allowed = np.asarray(event_allowed_mask, dtype=bool)
         if event_allowed.ndim != 1 or event_allowed.shape[0] != contrib_all.shape[0]:
             event_allowed = np.ones_like(contrib_all, dtype=bool)
-    m_dict = dx_s.notna() & dy_s.notna() & np.isfinite(contrib_all)
-    if m_dict.any():
-        m_nonzero = m_dict & (contrib_all > 0.0)
-        m_event_excluded = m_dict & ~event_allowed
-        m_allowed_zero = m_dict & event_allowed & ~m_nonzero
-        if m_event_excluded.any():
-            ax.scatter(
-                dx_s[m_event_excluded],
-                dy_s[m_event_excluded],
-                s=16,
-                marker="x",
-                color="lightgray",
-                alpha=0.80,
-                linewidths=0.8,
-                label=f"{basis_label} (excluded by event constraint)",
-                zorder=0,
-            )
-        if m_allowed_zero.any():
-            ax.scatter(
-                dx_s[m_allowed_zero],
-                dy_s[m_allowed_zero],
-                s=14,
-                color="#C7CBD1",
-                alpha=0.70,
-                linewidths=0.0,
-                label=f"{basis_label} (allowed, zero after weighting)",
-                zorder=0,
-            )
-        if m_nonzero.any():
-            cvals = contrib_all[np.asarray(m_nonzero)]
-            sc = ax.scatter(
-                dx_s[m_nonzero],
-                dy_s[m_nonzero],
-                c=cvals,
-                cmap="viridis",
-                s=28 + 250 * (cvals / max(float(np.max(cvals)), 1e-12)),
-                alpha=0.85,
-                edgecolors="black",
-                linewidths=0.25,
-                label=f"{basis_label} (weighted)",
-                zorder=1,
-            )
-            cbar = fig.colorbar(sc, ax=ax, pad=0.02)
-            cbar.set_label("Contribution [%]")
 
-    if complete_df is not None and not complete_df.empty:
-        cx = pd.to_numeric(complete_df.get(flux_col), errors="coerce")
-        cy = pd.to_numeric(complete_df.get(eff_col_time), errors="coerce")
-        m = cx.notna() & cy.notna()
-        if m.any():
-            ax.plot(cx[m], cy[m], color="#1f77b4", linewidth=1.5, alpha=0.9, label="Complete curve", zorder=1)
+    # Global masks reused for all pair panels.
+    finite_contrib = np.isfinite(contrib_all)
+    allowed_nonzero_base = event_allowed & (contrib_all > 0.0) & finite_contrib
+    vmax = float(np.nanmax(contrib_all[allowed_nonzero_base])) if np.any(allowed_nonzero_base) else 1.0
+    vmax = max(vmax, 1e-12)
+    norm = plt.Normalize(vmin=0.0, vmax=vmax)
+    cmap = plt.get_cmap("viridis")
 
-    tx = pd.to_numeric(time_df.get(flux_col), errors="coerce")
-    ty = pd.to_numeric(time_df.get(eff_col_time), errors="coerce")
-    m = tx.notna() & ty.notna()
-    if m.any():
-        ax.scatter(
-            tx[m],
-            ty[m],
-            s=20,
-            facecolor="white",
-            edgecolor="black",
-            linewidth=0.6,
-            label="Discretized",
-            zorder=2,
-        )
-    hx = float(tx.iloc[highlight_idx])
-    hy = float(ty.iloc[highlight_idx])
-    ax.scatter([hx], [hy], s=95, color="#D62728", marker="X", label=f"Highlight idx {highlight_idx}", zorder=3)
-    ax.set_xlabel("flux_cm2_min")
-    ax.set_ylabel("eff")
-    ax.set_title(f"{basis_label} contributions with complete/discretized curve")
-    ax.grid(True, alpha=0.2)
-    ax.legend(loc="best", fontsize=8)
+    for i, y_col in enumerate(parameter_space_cols):
+        for j, x_col in enumerate(parameter_space_cols):
+            ax = axes[i, j]
+            if i < j:
+                ax.axis("off")
+                continue
 
-    # Shared limits over all plotted points.
-    x_parts: list[np.ndarray] = []
-    y_parts: list[np.ndarray] = []
-    if m_dict.any():
-        x_parts.append(dx_s[m_dict].to_numpy(dtype=float))
-        y_parts.append(dy_s[m_dict].to_numpy(dtype=float))
-    if complete_df is not None and not complete_df.empty:
-        cx = pd.to_numeric(complete_df.get(flux_col), errors="coerce")
-        cy = pd.to_numeric(complete_df.get(eff_col_time), errors="coerce")
-        m_comp = cx.notna() & cy.notna()
-        if m_comp.any():
-            x_parts.append(cx[m_comp].to_numpy(dtype=float))
-            y_parts.append(cy[m_comp].to_numpy(dtype=float))
-    if m.any():
-        x_parts.append(tx[m].to_numpy(dtype=float))
-        y_parts.append(ty[m].to_numpy(dtype=float))
-    x_parts.append(np.array([hx], dtype=float))
-    y_parts.append(np.array([hy], dtype=float))
+            bx = pd.to_numeric(dictionary_df.get(x_col), errors="coerce")
+            by = pd.to_numeric(dictionary_df.get(y_col), errors="coerce")
+            tx = pd.to_numeric(time_df.get(x_col), errors="coerce")
+            ty = pd.to_numeric(time_df.get(y_col), errors="coerce")
 
-    x_all = np.concatenate(x_parts) if x_parts else np.array([], dtype=float)
-    y_all = np.concatenate(y_parts) if y_parts else np.array([], dtype=float)
-    x_all = x_all[np.isfinite(x_all)]
-    y_all = y_all[np.isfinite(y_all)]
-    if x_all.size and y_all.size:
-        x_min, x_max = float(np.min(x_all)), float(np.max(x_all))
-        y_min, y_max = float(np.min(y_all)), float(np.max(y_all))
-        if x_max <= x_min:
-            x_pad = max(abs(x_min) * 0.05, 1e-6)
-            x_min -= x_pad
-            x_max += x_pad
-        else:
-            x_pad = 0.03 * (x_max - x_min)
-            x_min -= x_pad
-            x_max += x_pad
-        if y_max <= y_min:
-            y_pad = max(abs(y_min) * 0.05, 1e-6)
-            y_min -= y_pad
-            y_max += y_pad
-        else:
-            y_pad = 0.03 * (y_max - y_min)
-            y_min -= y_pad
-            y_max += y_pad
-        ax.set_xlim(x_min, x_max)
-        ax.set_ylim(y_min, y_max)
+            if i == j:
+                b = bx.dropna()
+                if not b.empty:
+                    ax.hist(b, bins=34, color="#808080", alpha=0.34, label="Dictionary")
+                m_weighted_1d = bx.notna() & allowed_nonzero_base
+                if m_weighted_1d.any():
+                    ax.hist(
+                        bx[m_weighted_1d],
+                        bins=34,
+                        weights=contrib_all[m_weighted_1d],
+                        color="#D62728",
+                        alpha=0.35,
+                        label="Weighted mass [%]",
+                    )
+                hx = pd.to_numeric(pd.Series([tx.iloc[highlight_idx]]), errors="coerce").iloc[0]
+                if np.isfinite(hx):
+                    ax.axvline(float(hx), color="#D62728", linestyle="--", linewidth=1.0)
+                if i == 0 and j == 0:
+                    ax.legend(loc="best", fontsize=7)
+                ax.set_ylabel("count / weight")
+            else:
+                m_basis = bx.notna() & by.notna() & finite_contrib
+                m_excluded = m_basis & ~event_allowed
+                m_allowed_zero = m_basis & event_allowed & (contrib_all <= 0.0)
+                m_weighted = m_basis & allowed_nonzero_base
 
-    fig.tight_layout()
+                if m_excluded.any():
+                    ax.scatter(
+                        bx[m_excluded],
+                        by[m_excluded],
+                        s=14,
+                        marker="x",
+                        color="lightgray",
+                        alpha=0.80,
+                        linewidths=0.8,
+                        label=("Excluded by event constraint" if (i == 1 and j == 0) else None),
+                        zorder=0,
+                    )
+                if m_allowed_zero.any():
+                    ax.scatter(
+                        bx[m_allowed_zero],
+                        by[m_allowed_zero],
+                        s=12,
+                        color="#C7CBD1",
+                        alpha=0.65,
+                        linewidths=0.0,
+                        label=("Allowed, zero weight" if (i == 1 and j == 0) else None),
+                        zorder=0,
+                    )
+                if m_weighted.any():
+                    cvals = contrib_all[m_weighted]
+                    ax.scatter(
+                        bx[m_weighted],
+                        by[m_weighted],
+                        c=cvals,
+                        cmap=cmap,
+                        norm=norm,
+                        s=24 + 260 * (cvals / vmax),
+                        alpha=0.88,
+                        edgecolors="black",
+                        linewidths=0.25,
+                        label=("Weighted dictionary points" if (i == 1 and j == 0) else None),
+                        zorder=1,
+                    )
+
+                if complete_df is not None and not complete_df.empty:
+                    cx = pd.to_numeric(complete_df.get(x_col), errors="coerce")
+                    cy = pd.to_numeric(complete_df.get(y_col), errors="coerce")
+                    m_comp = cx.notna() & cy.notna()
+                    if m_comp.any():
+                        ax.plot(
+                            cx[m_comp],
+                            cy[m_comp],
+                            color="#1f77b4",
+                            linewidth=1.1,
+                            alpha=0.85,
+                            label=("Complete curve" if (i == 1 and j == 0) else None),
+                            zorder=2,
+                        )
+
+                m_time = tx.notna() & ty.notna()
+                if m_time.any():
+                    ax.scatter(
+                        tx[m_time],
+                        ty[m_time],
+                        s=14,
+                        facecolor="white",
+                        edgecolor="black",
+                        linewidth=0.5,
+                        label=("Discretized curve" if (i == 1 and j == 0) else None),
+                        zorder=3,
+                    )
+
+                hx = pd.to_numeric(pd.Series([tx.iloc[highlight_idx]]), errors="coerce").iloc[0]
+                hy = pd.to_numeric(pd.Series([ty.iloc[highlight_idx]]), errors="coerce").iloc[0]
+                if np.isfinite(hx) and np.isfinite(hy):
+                    ax.scatter(
+                        [float(hx)],
+                        [float(hy)],
+                        s=85,
+                        color="#D62728",
+                        marker="X",
+                        label=(f"Highlight idx {highlight_idx}" if (i == 1 and j == 0) else None),
+                        zorder=4,
+                    )
+
+            ax.grid(True, alpha=0.20)
+            if i == n - 1:
+                ax.set_xlabel(x_col)
+            else:
+                ax.set_xticklabels([])
+            if j == 0 and i > 0:
+                ax.set_ylabel(y_col)
+            elif i > 0:
+                ax.set_yticklabels([])
+
+    legend_anchor = axes[min(1, n - 1), 0]
+    handles, labels = legend_anchor.get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, loc="upper right", fontsize=8, framealpha=0.9)
+
+    if np.any(allowed_nonzero_base):
+        sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
+        sm.set_array([])
+        cbar = fig.colorbar(sm, ax=axes, fraction=0.022, pad=0.02)
+        cbar.set_label("Contribution [%]")
+
+    fig.suptitle(
+        f"{basis_label} one-event contributions (highlight idx {highlight_idx}) in parameter space",
+        fontsize=12,
+    )
+    fig.subplots_adjust(left=0.07, right=0.93, bottom=0.06, top=0.95, wspace=0.08, hspace=0.10)
     _save_figure(fig, path, dpi=160)
     plt.close(fig)
 
@@ -1619,29 +1725,27 @@ def _plot_time_series_overview(
     synthetic_df: pd.DataFrame,
     flux_col: str,
     eff_col: str,
-    time_rate_col: str,
+    time_rate_col: str | None,
     interpolated_flux: np.ndarray | None,
     interpolated_eff: np.ndarray | None,
     interpolated_label: str,
     show_diagnostic_center: bool,
     path: Path,
 ) -> None:
-    """Plot complete/discretized flux-eff and global-rate comparison."""
+    """Plot complete/discretized/synthetic flux-eff-rate comparison."""
+    from matplotlib.lines import Line2D
+
     fig, axes = plt.subplots(3, 1, figsize=(10, 8.5), sharex=True)
 
     x_disc = pd.to_numeric(time_df.get("elapsed_hours"), errors="coerce")
-    y_flux_disc = pd.to_numeric(time_df.get(flux_col), errors="coerce")
-    y_eff_disc = pd.to_numeric(time_df.get(eff_col), errors="coerce")
     x_syn = pd.to_numeric(synthetic_df.get("elapsed_hours"), errors="coerce")
+    y_flux_disc = pd.to_numeric(time_df.get(flux_col), errors="coerce")
     y_syn_flux = pd.to_numeric(synthetic_df.get(flux_col), errors="coerce")
-    y_syn_eff = pd.to_numeric(synthetic_df.get(eff_col), errors="coerce")
 
     if complete_df is not None and not complete_df.empty:
         x_comp = pd.to_numeric(complete_df.get("elapsed_hours"), errors="coerce")
         y_flux_comp = pd.to_numeric(complete_df.get(flux_col), errors="coerce")
-        y_eff_comp = pd.to_numeric(complete_df.get(eff_col), errors="coerce")
         m0 = x_comp.notna() & y_flux_comp.notna()
-        m1 = x_comp.notna() & y_eff_comp.notna()
         if m0.any():
             axes[0].plot(
                 x_comp[m0],
@@ -1651,18 +1755,8 @@ def _plot_time_series_overview(
                 linewidth=1.0,
                 label="Complete curve",
             )
-        if m1.any():
-            axes[1].plot(
-                x_comp[m1],
-                y_eff_comp[m1],
-                color="#FF7F0E",
-                alpha=0.75,
-                linewidth=1.0,
-                label="Complete curve",
-            )
 
     m0d = x_disc.notna() & y_flux_disc.notna()
-    m1d = x_disc.notna() & y_eff_disc.notna()
     if m0d.any():
         axes[0].scatter(
             x_disc[m0d],
@@ -1673,33 +1767,12 @@ def _plot_time_series_overview(
             linewidths=0.8,
             label="Discretized",
         )
-    if m1d.any():
-        axes[1].scatter(
-            x_disc[m1d],
-            y_eff_disc[m1d],
-            s=18,
-            facecolors="white",
-            edgecolors="#FF7F0E",
-            linewidths=0.8,
-            label="Discretized",
-        )
 
     m0s = x_syn.notna() & y_syn_flux.notna()
-    m1s = x_syn.notna() & y_syn_eff.notna()
     if m0s.any():
         axes[0].plot(
             x_syn[m0s],
             y_syn_flux[m0s],
-            color="#D62728",
-            linewidth=1.1,
-            linestyle="-",
-            alpha=0.9,
-            label="Synthetic output",
-        )
-    if m1s.any():
-        axes[1].plot(
-            x_syn[m1s],
-            y_syn_eff[m1s],
             color="#D62728",
             linewidth=1.1,
             linestyle="-",
@@ -1722,6 +1795,65 @@ def _plot_time_series_overview(
                 alpha=0.85,
                 label=interpolated_label,
             )
+
+    eff_candidates = [f"eff_sim_{i}" for i in range(1, 5)]
+    if eff_col not in eff_candidates:
+        eff_candidates.append(eff_col)
+    eff_cols: list[str] = []
+    for col in eff_candidates:
+        if (
+            (complete_df is not None and col in complete_df.columns)
+            or col in time_df.columns
+            or col in synthetic_df.columns
+        ) and col not in eff_cols:
+            eff_cols.append(col)
+    eff_palette = ["#ff7f0e", "#d62728", "#9467bd", "#8c564b", "#2ca02c", "#17becf"]
+    eff_has_complete = False
+    eff_has_discretized = False
+    eff_has_synthetic = False
+
+    for idx, col in enumerate(eff_cols):
+        color = eff_palette[idx % len(eff_palette)]
+        if complete_df is not None and not complete_df.empty and col in complete_df.columns:
+            x_comp = pd.to_numeric(complete_df.get("elapsed_hours"), errors="coerce")
+            y_comp = pd.to_numeric(complete_df.get(col), errors="coerce")
+            m = x_comp.notna() & y_comp.notna()
+            if m.any():
+                eff_has_complete = True
+                axes[1].plot(
+                    x_comp[m],
+                    y_comp[m],
+                    color=color,
+                    alpha=0.70,
+                    linewidth=1.0,
+                )
+        if col in time_df.columns:
+            y_disc = pd.to_numeric(time_df.get(col), errors="coerce")
+            m = x_disc.notna() & y_disc.notna()
+            if m.any():
+                eff_has_discretized = True
+                axes[1].scatter(
+                    x_disc[m],
+                    y_disc[m],
+                    s=16,
+                    facecolors="white",
+                    edgecolors=color,
+                    linewidths=0.8,
+                )
+        if col in synthetic_df.columns:
+            y_syn = pd.to_numeric(synthetic_df.get(col), errors="coerce")
+            m = x_syn.notna() & y_syn.notna()
+            if m.any():
+                eff_has_synthetic = True
+                axes[1].plot(
+                    x_syn[m],
+                    y_syn[m],
+                    color=color,
+                    linewidth=1.0,
+                    linestyle="-",
+                    alpha=0.90,
+                )
+
     has_interp_eff = False
     if show_diagnostic_center and interpolated_eff is not None:
         y_eff_interp = pd.to_numeric(pd.Series(interpolated_eff), errors="coerce")
@@ -1744,15 +1876,74 @@ def _plot_time_series_overview(
     else:
         axes[0].set_title("Flux: complete + discretized + synthetic")
     axes[0].grid(True, alpha=0.25)
-    axes[0].legend(loc="best", fontsize=8)
+    axes[0].legend(loc="best", fontsize=8, framealpha=0.92, facecolor="white")
 
     axes[1].set_ylabel("eff")
     if has_interp_eff:
-        axes[1].set_title("Efficiency: complete + discretized + synthetic (+ diagnostic center)")
+        axes[1].set_title("Efficiencies: complete + discretized + synthetic (+ diagnostic center)")
     else:
-        axes[1].set_title("Efficiency: complete + discretized + synthetic")
+        axes[1].set_title("Efficiencies: complete + discretized + synthetic")
     axes[1].grid(True, alpha=0.25)
-    axes[1].legend(loc="best", fontsize=8)
+
+    # Compact two-block legend for efficiency panel.
+    style_handles: list[Line2D] = []
+    if eff_has_complete:
+        style_handles.append(
+            Line2D([0], [0], color="#505050", linestyle="--", linewidth=1.2, label="Complete")
+        )
+    if eff_has_discretized:
+        style_handles.append(
+            Line2D(
+                [0],
+                [0],
+                color="#505050",
+                linestyle="None",
+                marker="o",
+                markersize=5,
+                markerfacecolor="white",
+                markeredgewidth=0.9,
+                markeredgecolor="#505050",
+                label="Discretized",
+            )
+        )
+    if eff_has_synthetic:
+        style_handles.append(
+            Line2D([0], [0], color="#505050", linestyle="-", linewidth=1.2, label="Synthetic")
+        )
+    if has_interp_eff:
+        style_handles.append(
+            Line2D([0], [0], color="#8C8C8C", linestyle="--", linewidth=1.0, label=interpolated_label)
+        )
+
+    color_handles: list[Line2D] = []
+    for idx, col in enumerate(eff_cols):
+        color = eff_palette[idx % len(eff_palette)]
+        color_handles.append(Line2D([0], [0], color=color, linewidth=2.0, label=col))
+
+    if style_handles:
+        leg_style = axes[1].legend(
+            handles=style_handles,
+            loc="upper left",
+            fontsize=7,
+            framealpha=0.93,
+            facecolor="white",
+            title="Series",
+            title_fontsize=7,
+        )
+        axes[1].add_artist(leg_style)
+    if color_handles:
+        axes[1].legend(
+            handles=color_handles,
+            loc="upper right",
+            fontsize=7,
+            framealpha=0.93,
+            facecolor="white",
+            title="Efficiency",
+            title_fontsize=7,
+            ncol=2,
+            columnspacing=0.8,
+            handlelength=2.0,
+        )
 
     # Global rate overlays: complete, discretized target, synthetic output.
     if complete_df is not None and not complete_df.empty:
@@ -1775,18 +1966,19 @@ def _plot_time_series_overview(
                     label="Complete curve",
                 )
 
-    y_disc_rate = pd.to_numeric(time_df.get(time_rate_col), errors="coerce")
-    m2d = x_disc.notna() & y_disc_rate.notna()
-    if m2d.any():
-        axes[2].scatter(
-            x_disc[m2d],
-            y_disc_rate[m2d],
-            s=18,
-            facecolors="white",
-            edgecolors="#2CA02C",
-            linewidths=0.8,
-            label="Discretized",
-        )
+    if time_rate_col is not None and time_rate_col in time_df.columns:
+        y_disc_rate = pd.to_numeric(time_df.get(time_rate_col), errors="coerce")
+        m2d = x_disc.notna() & y_disc_rate.notna()
+        if m2d.any():
+            axes[2].scatter(
+                x_disc[m2d],
+                y_disc_rate[m2d],
+                s=18,
+                facecolors="white",
+                edgecolors="#2CA02C",
+                linewidths=0.8,
+                label="Discretized",
+            )
 
     y_syn_rate = pd.to_numeric(synthetic_df.get("events_per_second_global_rate"), errors="coerce")
     if y_syn_rate.isna().all():
@@ -1817,10 +2009,112 @@ def _plot_time_series_overview(
     axes[2].set_ylabel("global rate [Hz]")
     axes[2].set_title("Global rate: complete + discretized + synthetic")
     axes[2].grid(True, alpha=0.25)
-    axes[2].legend(loc="best", fontsize=8)
+    axes[2].legend(loc="best", fontsize=8, framealpha=0.92, facecolor="white")
 
     fig.tight_layout()
     _save_figure(fig, path, dpi=160)
+    plt.close(fig)
+
+
+def _plot_parameter_space_lower_triangle(
+    basis_df: pd.DataFrame,
+    time_df: pd.DataFrame,
+    synthetic_df: pd.DataFrame,
+    complete_df: pd.DataFrame | None,
+    parameter_space_cols: list[str],
+    path: Path,
+) -> None:
+    """Plot lower-triangular parameter-space diagnostics for STEP 3.2."""
+    n = len(parameter_space_cols)
+    if n <= 0:
+        return
+
+    fig, axes = plt.subplots(n, n, figsize=(3.0 * n, 3.0 * n), squeeze=False)
+
+    for i, y_col in enumerate(parameter_space_cols):
+        for j, x_col in enumerate(parameter_space_cols):
+            ax = axes[i, j]
+            if i < j:
+                ax.axis("off")
+                continue
+
+            bx = pd.to_numeric(basis_df.get(x_col), errors="coerce")
+            by = pd.to_numeric(basis_df.get(y_col), errors="coerce")
+            tx = pd.to_numeric(time_df.get(x_col), errors="coerce")
+            ty = pd.to_numeric(time_df.get(y_col), errors="coerce")
+            sx = pd.to_numeric(synthetic_df.get(x_col), errors="coerce")
+            sy = pd.to_numeric(synthetic_df.get(y_col), errors="coerce")
+
+            if i == j:
+                b = bx.dropna()
+                t = tx.dropna()
+                if not b.empty:
+                    ax.hist(b, bins=35, color="#808080", alpha=0.33, label="Basis")
+                if not t.empty:
+                    ax.hist(t, bins=35, color="#1f77b4", alpha=0.34, label="Time targets")
+                if i == 0 and j == 0:
+                    ax.legend(loc="best", fontsize=7)
+                ax.set_ylabel("count")
+            else:
+                m_basis = bx.notna() & by.notna()
+                if m_basis.any():
+                    ax.scatter(
+                        bx[m_basis],
+                        by[m_basis],
+                        s=6,
+                        color="#7a7a7a",
+                        alpha=0.15,
+                        linewidths=0,
+                        zorder=1,
+                    )
+
+                if complete_df is not None and not complete_df.empty:
+                    cx = pd.to_numeric(complete_df.get(x_col), errors="coerce")
+                    cy = pd.to_numeric(complete_df.get(y_col), errors="coerce")
+                    m_complete = cx.notna() & cy.notna()
+                    if m_complete.any():
+                        ax.plot(
+                            cx[m_complete],
+                            cy[m_complete],
+                            color="#1f77b4",
+                            lw=1.2,
+                            alpha=0.9,
+                            zorder=2,
+                        )
+
+                m_time = tx.notna() & ty.notna()
+                if m_time.any():
+                    ax.scatter(
+                        tx[m_time],
+                        ty[m_time],
+                        s=16,
+                        facecolor="white",
+                        edgecolor="black",
+                        linewidth=0.5,
+                        zorder=3,
+                    )
+
+                m_syn = sx.notna() & sy.notna()
+                if m_syn.any():
+                    ax.plot(
+                        sx[m_syn],
+                        sy[m_syn],
+                        color="#d62728",
+                        lw=1.0,
+                        alpha=0.85,
+                        linestyle="-",
+                        zorder=4,
+                    )
+
+            ax.grid(True, alpha=0.20)
+            if i == n - 1:
+                ax.set_xlabel(x_col)
+            if j == 0 and i > 0:
+                ax.set_ylabel(y_col)
+
+    fig.suptitle("STEP 3.2 parameter-space lower-triangle diagnostics", fontsize=12)
+    fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.98])
+    _save_figure(fig, path, dpi=170)
     plt.close(fig)
 
 
@@ -2023,25 +2317,48 @@ def main() -> int:
                 CANONICAL_TIME_DURATION_COLUMN,
             )
 
-    time_events_col = CANONICAL_TIME_EVENTS_COLUMN
+    time_events_col: str | None = CANONICAL_TIME_EVENTS_COLUMN
     if time_events_col not in time_df.columns:
-        log.error("Time series column '%s' not found.", time_events_col)
-        return 1
-    time_rate_col = CANONICAL_TIME_RATE_COLUMN
+        log.warning(
+            "Time series column '%s' not found; STEP 3.2 event filtering by target events is disabled.",
+            time_events_col,
+        )
+        time_events_col = None
+
+    time_rate_col: str | None = CANONICAL_TIME_RATE_COLUMN
     if time_rate_col not in time_df.columns:
-        # Fallback to midpoint rate if mean is not present.
         fallback = CANONICAL_TIME_RATE_FALLBACK_COLUMN
         if fallback in time_df.columns:
             time_rate_col = fallback
         else:
-            log.error("No time-series rate column found (%s / %s).", time_rate_col, fallback)
-            return 1
+            log.warning(
+                "No time-series rate column found (%s / %s); STEP 3.2 global rate will come from weighted feature space.",
+                CANONICAL_TIME_RATE_COLUMN,
+                fallback,
+            )
+            time_rate_col = None
+
     time_duration_col = CANONICAL_TIME_DURATION_COLUMN
     if time_duration_col not in time_df.columns:
         log.error("Time series duration column '%s' not found.", time_duration_col)
         return 1
 
-    basis_events_col = str(cfg_32.get("basis_n_events_column", "n_events"))
+    basis_events_col_cfg = str(cfg_32.get("basis_n_events_column", "n_events"))
+    basis_events_col, basis_events_col_mode = _resolve_basis_events_column(
+        basis_input_df,
+        basis_events_col_cfg,
+    )
+    if basis_events_col_mode == "fallback":
+        log.info(
+            "Basis events column '%s' not usable in selected basis; using fallback '%s'.",
+            basis_events_col_cfg,
+            basis_events_col,
+        )
+    elif basis_events_col_mode == "configured_non_numeric":
+        log.warning(
+            "Basis events column '%s' has no finite numeric values; event filtering disabled.",
+            basis_events_col_cfg,
+        )
     basis_events_tol_pct = _safe_float(
         cfg_32.get("basis_n_events_tolerance_pct", cfg_32.get("basis_n_events_tolerance", 30.0)),
         30.0,
@@ -2055,17 +2372,23 @@ def main() -> int:
         .to_numpy(dtype=float)
     )
     basis_events_all = None
-    if basis_events_col in basis_input_df.columns:
+    if basis_events_col is not None and basis_events_col in basis_input_df.columns:
         basis_events_all = pd.to_numeric(basis_input_df[basis_events_col], errors="coerce").to_numpy(dtype=float)
     else:
-        log.warning("Basis events column '%s' not found in selected basis; event filtering disabled.", basis_events_col)
+        log.warning(
+            "No usable basis events column found in selected basis; event filtering disabled. "
+            "Configured: '%s'.",
+            basis_events_col_cfg,
+        )
 
     target_param_matrix = (
         time_df[parameter_space_cols]
         .apply(pd.to_numeric, errors="coerce")
         .to_numpy(dtype=float)
     )
-    target_events = pd.to_numeric(time_df[time_events_col], errors="coerce").to_numpy(dtype=float)
+    target_events = None
+    if time_events_col is not None and time_events_col in time_df.columns:
+        target_events = pd.to_numeric(time_df[time_events_col], errors="coerce").to_numpy(dtype=float)
 
     valid_basis = np.all(np.isfinite(basis_param_all), axis=1)
     valid_target = np.all(np.isfinite(target_param_matrix), axis=1)
@@ -2288,6 +2611,11 @@ def main() -> int:
         tt_rate_columns_for_consistency=tt_rate_consistency_cols,
         histogram_rate_columns_for_consistency=hist_rate_consistency_cols,
     )
+    # Keep parameter-space coordinates exactly equal to STEP 3.1 targets.
+    for col in parameter_space_cols:
+        if col in synthetic_df.columns and col in time_df.columns:
+            synthetic_df[col] = pd.to_numeric(time_df[col], errors="coerce").to_numpy(dtype=float)
+
     rate_consistency_info = dict(synthetic_df.attrs.get("rate_consistency_info", {}))
     rate_consistency_info["tt_prefix_selected"] = tt_rate_consistency_prefix
     rate_consistency_info["tt_trigger_types_selected"] = tt_rate_consistency_triggers
@@ -2419,11 +2747,9 @@ def main() -> int:
         dictionary_df=dictionary_work,
         weights=weights,
         event_allowed_mask=event_allowed_highlight,
-        flux_col=flux_col,
-        eff_col_time=eff_col_time,
-        eff_col_dict=eff_col_basis,
         basis_label=basis_label,
         highlight_idx=highlight_idx,
+        parameter_space_cols=parameter_space_cols,
         path=out_plot_contrib,
     )
     log.info("Wrote plot: %s", out_plot_contrib)
@@ -2443,6 +2769,17 @@ def main() -> int:
         path=out_plot_series,
     )
     log.info("Wrote plot: %s", out_plot_series)
+
+    out_plot_paramspace = PLOTS_DIR / "parameter_space_lower_triangle.png"
+    _plot_parameter_space_lower_triangle(
+        basis_df=dictionary_work,
+        time_df=time_df,
+        synthetic_df=synthetic_df,
+        complete_df=complete_df,
+        parameter_space_cols=parameter_space_cols,
+        path=out_plot_paramspace,
+    )
+    log.info("Wrote plot: %s", out_plot_paramspace)
 
     # Histogram: full dataset events vs selected basis subset events (same bins).
     if basis_events_col in template_df.columns:
@@ -2480,8 +2817,12 @@ def main() -> int:
         "parameter_space_columns_config": parameter_space_cfg,
         "parameter_space_columns_used_for_weighting": parameter_space_cols,
         "parameter_space_dimensions": int(len(parameter_space_cols)),
+        "basis_events_column_configured": basis_events_col_cfg,
+        "basis_events_column_used": basis_events_col,
+        "basis_events_column_resolution": basis_events_col_mode,
         "basis_events_filter": basis_filter_info,
         "flux_eff_assignment_method": "target_discretized_from_step_3_1",
+        "global_rate_assignment_method": "weighted_feature_space_from_step_3_2",
         "diagnostic_center_method": "weighted_parameter_space_center_not_used_for_output",
         "diagnostic_flux_eff_center_label": diagnostic_center_label,
         "diagnostic_parameter_mae_vs_target": diagnostic_param_mae,

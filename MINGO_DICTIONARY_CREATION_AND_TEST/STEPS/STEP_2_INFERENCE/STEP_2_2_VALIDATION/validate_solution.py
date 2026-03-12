@@ -337,6 +337,8 @@ def main() -> int:
         val["n_events"] = pd.to_numeric(val["true_n_events"], errors="coerce")
     elif "n_events" in data_df.columns:
         val["n_events"] = pd.to_numeric(data_df["n_events"].values[:len(val)], errors="coerce")
+    elif "selected_rows" in data_df.columns:
+        val["n_events"] = pd.to_numeric(data_df["selected_rows"].values[:len(val)], errors="coerce")
 
     # Optionally exclude dictionary-like rows from reported validation.
     exclude_dict_rows = _as_bool(cfg_22.get("exclude_dictionary_entries", True), True)
@@ -349,6 +351,23 @@ def main() -> int:
         exclusion_mask |= _parse_true_is_dictionary_entry_mask(val)
     if exclude_dict_paramset:
         exclusion_mask |= _rows_with_dictionary_parameter_set(val, dict_df, data_df)
+
+    # Exclude out-of-coverage entries (flagged by step 2.1)
+    exclude_out_of_coverage = _as_bool(
+        cfg_22.get("exclude_out_of_coverage", True), True,
+    )
+    coverage_mask = pd.Series(False, index=val.index, dtype=bool)
+    if exclude_out_of_coverage and "in_coverage" in val.columns:
+        coverage_mask = ~val["in_coverage"].astype(str).str.lower().isin(
+            ("true", "1", "yes")
+        )
+        n_out_of_coverage = int(coverage_mask.sum())
+        if n_out_of_coverage > 0:
+            exclusion_mask |= coverage_mask
+            log.info(
+                "Validation: excluding %d out-of-coverage entries (outside dictionary convex hull in parameter space).",
+                n_out_of_coverage,
+            )
 
     n_excluded = int(exclusion_mask.sum())
     val_all = val.copy()

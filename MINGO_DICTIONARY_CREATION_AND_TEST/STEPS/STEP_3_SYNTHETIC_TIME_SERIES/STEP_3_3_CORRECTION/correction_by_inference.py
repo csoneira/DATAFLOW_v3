@@ -128,6 +128,7 @@ try:
         _derived_feature_columns as _shared_derived_feature_columns,
         _normalize_derived_physics_features,
         estimate_from_dataframes,
+        load_distance_definition,
         resolve_inverse_mapping_cfg,
     )
     from feature_columns_config import (  # noqa: E402
@@ -275,6 +276,116 @@ def _choose_eff_column(df: pd.DataFrame, preferred: str) -> str:
         if candidate in df.columns:
             return candidate
     raise KeyError("No efficiency column found in dataframe.")
+
+
+DEFAULT_PARAMETER_SPACE_PRIORITY = [
+    "flux_cm2_min",
+    "cos_n",
+    "eff_sim_1",
+    "eff_sim_2",
+    "eff_sim_3",
+    "eff_sim_4",
+    "eff_empirical_1",
+    "eff_empirical_2",
+    "eff_empirical_3",
+    "eff_empirical_4",
+]
+
+
+def _is_parameter_space_column(name: str) -> bool:
+    col = str(name).strip()
+    if not col:
+        return False
+    if col in {"flux_cm2_min", "cos_n"}:
+        return True
+    if col.startswith("eff_sim_"):
+        return True
+    if col.startswith("eff_empirical_"):
+        return True
+    return False
+
+
+def _parse_column_spec(value: object) -> list[str]:
+    """Parse list-like config values accepting arrays or comma-separated text."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or text.lower() == "auto":
+            return []
+        if text.startswith("[") and text.endswith("]"):
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, list):
+                    return [str(x).strip() for x in parsed if str(x).strip()]
+            except json.JSONDecodeError:
+                pass
+        return [part.strip() for part in text.split(",") if part.strip()]
+    if isinstance(value, (list, tuple, set)):
+        return [str(x).strip() for x in value if str(x).strip()]
+    text = str(value).strip()
+    return [text] if text and text.lower() != "auto" else []
+
+
+def _resolve_parameter_space_columns_from_cfg(
+    *,
+    merged_df: pd.DataFrame,
+    dictionary_df: pd.DataFrame,
+    configured_columns: object = None,
+) -> list[str]:
+    """Resolve parameter-space columns with available weighted/corrected pairs."""
+
+    def _has_weighted_and_corrected(col: str) -> bool:
+        if col not in merged_df.columns:
+            return False
+        return (f"corrected_{col}" in merged_df.columns) or (f"est_{col}" in merged_df.columns)
+
+    common_dict = set(dictionary_df.columns)
+    requested = _parse_column_spec(configured_columns)
+
+    if requested:
+        resolved: list[str] = []
+        missing: list[str] = []
+        for col in requested:
+            if col in common_dict and _has_weighted_and_corrected(col):
+                if col not in resolved:
+                    resolved.append(col)
+            else:
+                missing.append(col)
+        if missing:
+            log.warning(
+                "Ignoring STEP 3.3 parameter_space_columns without dictionary/weighted/corrected support: %s",
+                missing,
+            )
+        if resolved:
+            return resolved
+        raise KeyError("No configured STEP 3.3 parameter_space_columns are available.")
+
+    resolved_auto: list[str] = []
+    for col in DEFAULT_PARAMETER_SPACE_PRIORITY:
+        if col in common_dict and _has_weighted_and_corrected(col) and col not in resolved_auto:
+            resolved_auto.append(col)
+
+    for col in sorted(common_dict):
+        if col in resolved_auto:
+            continue
+        if _is_parameter_space_column(col) and _has_weighted_and_corrected(col):
+            resolved_auto.append(col)
+
+    if resolved_auto:
+        return resolved_auto
+
+    # Fallback: any estimated parameter with a base counterpart present in dictionary.
+    for col in merged_df.columns:
+        if not str(col).startswith("est_"):
+            continue
+        base = str(col)[len("est_"):]
+        if base in common_dict and base in merged_df.columns:
+            resolved_auto.append(base)
+    if resolved_auto:
+        return sorted(set(resolved_auto))
+
+    raise KeyError("Could not resolve STEP 3.3 parameter-space columns.")
 
 
 def _resolve_inference_feature_columns(
@@ -1156,9 +1267,10 @@ def _plot_flux_recovery_vs_global_rate(
     flux_est_col: str,
     flux_unc_abs_col: str | None,
     global_rate_col: str,
+    eff_plot_cols: list[str] | None,
     path: Path,
 ) -> None:
-    """Plot a 4-panel story using complete curve as simulated reference when available."""
+    """Plot feature-space distance, global rate, efficiencies, and flux."""
     def _apply_striped_background(ax: plt.Axes, y_vals: np.ndarray) -> None:
         """Apply stripes at 1%-of-mean increments, uniformly across the y-axis."""
         y_min, y_max = ax.get_ylim()
@@ -1193,9 +1305,17 @@ def _plot_flux_recovery_vs_global_rate(
             idx += 1
         ax.set_ylim(y_min, y_max)
 
+    from matplotlib.ticker import FuncFormatter, MaxNLocator
+
+    def _eff_display_name(col: str) -> str:
+        text = str(col).strip()
+        if text.startswith("eff_sim_"):
+            idx = text.split("_")[-1]
+            return f"Eff {idx}"
+        return text.replace("_", " ")
+
     x, x_label = _time_axis(df)
     true_flux = pd.to_numeric(df.get(flux_true_col), errors="coerce").to_numpy(dtype=float)
-    true_eff = pd.to_numeric(df.get(eff_true_col), errors="coerce").to_numpy(dtype=float)
     est_flux = pd.to_numeric(df.get(flux_est_col), errors="coerce").to_numpy(dtype=float)
     rate_vals = pd.to_numeric(df.get(global_rate_col), errors="coerce").to_numpy(dtype=float)
     unc_flux = (
@@ -1207,10 +1327,7 @@ def _plot_flux_recovery_vs_global_rate(
     # Prefer complete-curve references for simulated flux/efficiency.
     x_ref_flux = x
     y_ref_flux = true_flux
-    x_ref_eff = x
-    y_ref_eff = true_eff
     ref_flux_label = "Simulated flux (discretized)"
-    ref_eff_label = "Simulated efficiency (discretized)"
     if complete_df is not None and not complete_df.empty:
         if flux_complete_col in complete_df.columns:
             xc, _ = _time_axis(complete_df)
@@ -1219,90 +1336,264 @@ def _plot_flux_recovery_vs_global_rate(
                 x_ref_flux = xc
                 y_ref_flux = yc
                 ref_flux_label = "Simulated flux (complete)"
-        if eff_complete_col in complete_df.columns:
-            xc, _ = _time_axis(complete_df)
-            yc = pd.to_numeric(complete_df.get(eff_complete_col), errors="coerce").to_numpy(dtype=float)
-            if len(xc) == len(yc):
-                x_ref_eff = xc
-                y_ref_eff = yc
-                ref_eff_label = "Simulated efficiency (complete)"
+
+    # Prefer complete-curve references for global rate when available.
+    x_ref_rate = x
+    y_ref_rate = np.full(len(x), np.nan, dtype=float)
+    if complete_df is not None and not complete_df.empty:
+        for c in ("events_per_second_global_rate", "global_rate_hz_mean", "global_rate_hz_mid"):
+            if c in complete_df.columns:
+                xc, _ = _time_axis(complete_df)
+                yc = pd.to_numeric(complete_df.get(c), errors="coerce").to_numpy(dtype=float)
+                if len(xc) == len(yc):
+                    x_ref_rate = xc
+                    y_ref_rate = yc
+                    break
+
+    dist_col: str | None = None
+    for candidate in (
+        "best_distance",
+        "best_distance_base_l2",
+        "stage2_best_distance_rate",
+        "stage1_best_distance_eff",
+    ):
+        if candidate in df.columns:
+            dist_col = candidate
+            break
+    if dist_col is None:
+        for col in df.columns:
+            name = str(col).lower()
+            if "best_distance" in name:
+                dist_col = str(col)
+                break
+    if dist_col is None:
+        for col in df.columns:
+            name = str(col).lower()
+            if "distance" in name:
+                dist_col = str(col)
+                break
 
     fig, axes = plt.subplots(
         4,
         1,
-        figsize=(11.6, 9.2),
+        figsize=(11.6, 10.6),
         sharex=True,
-        gridspec_kw={"height_ratios": [1.0, 1.0, 1.0, 1.15]},
+        gridspec_kw={"height_ratios": [0.85, 1.0, 1.05, 1.25]},
     )
     for ax in axes:
         ax.set_facecolor("#FFFFFF")
         ax.grid(True, alpha=0.24)
 
-    # 1) Simulated flux.
+    # 1) Feature-space distance quality metric.
+    if dist_col is not None:
+        dist_vals = pd.to_numeric(df.get(dist_col), errors="coerce").to_numpy(dtype=float)
+    else:
+        dist_vals = np.full(len(x), np.nan, dtype=float)
+    m_dist = np.isfinite(x) & np.isfinite(dist_vals)
+    if np.any(m_dist):
+        order = np.argsort(x[m_dist])
+        xs = x[m_dist][order]
+        ys = dist_vals[m_dist][order]
+        axes[0].plot(
+            xs,
+            ys,
+            color="#6A3D9A",
+            linewidth=2.1,
+            alpha=0.95,
+            solid_capstyle="round",
+            label=(dist_col if dist_col is not None else "distance"),
+        )
+        _apply_striped_background(axes[0], ys)
+        axes[0].legend(loc="best", fontsize=8, framealpha=0.92, facecolor="white")
+    else:
+        axes[0].text(0.5, 0.5, "No finite distance values", ha="center", va="center")
+    axes[0].set_ylabel("Distance")
+    axes[0].set_title(
+        f"Feature-space distance (quality) [{dist_col}]"
+        if dist_col is not None
+        else "Feature-space distance (quality)"
+    )
+
+    # 2) Global rate.
+    rate_bg: list[np.ndarray] = []
+    m_rate = np.isfinite(x) & np.isfinite(rate_vals)
+    if np.any(m_rate):
+        order = np.argsort(x[m_rate])
+        xs = x[m_rate][order]
+        ys = rate_vals[m_rate][order]
+        rate_bg.append(ys)
+        axes[1].plot(
+            xs,
+            ys,
+            color="#2E8B57",
+            linewidth=2.6,
+            alpha=0.95,
+            solid_capstyle="round",
+            label="Weighted global rate",
+        )
+    m_ref_rate = np.isfinite(x_ref_rate) & np.isfinite(y_ref_rate)
+    if np.any(m_ref_rate):
+        order = np.argsort(x_ref_rate[m_ref_rate])
+        xs = x_ref_rate[m_ref_rate][order]
+        ys = y_ref_rate[m_ref_rate][order]
+        rate_bg.append(ys)
+        axes[1].plot(
+            xs,
+            ys,
+            color="#7FBF7B",
+            linewidth=1.3,
+            linestyle="--",
+            alpha=0.92,
+            label="Complete-curve rate reference",
+        )
+    axes[1].set_ylabel("Global rate [Hz]")
+    axes[1].set_title("Global rate time series")
+    if rate_bg:
+        _apply_striped_background(axes[1], np.concatenate(rate_bg))
+    axes[1].yaxis.set_major_locator(MaxNLocator(integer=True))
+    axes[1].yaxis.set_major_formatter(FuncFormatter(lambda v, _pos: f"{int(np.rint(v))}"))
+    axes[1].legend(loc="best", fontsize=8, framealpha=0.92, facecolor="white")
+
+    # 3) Efficiencies: simulated vs estimated (all available planes).
+    requested_eff_cols = [str(c).strip() for c in (eff_plot_cols or []) if str(c).strip()]
+    fallback_eff_cols = ["eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4"]
+    eff_candidates = requested_eff_cols + fallback_eff_cols + [str(eff_complete_col).strip()]
+    eff_base_from_true = (
+        str(eff_true_col)[len("true_"):] if str(eff_true_col).startswith("true_") else str(eff_true_col)
+    )
+    if eff_base_from_true:
+        eff_candidates.append(eff_base_from_true)
+
+    eff_cols: list[str] = []
+    for col in eff_candidates:
+        if not col or col in eff_cols:
+            continue
+        if (
+            (complete_df is not None and not complete_df.empty and col in complete_df.columns)
+            or (f"true_{col}" in df.columns)
+            or (col in df.columns)
+            or (f"est_{col}" in df.columns)
+            or (f"corrected_{col}" in df.columns)
+        ):
+            eff_cols.append(col)
+
+    eff_palette = ["#1F77B4", "#FF7F0E", "#2CA02C", "#9467BD", "#8C564B", "#17BECF"]
+    eff_bg: list[np.ndarray] = []
+    eff_unc_legend_added = False
+    for idx, eff_col in enumerate(eff_cols):
+        color = eff_palette[idx % len(eff_palette)]
+        eff_name = _eff_display_name(eff_col)
+
+        # Simulated reference for this efficiency.
+        x_sim = x
+        y_sim = np.full(len(x), np.nan, dtype=float)
+        y_true_col = f"true_{eff_col}"
+        if y_true_col in df.columns:
+            y_sim = pd.to_numeric(df.get(y_true_col), errors="coerce").to_numpy(dtype=float)
+        elif eff_col in df.columns:
+            y_sim = pd.to_numeric(df.get(eff_col), errors="coerce").to_numpy(dtype=float)
+        elif eff_col == eff_base_from_true and eff_true_col in df.columns:
+            y_sim = pd.to_numeric(df.get(eff_true_col), errors="coerce").to_numpy(dtype=float)
+        if complete_df is not None and not complete_df.empty and eff_col in complete_df.columns:
+            xc, _ = _time_axis(complete_df)
+            yc = pd.to_numeric(complete_df.get(eff_col), errors="coerce").to_numpy(dtype=float)
+            if len(xc) == len(yc):
+                x_sim = xc
+                y_sim = yc
+        m_sim = np.isfinite(x_sim) & np.isfinite(y_sim)
+        if np.any(m_sim):
+            order = np.argsort(x_sim[m_sim])
+            xs = x_sim[m_sim][order]
+            ys = y_sim[m_sim][order]
+            eff_bg.append(ys)
+            axes[2].plot(
+                xs,
+                ys,
+                color=color,
+                linewidth=1.15,
+                linestyle="--",
+                alpha=0.62,
+                label=f"{eff_name} sim",
+            )
+
+        # Estimated series for this efficiency.
+        est_eff_col = (
+            f"corrected_{eff_col}" if f"corrected_{eff_col}" in df.columns
+            else (f"est_{eff_col}" if f"est_{eff_col}" in df.columns else None)
+        )
+        if est_eff_col is None:
+            continue
+        y_est = pd.to_numeric(df.get(est_eff_col), errors="coerce").to_numpy(dtype=float)
+        m_est = np.isfinite(x) & np.isfinite(y_est)
+        if np.any(m_est):
+            order = np.argsort(x[m_est])
+            xs = x[m_est][order]
+            ys = y_est[m_est][order]
+            eff_bg.append(ys)
+            axes[2].plot(
+                xs,
+                ys,
+                color=color,
+                linewidth=1.9,
+                linestyle="-",
+                alpha=0.97,
+                marker="o",
+                markersize=2.7,
+                markerfacecolor=color,
+                markeredgecolor="white",
+                markeredgewidth=0.35,
+                label=f"{eff_name} est",
+            )
+            unc_col = f"unc_{eff_col}_abs"
+            if unc_col in df.columns:
+                ue = np.abs(pd.to_numeric(df.get(unc_col), errors="coerce").to_numpy(dtype=float)[m_est][order])
+                valid_u = np.isfinite(ue)
+                if np.any(valid_u):
+                    axes[2].fill_between(
+                        xs[valid_u],
+                        ys[valid_u] - ue[valid_u],
+                        ys[valid_u] + ue[valid_u],
+                        color=color,
+                        alpha=0.12,
+                        linewidth=0.0,
+                        label=("Estimated ± uncertainty" if not eff_unc_legend_added else None),
+                    )
+                    eff_unc_legend_added = True
+
+    axes[2].set_ylabel("Efficiency")
+    axes[2].set_title("Efficiencies: simulated vs estimated")
+    if eff_bg:
+        _apply_striped_background(axes[2], np.concatenate(eff_bg))
+    axes[2].legend(
+        loc="best",
+        fontsize=7,
+        ncol=4,
+        framealpha=0.92,
+        facecolor="white",
+        columnspacing=1.1,
+        handlelength=2.2,
+    )
+
+    # 4) Flux: simulated vs estimated (same color family; style separates curves).
+    flux_color = "#D62728"
     m_true_flux = np.isfinite(x_ref_flux) & np.isfinite(y_ref_flux)
     if np.any(m_true_flux):
         order = np.argsort(x_ref_flux[m_true_flux])
         xs = x_ref_flux[m_true_flux][order]
         ys = y_ref_flux[m_true_flux][order]
-        axes[0].plot(
+        axes[3].plot(
             xs,
             ys,
-            color="#1F77B4",
-            linewidth=1.2,
-            marker="o",
-            markersize=3.1,
-            markerfacecolor="white",
-            markeredgewidth=0.7,
-            alpha=0.92,
-            label=ref_flux_label,
+            color=flux_color,
+            linewidth=1.4,
+            linestyle="--",
+            alpha=0.58,
+            label="Simulated flux",
+            zorder=1,
         )
-    axes[0].set_ylabel("Sim. flux")
-    _apply_striped_background(axes[0], y_ref_flux)
-    axes[0].legend(loc="best", fontsize=8)
 
-    # 2) Simulated efficiency.
-    m_true_eff = np.isfinite(x_ref_eff) & np.isfinite(y_ref_eff)
-    if np.any(m_true_eff):
-        order = np.argsort(x_ref_eff[m_true_eff])
-        xs = x_ref_eff[m_true_eff][order]
-        ys = y_ref_eff[m_true_eff][order]
-        axes[1].plot(
-            xs,
-            ys,
-            color="#FF7F0E",
-            linewidth=1.15,
-            marker="o",
-            markersize=3.0,
-            markerfacecolor="white",
-            markeredgewidth=0.65,
-            alpha=0.90,
-            label=ref_eff_label,
-        )
-    axes[1].set_ylabel("Sim. eff")
-    _apply_striped_background(axes[1], y_ref_eff)
-    axes[1].legend(loc="best", fontsize=8)
-
-    # 3) Global rate.
-    m_rate = np.isfinite(x) & np.isfinite(rate_vals)
-    if np.any(m_rate):
-        order = np.argsort(x[m_rate])
-        xr = x[m_rate][order]
-        yr = rate_vals[m_rate][order]
-        axes[2].plot(
-            xr,
-            yr,
-            color="#2E8B57",
-            linewidth=2.4,
-            alpha=0.46,
-            solid_capstyle="round",
-            label=f"Global rate ({global_rate_col})",
-        )
-    axes[2].set_ylabel("Global rate")
-    _apply_striped_background(axes[2], rate_vals)
-    axes[2].legend(loc="best", fontsize=8)
-
-    # 4) Estimated reconstructed flux (+ uncertainty), with true flux reference.
     m_est_flux = np.isfinite(x) & np.isfinite(est_flux)
+    flux_bg = [y_ref_flux, est_flux]
     if np.any(m_est_flux):
         order = np.argsort(x[m_est_flux])
         xe = x[m_est_flux][order]
@@ -1310,14 +1601,15 @@ def _plot_flux_recovery_vs_global_rate(
         axes[3].plot(
             xe,
             ye,
-            color="#D62728",
-            linewidth=1.3,
+            color=flux_color,
+            linewidth=2.8,
             marker="o",
-            markersize=3.0,
-            markerfacecolor="#D62728",
-            markeredgewidth=0.0,
-            alpha=0.88,
-            label="Estimated reconstructed flux",
+            markersize=4.4,
+            markerfacecolor=flux_color,
+            markeredgecolor="white",
+            markeredgewidth=0.45,
+            alpha=0.99,
+            label="Estimated flux",
             zorder=3,
         )
         if unc_flux is not None and len(unc_flux) == len(x):
@@ -1328,99 +1620,394 @@ def _plot_flux_recovery_vs_global_rate(
                     xe[valid_ue],
                     ye[valid_ue] - ue[valid_ue],
                     ye[valid_ue] + ue[valid_ue],
-                    color="#D62728",
-                    alpha=0.16,
+                    color=flux_color,
+                    alpha=0.14,
                     linewidth=0.0,
                     label="Estimated ± uncertainty",
                     zorder=2,
                 )
-    if np.any(m_true_flux):
-        order = np.argsort(x_ref_flux[m_true_flux])
-        xs = x_ref_flux[m_true_flux][order]
-        ys = y_ref_flux[m_true_flux][order]
-        axes[3].plot(
-            xs,
-            ys,
-            color="#1F77B4",
-            linewidth=1.0,
-            linestyle="--",
-            alpha=0.60,
-            label=f"{ref_flux_label} reference",
-            zorder=1,
-        )
-    axes[3].set_ylabel("Estimated flux")
+    axes[3].set_ylabel("Flux")
     axes[3].set_xlabel(x_label)
-    _apply_striped_background(axes[3], est_flux)
-    axes[3].legend(loc="best", fontsize=8)
-
-    # Harmonize number of 1%-bands across all four subplots (visual-only, preserve axis centers)
-    # Determine per-axis 1% size using the same fallback logic as the striped background helper.
-    y_sources = [y_ref_flux, y_ref_eff, rate_vals, est_flux]
-    band_sizes = []
-    current_bands = []
-    centers = []
-    for ax, y_arr in zip(axes, y_sources):
-        y_min, y_max = ax.get_ylim()
-        span = y_max - y_min
-        valid = np.isfinite(y_arr)
-        if np.any(valid):
-            mean_val = float(np.mean(y_arr[valid]))
-            band = abs(mean_val) * 0.01
-        else:
-            band = span * 0.01
-        if not np.isfinite(band) or band <= 0.0:
-            band = max(span * 0.01, 1e-12)
-        band_sizes.append(band)
-        centers.append(0.5 * (y_min + y_max))
-        current_bands.append((span / band) if band > 0.0 else 0.0)
-
-    # Target number of 1%-bands (take ceiling of the maximum observed)
-    N = int(np.ceil(max(current_bands))) if current_bands else 0
-
-    # Apply new y-limits (preserve center) and set 1%-spaced ticks (values in original units).
-    # Then redraw the 1%-striped background so stripes cover the NEW ylim span (visual-only).
-    if N > 0:
-        for ax, center, band, y_arr in zip(axes, centers, band_sizes, y_sources):
-            target_span = N * band
-            new_min = center - 0.5 * target_span
-            new_max = center + 0.5 * target_span
-            ax.set_ylim(new_min, new_max)
-            # set tick positions every 1% but limit tick count to avoid label overlap
-            # keep ticks aligned to the 1%-band grid but sample them sparsely when N is large
-            max_ticks = 9
-            n_bands = max(1, int(round(target_span / band)))
-            step_bands = max(1, int(np.ceil(n_bands / max_ticks)))
-            # build symmetric indices around center on the band grid
-            k_min = - (n_bands // 2)
-            k_max = (n_bands // 2) + (1 if (n_bands % 2 == 0) else 0)
-            ks = list(range(k_min, k_max + 1, step_bands))
-            ticks = [center + k * band for k in ks]
-            ax.set_yticks(ticks)
-            # format tick labels to 2 decimal places to avoid excessive precision
-            try:
-                ax.set_yticklabels([f"{v:.2f}" for v in ticks])
-            except Exception:
-                # fallback: use a numeric formatter if direct set fails
-                try:
-                    from matplotlib.ticker import FormatStrFormatter
-
-                    ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
-                except Exception:
-                    pass
-            # redraw 1%-striped background to fill the expanded ylim range
-            try:
-                _apply_striped_background(ax, y_arr)
-            except Exception:
-                # non-critical: leave background as-is if redraw fails
-                pass
+    axes[3].set_title("Flux: simulated vs estimated")
+    _apply_striped_background(axes[3], np.concatenate([arr for arr in flux_bg if arr.size > 0]))
+    axes[3].legend(loc="best", fontsize=8, framealpha=0.92, facecolor="white")
 
     fig.suptitle(
-        "Flux-recovery story: simulated flux/efficiency -> global-rate response -> reconstructed flux",
+        "Feature-space quality and reconstruction diagnostics",
         fontsize=11,
     )
 
     fig.tight_layout()
     _save_figure(fig, path, dpi=170)
+    plt.close(fig)
+
+
+def _plot_corrected_time_series_overview(
+    *,
+    complete_df: pd.DataFrame | None,
+    time_df: pd.DataFrame,
+    merged_df: pd.DataFrame,
+    flux_col: str,
+    eff_cols: list[str],
+    corrected_flux_col: str,
+    flux_unc_abs_col: str | None,
+    global_rate_col: str | None,
+    path: Path,
+) -> None:
+    """Plot weighted-vs-corrected trajectory for flux, all efficiencies, and global rate."""
+    fig, axes = plt.subplots(3, 1, figsize=(11.8, 9.4), sharex=True)
+    x_merge, x_label = _time_axis(merged_df)
+    x_time, _ = _time_axis(time_df)
+    x_complete, _ = _time_axis(complete_df) if complete_df is not None and not complete_df.empty else (None, "")
+
+    # Panel 1: flux.
+    flux_bg: list[np.ndarray] = []
+    y_weighted_flux = pd.to_numeric(merged_df.get(flux_col), errors="coerce").to_numpy(dtype=float)
+    y_corrected_flux = pd.to_numeric(merged_df.get(corrected_flux_col), errors="coerce").to_numpy(dtype=float)
+    flux_bg.extend([y_weighted_flux, y_corrected_flux])
+    m_wf = np.isfinite(x_merge) & np.isfinite(y_weighted_flux)
+    if np.any(m_wf):
+        axes[0].scatter(
+            x_merge[m_wf],
+            y_weighted_flux[m_wf],
+            s=16,
+            facecolors="white",
+            edgecolors="#1F77B4",
+            linewidths=0.8,
+            label="Weighted curve (STEP 3.2)",
+            zorder=2,
+        )
+    m_cf = np.isfinite(x_merge) & np.isfinite(y_corrected_flux)
+    if np.any(m_cf):
+        order = np.argsort(x_merge[m_cf])
+        xs = x_merge[m_cf][order]
+        ys = y_corrected_flux[m_cf][order]
+        axes[0].plot(
+            xs,
+            ys,
+            color="#D62728",
+            linewidth=1.15,
+            linestyle="-",
+            label="Corrected curve (STEP 3.3)",
+            zorder=3,
+        )
+        if flux_unc_abs_col and flux_unc_abs_col in merged_df.columns:
+            unc = pd.to_numeric(merged_df.get(flux_unc_abs_col), errors="coerce").to_numpy(dtype=float)
+            if len(unc) == len(x_merge):
+                us = np.abs(unc[m_cf][order])
+                valid_u = np.isfinite(us)
+                if np.any(valid_u):
+                    axes[0].fill_between(
+                        xs[valid_u],
+                        ys[valid_u] - us[valid_u],
+                        ys[valid_u] + us[valid_u],
+                        color="#D62728",
+                        alpha=0.16,
+                        linewidth=0.0,
+                        label="Corrected ± uncertainty",
+                        zorder=1,
+                    )
+    if complete_df is not None and not complete_df.empty and flux_col in complete_df.columns and x_complete is not None:
+        y_complete_flux = pd.to_numeric(complete_df.get(flux_col), errors="coerce").to_numpy(dtype=float)
+        flux_bg.append(y_complete_flux)
+        m_comp = np.isfinite(x_complete) & np.isfinite(y_complete_flux)
+        if np.any(m_comp):
+            axes[0].plot(
+                x_complete[m_comp],
+                y_complete_flux[m_comp],
+                color="#1F77B4",
+                linewidth=0.95,
+                linestyle="--",
+                alpha=0.60,
+                label="Complete curve (STEP 3.1)",
+                zorder=0,
+            )
+    axes[0].set_ylabel("flux_cm2_min")
+    axes[0].set_title("Flux: weighted (STEP 3.2) vs corrected (STEP 3.3)")
+    _apply_mean_striped_background(axes[0], np.concatenate(flux_bg))
+    axes[0].grid(True, alpha=0.25)
+    axes[0].legend(loc="best", fontsize=8)
+
+    # Panel 2: all efficiencies in one plot.
+    eff_palette = ["#FF7F0E", "#D62728", "#9467BD", "#8C564B", "#2CA02C", "#17BECF"]
+    eff_bg: list[np.ndarray] = []
+    complete_label_added = False
+    for idx, eff_col in enumerate(eff_cols):
+        color = eff_palette[idx % len(eff_palette)]
+        weighted = pd.to_numeric(merged_df.get(eff_col), errors="coerce").to_numpy(dtype=float)
+        corrected_col = f"corrected_{eff_col}" if f"corrected_{eff_col}" in merged_df.columns else f"est_{eff_col}"
+        if corrected_col not in merged_df.columns:
+            continue
+        corrected = pd.to_numeric(merged_df.get(corrected_col), errors="coerce").to_numpy(dtype=float)
+        eff_bg.extend([weighted, corrected])
+
+        if complete_df is not None and not complete_df.empty and eff_col in complete_df.columns and x_complete is not None:
+            y_comp = pd.to_numeric(complete_df.get(eff_col), errors="coerce").to_numpy(dtype=float)
+            eff_bg.append(y_comp)
+            m_comp = np.isfinite(x_complete) & np.isfinite(y_comp)
+            if np.any(m_comp):
+                axes[1].plot(
+                    x_complete[m_comp],
+                    y_comp[m_comp],
+                    color=color,
+                    linewidth=0.85,
+                    linestyle="--",
+                    alpha=0.45,
+                    label=("Complete curve (STEP 3.1)" if not complete_label_added else None),
+                    zorder=0,
+                )
+                complete_label_added = True
+
+        m_w = np.isfinite(x_merge) & np.isfinite(weighted)
+        if np.any(m_w):
+            axes[1].scatter(
+                x_merge[m_w],
+                weighted[m_w],
+                s=14,
+                facecolors="white",
+                edgecolors=color,
+                linewidths=0.75,
+                label=f"{eff_col} weighted",
+                zorder=2,
+            )
+
+        m_c = np.isfinite(x_merge) & np.isfinite(corrected)
+        if np.any(m_c):
+            order = np.argsort(x_merge[m_c])
+            xs = x_merge[m_c][order]
+            ys = corrected[m_c][order]
+            axes[1].plot(
+                xs,
+                ys,
+                color=color,
+                linewidth=1.05,
+                linestyle="-",
+                alpha=0.92,
+                label=f"{eff_col} corrected",
+                zorder=3,
+            )
+            unc_col = f"unc_{eff_col}_abs"
+            if unc_col in merged_df.columns:
+                unc = pd.to_numeric(merged_df.get(unc_col), errors="coerce").to_numpy(dtype=float)
+                if len(unc) == len(x_merge):
+                    us = np.abs(unc[m_c][order])
+                    valid_u = np.isfinite(us)
+                    if np.any(valid_u):
+                        axes[1].fill_between(
+                            xs[valid_u],
+                            ys[valid_u] - us[valid_u],
+                            ys[valid_u] + us[valid_u],
+                            color=color,
+                            alpha=0.08,
+                            linewidth=0.0,
+                            zorder=1,
+                        )
+
+    axes[1].set_ylabel("eff")
+    axes[1].set_title("Efficiencies (all planes): weighted (STEP 3.2) vs corrected (STEP 3.3)")
+    if eff_bg:
+        _apply_mean_striped_background(axes[1], np.concatenate(eff_bg))
+    axes[1].grid(True, alpha=0.25)
+    axes[1].legend(loc="best", fontsize=7, ncol=2)
+
+    # Panel 3: global rate (feature-space output from STEP 3.2).
+    rate_bg: list[np.ndarray] = []
+    rate_col_merge = None
+    for c in (
+        global_rate_col,
+        "events_per_second_global_rate",
+        "global_rate_hz_mean",
+        "global_rate_hz_mid",
+    ):
+        if c and c in merged_df.columns:
+            rate_col_merge = c
+            break
+    if rate_col_merge is not None:
+        y_rate_merge = pd.to_numeric(merged_df.get(rate_col_merge), errors="coerce").to_numpy(dtype=float)
+        rate_bg.append(y_rate_merge)
+        m_rm = np.isfinite(x_merge) & np.isfinite(y_rate_merge)
+        if np.any(m_rm):
+            axes[2].plot(
+                x_merge[m_rm],
+                y_rate_merge[m_rm],
+                color="#2CA02C",
+                linewidth=1.1,
+                linestyle="-",
+                label=f"Weighted feature-space rate ({rate_col_merge})",
+            )
+
+    rate_col_time = None
+    for c in ("events_per_second_global_rate", "global_rate_hz_mean", "global_rate_hz_mid"):
+        if c in time_df.columns:
+            rate_col_time = c
+            break
+    if rate_col_time is not None:
+        y_rate_time = pd.to_numeric(time_df.get(rate_col_time), errors="coerce").to_numpy(dtype=float)
+        rate_bg.append(y_rate_time)
+        m_rt = np.isfinite(x_time) & np.isfinite(y_rate_time)
+        if np.any(m_rt):
+            axes[2].scatter(
+                x_time[m_rt],
+                y_rate_time[m_rt],
+                s=16,
+                facecolors="white",
+                edgecolors="#2CA02C",
+                linewidths=0.8,
+                label="Discretized rate (STEP 3.1)",
+            )
+
+    if complete_df is not None and not complete_df.empty and x_complete is not None:
+        rate_col_complete = None
+        for c in ("events_per_second_global_rate", "global_rate_hz_mean", "global_rate_hz_mid"):
+            if c in complete_df.columns:
+                rate_col_complete = c
+                break
+        if rate_col_complete is not None:
+            y_rate_complete = pd.to_numeric(complete_df.get(rate_col_complete), errors="coerce").to_numpy(dtype=float)
+            rate_bg.append(y_rate_complete)
+            m_rc = np.isfinite(x_complete) & np.isfinite(y_rate_complete)
+            if np.any(m_rc):
+                axes[2].plot(
+                    x_complete[m_rc],
+                    y_rate_complete[m_rc],
+                    color="#2CA02C",
+                    linewidth=0.9,
+                    linestyle="--",
+                    alpha=0.6,
+                    label="Complete rate (STEP 3.1)",
+                )
+
+    axes[2].set_xlabel(x_label)
+    axes[2].set_ylabel("global rate [Hz]")
+    axes[2].set_title("Global rate (feature-space dimension, carried from STEP 3.2)")
+    if rate_bg:
+        _apply_mean_striped_background(axes[2], np.concatenate(rate_bg))
+    axes[2].grid(True, alpha=0.25)
+    axes[2].legend(loc="best", fontsize=8)
+
+    fig.tight_layout()
+    _save_figure(fig, path, dpi=170)
+    plt.close(fig)
+
+
+def _plot_corrected_parameter_space_lower_triangle(
+    *,
+    dictionary_df: pd.DataFrame,
+    merged_df: pd.DataFrame,
+    complete_df: pd.DataFrame | None,
+    parameter_space_cols: list[str],
+    path: Path,
+) -> None:
+    """Lower-triangular parameter-space diagnostics for weighted and corrected curves."""
+    n = len(parameter_space_cols)
+    if n <= 0:
+        return
+
+    fig, axes = plt.subplots(n, n, figsize=(3.1 * n, 3.1 * n), squeeze=False)
+
+    for i, y_col in enumerate(parameter_space_cols):
+        for j, x_col in enumerate(parameter_space_cols):
+            ax = axes[i, j]
+            if i < j:
+                ax.axis("off")
+                continue
+
+            bx = pd.to_numeric(dictionary_df.get(x_col), errors="coerce")
+            by = pd.to_numeric(dictionary_df.get(y_col), errors="coerce")
+            wx = pd.to_numeric(merged_df.get(x_col), errors="coerce")
+            wy = pd.to_numeric(merged_df.get(y_col), errors="coerce")
+
+            cx_col = f"corrected_{x_col}" if f"corrected_{x_col}" in merged_df.columns else f"est_{x_col}"
+            cy_col = f"corrected_{y_col}" if f"corrected_{y_col}" in merged_df.columns else f"est_{y_col}"
+            cx = pd.to_numeric(merged_df.get(cx_col), errors="coerce")
+            cy = pd.to_numeric(merged_df.get(cy_col), errors="coerce")
+
+            if i == j:
+                b = bx.dropna()
+                w = wx.dropna()
+                c = cx.dropna()
+                if not b.empty:
+                    ax.hist(b, bins=34, color="#808080", alpha=0.34, label="Dictionary")
+                if not w.empty:
+                    ax.hist(w, bins=34, color="#1F77B4", alpha=0.30, label="Weighted curve")
+                if not c.empty:
+                    ax.hist(c, bins=34, color="#D62728", alpha=0.30, label="Corrected curve")
+                if i == 0 and j == 0:
+                    ax.legend(loc="best", fontsize=7)
+                ax.set_ylabel("count")
+            else:
+                m_basis = bx.notna() & by.notna()
+                if m_basis.any():
+                    ax.scatter(
+                        bx[m_basis],
+                        by[m_basis],
+                        s=6,
+                        color="#7A7A7A",
+                        alpha=0.16,
+                        linewidths=0,
+                        label=("Dictionary" if (i == 1 and j == 0) else None),
+                        zorder=1,
+                    )
+
+                if complete_df is not None and not complete_df.empty:
+                    kx = pd.to_numeric(complete_df.get(x_col), errors="coerce")
+                    ky = pd.to_numeric(complete_df.get(y_col), errors="coerce")
+                    m_comp = kx.notna() & ky.notna()
+                    if m_comp.any():
+                        ax.plot(
+                            kx[m_comp],
+                            ky[m_comp],
+                            color="#1F77B4",
+                            lw=0.95,
+                            alpha=0.55,
+                            linestyle="--",
+                            label=("Complete curve" if (i == 1 and j == 0) else None),
+                            zorder=2,
+                        )
+
+                m_weighted = wx.notna() & wy.notna()
+                if m_weighted.any():
+                    ax.scatter(
+                        wx[m_weighted],
+                        wy[m_weighted],
+                        s=14,
+                        facecolor="white",
+                        edgecolor="black",
+                        linewidth=0.5,
+                        label=("Weighted curve" if (i == 1 and j == 0) else None),
+                        zorder=3,
+                    )
+
+                m_corr = cx.notna() & cy.notna()
+                if m_corr.any():
+                    ax.plot(
+                        cx[m_corr],
+                        cy[m_corr],
+                        color="#D62728",
+                        lw=1.05,
+                        alpha=0.92,
+                        linestyle="-",
+                        label=("Corrected curve" if (i == 1 and j == 0) else None),
+                        zorder=4,
+                    )
+
+            ax.grid(True, alpha=0.20)
+            if i == n - 1:
+                ax.set_xlabel(x_col)
+            else:
+                ax.set_xticklabels([])
+            if j == 0 and i > 0:
+                ax.set_ylabel(y_col)
+            elif i > 0:
+                ax.set_yticklabels([])
+
+    if n >= 2:
+        handles, labels = axes[1, 0].get_legend_handles_labels()
+        if handles:
+            fig.legend(handles, labels, loc="upper right", fontsize=8, framealpha=0.9)
+    fig.suptitle("STEP 3.3 corrected curve in parameter space (lower triangle)", fontsize=12)
+    fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.98])
+    _save_figure(fig, path, dpi=175)
     plt.close(fig)
 
 
@@ -1434,25 +2021,51 @@ def _make_plots(
     eff_est_col: str,
     eff_unc_abs_col: str | None,
 ) -> None:
-    """Generate requested 2x2 diagnostic plot (transposed layout)."""
+    """Generate correction overview with flux row + one row per efficiency."""
     x, x_label = _time_axis(df)
     true_flux = pd.to_numeric(df.get(flux_true_col), errors="coerce").to_numpy(dtype=float)
     est_flux = pd.to_numeric(df.get(flux_est_col), errors="coerce").to_numpy(dtype=float)
-    true_eff = pd.to_numeric(df.get(eff_true_col), errors="coerce").to_numpy(dtype=float)
-    est_eff = pd.to_numeric(df.get(eff_est_col), errors="coerce").to_numpy(dtype=float)
     unc_flux_abs = (
         pd.to_numeric(df.get(flux_unc_abs_col), errors="coerce").to_numpy(dtype=float)
         if flux_unc_abs_col and flux_unc_abs_col in df.columns
         else None
     )
-    unc_eff_abs = (
-        pd.to_numeric(df.get(eff_unc_abs_col), errors="coerce").to_numpy(dtype=float)
-        if eff_unc_abs_col and eff_unc_abs_col in df.columns
-        else None
-    )
 
-    # Main 2x2 diagnostic plot (transposed w.r.t. previous layout).
-    fig, axes = plt.subplots(2, 2, figsize=(13, 8.5))
+    eff_panels: list[tuple[str, np.ndarray, np.ndarray, np.ndarray | None]] = []
+    for idx in range(1, 5):
+        base = f"eff_sim_{idx}"
+        true_col = f"true_{base}"
+        if true_col not in df.columns:
+            continue
+        corrected_col = f"corrected_{base}"
+        estimated_col = f"est_{base}"
+        est_col = corrected_col if corrected_col in df.columns else estimated_col
+        if est_col not in df.columns:
+            continue
+        unc_col = f"unc_{base}_abs"
+        true_vals = pd.to_numeric(df.get(true_col), errors="coerce").to_numpy(dtype=float)
+        est_vals = pd.to_numeric(df.get(est_col), errors="coerce").to_numpy(dtype=float)
+        unc_vals = (
+            pd.to_numeric(df.get(unc_col), errors="coerce").to_numpy(dtype=float)
+            if unc_col in df.columns
+            else None
+        )
+        eff_panels.append((base, true_vals, est_vals, unc_vals))
+
+    if not eff_panels:
+        # Backward-compatible fallback for old merged tables with only one efficiency.
+        fallback_true = pd.to_numeric(df.get(eff_true_col), errors="coerce").to_numpy(dtype=float)
+        fallback_est = pd.to_numeric(df.get(eff_est_col), errors="coerce").to_numpy(dtype=float)
+        fallback_unc = (
+            pd.to_numeric(df.get(eff_unc_abs_col), errors="coerce").to_numpy(dtype=float)
+            if eff_unc_abs_col and eff_unc_abs_col in df.columns
+            else None
+        )
+        eff_panels = [("eff", fallback_true, fallback_est, fallback_unc)]
+
+    n_rows = 1 + len(eff_panels)
+    fig_h = max(8.5, 3.1 * n_rows)
+    fig, axes = plt.subplots(n_rows, 2, figsize=(13.2, fig_h), squeeze=False, sharey="row")
     _plot_series_panel(
         axes[0, 0],
         x=x,
@@ -1471,28 +2084,32 @@ def _make_plots(
         ylabel="Estimated flux",
         title="Flux diagonal (y = x)",
     )
-    _plot_series_panel(
-        axes[1, 0],
-        x=x,
-        true_vals=true_eff,
-        est_vals=est_eff,
-        unc_abs=unc_eff_abs,
-        ylabel="eff",
-        title="Efficiency time series",
-    )
-    axes[1, 0].set_xlabel(x_label)
-    _plot_diag_panel(
-        axes[1, 1],
-        true_vals=true_eff,
-        est_vals=est_eff,
-        unc_abs=unc_eff_abs,
-        xlabel="Simulated efficiency",
-        ylabel="Estimated efficiency",
-        title="Efficiency diagonal (y = x)",
-    )
+
+    for row, (base, true_eff, est_eff, unc_eff_abs) in enumerate(eff_panels, start=1):
+        eff_label = base.replace("eff_sim_", "eff")
+        _plot_series_panel(
+            axes[row, 0],
+            x=x,
+            true_vals=true_eff,
+            est_vals=est_eff,
+            unc_abs=unc_eff_abs,
+            ylabel=eff_label,
+            title=f"{base} time series",
+        )
+        _plot_diag_panel(
+            axes[row, 1],
+            true_vals=true_eff,
+            est_vals=est_eff,
+            unc_abs=unc_eff_abs,
+            xlabel=f"Simulated {base}",
+            ylabel=f"Estimated {base}",
+            title=f"{base} diagonal (y = x)",
+        )
+
+    axes[n_rows - 1, 0].set_xlabel(x_label)
     fig.suptitle("STEP 3.3 correction diagnostics", fontsize=12)
     fig.tight_layout()
-    _save_figure(fig, PLOTS_DIR / "correction_overview_2x2.png", dpi=160)
+    _save_figure(fig, PLOTS_DIR / "correction_overview.png", dpi=160)
     plt.close(fig)
 
 
@@ -1688,13 +2305,33 @@ def main() -> int:
     syn_with_idx["dataset_index"] = np.arange(len(syn_with_idx), dtype=int)
     merged = pd.merge(est_df, syn_with_idx, on="dataset_index", how="left", suffixes=("", "_synthetic"))
 
-    # Ensure key true columns exist with explicit names.
+    # Explicit true/corrected columns for all inferred parameters.
+    estimated_param_names: list[str] = []
+    for col in est_df.columns:
+        if str(col).startswith("est_"):
+            pname = str(col)[len("est_"):]
+            if pname and pname not in estimated_param_names:
+                estimated_param_names.append(pname)
+
+    for pname in estimated_param_names:
+        est_name = f"est_{pname}"
+        true_name = f"true_{pname}"
+        if true_name in merged.columns:
+            merged[true_name] = pd.to_numeric(merged.get(true_name), errors="coerce")
+        elif pname in merged.columns:
+            merged[true_name] = pd.to_numeric(merged.get(pname), errors="coerce")
+        merged[f"corrected_{pname}"] = pd.to_numeric(merged.get(est_name), errors="coerce")
+
+    # Preserve canonical true columns for downstream compatibility.
     merged[f"true_{flux_col}"] = pd.to_numeric(merged.get(flux_col), errors="coerce")
     merged[f"true_{eff_col}"] = pd.to_numeric(merged.get(eff_col), errors="coerce")
     if "n_events" in merged.columns:
         merged["n_events"] = pd.to_numeric(merged["n_events"], errors="coerce")
     elif "true_n_events" in merged.columns:
         merged["n_events"] = pd.to_numeric(merged["true_n_events"], errors="coerce")
+
+    if estimated_param_names:
+        log.info("Correction dimensions (estimated parameters): %s", estimated_param_names)
 
     # ── 2) LUT uncertainty interpolation ────────────────────────────
     lut_df = _load_lut(lut_path)
@@ -1760,10 +2397,15 @@ def main() -> int:
                 est_eff_col = c
                 break
 
-    bias_correction_summary = {
-        "enabled": False,
-        "removed": True,
-        "reason": "posthoc_bias_correction_disabled_use_method_level_estimation",
+    correction_summary = {
+        "enabled": True,
+        "mode": "step_2_1_inverse_mapping",
+        "description": (
+            "Applied the same inverse-mapping correction used in STEP 2.1 "
+            "to the STEP 3.2 weighted curve."
+        ),
+        "estimated_parameters": estimated_param_names,
+        "corrected_column_prefix": "corrected_",
     }
 
     true_flux_col = f"true_{flux_col}"
@@ -1772,6 +2414,42 @@ def main() -> int:
     eff_param = est_eff_col.replace("est_", "", 1) if est_eff_col.startswith("est_") else eff_col
     flux_unc_abs_col = f"unc_{flux_param}_abs" if f"unc_{flux_param}_abs" in merged.columns else None
     eff_unc_abs_col = f"unc_{eff_param}_abs" if f"unc_{eff_param}_abs" in merged.columns else None
+
+    parameter_space_cfg = cfg_33.get("parameter_space_columns", None)
+    try:
+        parameter_space_cols = _resolve_parameter_space_columns_from_cfg(
+            merged_df=merged,
+            dictionary_df=dictionary_df,
+            configured_columns=parameter_space_cfg,
+        )
+    except KeyError as exc:
+        log.warning("%s Falling back to canonical flux/eff dimensions.", exc)
+        parameter_space_cols = [
+            c
+            for c in ("flux_cm2_min", "eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4")
+            if c in merged.columns and ((f"corrected_{c}" in merged.columns) or (f"est_{c}" in merged.columns))
+        ]
+
+    eff_cols_for_plot = [c for c in parameter_space_cols if c.startswith("eff_sim_")]
+    if not eff_cols_for_plot:
+        for c in ("eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4"):
+            if c in merged.columns and c not in eff_cols_for_plot:
+                eff_cols_for_plot.append(c)
+    if not eff_cols_for_plot and eff_col in merged.columns:
+        eff_cols_for_plot = [eff_col]
+
+    global_rate_plot_col = None
+    for c in (
+        global_rate_col,
+        f"true_{global_rate_col}",
+        "events_per_second_global_rate",
+        "global_rate_hz_mean",
+        "global_rate_hz_mid",
+        "true_events_per_second_global_rate",
+    ):
+        if c in merged.columns:
+            global_rate_plot_col = c
+            break
 
     # Error columns for primary diagnostics.
     t_flux = pd.to_numeric(merged.get(true_flux_col), errors="coerce")
@@ -1790,13 +2468,50 @@ def main() -> int:
     merged.to_csv(out_csv, index=False)
     log.info("Wrote corrected table: %s (%d rows)", out_csv, len(merged))
 
+    corrected_curve_cols: list[str] = []
+    for c in (
+        "dataset_index",
+        "file_index",
+        "time_start_utc",
+        "time_end_utc",
+        "time_utc",
+        "elapsed_hours_start",
+        "elapsed_hours_end",
+        "elapsed_hours",
+        "duration_seconds",
+        "n_events",
+    ):
+        if c in merged.columns and c not in corrected_curve_cols:
+            corrected_curve_cols.append(c)
+    if global_rate_plot_col is not None and global_rate_plot_col in merged.columns:
+        corrected_curve_cols.append(global_rate_plot_col)
+    for pname in parameter_space_cols:
+        for c in (
+            pname,
+            f"corrected_{pname}",
+            f"est_{pname}",
+            f"true_{pname}",
+            f"unc_{pname}_abs",
+            f"unc_{pname}_pct",
+        ):
+            if c in merged.columns and c not in corrected_curve_cols:
+                corrected_curve_cols.append(c)
+    corrected_curve_df = merged[corrected_curve_cols].copy()
+    out_curve_csv = FILES_DIR / "corrected_curve.csv"
+    corrected_curve_df.to_csv(out_curve_csv, index=False)
+    log.info("Wrote corrected curve: %s (%d rows, %d cols)", out_curve_csv, len(corrected_curve_df), len(corrected_curve_df.columns))
+
     summary = {
         "synthetic_dataset_csv": str(synthetic_path),
         "dictionary_csv": str(dictionary_path),
         "uncertainty_lut_csv": str(lut_path),
+        "corrected_table_csv": str(out_csv),
+        "corrected_curve_csv": str(out_curve_csv),
         "overlay_center_source": "step_3_2_diagnostic_center_csv",
         "step32_diagnostic_center_csv": str(step32_center_path),
         "distance_metric": distance_metric,
+        "distance_definition_used": dd is not None,
+        "distance_definition_mode": dd["selected_mode"] if dd is not None else None,
         "interpolation_k": interpolation_k,
         "inverse_mapping": inverse_mapping_cfg,
         "feature_columns_config": feature_columns_cfg,
@@ -1826,7 +2541,12 @@ def main() -> int:
         ),
         "lut_param_names_used": lut_params,
         "density_center_available": bool(center_flux is not None and center_eff is not None),
-        "post_estimation_bias_correction": bias_correction_summary,
+        "correction_method": correction_summary,
+        "parameter_space_columns_config": parameter_space_cfg,
+        "parameter_space_columns_used": parameter_space_cols,
+        "efficiency_columns_in_overview_plot": eff_cols_for_plot,
+        "global_rate_column_used": global_rate_plot_col,
+        "corrected_curve_columns": corrected_curve_cols,
     }
     out_summary = FILES_DIR / "correction_summary.json"
     with open(out_summary, "w", encoding="utf-8") as f:
@@ -1855,34 +2575,17 @@ def main() -> int:
         eff_est_col=est_eff_col,
         eff_unc_abs_col=eff_unc_abs_col,
     )
-    out_overlay = PLOTS_DIR / "synthetic_time_series_overview_with_estimated.png"
-    _plot_step32_style_overlay(
-        complete_df=complete_df,
-        time_df=time_df,
+    corrected_flux_col = f"corrected_{flux_col}" if f"corrected_{flux_col}" in merged.columns else est_flux_col
+
+    out_param_space = PLOTS_DIR / "parameter_space_lower_triangle_corrected.png"
+    _plot_corrected_parameter_space_lower_triangle(
+        dictionary_df=dictionary_df,
         merged_df=merged,
-        flux_col=flux_col,
-        eff_col_time=eff_col_time,
-        est_flux_col=est_flux_col,
-        est_eff_col=est_eff_col,
-        flux_unc_abs_col=flux_unc_abs_col,
-        eff_unc_abs_col=eff_unc_abs_col,
-        center_flux=center_flux,
-        center_eff=center_eff,
-        path=out_overlay,
+        complete_df=complete_df,
+        parameter_space_cols=parameter_space_cols,
+        path=out_param_space,
     )
 
-    # Simulated flux + estimated flux + global-rate context.
-    global_rate_plot_col = None
-    for c in (
-        global_rate_col,
-        f"true_{global_rate_col}",
-        "events_per_second_global_rate",
-        "global_rate_hz_mean",
-        "true_events_per_second_global_rate",
-    ):
-        if c in merged.columns:
-            global_rate_plot_col = c
-            break
     if global_rate_plot_col is None:
         log.warning(
             "Could not produce flux/global-rate plot: no global-rate column found (preferred: %s).",
@@ -1900,6 +2603,7 @@ def main() -> int:
             flux_est_col=est_flux_col,
             flux_unc_abs_col=flux_unc_abs_col,
             global_rate_col=global_rate_plot_col,
+            eff_plot_cols=eff_cols_for_plot,
             path=out_flux_rate,
         )
 

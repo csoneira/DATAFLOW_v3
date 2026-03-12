@@ -503,6 +503,18 @@ def _auto_tune_distance(
         mode_label, best_k, best_lambda, best_score, weight_tuned_score,
     )
 
+    # Compute dictionary internal 1st-NN distances for coverage threshold.
+    # Step 2.1 reports best_distance = 1st NN, so the threshold must match.
+    dm_final = _weighted_lp_pairwise(z, best_p, weights)
+    np.fill_diagonal(dm_final, np.inf)
+    nn1_dists = np.min(dm_final, axis=1)
+    loo_dist_p95 = float(np.percentile(nn1_dists, 95))
+    loo_dist_max = float(np.max(nn1_dists))
+    log.info(
+        "  Dictionary internal 1st-NN distances: median=%.2f, p95=%.2f, max=%.2f",
+        float(np.median(nn1_dists)), loo_dist_p95, loo_dist_max,
+    )
+
     return {
         "selected_mode": mode_label,
         "p_norm": float(best_p),
@@ -519,6 +531,8 @@ def _auto_tune_distance(
         "n_active_features": int(np.sum(weights > 0)),
         "n_zeroed_features": int(np.sum(weights == 0)),
         "tuning_metric": "median_relative_error_pct",
+        "loo_distance_p95": round(loo_dist_p95, 4),
+        "loo_distance_max": round(loo_dist_max, 4),
     }
 
 

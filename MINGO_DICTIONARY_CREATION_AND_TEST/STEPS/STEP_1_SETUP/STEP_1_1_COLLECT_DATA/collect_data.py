@@ -514,12 +514,20 @@ def main() -> int:
             station_id,
         )
         return 1
-    task_ids = discovered_task_ids
-    if configured_task_ids != task_ids:
-        log.warning(
-            "Ignoring configured task_ids=%s. STEP 1.1 collects all available tasks: %s.",
+    task_ids = sorted(set(configured_task_ids) & set(discovered_task_ids))
+    if not task_ids:
+        log.error(
+            "None of the configured task_ids=%s exist on disk (discovered=%s).",
             configured_task_ids,
+            discovered_task_ids,
+        )
+        return 1
+    ignored = sorted(set(discovered_task_ids) - set(task_ids))
+    if ignored:
+        log.info(
+            "Respecting configured task_ids=%s. Skipping discovered tasks: %s.",
             task_ids,
+            ignored,
         )
     cfg_11 = config.get("step_1_1", {})
     min_rows_raw = cfg_11.get("min_rows_for_dataset", 0)
@@ -778,8 +786,8 @@ def main() -> int:
         "z_config_seed_from_config": z_config_seed_from_config,
         "total_rows": len(collected),
         "task_ids_used": task_ids,
-        "task_ids_discovered": task_ids,
-        "task_ids_config_ignored": configured_task_ids,
+        "task_ids_discovered": discovered_task_ids,
+        "task_ids_configured": configured_task_ids,
         "station_id": station_id,
         "simulation_params_source": str(sim_params_path),
         "mesh_support_filter_mode": "disabled",

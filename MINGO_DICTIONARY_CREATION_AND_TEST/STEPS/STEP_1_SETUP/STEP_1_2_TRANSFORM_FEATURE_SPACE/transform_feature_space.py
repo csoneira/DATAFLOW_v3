@@ -1098,9 +1098,9 @@ def main() -> int:
     log.info("  Rows loaded: %d, columns=%d", len(df), len(df.columns))
 
     try:
-        min_eff_sim = float(cfg_12.get("min_simulated_efficiency", 0.3))
+        min_eff_sim = float(cfg_12.get("min_simulated_efficiency", 0.5))
     except (TypeError, ValueError):
-        min_eff_sim = 0.3
+        min_eff_sim = 0.5
 
     out, rate_col_by_prefix, tt_cols_by_prefix = _build_prefix_global_rate_columns(df)
     out, added_standard_rate_cols = _ensure_standard_task_prefix_rate_columns(
@@ -1130,6 +1130,22 @@ def main() -> int:
         log.info(
             "Simulated-efficiency filter (>= %.2f on %s): kept %d / %d rows (removed %d).",
             min_eff_sim, eff_sim_cols, len(out), n_before, n_before - len(out),
+        )
+
+    # Filter: keep only rows where the spread (max - min) of eff_sim is below a threshold.
+    try:
+        max_eff_spread = float(cfg_12.get("max_simulated_efficiency_spread", 0.15))
+    except (TypeError, ValueError):
+        max_eff_spread = 0.15
+    if eff_sim_cols and max_eff_spread > 0.0:
+        eff_vals = out[eff_sim_cols].apply(pd.to_numeric, errors="coerce")
+        spread = eff_vals.max(axis=1) - eff_vals.min(axis=1)
+        keep_mask = spread <= max_eff_spread
+        n_before = len(out)
+        out = out.loc[keep_mask].reset_index(drop=True)
+        log.info(
+            "Simulated-efficiency spread filter (<= %.2f on %s): kept %d / %d rows (removed %d).",
+            max_eff_spread, eff_sim_cols, len(out), n_before, n_before - len(out),
         )
 
     curated_cols, unmatched_keep_patterns = _resolve_configured_keep_columns(
