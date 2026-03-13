@@ -2141,155 +2141,175 @@ def _plot_estimated_curve_flux_vs_eff(
     dict_rate_col: str,
     out_path: Path,
 ) -> tuple[int, int]:
-    """Plot estimated (flux, eff) trajectory over dictionary global-rate contours."""
-    flux_col = "flux_cm2_min"
-    model = _build_rate_model(
-        flux=dict_df[flux_col],
-        eff=dict_df[dict_eff_col],
-        rate=dict_df[dict_rate_col],
-    )
-    if model is None:
+    """Lower-triangle matrix: estimated real-data parameter curve vs dictionary."""
+    del dict_rate_col  # kept in signature for backward compatibility
+
+    flux_param = "flux_cm2_min"
+    param_specs: list[tuple[str, str, str]] = []
+    if (
+        est_flux_col in real_df.columns
+        and flux_param in dict_df.columns
+        and pd.to_numeric(real_df[est_flux_col], errors="coerce").notna().any()
+        and pd.to_numeric(dict_df[flux_param], errors="coerce").notna().any()
+    ):
+        param_specs.append((flux_param, est_flux_col, flux_param))
+
+    def _eff_label_from_col(col: str, fallback_plane: int) -> str:
+        m = re.search(r"eff_sim_(\d+)", str(col))
+        if m is not None:
+            return f"eff_sim_{m.group(1)}"
+        return f"eff_sim_{int(fallback_plane)}"
+
+    if (
+        est_eff_col in real_df.columns
+        and dict_eff_col in dict_df.columns
+        and pd.to_numeric(real_df[est_eff_col], errors="coerce").notna().any()
+        and pd.to_numeric(dict_df[dict_eff_col], errors="coerce").notna().any()
+    ):
+        param_specs.append((_eff_label_from_col(est_eff_col, 2), est_eff_col, dict_eff_col))
+
+    seen_labels = {name for name, _, _ in param_specs}
+    for plane in (1, 2, 3, 4):
+        pname = f"eff_sim_{plane}"
+        if pname in seen_labels:
+            continue
+        real_col = f"est_eff_sim_{plane}"
+        dict_col = f"eff_sim_{plane}"
+        if real_col not in real_df.columns or dict_col not in dict_df.columns:
+            continue
+        if not pd.to_numeric(real_df[real_col], errors="coerce").notna().any():
+            continue
+        if not pd.to_numeric(dict_df[dict_col], errors="coerce").notna().any():
+            continue
+        param_specs.append((pname, real_col, dict_col))
+        seen_labels.add(pname)
+
+    if len(param_specs) < 2:
         _plot_placeholder(
             out_path,
-            "Estimated curve in flux-eff plane",
-            "Not enough finite dictionary points to build global-rate contours.",
+            "Estimated curve in parameter space",
+            "Not enough estimated parameter dimensions to build a lower-triangle matrix.",
         )
         return (0, 0)
 
-    dict_flux = pd.to_numeric(dict_df[flux_col], errors="coerce")
-    dict_eff = pd.to_numeric(dict_df[dict_eff_col], errors="coerce")
-    dict_rate = pd.to_numeric(dict_df[dict_rate_col], errors="coerce")
-    dict_valid = dict_flux.notna() & dict_eff.notna() & dict_rate.notna()
-    n_dict = int(dict_valid.sum())
+    # Point-count summary uses primary pair (flux + first efficiency-like axis).
+    x0_name, x0_real, x0_dict = param_specs[0]
+    y0_name, y0_real, y0_dict = param_specs[1]
+    del x0_name, y0_name
+    real_primary = pd.to_numeric(real_df[x0_real], errors="coerce").notna() & pd.to_numeric(real_df[y0_real], errors="coerce").notna()
+    dict_primary = pd.to_numeric(dict_df[x0_dict], errors="coerce").notna() & pd.to_numeric(dict_df[y0_dict], errors="coerce").notna()
+    n_real = int(real_primary.sum())
+    n_dict = int(dict_primary.sum())
 
-    real_flux = pd.to_numeric(real_df[est_flux_col], errors="coerce")
-    real_eff = pd.to_numeric(real_df[est_eff_col], errors="coerce")
-    n_real_flux = int(real_flux.notna().sum())
-    n_real_eff = int(real_eff.notna().sum())
-    real_valid = real_flux.notna() & real_eff.notna()
-    n_real = int(real_valid.sum())
-    if n_real == 0:
-        log.warning(
-            "STEP_4.2.6 no finite estimated curve points: %s finite=%d/%d, %s finite=%d/%d.",
-            est_flux_col,
-            n_real_flux,
-            len(real_df),
-            est_eff_col,
-            n_real_eff,
-            len(real_df),
-        )
-        _plot_placeholder(
-            out_path,
-            "Estimated curve in flux-eff plane",
-            "No finite estimated (flux, eff) points available.\n"
-            f"{est_flux_col}: {n_real_flux}/{len(real_df)} finite, "
-            f"{est_eff_col}: {n_real_eff}/{len(real_df)} finite.",
-        )
-        return (n_real, n_dict)
+    n = len(param_specs)
+    fig, axes = plt.subplots(n, n, figsize=(3.1 * n, 3.1 * n), squeeze=False)
 
-    x_ref = np.asarray(model["x"], dtype=float)
-    y_ref = np.asarray(model["y"], dtype=float)
-    x_real = real_flux[real_valid].to_numpy(dtype=float)
-    y_real = real_eff[real_valid].to_numpy(dtype=float)
-    x_all = np.concatenate([x_ref[np.isfinite(x_ref)], x_real[np.isfinite(x_real)]])
-    y_all = np.concatenate([y_ref[np.isfinite(y_ref)], y_real[np.isfinite(y_real)]])
-    x_lo = float(np.nanmin(x_all))
-    x_hi = float(np.nanmax(x_all))
-    y_lo = float(np.nanmin(y_all))
-    y_hi = float(np.nanmax(y_all))
-    x_span = max(x_hi - x_lo, 1e-9)
-    y_span = max(y_hi - y_lo, 1e-9)
-    x_lo -= 0.03 * x_span
-    x_hi += 0.03 * x_span
-    y_lo -= 0.03 * y_span
-    y_hi += 0.03 * y_span
+    for i, (y_name, y_real_col, y_dict_col) in enumerate(param_specs):
+        for j, (x_name, x_real_col, x_dict_col) in enumerate(param_specs):
+            ax = axes[i, j]
+            if i < j:
+                ax.axis("off")
+                continue
 
-    xi = np.linspace(x_lo, x_hi, 230, dtype=float)
-    yi = np.linspace(y_lo, y_hi, 230, dtype=float)
-    Xi, Yi = np.meshgrid(xi, yi)
-    Zi = _predict_rate(model, Xi, Yi)
-    finite_z = Zi[np.isfinite(Zi)]
+            bx = pd.to_numeric(dict_df.get(x_dict_col), errors="coerce")
+            by = pd.to_numeric(dict_df.get(y_dict_col), errors="coerce")
+            rx = pd.to_numeric(real_df.get(x_real_col), errors="coerce")
+            ry = pd.to_numeric(real_df.get(y_real_col), errors="coerce")
 
-    fig, ax = plt.subplots(figsize=(9.2, 7.1))
-    z_min = float(np.nanmin(finite_z)) if finite_z.size else np.nan
-    z_max = float(np.nanmax(finite_z)) if finite_z.size else np.nan
-    if finite_z.size >= 10 and np.isfinite(z_min) and np.isfinite(z_max) and z_max > z_min:
-        levels = np.linspace(z_min, z_max, 16)
-        cf = ax.contourf(Xi, Yi, Zi, levels=levels, cmap="viridis", alpha=0.35, zorder=0)
-        cbar = fig.colorbar(cf, ax=ax, pad=0.02, fraction=0.048)
-        cbar.set_label("Global rate [Hz]")
-        ax.contour(Xi, Yi, Zi, levels=levels[::2], colors="k", linewidths=0.35, alpha=0.28, zorder=1)
-    else:
-        sc_fallback = ax.scatter(
-            dict_flux[dict_valid],
-            dict_eff[dict_valid],
-            c=dict_rate[dict_valid],
-            cmap="viridis",
-            s=12,
-            alpha=0.5,
-            edgecolors="none",
-            zorder=0,
-        )
-        cbar = fig.colorbar(sc_fallback, ax=ax, pad=0.02, fraction=0.048)
-        cbar.set_label("Global rate [Hz]")
+            if i == j:
+                b = bx.dropna()
+                r = rx.dropna()
+                if not b.empty:
+                    ax.hist(b, bins=34, color="#808080", alpha=0.34, label="Dictionary")
+                if not r.empty:
+                    ax.hist(r, bins=34, color="#D62728", alpha=0.30, label="Estimated curve")
+                if i == 0 and j == 0:
+                    ax.legend(loc="best", fontsize=7)
+                ax.set_ylabel("count")
+            else:
+                m_basis = bx.notna() & by.notna()
+                if m_basis.any():
+                    ax.scatter(
+                        bx[m_basis],
+                        by[m_basis],
+                        s=6,
+                        color="#7A7A7A",
+                        alpha=0.16,
+                        linewidths=0,
+                        label=("Dictionary" if (i == 1 and j == 0) else None),
+                        zorder=1,
+                    )
 
-    # Reference dictionary points.
-    ax.scatter(
-        dict_flux[dict_valid],
-        dict_eff[dict_valid],
-        s=10,
-        alpha=0.18,
-        color="#606060",
-        zorder=1,
-        label="Dictionary points",
-    )
+                m_real = rx.notna() & ry.notna()
+                if m_real.any():
+                    order_idx = _ordered_row_indices(real_df, m_real)
+                    xr = real_df.iloc[order_idx][x_real_col].to_numpy(dtype=float)
+                    yr = real_df.iloc[order_idx][y_real_col].to_numpy(dtype=float)
+                    finite_ord = np.isfinite(xr) & np.isfinite(yr)
+                    xr = xr[finite_ord]
+                    yr = yr[finite_ord]
+                    if len(xr) > 0:
+                        ax.plot(
+                            xr,
+                            yr,
+                            color="#D62728",
+                            lw=1.05,
+                            alpha=0.92,
+                            linestyle="-",
+                            label=("Estimated curve" if (i == 1 and j == 0) else None),
+                            zorder=3,
+                        )
+                        ax.scatter(
+                            xr,
+                            yr,
+                            s=14,
+                            facecolor="white",
+                            edgecolor="black",
+                            linewidth=0.5,
+                            label=("Estimated points" if (i == 1 and j == 0) else None),
+                            zorder=4,
+                        )
+                        ax.scatter(
+                            [xr[0]],
+                            [yr[0]],
+                            color="#2CA02C",
+                            marker="o",
+                            s=40,
+                            edgecolor="black",
+                            linewidth=0.6,
+                            zorder=5,
+                            label=("Start" if (i == 1 and j == 0) else None),
+                        )
+                        ax.scatter(
+                            [xr[-1]],
+                            [yr[-1]],
+                            color="#D62728",
+                            marker="X",
+                            s=46,
+                            edgecolor="black",
+                            linewidth=0.6,
+                            zorder=5,
+                            label=("End" if (i == 1 and j == 0) else None),
+                        )
 
-    order_idx = _ordered_row_indices(real_df, real_valid)
-    x_ord = real_df.iloc[order_idx][est_flux_col].to_numpy(dtype=float)
-    y_ord = real_df.iloc[order_idx][est_eff_col].to_numpy(dtype=float)
+            ax.grid(True, alpha=0.20)
+            if i == n - 1:
+                ax.set_xlabel(x_name)
+            else:
+                ax.set_xticklabels([])
+            if j == 0 and i > 0:
+                ax.set_ylabel(y_name)
+            elif i > 0:
+                ax.set_yticklabels([])
 
-    ax.plot(
-        x_ord,
-        y_ord,
-        linewidth=1.8,
-        color="#1F77B4",
-        alpha=0.92,
-        zorder=3,
-        label="Estimated trajectory",
-    )
-    ax.scatter(
-        x_ord,
-        y_ord,
-        s=24,
-        facecolor="white",
-        edgecolor="black",
-        linewidth=0.6,
-        zorder=4,
-        label="Estimated points",
-    )
+    if n >= 2:
+        handles, labels = axes[1, 0].get_legend_handles_labels()
+        if handles:
+            fig.legend(handles, labels, loc="upper right", fontsize=8, framealpha=0.90)
 
-    ax.scatter([x_ord[0]], [y_ord[0]], color="#2CA02C", marker="o", s=82, edgecolor="black", linewidth=0.8, zorder=5)
-    ax.scatter([x_ord[-1]], [y_ord[-1]], color="#D62728", marker="X", s=95, edgecolor="black", linewidth=0.8, zorder=5)
-
-    if len(x_ord) >= 3:
-        i = min(len(x_ord) - 2, max(0, int(0.85 * len(x_ord))))
-        ax.annotate(
-            "",
-            xy=(x_ord[i + 1], y_ord[i + 1]),
-            xytext=(x_ord[i], y_ord[i]),
-            arrowprops={"arrowstyle": "->", "color": "black", "lw": 1.2},
-            zorder=5,
-        )
-
-    ax.set_xlim(x_lo, x_hi)
-    ax.set_ylim(y_lo, y_hi)
-    ax.set_xlabel("Flux [cm^-2 min^-1]")
-    ax.set_ylabel(f"Estimated efficiency ({est_eff_col})")
-    ax.set_title("Estimated real-data curve in flux-eff plane with global-rate contours")
-    ax.grid(True, alpha=0.2)
-    ax.legend(loc="best", fontsize=8)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    fig.suptitle("STEP 4.2 estimated curve in parameter space (lower triangle)", fontsize=12)
+    fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.98])
+    fig.savefig(out_path, dpi=170)
     plt.close(fig)
     return (n_real, n_dict)
 

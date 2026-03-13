@@ -2011,6 +2011,102 @@ def _plot_corrected_parameter_space_lower_triangle(
     plt.close(fig)
 
 
+_EFFPROD_SUFFIX_TO_TT_LABEL = {
+    "4planes": "1234",
+    "123": "123",
+    "234": "234",
+    "12": "12",
+    "34": "34",
+}
+
+
+def _plot_tt_rate_breakdown(df: pd.DataFrame) -> int:
+    """Plot per-TT global rate, efficiency product, and rate/eff_product in a 3×N grid."""
+    x, x_label = _time_axis(df)
+
+    # Identify available TT combinations from efficiency_product columns
+    tt_entries: list[tuple[str, str, str]] = []  # (label, rate_col, effprod_col)
+    for suffix, tt_label in _EFFPROD_SUFFIX_TO_TT_LABEL.items():
+        effprod_col = f"efficiency_product_{suffix}"
+        if effprod_col not in df.columns:
+            continue
+        flux_proxy_col = (
+            "flux_proxy_rate_div_effprod" if suffix == "4planes"
+            else f"flux_proxy_rate_div_effprod_{suffix}"
+        )
+        # Use global rate as the "rate" for all TT (no per-TT rates in synthetic data)
+        rate_col = "events_per_second_global_rate"
+        if rate_col not in df.columns:
+            continue
+        tt_entries.append((tt_label, rate_col, effprod_col))
+
+    if not tt_entries:
+        return 0
+
+    n_tt = len(tt_entries)
+    fig, axes = plt.subplots(
+        3, n_tt,
+        figsize=(4.0 * n_tt, 9.0),
+        squeeze=False,
+    )
+
+    # Share y-axis within each row and x-axis within each column
+    for row in range(3):
+        for col in range(1, n_tt):
+            axes[row, col].sharey(axes[row, 0])
+    for col in range(n_tt):
+        for row in range(2):
+            axes[row, col].sharex(axes[2, col])
+
+    colors = ["#4C72B0", "#DD8452", "#55A868", "#C44E52", "#8172B3"]
+    row_labels = ["Global rate [Hz]", "Eff. product", "Rate / Eff. prod."]
+
+    for j, (tt_label, rate_col, effprod_col) in enumerate(tt_entries):
+        rate = pd.to_numeric(df[rate_col], errors="coerce").to_numpy(dtype=float)
+        effprod = pd.to_numeric(df[effprod_col], errors="coerce").to_numpy(dtype=float)
+        color = colors[j % len(colors)]
+
+        # Row 0: global rate
+        ax = axes[0, j]
+        ok = np.isfinite(rate)
+        if ok.any():
+            ax.scatter(x[ok], rate[ok], s=8, color=color, alpha=0.6, edgecolors="none")
+        ax.set_title(f"TT {tt_label}", fontsize=9, fontweight="bold")
+        ax.grid(True, alpha=0.2, linewidth=0.5)
+
+        # Row 1: efficiency product
+        ax = axes[1, j]
+        ok = np.isfinite(effprod)
+        if ok.any():
+            ax.scatter(x[ok], effprod[ok], s=8, color=color, alpha=0.6, edgecolors="none")
+        ax.grid(True, alpha=0.2, linewidth=0.5)
+
+        # Row 2: rate / eff_product
+        ax = axes[2, j]
+        both_ok = np.isfinite(rate) & np.isfinite(effprod) & (effprod > 0)
+        if both_ok.any():
+            ratio = rate[both_ok] / effprod[both_ok]
+            ax.scatter(x[both_ok], ratio, s=8, color=color, alpha=0.6, edgecolors="none")
+        ax.grid(True, alpha=0.2, linewidth=0.5)
+
+    # Y-axis labels only on leftmost column
+    for row in range(3):
+        axes[row, 0].set_ylabel(row_labels[row], fontsize=8)
+        for col in range(1, n_tt):
+            plt.setp(axes[row, col].get_yticklabels(), visible=False)
+
+    # X-axis labels only on bottom row
+    for col in range(n_tt):
+        axes[2, col].set_xlabel(x_label, fontsize=7)
+        for row in range(2):
+            plt.setp(axes[row, col].get_xticklabels(), visible=False)
+
+    fig.tight_layout()
+    _save_figure(fig, PLOTS_DIR / "tt_rate_breakdown.png", dpi=170)
+    plt.close(fig)
+    return n_tt
+
+
 def _make_plots(
     df: pd.DataFrame,
     *,
@@ -2287,6 +2383,22 @@ def main() -> int:
         eff_col_time = eff_col
         time_df[eff_col_time] = pd.to_numeric(synthetic_df.get(eff_col), errors="coerce")
 
+    # ── Load STEP 1.5 distance definition ───────────────────────────
+    dd = load_distance_definition(resolved_feature_columns)
+    if dd.get("available"):
+        log.info(
+            "Distance definition loaded: %s (p=%.1f, k=%d, λ=%.2g, %d/%d active)",
+            dd.get("selected_mode"), dd["p_norm"], dd["optimal_k"],
+            dd["optimal_lambda"],
+            int(np.sum(dd["weights"] > 0)), len(resolved_feature_columns),
+        )
+        if interpolation_k is None or interpolation_k != dd["optimal_k"]:
+            log.info("Overriding interpolation_k %s → %d from distance definition.", interpolation_k, dd["optimal_k"])
+            interpolation_k = dd["optimal_k"]
+    else:
+        log.warning("Distance definition not available: %s", dd.get("reason"))
+        dd = None
+
     # ── 1) Inference over synthetic dataset ─────────────────────────
     est_df = estimate_from_dataframes(
         dict_df=dict_work,
@@ -2298,6 +2410,7 @@ def main() -> int:
         global_rate_col=global_rate_col,
         exclude_same_file=exclude_same_file,
         inverse_mapping_cfg=inverse_mapping_cfg,
+        distance_definition=dd,
     )
 
     # Merge with synthetic rows for time axes and true values.
@@ -2510,8 +2623,8 @@ def main() -> int:
         "overlay_center_source": "step_3_2_diagnostic_center_csv",
         "step32_diagnostic_center_csv": str(step32_center_path),
         "distance_metric": distance_metric,
-        "distance_definition_used": dd is not None,
-        "distance_definition_mode": dd["selected_mode"] if dd is not None else None,
+        "distance_definition_used": dd.get("available", False),
+        "distance_definition_mode": dd.get("selected_mode") if dd.get("available") else None,
         "interpolation_k": interpolation_k,
         "inverse_mapping": inverse_mapping_cfg,
         "feature_columns_config": feature_columns_cfg,
@@ -2575,6 +2688,7 @@ def main() -> int:
         eff_est_col=est_eff_col,
         eff_unc_abs_col=eff_unc_abs_col,
     )
+    _plot_tt_rate_breakdown(merged)
     corrected_flux_col = f"corrected_{flux_col}" if f"corrected_{flux_col}" in merged.columns else est_flux_col
 
     out_param_space = PLOTS_DIR / "parameter_space_lower_triangle_corrected.png"

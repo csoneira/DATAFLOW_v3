@@ -2865,6 +2865,8 @@ def estimate_from_dataframes(
             candidates_hist_raw=cand_hist_raw,
             histogram_distance_weight=hist_distance_weight,
             histogram_distance_blend_mode=hist_distance_blend_mode,
+            dd_weights=_dd_non_hist_weights,
+            dd_p_norm=dd_p_norm,
         )
 
         # Handle NaN distances

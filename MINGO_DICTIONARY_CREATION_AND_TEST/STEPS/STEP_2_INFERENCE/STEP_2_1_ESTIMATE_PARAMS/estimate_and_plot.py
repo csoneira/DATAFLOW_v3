@@ -64,6 +64,17 @@ logging.basicConfig(
 )
 log = logging.getLogger("STEP_2.1")
 
+# ── Import shared estimation engine ──────────────────────────────────
+sys.path.insert(0, str(INFERENCE_DIR))
+try:
+    from estimate_parameters import (
+        estimate_from_dataframes,
+        load_distance_definition,
+    )
+except Exception as exc:
+    log.error("Failed to import estimate_parameters from %s: %s", INFERENCE_DIR, exc)
+    raise
+
 _FIGURE_COUNTER = 0
 FIGURE_STEP_PREFIX = "2_1"
 
@@ -113,180 +124,6 @@ def _load_config(path: Path) -> dict:
             extra_cfg = json.loads(extra.read_text(encoding="utf-8"))
             cfg.update(extra_cfg)
     return cfg
-
-
-def estimate(
-    dict_df: pd.DataFrame,
-    data_df: pd.DataFrame,
-    feature_cols: list[str],
-    param_cols: list[str],
-    *,
-    k: int = 10,
-    idw_power: float = 2.0,
-    ridge_lambda: float = 1e6,
-    center: np.ndarray | None = None,
-    scale: np.ndarray | None = None,
-    weights: np.ndarray | None = None,
-    p_norm: float = 2.0,
-) -> pd.DataFrame:
-    """
-    Single-stage kNN estimation with locally weighted linear regression
-    (ridge) in weighted Lp feature space.
-
-    When ridge_lambda >= 1e5, falls back to pure IDW² weighted mean.
-    When ridge_lambda is smaller, fits a local hyperplane at each query
-    point using the k nearest dictionary entries, with IDW² observation
-    weights and Tikhonov regularization.
-
-    Distance definition (center, scale, weights, p_norm) comes from the
-    distance_definition.json artifact produced by step 1.5.
-    """
-    # Validate columns
-    missing_feat_dict = [c for c in feature_cols if c not in dict_df.columns]
-    missing_feat_data = [c for c in feature_cols if c not in data_df.columns]
-    if missing_feat_dict:
-        raise ValueError(f"Feature columns missing in dictionary: {missing_feat_dict}")
-    if missing_feat_data:
-        raise ValueError(f"Feature columns missing in dataset: {missing_feat_data}")
-
-    available_param_cols = [c for c in param_cols if c in dict_df.columns]
-    if not available_param_cols:
-        raise ValueError(f"No parameter columns found in dictionary. Looked for: {param_cols}")
-
-    # Extract feature matrices
-    dict_feat = dict_df[feature_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
-    data_feat = data_df[feature_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
-
-    # Normalize using distance definition from step 1.4
-    if center is not None and scale is not None:
-        dict_z = (dict_feat - center) / scale
-        data_z = (data_feat - center) / scale
-    else:
-        # Fallback: standard z-score from dictionary
-        means = np.nanmean(dict_feat, axis=0)
-        stds = np.nanstd(dict_feat, axis=0)
-        stds[stds < 1e-15] = np.nan
-        dict_z = (dict_feat - means) / stds
-        data_z = (data_feat - means) / stds
-
-    # Per-feature weights (default uniform)
-    feat_w = weights if weights is not None else np.ones(len(feature_cols), dtype=float)
-    use_local_linear = ridge_lambda < 1e5
-    n_feat = len(feature_cols)
-
-    # Parameter arrays
-    dict_params = {pc: pd.to_numeric(dict_df[pc], errors="coerce").to_numpy(dtype=float)
-                   for pc in available_param_cols}
-
-    # param_set_id for exclusion
-    has_param_set_id = "param_set_id" in dict_df.columns and "param_set_id" in data_df.columns
-    if has_param_set_id:
-        dict_psid = dict_df["param_set_id"].to_numpy()
-        data_psid = data_df["param_set_id"].to_numpy()
-    else:
-        log.warning("No param_set_id column — no same-parameter-set exclusion applied.")
-
-    n_dict = len(dict_df)
-    n_data = len(data_df)
-    results = []
-
-    for i in range(n_data):
-        row = {"dataset_index": i}
-
-        # Build candidate mask: exclude same param_set_id
-        mask = np.ones(n_dict, dtype=bool)
-        if has_param_set_id:
-            mask &= dict_psid != data_psid[i]
-
-        cand_idx = np.where(mask)[0]
-        row["n_candidates"] = len(cand_idx)
-
-        if len(cand_idx) == 0:
-            for pc in available_param_cols:
-                row[f"est_{pc}"] = np.nan
-            row["best_distance"] = np.nan
-            results.append(row)
-            continue
-
-        # Distance in weighted Lp feature space
-        sample = data_z[i]
-        candidates = dict_z[cand_idx]
-        valid = np.isfinite(sample)[None, :] & np.isfinite(candidates)
-        diff_abs = np.where(valid, np.abs(candidates - sample[None, :]), 0.0)
-        if p_norm == 1.0:
-            distances = np.sum(feat_w * diff_abs, axis=1)
-        elif p_norm == 2.0:
-            distances = np.sqrt(np.sum(feat_w * diff_abs * diff_abs, axis=1))
-        else:
-            distances = np.power(
-                np.sum(feat_w * np.power(diff_abs, p_norm), axis=1), 1.0 / p_norm
-            )
-        n_valid_dims = np.sum(valid, axis=1)
-        distances[n_valid_dims < 2] = np.nan
-
-        finite = np.isfinite(distances)
-        if not np.any(finite):
-            for pc in available_param_cols:
-                row[f"est_{pc}"] = np.nan
-            row["best_distance"] = np.nan
-            results.append(row)
-            continue
-
-        # Select k nearest
-        finite_idx = np.where(finite)[0]
-        finite_dist = distances[finite_idx]
-        order = np.argsort(finite_dist)
-        k_use = min(k, len(order))
-        top_local = order[:k_use]
-        top_idx = cand_idx[finite_idx[top_local]]
-        top_dist = finite_dist[top_local]
-
-        row["best_distance"] = float(top_dist[0])
-        row["n_neighbors_used"] = k_use
-
-        # IDW weights
-        eps = 1e-12
-        idw_w = 1.0 / np.power(np.maximum(top_dist, eps), idw_power)
-        idw_w /= np.sum(idw_w)
-
-        # Estimation: local-linear ridge or pure IDW weighted mean
-        if use_local_linear:
-            # Build design matrix [1, x - x₀] once for all parameters
-            xi = dict_z[top_idx] - sample[None, :]            # (k_use, n_feat)
-            Z = np.column_stack([np.ones(k_use), xi])          # (k_use, n_feat+1)
-            reg = np.zeros(n_feat + 1)
-            reg[1:] = ridge_lambda
-            ZtW = Z.T * idw_w[np.newaxis, :]                  # (n_feat+1, k_use)
-            A = ZtW @ Z + np.diag(reg)                        # (n_feat+1, n_feat+1)
-
-        for pc in available_param_cols:
-            vals = dict_params[pc][top_idx]
-            fin = np.isfinite(vals)
-            if not np.any(fin):
-                row[f"est_{pc}"] = np.nan
-                continue
-
-            if use_local_linear and np.all(fin):
-                b_vec = ZtW @ vals                             # (n_feat+1,)
-                try:
-                    theta = np.linalg.solve(A, b_vec)
-                    row[f"est_{pc}"] = float(theta[0])         # intercept
-                except np.linalg.LinAlgError:
-                    row[f"est_{pc}"] = float(np.dot(idw_w, vals))
-            else:
-                w = idw_w.copy()
-                w[~fin] = 0.0
-                ws = np.sum(w)
-                if ws > 0:
-                    w /= ws
-                row[f"est_{pc}"] = float(np.sum(w * np.nan_to_num(vals)))
-
-        if (i + 1) % 200 == 0 or i == n_data - 1:
-            log.info("  Estimated %d / %d", i + 1, n_data)
-
-        results.append(row)
-
-    return pd.DataFrame(results)
 
 
 # =====================================================================
@@ -578,59 +415,62 @@ def main() -> int:
         return 1
 
     # Config knobs (with sensible defaults)
-    k = int(cfg_21.get("inverse_mapping", {}).get("neighbor_count", 10))
-    idw_power = float(cfg_21.get("inverse_mapping", {}).get("inverse_distance_power", 2.0))
+    inv_cfg = cfg_21.get("inverse_mapping", {})
+    k = int(inv_cfg.get("neighbor_count", 10))
+    idw_power = float(inv_cfg.get("inverse_distance_power", 2.0))
     ridge_lambda = 1e6  # default: pure IDW (no local-linear)
 
-    # Load distance definition from step 1.5 artifact
-    dist_center: np.ndarray | None = None
-    dist_scale: np.ndarray | None = None
-    dist_weights: np.ndarray | None = None
-    dist_p_norm: float = 2.0
+    # Load distance definition from step 1.5 artifact (shared function)
+    dd = load_distance_definition(feature_cols, path=DEFAULT_DISTANCE_DEFINITION)
     dist_mode_name: str = "l2_standard_zscore_fallback"
 
-    if DEFAULT_DISTANCE_DEFINITION.exists():
-        dist_def = json.loads(DEFAULT_DISTANCE_DEFINITION.read_text(encoding="utf-8"))
-        dd_cols = dist_def.get("feature_columns", [])
-        dd_center = np.asarray(dist_def["center"], dtype=float)
-        dd_scale = np.asarray(dist_def["scale"], dtype=float)
-        dd_weights = np.asarray(dist_def.get("weights", [1.0] * len(dd_cols)), dtype=float)
-        if list(dd_cols) == list(feature_cols) and len(dd_center) == len(feature_cols):
-            dist_center = dd_center
-            dist_scale = dd_scale
-            dist_weights = dd_weights
-            dist_p_norm = float(dist_def.get("p_norm", 2.0))
-            dist_mode_name = dist_def.get("selected_mode", "unknown")
-            n_active = int(np.sum(dd_weights > 0))
-            # Override k and lambda from artifact if available
-            if "optimal_k" in dist_def:
-                k = int(dist_def["optimal_k"])
-            if "optimal_lambda" in dist_def:
-                ridge_lambda = float(dist_def["optimal_lambda"])
-            regression_mode = "local-linear ridge" if ridge_lambda < 1e5 else "IDW²"
-            log.info(
-                "Loaded distance definition from step 1.5: %s (p=%.1f, k=%d, λ=%.0e [%s], %d/%d active features)",
-                dist_mode_name, dist_p_norm, k, ridge_lambda, regression_mode, n_active, len(feature_cols),
-            )
-        else:
-            log.warning(
-                "Distance definition feature columns don't match (%d vs %d); falling back to standard z-score.",
-                len(dd_cols), len(feature_cols),
-            )
+    if dd["available"]:
+        dist_mode_name = dd.get("selected_mode", "unknown")
+        # Override k and lambda from artifact if available
+        if "optimal_k" in dd:
+            k = int(dd["optimal_k"])
+        if "optimal_lambda" in dd:
+            ridge_lambda = float(dd["optimal_lambda"])
+        n_active = int(np.sum(dd["weights"] > 0))
+        regression_mode = "local-linear ridge" if ridge_lambda < 1e5 else "IDW²"
+        log.info(
+            "Loaded distance definition from step 1.5: %s (p=%.1f, k=%d, λ=%.0e [%s], %d/%d active features)",
+            dist_mode_name, dd["p_norm"], k, ridge_lambda, regression_mode, n_active, len(feature_cols),
+        )
     else:
-        log.warning("Distance definition artifact not found (%s); falling back to standard z-score.", DEFAULT_DISTANCE_DEFINITION)
+        log.warning("Distance definition not available: %s; falling back to standard z-score.", dd.get("reason"))
+        dd = None
+
+    # Determine aggregation mode from ridge_lambda
+    aggregation = "local_linear" if ridge_lambda < 1e5 else "weighted_mean"
 
     log.info("Dictionary: %s (%d rows)", dict_path, len(dict_df))
     log.info("Dataset:    %s (%d rows)", data_path, len(data_df))
     log.info("Feature columns: %d", len(feature_cols))
     log.info("Parameter columns: %s", param_cols)
-    log.info("k=%d, IDW power=%.1f, ridge λ=%.0e", k, idw_power, ridge_lambda)
+    log.info("k=%d, IDW power=%.1f, ridge λ=%.0e, aggregation=%s", k, idw_power, ridge_lambda, aggregation)
 
-    # ── Run estimation ─────────────────────────────────────────
-    result_df = estimate(
-        dict_df, data_df, feature_cols, param_cols,
-        k=k, idw_power=idw_power, ridge_lambda=ridge_lambda,
-        center=dist_center, scale=dist_scale, weights=dist_weights, p_norm=dist_p_norm,
+    # ── Run estimation using the shared engine ─────────────────
+    result_df = estimate_from_dataframes(
+        dict_df=dict_df,
+        data_df=data_df,
+        feature_columns=feature_cols,
+        distance_metric="l2_zscore",
+        param_columns=param_cols,
+        exclude_same_file=False,
+        shared_parameter_exclusion_mode="full",
+        shared_parameter_exclusion_columns=["param_set_id"],
+        shared_parameter_exclusion_ignore=(),
+        density_weighting_cfg=None,
+        include_global_rate=False,
+        inverse_mapping_cfg={
+            "neighbor_selection": "knn",
+            "neighbor_count": k,
+            "weighting": "inverse_distance",
+            "inverse_distance_power": idw_power,
+            "aggregation": aggregation,
+        },
+        distance_definition=dd,
     )
 
     # Flag entries outside dictionary convex hull in parameter space
@@ -679,10 +519,11 @@ def main() -> int:
         "dictionary": str(dict_path),
         "dataset": str(data_path),
         "distance_mode": dist_mode_name,
-        "distance_p_norm": dist_p_norm,
-        "distance_from_step_1_4": dist_center is not None,
+        "distance_definition_used": dd is not None,
+        "distance_definition_mode": dd.get("selected_mode") if dd is not None else None,
         "k": k,
         "idw_power": idw_power,
+        "aggregation": aggregation,
         "feature_columns": feature_cols,
         "feature_columns_count": len(feature_cols),
         "parameter_columns": param_cols,

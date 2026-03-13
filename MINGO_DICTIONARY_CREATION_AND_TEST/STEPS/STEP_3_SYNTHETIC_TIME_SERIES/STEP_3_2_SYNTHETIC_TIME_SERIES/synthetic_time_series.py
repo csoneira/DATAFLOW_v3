@@ -20,6 +20,7 @@ import json
 import logging
 from pathlib import Path
 import re
+import sys
 
 import matplotlib
 matplotlib.use("Agg")
@@ -62,6 +63,18 @@ FILES_DIR = STEP_DIR / "OUTPUTS" / "FILES"
 PLOTS_DIR = STEP_DIR / "OUTPUTS" / "PLOTS"
 FILES_DIR.mkdir(parents=True, exist_ok=True)
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
+
+STEP2_INFERENCE_DIR = STEP_ROOT / "STEP_2_INFERENCE"
+sys.path.insert(0, str(STEP2_INFERENCE_DIR))
+try:
+    from estimate_parameters import (
+        _build_neighbor_weights as _step2_build_neighbor_weights,
+        _local_linear_estimate as _step2_local_linear_estimate,
+    )
+except Exception as exc:
+    raise RuntimeError(
+        f"Failed to import STEP 2 inference helpers from {STEP2_INFERENCE_DIR}: {exc}"
+    ) from exc
 
 _FIGURE_COUNTER = 0
 FIGURE_STEP_PREFIX = "3_2"
@@ -166,16 +179,29 @@ STEP32_WEIGHTING_DEFAULTS = {
     "parameter_space_columns": None,
     "basis_n_events_tolerance_pct": 25,
     "basis_min_rows": 1,
-    "weighting_method": "gaussian",
+    "weighting_method": "inverse_distance",
     "interpolation_aggregation": "local_linear",
-    "distance_hardness": 1.0,
-    "density_correction_enabled": True,
+    "distance_hardness": 2.0,
+    "density_correction_enabled": False,
     "density_correction_k_neighbors": None,
     "enforce_distance_monotonic_weights": False,
     "top_k": None,
     "random_seed": None,
     "highlight_point_index": None,
 }
+
+
+def _normalize_weighting_method(value: object) -> str:
+    text = str(value).strip().lower() if value is not None else ""
+    if text in {"closest_point", "closest-point", "take_closest_point", "take-closest-point"}:
+        return "closest_point"
+    if text in {"nearest", "nn", "1nn"}:
+        return "nearest"
+    if text in {"inverse_distance", "idw", "inverse", "invdist"}:
+        return "inverse_distance"
+    if text == "softmax":
+        return "softmax"
+    return "gaussian"
 
 
 def _load_config(path: Path) -> dict:
@@ -885,8 +911,8 @@ def _build_weights(
     if event_mask is not None and event_mask.shape != d2.shape:
         raise ValueError("event_mask shape must match (n_targets, n_basis)")
 
-    method_key = str(method).strip().lower()
-    if method_key == "nearest":
+    method_key = _normalize_weighting_method(method)
+    if method_key in {"nearest", "closest_point"}:
         w = np.zeros_like(d2, dtype=float)
         for i in range(d2.shape[0]):
             row_d2 = d2[i]
@@ -898,7 +924,38 @@ def _build_weights(
             w[i, j] = 1.0
         return w
 
-    # Default gaussian
+    if method_key in {"inverse_distance", "softmax"}:
+        distances = np.sqrt(np.maximum(d2, 0.0))
+        w = np.zeros_like(distances, dtype=float)
+        k = None if top_k is None else max(1, int(top_k))
+        idw_power = max(float(distance_hardness), 0.0)
+        for i in range(distances.shape[0]):
+            row_d = distances[i]
+            finite = np.isfinite(row_d)
+            if event_mask is not None:
+                finite &= np.asarray(event_mask[i], dtype=bool)
+            idx = np.where(finite)[0]
+            if idx.size == 0:
+                j = int(np.argmin(row_d))
+                w[i, j] = 1.0
+                continue
+            if k is not None and k < idx.size:
+                idx = idx[np.argsort(row_d[idx], kind="mergesort")[:k]]
+            row_weights = _step2_build_neighbor_weights(
+                row_d[idx],
+                weighting_mode=method_key,
+                idw_power=idw_power,
+                softmax_temperature=1.0,
+                distance_floor=1e-12,
+            )
+            if np.sum(row_weights) <= 0.0:
+                j = int(idx[np.argmin(row_d[idx])])
+                w[i, j] = 1.0
+            else:
+                w[i, idx] = row_weights
+        return w
+
+    # Legacy gaussian mode
     hard = max(float(distance_hardness), 1e-6)
     w = np.exp(-0.5 * hard * d2)
     if event_mask is not None:
@@ -963,70 +1020,52 @@ def _normalize_interpolation_aggregation(value: object) -> str:
     return "weighted_mean"
 
 
+def _weighted_mean_1d(values: np.ndarray, weights_row: np.ndarray) -> float:
+    vals = np.asarray(values, dtype=float)
+    w = np.asarray(weights_row, dtype=float)
+    mask = np.isfinite(vals) & np.isfinite(w) & (w > 0.0)
+    if not np.any(mask):
+        return np.nan
+    vals = vals[mask]
+    w = w[mask]
+    den = float(np.sum(w))
+    if den <= 0.0 or not np.isfinite(den):
+        return np.nan
+    return float(np.sum(w * vals) / den)
+
+
 def _local_linear_predict(
     values: np.ndarray,
     weights_row: np.ndarray,
     basis_params_std: np.ndarray,
     target_param_std: np.ndarray,
     *,
+    column_name: str | None = None,
     ridge_lambda: float = 1e-2,
 ) -> float:
     vals = np.asarray(values, dtype=float)
     w = np.asarray(weights_row, dtype=float)
     X = np.asarray(basis_params_std, dtype=float)
     x0 = np.asarray(target_param_std, dtype=float)
+    fallback = _weighted_mean_1d(vals, w)
     if X.ndim != 2 or vals.ndim != 1 or w.ndim != 1:
-        return np.nan
+        return fallback
     if X.shape[0] != vals.size or vals.size != w.size:
-        return np.nan
+        return fallback
     if X.shape[1] != x0.size:
-        return np.nan
+        return fallback
 
-    finite_feat = np.all(np.isfinite(X), axis=1)
-    mask = finite_feat & np.isfinite(vals) & np.isfinite(w) & (w > 0.0)
-    if int(np.sum(mask)) < 3:
-        den = float(np.sum(w[np.isfinite(vals) & (w > 0.0)]))
-        if den <= 0:
-            return np.nan
-        num = float(np.sum(w[np.isfinite(vals) & (w > 0.0)] * vals[np.isfinite(vals) & (w > 0.0)]))
-        return num / den
-
-    y = vals[mask]
-    ww = w[mask]
-    Xc = X[mask] - x0[np.newaxis, :]
-    ww_sum = float(np.sum(ww))
-    if ww_sum <= 0.0:
-        return np.nan
-    ww = ww / ww_sum
-
-    A = np.hstack([np.ones((Xc.shape[0], 1), dtype=float), Xc])
-    sqrt_w = np.sqrt(np.clip(ww, 1e-16, None))
-    Aw = A * sqrt_w[:, None]
-    yw = y * sqrt_w
-
-    try:
-        # Unbiased weighted least squares first; ridge penalties can induce
-        # systematic center shifts by shrinking slopes.
-        beta = np.linalg.lstsq(Aw, yw, rcond=None)[0]
-    except np.linalg.LinAlgError:
-        # Fallback to tiny ridge only when the local system is ill-conditioned.
-        n_coef = A.shape[1]
-        reg = np.zeros((n_coef, n_coef), dtype=float)
-        if n_coef > 1:
-            reg[1:, 1:] = max(float(ridge_lambda), 0.0) * np.eye(n_coef - 1, dtype=float)
-        try:
-            beta = np.linalg.solve(Aw.T @ Aw + reg, Aw.T @ yw)
-        except np.linalg.LinAlgError:
-            return float(np.sum(ww * y))
-
-    pred = float(beta[0])
-    if not np.isfinite(pred):
-        return float(np.sum(ww * y))
-    y_min = float(np.nanmin(y))
-    y_max = float(np.nanmax(y))
-    if np.isfinite(y_min) and np.isfinite(y_max):
-        pred = float(np.clip(pred, y_min, y_max))
-    return pred
+    pred = _step2_local_linear_estimate(
+        values=vals,
+        weights=w,
+        sample_features=x0,
+        neighbor_features=X,
+        parameter_name=column_name,
+        ridge_lambda=ridge_lambda,
+    )
+    if np.isfinite(pred):
+        return float(pred)
+    return fallback
 
 
 def _weighted_numeric_columns(
@@ -1069,6 +1108,7 @@ def _weighted_numeric_columns(
                     weights_row=weights[i],
                     basis_params_std=basis_std,
                     target_param_std=target_std[i],
+                    column_name=col,
                 )
             out[col] = pred
         else:
@@ -1284,6 +1324,7 @@ def _enforce_rate_consistency_constraints(
             .apply(pd.to_numeric, errors="coerce")
             .to_numpy(dtype=float)
         )
+        info["tt_negative_entries_clipped"] = int(np.sum(np.isfinite(tt_matrix) & (tt_matrix < 0.0)))
         tt_matrix = np.where(np.isfinite(tt_matrix), np.clip(tt_matrix, 0.0, None), np.nan)
         tt_sum_before = np.nansum(tt_matrix, axis=1)
         blend_tt = float(np.clip(CANONICAL_TT_RATE_CONSISTENCY_BLEND, 0.0, 1.0))
@@ -1298,7 +1339,7 @@ def _enforce_rate_consistency_constraints(
             scale = np.ones(n_rows, dtype=float)
             scale[valid] = desired_tt_sum[valid] / tt_sum_before[valid]
             tt_matrix = np.where(np.isfinite(tt_matrix), tt_matrix * scale[:, None], tt_matrix)
-            out_df.loc[:, tt_cols] = tt_matrix
+        out_df.loc[:, tt_cols] = tt_matrix
         tt_sum_after = np.nansum(tt_matrix, axis=1)
         m_before = np.isfinite(tt_sum_before) & np.isfinite(rates)
         m_after = np.isfinite(tt_sum_after) & np.isfinite(rates)
@@ -1319,6 +1360,7 @@ def _enforce_rate_consistency_constraints(
     if hist_cols:
         bins = np.array([int(HIST_RATE_COLUMN_RE.match(c).group("bin")) for c in hist_cols], dtype=float)
         raw_hist = out_df[hist_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+        info["hist_negative_entries_clipped"] = int(np.sum(np.isfinite(raw_hist) & (raw_hist < 0.0)))
         hist = np.where(np.isfinite(raw_hist), np.clip(raw_hist, 0.0, None), 0.0)
 
         sum_before = np.nansum(hist, axis=1)
@@ -1347,7 +1389,7 @@ def _enforce_rate_consistency_constraints(
                     float(desired_mean[i]),
                 )
                 hist_adj[i] = np.clip(probs_adj, 0.0, None) * mass
-            out_df.loc[:, hist_cols] = hist_adj
+        out_df.loc[:, hist_cols] = hist_adj
 
         sum_after = np.nansum(hist_adj, axis=1)
         mean_after = np.divide(
@@ -1380,6 +1422,7 @@ def _make_synthetic_dataset(
     basis_param_matrix: np.ndarray,
     target_param_matrix: np.ndarray,
     *,
+    feature_generation_mode: str,
     flux_col: str,
     eff_col: str,
     time_rate_col: str | None,
@@ -1399,22 +1442,27 @@ def _make_synthetic_dataset(
 
     # Dominant row gives categorical/non-numeric morphology.
     dominant_idx = np.argmax(weights, axis=1)
-    for col in common_cols:
-        if pd.api.types.is_numeric_dtype(dictionary_df[col]):
-            continue
-        out[col] = dictionary_df[col].to_numpy()[dominant_idx]
+    copy_closest_basis_row = feature_generation_mode == "closest_point"
+    if copy_closest_basis_row:
+        for col in common_cols:
+            out[col] = dictionary_df[col].to_numpy()[dominant_idx]
+    else:
+        for col in common_cols:
+            if pd.api.types.is_numeric_dtype(dictionary_df[col]):
+                continue
+            out[col] = dictionary_df[col].to_numpy()[dominant_idx]
 
-    numeric_cols = [c for c in common_cols if pd.api.types.is_numeric_dtype(dictionary_df[c])]
-    numeric_values = _weighted_numeric_columns(
-        weights,
-        dictionary_df,
-        numeric_cols,
-        interpolation_aggregation=interpolation_aggregation,
-        basis_param_matrix=basis_param_matrix,
-        target_param_matrix=target_param_matrix,
-    )
-    for col, values in numeric_values.items():
-        out[col] = values
+        numeric_cols = [c for c in common_cols if pd.api.types.is_numeric_dtype(dictionary_df[c])]
+        numeric_values = _weighted_numeric_columns(
+            weights,
+            dictionary_df,
+            numeric_cols,
+            interpolation_aggregation=interpolation_aggregation,
+            basis_param_matrix=basis_param_matrix,
+            target_param_matrix=target_param_matrix,
+        )
+        for col, values in numeric_values.items():
+            out[col] = values
 
     # Parameter-space target overrides from STEP 3.1.
     target_flux = pd.to_numeric(time_df[flux_col], errors="coerce")
@@ -1428,12 +1476,25 @@ def _make_synthetic_dataset(
     else:
         target_events_from_time = pd.Series(np.nan, index=time_df.index, dtype=float)
     target_duration = pd.to_numeric(time_df[time_duration_col], errors="coerce")
-    output_flux = target_flux
-    output_eff = target_eff
+    target_output_flux = target_flux
+    target_output_eff = target_eff
     if flux_output_values is not None and len(flux_output_values) == n_targets:
-        output_flux = pd.Series(np.asarray(flux_output_values, dtype=float), index=time_df.index)
+        target_output_flux = pd.Series(np.asarray(flux_output_values, dtype=float), index=time_df.index)
     if eff_output_values is not None and len(eff_output_values) == n_targets:
-        output_eff = pd.Series(np.asarray(eff_output_values, dtype=float), index=time_df.index)
+        target_output_eff = pd.Series(np.asarray(eff_output_values, dtype=float), index=time_df.index)
+
+    if copy_closest_basis_row:
+        output_flux = pd.Series(
+            pd.to_numeric(dictionary_df.iloc[dominant_idx][flux_col], errors="coerce").to_numpy(dtype=float),
+            index=time_df.index,
+        )
+        output_eff = pd.Series(
+            pd.to_numeric(dictionary_df.iloc[dominant_idx][eff_col], errors="coerce").to_numpy(dtype=float),
+            index=time_df.index,
+        )
+    else:
+        output_flux = target_output_flux
+        output_eff = target_output_eff
 
     # Global rate is a weighted feature-space output from STEP 3.2.
     weighted_rate = pd.Series(np.nan, index=out.index, dtype=float)
@@ -1477,16 +1538,19 @@ def _make_synthetic_dataset(
         histogram_rate_columns=histogram_rate_columns_for_consistency,
     )
 
-    duration_arr = pd.to_numeric(target_duration, errors="coerce").to_numpy(dtype=float)
-    events_from_rate = np.rint(
-        np.clip(weighted_rate_arr, 0.0, None)
-        * np.where(np.isfinite(duration_arr), np.maximum(duration_arr, 0.0), 0.0)
-    )
-    events_from_rate = np.where(np.isfinite(events_from_rate), np.maximum(events_from_rate, 0.0), np.nan)
-    if np.isfinite(events_from_rate).any():
-        output_events = pd.Series(events_from_rate, index=time_df.index, dtype=float)
+    if copy_closest_basis_row and "n_events" in out.columns:
+        output_events = pd.to_numeric(out["n_events"], errors="coerce")
     else:
-        output_events = target_events_from_time.copy()
+        duration_arr = pd.to_numeric(target_duration, errors="coerce").to_numpy(dtype=float)
+        events_from_rate = np.rint(
+            np.clip(weighted_rate_arr, 0.0, None)
+            * np.where(np.isfinite(duration_arr), np.maximum(duration_arr, 0.0), 0.0)
+        )
+        events_from_rate = np.where(np.isfinite(events_from_rate), np.maximum(events_from_rate, 0.0), np.nan)
+        if np.isfinite(events_from_rate).any():
+            output_events = pd.Series(events_from_rate, index=time_df.index, dtype=float)
+        else:
+            output_events = target_events_from_time.copy()
 
     out["flux_cm2_min"] = output_flux
     out["flux"] = output_flux
@@ -1495,10 +1559,10 @@ def _make_synthetic_dataset(
     out["events_per_second_global_rate"] = weighted_rate
     out["n_events"] = pd.to_numeric(output_events, errors="coerce").round().astype("Int64")
     for c in ("selected_rows", "requested_rows", "generated_events_count"):
-        if c in out.columns:
+        if c in out.columns and not copy_closest_basis_row:
             out[c] = pd.to_numeric(output_events, errors="coerce").round().astype("Int64")
     for c in ("count_rate_denominator_seconds", "events_per_second_total_seconds"):
-        if c in out.columns:
+        if c in out.columns and not copy_closest_basis_row:
             out[c] = target_duration
     if "is_dictionary_entry" in out.columns:
         out["is_dictionary_entry"] = False
@@ -1516,18 +1580,19 @@ def _make_synthetic_dataset(
 
     # Add time/traceability columns in one concat to avoid dataframe fragmentation.
     extras = pd.DataFrame({
-        "file_index": pd.to_numeric(time_df.get("file_index"), errors="coerce").astype("Int64"),
-        "time_start_utc": time_df.get("time_start_utc"),
-        "time_end_utc": time_df.get("time_end_utc"),
-        "time_utc": time_df.get("time_utc"),
-        "elapsed_hours_start": pd.to_numeric(time_df.get("elapsed_hours_start"), errors="coerce"),
-        "elapsed_hours_end": pd.to_numeric(time_df.get("elapsed_hours_end"), errors="coerce"),
-        "elapsed_hours": pd.to_numeric(time_df.get("elapsed_hours"), errors="coerce"),
+        "file_index": pd.to_numeric(pd.Series(time_df.get("file_index"), index=time_df.index), errors="coerce").astype("Int64"),
+        "time_start_utc": pd.Series(time_df.get("time_start_utc"), index=time_df.index),
+        "time_end_utc": pd.Series(time_df.get("time_end_utc"), index=time_df.index),
+        "time_utc": pd.Series(time_df.get("time_utc"), index=time_df.index),
+        "elapsed_hours_start": pd.to_numeric(pd.Series(time_df.get("elapsed_hours_start"), index=time_df.index), errors="coerce"),
+        "elapsed_hours_end": pd.to_numeric(pd.Series(time_df.get("elapsed_hours_end"), index=time_df.index), errors="coerce"),
+        "elapsed_hours": pd.to_numeric(pd.Series(time_df.get("elapsed_hours"), index=time_df.index), errors="coerce"),
         "duration_seconds": target_duration,
-        "target_events_per_file": pd.to_numeric(time_df.get("target_events_per_file"), errors="coerce").astype("Int64"),
-        "n_events_expected": pd.to_numeric(time_df.get("n_events_expected"), errors="coerce"),
+        "target_events_per_file": pd.to_numeric(pd.Series(time_df.get("target_events_per_file"), index=time_df.index), errors="coerce").astype("Int64"),
+        "n_events_expected": pd.to_numeric(pd.Series(time_df.get("n_events_expected"), index=time_df.index), errors="coerce"),
         "global_rate_hz_source": weighted_rate,
         "dominant_dictionary_index": dominant_idx,
+        "step32_feature_generation_mode": np.full(n_targets, feature_generation_mode, dtype=object),
     }, index=out.index)
     if "filename_base" in dictionary_df.columns:
         extras["dominant_dictionary_filename_base"] = dictionary_df["filename_base"].astype(str).to_numpy()[dominant_idx]
@@ -2484,23 +2549,28 @@ def main() -> int:
         int(len(hist_rate_consistency_cols)),
     )
 
-    method = str(cfg_32.get("weighting_method", "gaussian"))
+    method = _normalize_weighting_method(cfg_32.get("weighting_method", "inverse_distance"))
     interpolation_aggregation = _normalize_interpolation_aggregation(
         cfg_32.get("interpolation_aggregation", "local_linear")
     )
+    feature_generation_mode = "closest_point" if method == "closest_point" else "weighted_interpolation"
     show_diagnostic_center = _safe_bool(cfg_32.get("show_diagnostic_center", False), False)
     top_k_raw = cfg_32.get("top_k", None)
     top_k = None if top_k_raw in (None, "", 0) else _safe_int(top_k_raw, 8, minimum=1)
-    distance_hardness = _safe_float(cfg_32.get("distance_hardness", 1.0), 1.0)
+    distance_hardness = _safe_float(cfg_32.get("distance_hardness", 2.0), 2.0)
     enforce_distance_monotonic_weights = _safe_bool(
         cfg_32.get("enforce_distance_monotonic_weights", False),
         False,
     )
-    density_enabled = _safe_bool(cfg_32.get("density_correction_enabled", True), True)
+    density_enabled = _safe_bool(cfg_32.get("density_correction_enabled", False), False)
     density_k = _safe_int(cfg_32.get("density_correction_k_neighbors", 10), 10, minimum=1)
+    if method in {"inverse_distance", "nearest", "closest_point", "softmax"} and density_enabled:
+        log.info("Ignoring density correction for weighting_method=%s to match STEP 2 weighting behavior.", method)
+        density_enabled = False
     log.info(
-        "Interpolation config: weighting_method=%s, aggregation=%s, top_k=%s, hardness=%.3g, show_diagnostic_center=%s",
+        "Interpolation config: weighting_method=%s, generation_mode=%s, aggregation=%s, top_k=%s, weight_power=%.3g, show_diagnostic_center=%s",
         method,
+        feature_generation_mode,
         interpolation_aggregation,
         ("all" if top_k is None else str(top_k)),
         float(distance_hardness),
@@ -2600,6 +2670,7 @@ def main() -> int:
         weights=weights,
         basis_param_matrix=basis_param_matrix,
         target_param_matrix=target_param_matrix,
+        feature_generation_mode=feature_generation_mode,
         flux_col=flux_col,
         eff_col=eff_col_time,
         time_rate_col=time_rate_col,
@@ -2611,10 +2682,18 @@ def main() -> int:
         tt_rate_columns_for_consistency=tt_rate_consistency_cols,
         histogram_rate_columns_for_consistency=hist_rate_consistency_cols,
     )
-    # Keep parameter-space coordinates exactly equal to STEP 3.1 targets.
-    for col in parameter_space_cols:
-        if col in synthetic_df.columns and col in time_df.columns:
-            synthetic_df[col] = pd.to_numeric(time_df[col], errors="coerce").to_numpy(dtype=float)
+    if feature_generation_mode == "closest_point":
+        for col in parameter_space_cols:
+            if col in time_df.columns:
+                synthetic_df[f"step32_target_{col}"] = pd.to_numeric(
+                    time_df[col],
+                    errors="coerce",
+                ).to_numpy(dtype=float)
+    else:
+        # Keep parameter-space coordinates exactly equal to STEP 3.1 targets.
+        for col in parameter_space_cols:
+            if col in synthetic_df.columns and col in time_df.columns:
+                synthetic_df[col] = pd.to_numeric(time_df[col], errors="coerce").to_numpy(dtype=float)
 
     rate_consistency_info = dict(synthetic_df.attrs.get("rate_consistency_info", {}))
     rate_consistency_info["tt_prefix_selected"] = tt_rate_consistency_prefix
@@ -2821,8 +2900,17 @@ def main() -> int:
         "basis_events_column_used": basis_events_col,
         "basis_events_column_resolution": basis_events_col_mode,
         "basis_events_filter": basis_filter_info,
-        "flux_eff_assignment_method": "target_discretized_from_step_3_1",
-        "global_rate_assignment_method": "weighted_feature_space_from_step_3_2",
+        "feature_generation_mode": feature_generation_mode,
+        "flux_eff_assignment_method": (
+            "copied_from_closest_basis_row"
+            if feature_generation_mode == "closest_point"
+            else "target_discretized_from_step_3_1"
+        ),
+        "global_rate_assignment_method": (
+            "copied_from_closest_basis_row"
+            if feature_generation_mode == "closest_point"
+            else "weighted_feature_space_from_step_3_2"
+        ),
         "diagnostic_center_method": "weighted_parameter_space_center_not_used_for_output",
         "diagnostic_flux_eff_center_label": diagnostic_center_label,
         "diagnostic_parameter_mae_vs_target": diagnostic_param_mae,
@@ -2849,6 +2937,7 @@ def main() -> int:
         "interpolation_aggregation": interpolation_aggregation,
         "distance_definition": "standardized_euclidean_in_parameter_space",
         "distance_hardness": float(distance_hardness),
+        "step2_style_weight_power": float(distance_hardness) if method in {"inverse_distance", "softmax"} else None,
         "enforce_distance_monotonic_weights": bool(enforce_distance_monotonic_weights),
         "top_k": int(top_k) if top_k is not None else None,
         "highlight_point_index": int(highlight_idx),

@@ -2,7 +2,7 @@
 ## Angular distribution
 cos_n: [2, 2]
 ## Flux
-flux_cm2_min: [0.8, 1.2]
+flux_cm2_min: [1.2, 1.8]
 
 # Append strategy:
 # - uniform_random: existing behavior
@@ -27,7 +27,7 @@ efficiencies_identical: false
 # Example tunings:
 # - 0.8  -> allows up to 0.8 spread
 # - null -> disable spread cap; each plane is sampled in full [min,max]
-efficiencies_max_spread: 0.15
+efficiencies_max_spread: 0.2
 
 # Optional: generate multiple rows per run, sharing selected columns.
 repeat_samples: 1

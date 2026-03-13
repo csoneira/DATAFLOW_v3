@@ -912,6 +912,13 @@ def ensure_global_count_keys(prefixes: Iterable[str]) -> None:
         for tt_value in TT_COUNT_VALUES:
             global_variables.setdefault(f"{prefix}_{tt_value}_count", 0)
 
+TASK1_CHANNEL_PATTERN_ORDER: tuple[tuple[int, int, str], ...] = tuple(
+    (plane, strip, side)
+    for plane in range(1, 5)
+    for strip in range(1, 5)
+    for side in ("F", "B")
+)
+
 FILTER_METRIC_NAMES: tuple[str, ...] = (
     "q_front_back_zero_rows_pct",
     "valid_lines_in_binary_file_percentage",
@@ -927,6 +934,41 @@ def record_filter_metric(name: str, removed: float, total: float) -> None:
     pct = 0.0 if total == 0 else 100.0 * float(removed) / float(total)
     filter_metrics[name] = round(pct, 4)
     print(f"[filter-metrics] {name}: removed {removed} of {total} ({pct:.2f}%)")
+
+
+def build_task1_channel_pattern_series(df: pd.DataFrame) -> pd.Series:
+    """Encode per-event front/back channel occupancy as a deterministic 32-bit string."""
+    pattern_arrays: list[np.ndarray] = []
+    for plane, strip, side in TASK1_CHANNEL_PATTERN_ORDER:
+        col_name = f"Q{plane}_{side}_{strip}"
+        if col_name in df.columns:
+            values = df[col_name].fillna(0).to_numpy(copy=False)
+            bits = np.where(values != 0, "1", "0")
+        else:
+            print(f"Warning: missing channel column '{col_name}' while building TASK_1 patterns.")
+            bits = np.full(len(df), "0", dtype="<U1")
+        pattern_arrays.append(bits)
+
+    if not pattern_arrays:
+        return pd.Series(dtype="object", index=df.index)
+
+    full_pattern = pattern_arrays[0].copy()
+    for bits in pattern_arrays[1:]:
+        full_pattern = np.char.add(full_pattern, bits)
+    return pd.Series(full_pattern, index=df.index, dtype="object")
+
+
+def store_pattern_rates(metadata: dict[str, object], patterns: pd.Series, prefix: str, df: pd.DataFrame) -> None:
+    phase_meta = build_events_per_second_metadata(df)
+    try:
+        denominator = float(phase_meta.get("events_per_second_total_seconds", 0) or 0)
+    except (TypeError, ValueError):
+        denominator = 0.0
+
+    counts = patterns.value_counts()
+    for pattern, count in counts.items():
+        rate_hz = round(float(count) / denominator, 6) if denominator > 0 else 0.0
+        metadata[f"{prefix}_{pattern}_rate_hz"] = rate_hz
 
 reprocessing_parameters = pd.DataFrame()
 
@@ -2458,6 +2500,9 @@ for tt_value, count in raw_tt_counts.items():
     tt_label = normalize_tt_label(tt_value)
     global_variables[f"raw_tt_{tt_label}_count"] = int(count)
 
+raw_channel_patterns = build_task1_channel_pattern_series(working_df)
+store_pattern_rates(global_variables, raw_channel_patterns, "raw_channel_pattern", working_df)
+
 # Print the counts of each raw_tt value and the percentage
 total_events = len(working_df)
 print("Raw TT counts and percentages:")
@@ -3446,6 +3491,9 @@ raw_to_clean_counts = working_df["raw_to_clean_tt"].value_counts()
 for combo_value, count in raw_to_clean_counts.items():
     combo_label = normalize_tt_label(combo_value)
     global_variables[f"raw_to_clean_tt_{combo_label}_count"] = int(count)
+
+clean_channel_patterns = build_task1_channel_pattern_series(working_df)
+store_pattern_rates(global_variables, clean_channel_patterns, "clean_channel_pattern", working_df)
 
 # Final number of events
 final_number_of_events = len(working_df)

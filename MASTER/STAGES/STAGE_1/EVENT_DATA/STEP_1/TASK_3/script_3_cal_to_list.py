@@ -564,6 +564,8 @@ def ensure_global_count_keys(prefixes: Iterable[str]) -> None:
         for tt_value in TT_COUNT_VALUES:
             global_variables.setdefault(f"{prefix}_{tt_value}_count", 0)
 
+TASK3_ACTIVE_STRIP_COLUMNS: tuple[str, ...] = tuple(f"active_strips_P{plane}" for plane in range(1, 5))
+
 FILTER_METRIC_NAMES: tuple[str, ...] = (
     "filter6_new_zero_rows_pct",
     "q_sum_all_zero_rows_removed_pct",
@@ -589,6 +591,39 @@ def record_filter_metric(name: str, removed: float, total: float) -> None:
     pct = 0.0 if total == 0 else 100.0 * float(removed) / float(total)
     filter_metrics[name] = round(pct, 4)
     print(f"[filter-metrics] {name}: removed {removed} of {total} ({pct:.2f}%)")
+
+
+def build_task3_full_strip_pattern_series(df: pd.DataFrame) -> pd.Series:
+    """Encode the four per-plane active-strip labels as one deterministic 16-bit string."""
+    pattern_arrays: list[np.ndarray] = []
+    for col_name in TASK3_ACTIVE_STRIP_COLUMNS:
+        if col_name in df.columns:
+            values = df[col_name].fillna("0000").astype(str).to_numpy(copy=False)
+        else:
+            print(f"Warning: missing active-strip column '{col_name}' while building TASK_3 patterns.")
+            values = np.full(len(df), "0000", dtype="<U4")
+        pattern_arrays.append(values)
+
+    if not pattern_arrays:
+        return pd.Series(dtype="object", index=df.index)
+
+    full_pattern = pattern_arrays[0].copy()
+    for values in pattern_arrays[1:]:
+        full_pattern = np.char.add(full_pattern, values)
+    return pd.Series(full_pattern, index=df.index, dtype="object")
+
+
+def store_pattern_rates(metadata: dict[str, object], patterns: pd.Series, prefix: str, df: pd.DataFrame) -> None:
+    phase_meta = build_events_per_second_metadata(df)
+    try:
+        denominator = float(phase_meta.get("events_per_second_total_seconds", 0) or 0)
+    except (TypeError, ValueError):
+        denominator = 0.0
+
+    counts = patterns.value_counts()
+    for pattern, count in counts.items():
+        rate_hz = round(float(count) / denominator, 6) if denominator > 0 else 0.0
+        metadata[f"{prefix}_{pattern}_rate_hz"] = rate_hz
 
 def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:
     """Compute trigger type based on planes with non-zero charge."""
@@ -1981,6 +2016,9 @@ for plane_id in range(1, 5):
     counts = working_df[col_name].value_counts()
     for pattern in active_patterns:
         global_variables[f"{col_name}_{pattern}_count"] = int(counts.get(pattern, 0))
+
+cal_strip_patterns = build_task3_full_strip_pattern_series(working_df)
+store_pattern_rates(global_variables, cal_strip_patterns, "cal_strip_pattern", working_df)
 
 if create_plots:
 
@@ -3863,6 +3901,9 @@ cal_to_list_counts = working_df["cal_to_list_tt"].value_counts()
 for combo_value, count in cal_to_list_counts.items():
     combo_label = normalize_tt_label(combo_value)
     global_variables[f"cal_to_list_tt_{combo_label}_count"] = int(count)
+
+list_strip_patterns = build_task3_full_strip_pattern_series(working_df)
+store_pattern_rates(global_variables, list_strip_patterns, "list_strip_pattern", working_df)
 
 # Final number of events
 final_number_of_events = len(working_df)

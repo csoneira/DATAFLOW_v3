@@ -79,6 +79,7 @@ PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 PLOT_EVENT_HIST = PLOTS_DIR / "STEP_4_1_1_event_count_histogram.png"
 PLOT_FEATURE_MATRIX = PLOTS_DIR / "STEP_4_1_2_feature_scatter_matrix_real_vs_dictionary.png"
 PLOT_COMPARE_COLS = PLOTS_DIR / "STEP_4_1_3_comparison_columns_and_global_rate.png"
+PLOT_TT_BREAKDOWN = PLOTS_DIR / "STEP_4_1_4_tt_rate_breakdown.png"
 
 _PLOT_EXTENSIONS = {
     ".png",
@@ -1414,6 +1415,22 @@ def _make_feature_scatter_matrix_real_vs_dictionary(
         col: pd.to_numeric(dict_plot[col], errors="coerce")
         for col in plot_data_cols
     }
+    feature_axis_limits: dict[str, tuple[float, float]] = {}
+    for col in plot_data_cols:
+        combined = pd.concat([real_numeric[col], dict_numeric[col]], ignore_index=True).to_numpy(dtype=float)
+        finite = combined[np.isfinite(combined)]
+        if finite.size == 0:
+            continue
+        lower = float(np.min(finite))
+        upper = float(np.max(finite))
+        if np.isclose(lower, upper):
+            pad = max(abs(lower) * 0.05, 1e-6)
+            feature_axis_limits[col] = (lower - pad, upper + pad)
+            continue
+        # Keep exact plotted span (no margin) so real/dictionary overlays
+        # are visually comparable without artificial extension to nearby ticks.
+        pad = 0.0
+        feature_axis_limits[col] = (lower - pad, upper + pad)
 
     fig, axes = plt.subplots(n, n, figsize=(cell * n, cell * n), squeeze=False)
     diag_bins = 28 if n <= 24 else 16
@@ -1476,6 +1493,16 @@ def _make_feature_scatter_matrix_real_vs_dictionary(
             elif i > j:
                 if x_is_placeholder or y_is_placeholder:
                     ax.set_facecolor("#F7F7F7")
+                    # Keep per-feature axis consistency even in the suppressed
+                    # rate-histogram placeholder row/column panels.
+                    if not x_is_placeholder:
+                        x_limits = feature_axis_limits.get(cx)
+                        if x_limits is not None:
+                            ax.set_xlim(x_limits)
+                    if not y_is_placeholder:
+                        y_limits = feature_axis_limits.get(cy)
+                        if y_limits is not None:
+                            ax.set_ylim(y_limits)
                     if i == n - 1:
                         ax.set_xlabel(
                             STEP12_RATE_HIST_PLACEHOLDER_LABEL if x_is_placeholder else cx,
@@ -1522,6 +1549,15 @@ def _make_feature_scatter_matrix_real_vs_dictionary(
             else:
                 ax.axis("off")
                 continue
+
+            if not x_is_placeholder:
+                x_limits = feature_axis_limits.get(cx)
+                if x_limits is not None:
+                    ax.set_xlim(x_limits)
+            if i > j and not y_is_placeholder:
+                y_limits = feature_axis_limits.get(cy)
+                if y_limits is not None:
+                    ax.set_ylim(y_limits)
 
             if i == n - 1:
                 ax.set_xlabel(
@@ -1656,9 +1692,8 @@ def _make_comparison_columns_plot(
     comparison_strategy: str,
     global_rate_col: str | None,
 ) -> int:
-    """Plot global rate, feature-space traces, and STEP 4.2 comparison columns."""
-    feature_preview_cols = _pick_feature_space_preview_columns(df, max_lines=8)
-    if not comparison_cols and not feature_preview_cols and global_rate_col is None:
+    """Plot global rate, efficiencies, rate-histogram heatmap, and physics transforms."""
+    if global_rate_col is None and not any(c in df.columns for c in ("eff_empirical_1",)):
         _plot_placeholder(
             PLOT_COMPARE_COLS,
             "Comparison columns preview",
@@ -1666,133 +1701,281 @@ def _make_comparison_columns_plot(
         )
         return 0
 
+    # --- resolve time axis -------------------------------------------------
     tcol = _choose_timeline_column(df)
     if tcol is None:
         x = pd.Series(np.arange(len(df), dtype=float), index=df.index)
         x_label = "Row index"
+        x_is_time = False
     else:
         ts = pd.to_datetime(df[tcol], errors="coerce", utc=True).dt.tz_convert(None)
         if ts.notna().any():
             x = ts
-            x_label = "Data time from filename_base [UTC]" if tcol == "file_timestamp_utc" else "Execution time [UTC]"
+            x_label = (
+                "Data time from filename_base [UTC]"
+                if tcol == "file_timestamp_utc"
+                else "Execution time [UTC]"
+            )
+            x_is_time = True
         else:
             x = pd.Series(np.arange(len(df), dtype=float), index=df.index)
             x_label = "Row index"
+            x_is_time = False
+
+    # --- identify feature groups -------------------------------------------
+    eff_cols = [c for c in ("eff_empirical_1", "eff_empirical_2", "eff_empirical_3", "eff_empirical_4") if c in df.columns]
+    hist_indexed: list[tuple[int, str]] = []
+    for col in df.columns:
+        m = RATE_HIST_BIN_RE.match(str(col))
+        if m is not None:
+            hist_indexed.append((int(m.group("bin")), str(col)))
+    hist_indexed.sort(key=lambda t: t[0])
+    hist_cols = [c for _, c in hist_indexed]
+    hist_bins = [b for b, _ in hist_indexed]
+
+    # --- decide panel layout (2 panels: global_rate+histogram, efficiencies) --
+    panels: list[str] = ["global_rate"]
+    if eff_cols:
+        panels.append("efficiencies")
+    n_panels = len(panels)
 
     fig, axes = plt.subplots(
-        3,
-        1,
-        figsize=(12.0, 11.0),
+        n_panels, 1,
+        figsize=(13.5, 3.6 * n_panels),
         sharex=True,
-        height_ratios=[1.2, 1.0, 1.0],
+        gridspec_kw={"hspace": 0.18},
     )
+    if n_panels == 1:
+        axes = [axes]
 
-    # Panel 1: global rate
-    ax0 = axes[0]
+    ax_idx = 0
+
+    # --- Panel: global rate with histogram heatmap as background -----------
+    ax = axes[ax_idx]; ax_idx += 1
+
+    # Draw histogram heatmap as background (shared y-axis: bin = rate Hz)
+    if hist_cols:
+        hist_matrix = df[hist_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float).T  # (n_bins, n_rows)
+        xvals = x.to_numpy()
+        if x_is_time:
+            import matplotlib.dates as mdates
+            xvals_num = mdates.date2num(pd.to_datetime(xvals))
+        else:
+            xvals_num = xvals.astype(float)
+
+        if len(xvals_num) > 1:
+            dx = np.diff(xvals_num)
+            x_edges = np.concatenate([
+                [xvals_num[0] - dx[0] / 2],
+                (xvals_num[:-1] + xvals_num[1:]) / 2,
+                [xvals_num[-1] + dx[-1] / 2],
+            ])
+        else:
+            x_edges = np.array([xvals_num[0] - 0.5, xvals_num[0] + 0.5])
+        hist_bins_arr = np.array(hist_bins, dtype=float)
+        y_edges = np.concatenate([
+            [hist_bins_arr[0] - 0.5],
+            (hist_bins_arr[:-1] + hist_bins_arr[1:]) / 2,
+            [hist_bins_arr[-1] + 0.5],
+        ])
+
+        finite_vals = hist_matrix[np.isfinite(hist_matrix)]
+        vmin = float(np.nanpercentile(finite_vals, 2)) if len(finite_vals) else 0.0
+        vmax = float(np.nanpercentile(finite_vals, 98)) if len(finite_vals) else 1.0
+
+        pcm = ax.pcolormesh(
+            x_edges, y_edges, hist_matrix,
+            cmap="turbo", shading="flat",
+            vmin=vmin, vmax=vmax, alpha=0.35,
+            zorder=0,
+        )
+        cb = fig.colorbar(pcm, ax=ax, pad=0.012, aspect=30, fraction=0.04)
+        cb.set_label("Hist. rate [Hz]", fontsize=7)
+        cb.ax.tick_params(labelsize=6)
+
+    # Draw global rate on the same axis (above the heatmap)
     if global_rate_col is not None and global_rate_col in df.columns:
         gv = pd.to_numeric(df[global_rate_col], errors="coerce")
         valid = gv.notna()
         if valid.any():
-            ax0.plot(
-                x[valid].to_numpy(),
-                gv[valid].to_numpy(dtype=float),
-                color="#1F77B4",
-                linewidth=1.2,
-                marker="o",
-                markersize=2.2,
-                alpha=0.85,
+            xv = x[valid].to_numpy()
+            yv = gv[valid].to_numpy(dtype=float)
+            ax.scatter(xv, yv, s=14, color="#4C72B0", alpha=0.6, zorder=3, edgecolors="none")
+            if len(yv) >= 5:
+                kernel = 5
+                med = pd.Series(yv).rolling(kernel, center=True, min_periods=1).median().to_numpy()
+                ax.plot(xv, med, color="#C44E52", linewidth=1.8, alpha=0.9, zorder=4, label=f"running median (w={kernel})")
+                ax.legend(loc="upper right", fontsize=7.5, frameon=True, framealpha=0.85)
+            mean_v = float(np.nanmean(yv))
+            ax.axhline(mean_v, color="grey", linewidth=0.7, linestyle="--", alpha=0.5, zorder=2)
+            ax.set_ylabel("Rate [Hz]", fontsize=9)
+            ax.set_title(f"Global rate ({global_rate_col})", fontsize=10, fontweight="bold")
+        else:
+            ax.text(0.5, 0.5, f"{global_rate_col}: no finite values", ha="center", va="center", transform=ax.transAxes)
+            ax.set_ylabel("Rate [Hz]", fontsize=9)
+    else:
+        ax.text(0.5, 0.5, "No global-rate column found", ha="center", va="center", transform=ax.transAxes)
+        ax.set_ylabel("Rate [Hz]", fontsize=9)
+    ax.grid(True, alpha=0.2, linewidth=0.5)
+
+    # --- Panel: empirical efficiencies -------------------------------------
+    if "efficiencies" in panels:
+        ax = axes[ax_idx]; ax_idx += 1
+        eff_colors = ["#4C72B0", "#DD8452", "#55A868", "#C44E52"]
+        for i, col in enumerate(eff_cols):
+            v = pd.to_numeric(df[col], errors="coerce")
+            ok = v.notna()
+            if ok.sum() < 2:
+                continue
+            label = col.replace("eff_empirical_", "Plane ")
+            ax.plot(
+                x[ok].to_numpy(), v[ok].to_numpy(dtype=float),
+                color=eff_colors[i % len(eff_colors)],
+                linewidth=1.3, marker=".", markersize=4, alpha=0.85,
+                label=label,
             )
-            ax0.set_ylabel(f"{global_rate_col} [Hz]")
-            ax0.set_title("Global rate over selected real-data window")
-        else:
-            ax0.text(0.5, 0.5, f"{global_rate_col}: no finite values", ha="center", va="center")
-            ax0.set_ylabel("Global rate [Hz]")
-    else:
-        ax0.text(0.5, 0.5, "No global-rate column found", ha="center", va="center")
-        ax0.set_ylabel("Global rate [Hz]")
-    ax0.grid(True, alpha=0.22)
+        ax.set_ylim(0.0, 1.05)
+        ax.set_ylabel("Efficiency", fontsize=9)
+        ax.set_title("Empirical efficiencies per plane", fontsize=10, fontweight="bold")
+        ax.legend(loc="lower left", fontsize=8, ncol=4, frameon=True, framealpha=0.85)
+        ax.grid(True, alpha=0.2, linewidth=0.5)
 
-    # Panel 2: standardized feature-space traces
-    ax1 = axes[1]
-    shown_features = 0
-    for col in feature_preview_cols:
-        if col not in df.columns:
-            continue
-        values = pd.to_numeric(df[col], errors="coerce")
-        valid = values.notna()
-        if valid.sum() < 3:
-            continue
-        v = values[valid].to_numpy(dtype=float)
-        center = float(np.nanmedian(v))
-        scale = float(np.nanstd(v))
-        if not np.isfinite(scale) or scale <= 0.0:
-            z = np.zeros_like(v, dtype=float)
-        else:
-            z = (v - center) / scale
-        ax1.plot(
-            x[valid].to_numpy(),
-            z,
-            linewidth=1.0,
-            alpha=0.9,
-            label=col,
-        )
-        shown_features += 1
-
-    if shown_features == 0:
-        ax1.text(0.5, 0.5, "No finite feature-space traces available", ha="center", va="center")
-    else:
-        ax1.legend(loc="upper right", fontsize=7, ncol=2, frameon=True)
-    ax1.axhline(0.0, color="black", linewidth=0.8, alpha=0.4)
-    ax1.set_ylabel("Feature value (z-score)")
-    ax1.set_title(
-        f"Feature-space timeline preview (showing {shown_features}/{len(feature_preview_cols)} columns)"
-    )
-    ax1.grid(True, alpha=0.22)
-
-    # Panel 3: standardized comparison/matching traces used in STEP 4.2
-    ax2 = axes[2]
-    shown = 0
-    max_lines = 8
-    for col in comparison_cols[:max_lines]:
-        if col not in df.columns:
-            continue
-        values = pd.to_numeric(df[col], errors="coerce")
-        valid = values.notna()
-        if valid.sum() < 3:
-            continue
-        v = values[valid].to_numpy(dtype=float)
-        center = float(np.nanmedian(v))
-        scale = float(np.nanstd(v))
-        if not np.isfinite(scale) or scale <= 0.0:
-            z = np.zeros_like(v, dtype=float)
-        else:
-            z = (v - center) / scale
-        ax2.plot(
-            x[valid].to_numpy(),
-            z,
-            linewidth=1.0,
-            alpha=0.9,
-            label=col,
-        )
-        shown += 1
-
-    if shown == 0:
-        ax2.text(0.5, 0.5, "No finite STEP 4.2 matching-column traces available", ha="center", va="center")
-    else:
-        ax2.legend(loc="upper right", fontsize=7, ncol=2, frameon=True)
-    ax2.axhline(0.0, color="black", linewidth=0.8, alpha=0.4)
-    ax2.set_ylabel("Matching value (z-score)")
-    ax2.set_xlabel(x_label)
-    ax2.set_title(
-        "Columns preview for STEP 4.2 matching "
-        f"({comparison_strategy}; showing {shown}/{len(comparison_cols)})"
-    )
-    ax2.grid(True, alpha=0.22)
-
-    fig.tight_layout()
-    fig.savefig(PLOT_COMPARE_COLS, dpi=150)
+    # --- finalize ----------------------------------------------------------
+    axes[-1].set_xlabel(x_label, fontsize=9)
+    if x_is_time:
+        fig.autofmt_xdate(rotation=25, ha="right")
+    fig.savefig(PLOT_COMPARE_COLS, dpi=170)
     plt.close(fig)
-    return shown
+    return len(eff_cols)
+
+
+_EFFPROD_SUFFIX_TO_TT_LABEL = {
+    "4planes": "1234",
+    "123": "123",
+    "234": "234",
+    "12": "12",
+    "34": "34",
+}
+
+
+def _make_tt_rate_breakdown_plot(
+    df: pd.DataFrame,
+) -> int:
+    """Plot per-TT rate, efficiency product, and rate/eff_product in a 3×N grid."""
+    tcol = _choose_timeline_column(df)
+    if tcol is None:
+        x = pd.Series(np.arange(len(df), dtype=float), index=df.index)
+        x_label = "Row index"
+        x_is_time = False
+    else:
+        ts = pd.to_datetime(df[tcol], errors="coerce", utc=True).dt.tz_convert(None)
+        if ts.notna().any():
+            x = ts
+            x_label = (
+                "Data time from filename_base [UTC]"
+                if tcol == "file_timestamp_utc"
+                else "Execution time [UTC]"
+            )
+            x_is_time = True
+        else:
+            x = pd.Series(np.arange(len(df), dtype=float), index=df.index)
+            x_label = "Row index"
+            x_is_time = False
+
+    # Find efficiency_product columns and matching TT rate columns
+    tt_entries: list[tuple[str, str, str]] = []  # (label, tt_rate_col, effprod_col)
+    for suffix, tt_label in _EFFPROD_SUFFIX_TO_TT_LABEL.items():
+        effprod_col = f"efficiency_product_{suffix}"
+        if effprod_col not in df.columns:
+            continue
+        pattern = re.compile(rf"^.+_tt_{re.escape(tt_label)}_rate_hz$")
+        candidates = [c for c in df.columns if pattern.match(c)]
+        if not candidates:
+            continue
+        tt_rate_col = _choose_best_col(candidates)
+        tt_entries.append((tt_label, tt_rate_col, effprod_col))
+
+    if not tt_entries:
+        _plot_placeholder(
+            PLOT_TT_BREAKDOWN,
+            "TT rate breakdown",
+            "No matching TT rate + efficiency product columns found.",
+        )
+        return 0
+
+    n_tt = len(tt_entries)
+    fig, axes = plt.subplots(
+        3, n_tt,
+        figsize=(4.0 * n_tt, 9.0),
+        squeeze=False,
+    )
+
+    # Share y-axis within each row and x-axis within each column
+    for row in range(3):
+        for col in range(1, n_tt):
+            axes[row, col].sharey(axes[row, 0])
+    for col in range(n_tt):
+        for row in range(2):
+            axes[row, col].sharex(axes[2, col])
+
+    colors = ["#4C72B0", "#DD8452", "#55A868", "#C44E52", "#8172B3"]
+    row_labels = ["TT rate [Hz]", "Eff. product", "Rate / Eff. prod."]
+
+    for j, (tt_label, tt_rate_col, effprod_col) in enumerate(tt_entries):
+        rate = pd.to_numeric(df[tt_rate_col], errors="coerce")
+        effprod = pd.to_numeric(df[effprod_col], errors="coerce")
+        color = colors[j % len(colors)]
+
+        # Row 0: TT rate
+        ax = axes[0, j]
+        ok = rate.notna()
+        if ok.any():
+            ax.scatter(
+                x[ok].to_numpy(), rate[ok].to_numpy(dtype=float),
+                s=8, color=color, alpha=0.6, edgecolors="none",
+            )
+        ax.set_title(f"TT {tt_label}", fontsize=9, fontweight="bold")
+        ax.grid(True, alpha=0.2, linewidth=0.5)
+
+        # Row 1: efficiency product
+        ax = axes[1, j]
+        ok = effprod.notna()
+        if ok.any():
+            ax.scatter(
+                x[ok].to_numpy(), effprod[ok].to_numpy(dtype=float),
+                s=8, color=color, alpha=0.6, edgecolors="none",
+            )
+        ax.grid(True, alpha=0.2, linewidth=0.5)
+
+        # Row 2: rate / eff_product
+        ax = axes[2, j]
+        both_ok = rate.notna() & effprod.notna() & (effprod > 0)
+        if both_ok.any():
+            ratio = rate[both_ok].to_numpy(dtype=float) / effprod[both_ok].to_numpy(dtype=float)
+            ax.scatter(
+                x[both_ok].to_numpy(), ratio,
+                s=8, color=color, alpha=0.6, edgecolors="none",
+            )
+        ax.grid(True, alpha=0.2, linewidth=0.5)
+
+    # Y-axis labels only on leftmost column
+    for row in range(3):
+        axes[row, 0].set_ylabel(row_labels[row], fontsize=8)
+        for col in range(1, n_tt):
+            plt.setp(axes[row, col].get_yticklabels(), visible=False)
+
+    # X-axis labels only on bottom row
+    for col in range(n_tt):
+        axes[2, col].set_xlabel(x_label, fontsize=7)
+        for row in range(2):
+            plt.setp(axes[row, col].get_xticklabels(), visible=False)
+
+    if x_is_time:
+        fig.autofmt_xdate(rotation=25, ha="right")
+    fig.tight_layout()
+    fig.savefig(PLOT_TT_BREAKDOWN, dpi=170)
+    plt.close(fig)
+    return n_tt
 
 
 def main() -> int:
@@ -2175,6 +2358,12 @@ def main() -> int:
 
     step41_row_id_col = "__step41_row_id"
     collected[step41_row_id_col] = np.arange(len(collected), dtype=int)
+    # Save TT rate columns before the step12 transform drops them
+    tt_rate_cols_pre = _tt_rate_columns(collected)
+    if tt_rate_cols_pre:
+        tt_rate_pre_df = collected[[step41_row_id_col, *tt_rate_cols_pre]].copy()
+    else:
+        tt_rate_pre_df = None
     passthrough_cols = [
         c for c in collected.columns
         if (
@@ -2203,6 +2392,15 @@ def main() -> int:
             on=step41_row_id_col,
             how="left",
         )
+    # Restore TT rate columns for the breakdown plot (not saved to CSV)
+    if tt_rate_pre_df is not None:
+        tt_restore = [c for c in tt_rate_cols_pre if c not in collected.columns]
+        if tt_restore:
+            collected = collected.merge(
+                tt_rate_pre_df[[step41_row_id_col, *tt_restore]],
+                on=step41_row_id_col,
+                how="left",
+            )
     collected = collected.drop(columns=[step41_row_id_col], errors="ignore")
     rows_after_step12_transform = int(len(collected))
     if collected.empty:
@@ -2216,7 +2414,8 @@ def main() -> int:
     )
 
     out_csv = FILES_DIR / "real_collected_data.csv"
-    collected.to_csv(out_csv, index=False)
+    csv_cols = [c for c in collected.columns if not re.search(r"_tt_.+_rate_hz$", str(c))]
+    collected[csv_cols].to_csv(out_csv, index=False)
     log.info("Wrote collected real data (STEP 1.2 transformed): %s (%d rows)", out_csv, len(collected))
 
     event_col = _make_event_histogram(
@@ -2246,6 +2445,7 @@ def main() -> int:
         comparison_strategy=comparison_strategy,
         global_rate_col=global_rate_col_used,
     )
+    n_tt_breakdown = _make_tt_rate_breakdown_plot(collected)
     log.info("Wrote plots in: %s", PLOTS_DIR)
 
     summary = {
