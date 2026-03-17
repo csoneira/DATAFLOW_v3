@@ -102,7 +102,6 @@ PLOTS_DIR = STEP_DIR / "OUTPUTS" / "PLOTS"
 FILES_DIR.mkdir(parents=True, exist_ok=True)
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 
-PLOT_EFF = PLOTS_DIR / "STEP_4_2_2_efficiency_vs_time.png"
 PLOT_EST_CURVE = PLOTS_DIR / "STEP_4_2_6_estimated_curve_flux_vs_eff.png"
 PLOT_RECOVERY_STORY = PLOTS_DIR / "STEP_4_2_7_flux_recovery_vs_global_rate.png"
 
@@ -133,9 +132,9 @@ try:
         _append_derived_tt_global_rate_column,
         _derived_feature_columns as _shared_derived_feature_columns,
         _normalize_derived_physics_features,
+        build_step15_runtime_inverse_mapping_cfg,
         estimate_from_dataframes,
         load_distance_definition,
-        resolve_inverse_mapping_cfg,
     )
     from feature_columns_config import (  # noqa: E402
         parse_explicit_feature_columns,
@@ -1556,182 +1555,6 @@ def _plot_series_with_uncertainty(
     plt.close(fig)
 
 
-def _plot_pre_estimation_efficiencies(
-    *,
-    x: pd.Series,
-    has_time_axis: bool,
-    xlabel: str,
-    global_rate: pd.Series | None,
-    global_rate_label: str,
-    raw_eff_by_plane: dict[int, pd.Series],
-    raw_eff_source_prefix: str | None,
-    transformed_eff_by_plane: dict[int, pd.Series],
-    transform_mode: str,
-    out_path: Path,
-) -> None:
-    """Four-panel diagnostic:
-    top: global-rate only,
-    middle: raw eff(1..4) from 1 - three/four,
-    third: transformed efficiencies using STEP 1.2 fit polynomials,
-    bottom: same transformed efficiencies zoomed to y in [0.75, 1.0].
-    """
-    raw_valid = any(pd.to_numeric(raw_eff_by_plane.get(p), errors="coerce").notna().any() for p in (1, 2, 3, 4))
-    tr_valid = any(
-        pd.to_numeric(transformed_eff_by_plane.get(p), errors="coerce").notna().any() for p in (1, 2, 3, 4)
-    )
-    gr_valid = False
-    gr = pd.Series(np.nan, index=x.index, dtype=float)
-    if global_rate is not None:
-        gr = pd.to_numeric(global_rate, errors="coerce")
-        gr_valid = gr.notna().any()
-
-    if not (raw_valid or tr_valid or gr_valid):
-        _plot_placeholder(
-            out_path,
-            "Pre-estimation efficiency diagnostics",
-            "No finite global-rate or source/transformed efficiency values available.",
-        )
-        return
-
-    source_prefix_label = (
-        f"{str(raw_eff_source_prefix)}_tt"
-        if raw_eff_source_prefix not in (None, "", "None")
-        else "selected_tt"
-    )
-
-    def _eff_ylim(vmin: float, vmax: float) -> tuple[float, float]:
-        if not (np.isfinite(vmin) and np.isfinite(vmax)):
-            return (-0.02, 1.02)
-        lo = min(-0.02, float(vmin))
-        hi = max(1.02, float(vmax))
-        if hi <= lo:
-            hi = lo + 0.05
-        pad = 0.03 * (hi - lo)
-        return (lo - pad, hi + pad)
-
-    xv = x.to_numpy()
-    fig, axes = plt.subplots(4, 1, figsize=(12.2, 14.0), sharex=True)
-
-    # Top panel: global rate only
-    ax_rate = axes[0]
-    color_by_plane = {1: "#1F77B4", 2: "#FF7F0E", 3: "#2CA02C", 4: "#9467BD"}
-    if gr_valid:
-        ax_rate.scatter(
-            xv,
-            gr.to_numpy(dtype=float),
-            color="#111111",
-            s=9,
-            alpha=0.85,
-            label=f"{global_rate_label} [Hz]",
-        )
-        ax_rate.legend(loc="best", fontsize=8, frameon=True)
-    else:
-        ax_rate.text(0.5, 0.5, "No finite global-rate values", ha="center", va="center")
-    ax_rate.set_ylabel("Global rate [Hz]")
-    ax_rate.set_title("Before dictionary estimation: global_rate_hz")
-    ax_rate.grid(True, alpha=0.22)
-
-    # Middle panel: efficiencies from selected TT prefix
-    ax_raw = axes[1]
-    n_raw = 0
-    raw_y_min = np.inf
-    raw_y_max = -np.inf
-    for plane in (1, 2, 3, 4):
-        eff = pd.to_numeric(raw_eff_by_plane.get(plane), errors="coerce")
-        valid = eff.notna()
-        if valid.any():
-            yvals = eff[valid].to_numpy(dtype=float)
-            if yvals.size:
-                raw_y_min = min(raw_y_min, float(np.nanmin(yvals)))
-                raw_y_max = max(raw_y_max, float(np.nanmax(yvals)))
-            ax_raw.scatter(
-                xv[valid.to_numpy()],
-                yvals,
-                s=10,
-                alpha=0.88,
-                color=color_by_plane[plane],
-                label=f"eff_{plane} ({source_prefix_label}) = 1 - three/four",
-            )
-            n_raw += 1
-    if n_raw == 0:
-        ax_raw.text(0.5, 0.5, "No raw efficiency values available", ha="center", va="center")
-    else:
-        ax_raw.legend(loc="best", fontsize=8, frameon=True, ncol=2)
-    ax_raw.set_ylim(*_eff_ylim(raw_y_min, raw_y_max))
-    ax_raw.set_ylabel("Source efficiencies")
-    ax_raw.set_title(f"Efficiencies from {source_prefix_label} rates (1 - threeplane/fourplane)")
-    ax_raw.grid(True, alpha=0.22)
-
-    # Third and bottom panels: transformed efficiencies (full + zoomed).
-    ax_bot = axes[2]
-    ax_bot_zoom = axes[3]
-    n_drawn = 0
-    tr_y_min = np.inf
-    tr_y_max = -np.inf
-    for plane in (1, 2, 3, 4):
-        eff_t = pd.to_numeric(transformed_eff_by_plane.get(plane), errors="coerce")
-        valid = eff_t.notna()
-        if valid.any():
-            yvals_t = eff_t[valid].to_numpy(dtype=float)
-            xvals_t = xv[valid.to_numpy()]
-            if yvals_t.size:
-                tr_y_min = min(tr_y_min, float(np.nanmin(yvals_t)))
-                tr_y_max = max(tr_y_max, float(np.nanmax(yvals_t)))
-            label = f"transformed_eff_{plane}"
-            ax_bot.scatter(
-                xvals_t,
-                yvals_t,
-                s=10,
-                alpha=0.9,
-                color=color_by_plane[plane],
-                label=label,
-            )
-            ax_bot_zoom.scatter(
-                xvals_t,
-                yvals_t,
-                s=10,
-                alpha=0.9,
-                color=color_by_plane[plane],
-                label=label,
-            )
-            n_drawn += 1
-    if n_drawn == 0:
-        ax_bot.text(0.5, 0.5, "No transformed efficiency values available", ha="center", va="center")
-        ax_bot_zoom.text(0.5, 0.5, "No transformed efficiency values available", ha="center", va="center")
-
-    ax_bot.set_ylim(*_eff_ylim(tr_y_min, tr_y_max))
-    ax_bot.set_ylabel("Transformed efficiencies")
-    ax_bot.set_title(
-        "Transformed efficiency (using STEP 1.2 fit polynomials; "
-        f"mode={transform_mode})"
-    )
-    ax_bot.grid(True, alpha=0.22)
-    if n_drawn > 0:
-        ax_bot.legend(loc="best", fontsize=8, frameon=True, ncol=2)
-
-    ax_bot_zoom.set_ylim(0.75, 1.0)
-    ax_bot_zoom.set_ylabel("Transf. eff (zoom)")
-    ax_bot_zoom.set_xlabel(xlabel)
-    ax_bot_zoom.set_title(
-        "Transformed efficiency (zoomed y-range: [0.75, 1.0])"
-    )
-    ax_bot_zoom.grid(True, alpha=0.22)
-    if n_drawn > 0:
-        ax_bot_zoom.legend(loc="best", fontsize=8, frameon=True, ncol=2)
-
-    if not has_time_axis and len(xv) > 0:
-        xmin = float(np.nanmin(xv))
-        xmax = float(np.nanmax(xv)) if len(xv) > 1 else xmin + 1.0
-        ax_rate.set_xlim(xmin, xmax)
-        ax_raw.set_xlim(xmin, xmax)
-        ax_bot.set_xlim(xmin, xmax)
-        ax_bot_zoom.set_xlim(xmin, xmax)
-
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-
-
 def _plot_flux_recovery_story_real(
     *,
     x: pd.Series,
@@ -2383,12 +2206,7 @@ def main() -> int:
         interpolation_k: int | None = None
     else:
         interpolation_k = int(interpolation_k_raw)
-    inverse_mapping_cfg = resolve_inverse_mapping_cfg(
-        inverse_mapping_cfg=cfg_21.get("inverse_mapping", {}),
-        interpolation_k=interpolation_k,
-        histogram_distance_weight=float(cfg_21.get("histogram_distance_weight", 1.0)),
-        histogram_distance_blend_mode=str(cfg_21.get("histogram_distance_blend_mode", "normalized")),
-    )
+    inverse_mapping_cfg_requested = cfg_21.get("inverse_mapping", {})
     include_global_rate = _safe_bool(cfg_21.get("include_global_rate", True), True)
     global_rate_col = str(cfg_21.get("global_rate_col", "events_per_second_global_rate"))
     exclude_same_file = _safe_bool(cfg_42.get("exclude_same_file", False), False)
@@ -2500,15 +2318,6 @@ def main() -> int:
         "enabled" if inherit_step_2_1_method else "disabled (legacy STEP 4.2 overrides allowed)",
     )
     log.info("Metric=%s, k=%s, uncertainty_quantile=%.3f", distance_metric, interpolation_k, uncertainty_quantile)
-    log.info(
-        "Inverse mapping: selection=%s k=%s weighting=%s aggregation=%s hist_weight=%.3g hist_blend=%s",
-        inverse_mapping_cfg.get("neighbor_selection"),
-        ("all" if inverse_mapping_cfg.get("neighbor_count") is None else str(inverse_mapping_cfg.get("neighbor_count"))),
-        inverse_mapping_cfg.get("weighting"),
-        inverse_mapping_cfg.get("aggregation"),
-        float(inverse_mapping_cfg.get("histogram_distance_weight", 1.0)),
-        inverse_mapping_cfg.get("histogram_distance_blend_mode"),
-    )
 
     real_df = pd.read_csv(real_path, low_memory=False)
     dict_df = pd.read_csv(dict_path, low_memory=False)
@@ -2876,7 +2685,26 @@ def main() -> int:
     if feature_strategy == "step12_selected":
         log.info("STEP 1.2 selected-feature artifact: %s", step12_selected_path)
 
-    inverse_mapping_cfg_runtime = dict(inverse_mapping_cfg)
+    dd = load_distance_definition(feature_columns)
+    if dd["available"]:
+        log.info(
+            "Loaded STEP 1.5 distance definition: %s (p=%.1f, k=%d, λ=%.2g, %d/%d active)",
+            dd["selected_mode"], dd["p_norm"], dd["optimal_k"],
+            dd["optimal_lambda"],
+            int(np.sum(dd["weights"] > 0)), len(feature_columns),
+        )
+        if interpolation_k is None or interpolation_k != dd["optimal_k"]:
+            log.info("Overriding interpolation_k %s → %d from distance definition.", interpolation_k, dd["optimal_k"])
+            interpolation_k = dd["optimal_k"]
+    else:
+        log.warning("STEP 1.5 distance definition not available: %s", dd.get("reason"))
+        dd = None
+
+    inverse_mapping_cfg_runtime = build_step15_runtime_inverse_mapping_cfg(
+        inverse_mapping_cfg=inverse_mapping_cfg_requested,
+        interpolation_k=interpolation_k,
+        distance_definition=dd,
+    )
     if (
         not inherit_step_2_1_method
         and feature_mode == "derived"
@@ -2901,31 +2729,47 @@ def main() -> int:
             str(derived_tt_only_weighting),
             str(derived_tt_only_aggregation),
         )
-
-    dd = load_distance_definition(feature_columns)
-    if dd["available"]:
-        log.info(
-            "Loaded STEP 1.5 distance definition: %s (p=%.1f, k=%d, λ=%.2g, %d/%d active)",
-            dd["selected_mode"], dd["p_norm"], dd["optimal_k"],
-            dd["optimal_lambda"],
-            int(np.sum(dd["weights"] > 0)), len(feature_columns),
-        )
-        if interpolation_k is None or interpolation_k != dd["optimal_k"]:
-            log.info("Overriding interpolation_k %s → %d from distance definition.", interpolation_k, dd["optimal_k"])
-            interpolation_k = dd["optimal_k"]
     else:
-        log.warning("STEP 1.5 distance definition not available: %s", dd.get("reason"))
-        dd = None
+        if inherit_step_2_1_method and exclude_same_file:
+            log.info(
+                "Ignoring step_4_2.exclude_same_file=%s; using STEP 2.1 runtime behavior (exclude_same_file=false).",
+                exclude_same_file,
+            )
+        log.info(
+            "STEP 1.5 runtime inverse mapping: selection=%s k=%d weighting=%s idw_power=%.1f aggregation=%s",
+            inverse_mapping_cfg_runtime["neighbor_selection"],
+            int(inverse_mapping_cfg_runtime["neighbor_count"]),
+            inverse_mapping_cfg_runtime["weighting"],
+            float(inverse_mapping_cfg_runtime["inverse_distance_power"]),
+            inverse_mapping_cfg_runtime["aggregation"],
+        )
 
+    param_columns = [
+        col
+        for col in (
+            "flux_cm2_min",
+            "cos_n",
+            "eff_sim_1",
+            "eff_sim_2",
+            "eff_sim_3",
+            "eff_sim_4",
+        )
+        if col in dict_work.columns
+    ]
     est_df = estimate_from_dataframes(
         dict_df=dict_work,
         data_df=real_work,
         feature_columns=feature_columns,
         distance_metric=distance_metric,
         interpolation_k=interpolation_k,
+        param_columns=param_columns,
         include_global_rate=False,
         global_rate_col=global_rate_col,
-        exclude_same_file=exclude_same_file,
+        exclude_same_file=False if inherit_step_2_1_method else exclude_same_file,
+        shared_parameter_exclusion_mode="full" if inherit_step_2_1_method else None,
+        shared_parameter_exclusion_columns=["param_set_id"] if inherit_step_2_1_method else None,
+        shared_parameter_exclusion_ignore=() if inherit_step_2_1_method else ("cos_n",),
+        density_weighting_cfg=None,
         inverse_mapping_cfg=inverse_mapping_cfg_runtime,
         distance_definition=dd,
     )
@@ -3200,19 +3044,6 @@ def main() -> int:
         if candidate in merged.columns:
             eff_unc_abs_col = candidate
 
-    _plot_pre_estimation_efficiencies(
-        x=x,
-        has_time_axis=has_time_axis,
-        xlabel=x_label,
-        global_rate=merged[real_global_rate_col] if real_global_rate_col is not None else None,
-        global_rate_label=real_global_rate_col if real_global_rate_col is not None else "global_rate_hz",
-        raw_eff_by_plane=raw_eff_by_plane,
-        raw_eff_source_prefix=raw_eff_selected_prefix,
-        transformed_eff_by_plane=transformed_eff_by_plane,
-        transform_mode=eff_transform_mode,
-        out_path=PLOT_EFF,
-    )
-
     eff2_plot_source_cfg = str(cfg_42.get("eff2_global_rate_eff_source", "auto")).strip().lower()
     if eff2_plot_source_cfg not in {"auto", "transformed", "raw"}:
         log.warning(
@@ -3408,7 +3239,7 @@ def main() -> int:
         "distance_definition_used": dd is not None,
         "distance_definition_mode": dd["selected_mode"] if dd is not None else None,
         "interpolation_k": interpolation_k,
-        "inverse_mapping": inverse_mapping_cfg,
+        "inverse_mapping": inverse_mapping_cfg_requested,
         "inverse_mapping_runtime_applied": inverse_mapping_cfg_runtime,
         "inherit_step_2_1_method": bool(inherit_step_2_1_method),
         "feature_strategy": feature_strategy,
@@ -3557,7 +3388,6 @@ def main() -> int:
             "three_plane_col": dict_eff_cols_by_plane.get(2, {}).get("three_plane_col"),
             "four_plane_col": dict_eff_cols_by_plane.get(2, {}).get("four_plane_col"),
         },
-        "pre_estimation_efficiency_plot": str(PLOT_EFF),
         "estimated_curve_eff_column": est_curve_eff_col,
         "dictionary_curve_eff_column": dict_curve_eff_col,
         "n_estimated_curve_points": int(n_est_curve_real),

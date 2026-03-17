@@ -62,6 +62,14 @@ DEFAULT_STEP14_SELECTED_FEATURES = (
     / "FILES"
     / "selected_feature_columns.json"
 )
+DEFAULT_BUILD_SUMMARY = (
+    STEP_ROOT
+    / "STEP_1_SETUP"
+    / "STEP_1_3_BUILD_DICTIONARY"
+    / "OUTPUTS"
+    / "FILES"
+    / "build_summary.json"
+)
 ONLINE_RUN_DICTIONARY_ROOT = (
     REPO_ROOT
     / "MASTER"
@@ -99,6 +107,19 @@ RATE_HIST_BIN_RE = re.compile(r"^events_per_second_(?P<bin>\d+)_rate_hz")
 
 logging.basicConfig(format="[%(levelname)s] STEP_4.1 - %(message)s", level=logging.INFO)
 log = logging.getLogger("STEP_4.1")
+
+MODULES_DIR = STEP_ROOT / "MODULES"
+if str(MODULES_DIR) not in sys.path:
+    sys.path.insert(0, str(MODULES_DIR))
+try:
+    from efficiency_fit_utils import (  # noqa: E402
+        POLY_CORRECTED_EFFPROD_COL_TEMPLATE,
+        append_polynomial_corrected_efficiency_columns,
+        load_efficiency_fit_models,
+    )
+except Exception as exc:
+    log.error("Could not import efficiency_fit_utils from %s: %s", MODULES_DIR, exc)
+    raise
 
 STEP12_TRANSFORM_DIR = STEP_ROOT / "STEP_1_SETUP" / "STEP_1_2_TRANSFORM_FEATURE_SPACE"
 if str(STEP12_TRANSFORM_DIR) not in sys.path:
@@ -372,6 +393,52 @@ def _resolve_input_path(path_like: str | Path) -> Path:
     if candidate_step.exists():
         return candidate_step
     return candidate_pipeline
+
+
+def _load_step13_efficiency_fit(path: Path) -> tuple[dict[int, dict[str, object]], dict]:
+    """Load STEP 1.3 empirical-efficiency polynomial fit metadata."""
+    fit_models, fit_status, payload = load_efficiency_fit_models(path)
+    efficiency_fit = payload.get("efficiency_fit", {}) if isinstance(payload, dict) else {}
+    info: dict[str, object] = {
+        "path": str(path),
+        "exists": bool(path.exists()),
+        "status": fit_status,
+        "planes_loaded": sorted(int(plane) for plane in fit_models.keys()),
+        "polynomial_order_requested": (
+            efficiency_fit.get("polynomial_order_requested")
+            if isinstance(efficiency_fit, dict)
+            else None
+        ),
+    }
+    return fit_models, info
+
+
+def _append_step13_polynomial_efficiency_products(
+    df: pd.DataFrame,
+    *,
+    build_summary_path: Path,
+) -> dict[str, object]:
+    """Append STEP 1.3 polynomial-corrected efficiency columns for TT diagnostics."""
+    fit_models, load_info = _load_step13_efficiency_fit(build_summary_path)
+    append_info = append_polynomial_corrected_efficiency_columns(df, fit_models)
+    info = dict(load_info)
+    info["application"] = append_info
+    if append_info.get("status") == "ok":
+        log.info(
+            "Applied STEP 1.3 polynomial efficiency correction from %s: planes=%s, products=%s",
+            build_summary_path,
+            append_info.get("planes_applied", []),
+            append_info.get("efficiency_product_columns_created", []),
+        )
+    else:
+        log.warning(
+            "STEP 1.3 polynomial efficiency correction unavailable for STEP 4.1 TT plot "
+            "(summary=%s, load_status=%s, apply_status=%s).",
+            build_summary_path,
+            load_info.get("status"),
+            append_info.get("status"),
+        )
+    return info
 
 
 def _canonical_z_tuple(values: object) -> tuple[float, float, float, float] | None:
@@ -1801,13 +1868,6 @@ def _make_comparison_columns_plot(
             xv = x[valid].to_numpy()
             yv = gv[valid].to_numpy(dtype=float)
             ax.scatter(xv, yv, s=14, color="#4C72B0", alpha=0.6, zorder=3, edgecolors="none")
-            if len(yv) >= 5:
-                kernel = 5
-                med = pd.Series(yv).rolling(kernel, center=True, min_periods=1).median().to_numpy()
-                ax.plot(xv, med, color="#C44E52", linewidth=1.8, alpha=0.9, zorder=4, label=f"running median (w={kernel})")
-                ax.legend(loc="upper right", fontsize=7.5, frameon=True, framealpha=0.85)
-            mean_v = float(np.nanmean(yv))
-            ax.axhline(mean_v, color="grey", linewidth=0.7, linestyle="--", alpha=0.5, zorder=2)
             ax.set_ylabel("Rate [Hz]", fontsize=9)
             ax.set_title(f"Global rate ({global_rate_col})", fontsize=10, fontweight="bold")
         else:
@@ -1828,10 +1888,10 @@ def _make_comparison_columns_plot(
             if ok.sum() < 2:
                 continue
             label = col.replace("eff_empirical_", "Plane ")
-            ax.plot(
+            ax.scatter(
                 x[ok].to_numpy(), v[ok].to_numpy(dtype=float),
                 color=eff_colors[i % len(eff_colors)],
-                linewidth=1.3, marker=".", markersize=4, alpha=0.85,
+                s=12, alpha=0.8, edgecolors="none",
                 label=label,
             )
         ax.set_ylim(0.0, 1.05)
@@ -1854,6 +1914,7 @@ _EFFPROD_SUFFIX_TO_TT_LABEL = {
     "123": "123",
     "234": "234",
     "12": "12",
+    "23": "23",
     "34": "34",
 }
 
@@ -1883,17 +1944,25 @@ def _make_tt_rate_breakdown_plot(
             x_is_time = False
 
     # Find efficiency_product columns and matching TT rate columns
-    tt_entries: list[tuple[str, str, str]] = []  # (label, tt_rate_col, effprod_col)
+    tt_entries: list[tuple[str, str, str, str]] = []  # (label, tt_rate_col, effprod_col, source)
     for suffix, tt_label in _EFFPROD_SUFFIX_TO_TT_LABEL.items():
-        effprod_col = f"efficiency_product_{suffix}"
-        if effprod_col not in df.columns:
+        corrected_col = POLY_CORRECTED_EFFPROD_COL_TEMPLATE.format(suffix=suffix)
+        raw_col = f"efficiency_product_{suffix}"
+        effprod_col = None
+        effprod_source = "feature_space"
+        if corrected_col in df.columns and pd.to_numeric(df[corrected_col], errors="coerce").notna().any():
+            effprod_col = corrected_col
+            effprod_source = "poly_corrected"
+        elif raw_col in df.columns:
+            effprod_col = raw_col
+        if effprod_col is None:
             continue
         pattern = re.compile(rf"^.+_tt_{re.escape(tt_label)}_rate_hz$")
         candidates = [c for c in df.columns if pattern.match(c)]
         if not candidates:
             continue
         tt_rate_col = _choose_best_col(candidates)
-        tt_entries.append((tt_label, tt_rate_col, effprod_col))
+        tt_entries.append((tt_label, tt_rate_col, effprod_col, effprod_source))
 
     if not tt_entries:
         _plot_placeholder(
@@ -1919,9 +1988,14 @@ def _make_tt_rate_breakdown_plot(
             axes[row, col].sharex(axes[2, col])
 
     colors = ["#4C72B0", "#DD8452", "#55A868", "#C44E52", "#8172B3"]
-    row_labels = ["TT rate [Hz]", "Eff. product", "Rate / Eff. prod."]
+    use_poly_corrected = any(source == "poly_corrected" for _, _, _, source in tt_entries)
+    row_labels = [
+        "TT rate [Hz]",
+        ("Poly-corrected eff. product" if use_poly_corrected else "Eff. product"),
+        ("Rate / poly-corrected eff. prod." if use_poly_corrected else "Rate / eff. prod."),
+    ]
 
-    for j, (tt_label, tt_rate_col, effprod_col) in enumerate(tt_entries):
+    for j, (tt_label, tt_rate_col, effprod_col, effprod_source) in enumerate(tt_entries):
         rate = pd.to_numeric(df[tt_rate_col], errors="coerce")
         effprod = pd.to_numeric(df[effprod_col], errors="coerce")
         color = colors[j % len(colors)]
@@ -1934,7 +2008,10 @@ def _make_tt_rate_breakdown_plot(
                 x[ok].to_numpy(), rate[ok].to_numpy(dtype=float),
                 s=8, color=color, alpha=0.6, edgecolors="none",
             )
-        ax.set_title(f"TT {tt_label}", fontsize=9, fontweight="bold")
+        title = f"TT {tt_label}"
+        if effprod_source == "poly_corrected":
+            title += " (poly)"
+        ax.set_title(title, fontsize=9, fontweight="bold")
         ax.grid(True, alpha=0.2, linewidth=0.5)
 
         # Row 1: efficiency product
@@ -2012,6 +2089,7 @@ def main() -> int:
     timestamp_col = str(cfg_41.get("timestamp_column", "execution_timestamp"))
     metadata_agg = str(config.get("metadata_agg", "latest")).strip().lower()
     dictionary_csv_cfg = cfg_41.get("dictionary_csv", None)
+    build_summary_cfg = cfg_41.get("build_summary_json", None)
     global_rate_col_pref = str(cfg_41.get("global_rate_col", "events_per_second_global_rate"))
     event_count_col_cfg = str(cfg_41.get("event_count_column", "auto")).strip()
     selected_features_json_cfg = cfg_41.get("selected_feature_columns_json", None)
@@ -2089,6 +2167,8 @@ def main() -> int:
         event_count_col_cfg if event_count_col_cfg else "auto",
         ("disabled" if min_n_events is None else f"{min_n_events:.0f}"),
     )
+    build_summary_path = _resolve_input_path(build_summary_cfg or DEFAULT_BUILD_SUMMARY)
+    log.info("STEP 1.3 fit summary: %s", build_summary_path)
 
     dict_path = _resolve_input_path(dictionary_csv_cfg or DEFAULT_DICTIONARY)
     if not dict_path.exists():
@@ -2412,6 +2492,10 @@ def main() -> int:
         rows_after_step12_transform,
         int(len(collected.columns)),
     )
+    step13_poly_correction_info = _append_step13_polynomial_efficiency_products(
+        collected,
+        build_summary_path=build_summary_path,
+    )
 
     out_csv = FILES_DIR / "real_collected_data.csv"
     csv_cols = [c for c in collected.columns if not re.search(r"_tt_.+_rate_hz$", str(c))]
@@ -2485,6 +2569,7 @@ def main() -> int:
         "dictionary_for_comparison_preview": str(dict_path),
         "selected_feature_columns_json": str(selected_features_path),
         "feature_matrix_plot": feature_matrix_info,
+        "step13_polynomial_efficiency_correction": step13_poly_correction_info,
         "rows_total": int(len(collected)),
         "rows_before_event_cut": rows_before_event_cut,
         "rows_after_event_cut": rows_after_event_cut,

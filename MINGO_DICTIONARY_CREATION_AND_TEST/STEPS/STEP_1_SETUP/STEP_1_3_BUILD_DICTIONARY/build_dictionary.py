@@ -577,6 +577,37 @@ def _format_poly_label(coeffs_desc: list[float]) -> str:
     return " ".join(parts)
 
 
+def _tight_unit_interval_bounds(
+    *arrays: pd.Series | np.ndarray,
+    pad_fraction: float = 0.08,
+    min_pad: float = 0.02,
+) -> tuple[float, float]:
+    finite_chunks: list[np.ndarray] = []
+    for arr in arrays:
+        vals = np.asarray(arr, dtype=float).ravel()
+        if vals.size == 0:
+            continue
+        mask = np.isfinite(vals)
+        if np.any(mask):
+            finite_chunks.append(vals[mask])
+    if not finite_chunks:
+        return 0.0, 1.0
+
+    data = np.concatenate(finite_chunks)
+    lo = float(np.nanmin(data))
+    hi = float(np.nanmax(data))
+    if not np.isfinite(lo) or not np.isfinite(hi):
+        return 0.0, 1.0
+
+    span = hi - lo
+    pad = max(float(min_pad), float(span * pad_fraction)) if span > 0.0 else float(min_pad)
+    lo = max(0.0, lo - pad)
+    hi = min(1.0, hi + pad)
+    if hi <= lo:
+        return 0.0, 1.0
+    return lo, hi
+
+
 def _plot_relerr_hist(
     all_rows: pd.DataFrame,
     *,
@@ -681,17 +712,24 @@ def _plot_relerr_report(
                 x_dic[m_dic], y_dic[m_dic], s=20, alpha=0.8, marker="x", color="#D7301F", linewidths=0.9, label="Dictionary"
             )
 
-        ax_scatter.plot([0.0, 1.0], [0.0, 1.0], color="black", linestyle="--", linewidth=1.0)
+        fit_x = np.array([], dtype=float)
+        fit_y = np.array([], dtype=float)
 
         if fit_col in all_rows.columns:
             model_key = f"plane_{plane}"
             model = fit_models.get(model_key, {})
             coeffs = model.get("coefficients_desc", [])
             if isinstance(coeffs, list) and coeffs:
-                xv = np.linspace(0.0, 1.0, 200)
-                yv = np.polyval(np.asarray(coeffs, dtype=float), xv)
-                yv = np.clip(yv, 0.0, 1.0)
-                ax_scatter.plot(xv, yv, color="#1F78B4", linewidth=1.7, label="Polynomial fit")
+                emp_lo = _as_float_or_none(model.get("empirical_min"))
+                emp_hi = _as_float_or_none(model.get("empirical_max"))
+                if emp_lo is None or emp_hi is None or not np.isfinite(emp_lo) or not np.isfinite(emp_hi):
+                    emp_lo, emp_hi = _tight_unit_interval_bounds(x_non[m_non], x_dic[m_dic])
+                if emp_hi < emp_lo:
+                    emp_lo, emp_hi = emp_hi, emp_lo
+                fit_x = np.linspace(float(emp_lo), float(emp_hi), 200)
+                fit_y = np.polyval(np.asarray(coeffs, dtype=float), fit_x)
+                fit_y = np.clip(fit_y, 0.0, 1.0)
+                ax_scatter.plot(fit_x, fit_y, color="#1F78B4", linewidth=1.7, label="Polynomial fit")
             if plane == 1 and isinstance(coeffs, list) and coeffs:
                 ax_scatter.text(
                     0.03,
@@ -704,8 +742,17 @@ def _plot_relerr_report(
                     bbox={"facecolor": "white", "alpha": 0.75, "edgecolor": "none"},
                 )
 
-        ax_scatter.set_xlim(0.0, 1.0)
-        ax_scatter.set_ylim(0.0, 1.0)
+        xy_lo, xy_hi = _tight_unit_interval_bounds(
+            x_non[m_non],
+            y_non[m_non],
+            x_dic[m_dic],
+            y_dic[m_dic],
+            fit_x,
+            fit_y,
+        )
+        ax_scatter.plot([xy_lo, xy_hi], [xy_lo, xy_hi], color="black", linestyle="--", linewidth=1.0)
+        ax_scatter.set_xlim(xy_lo, xy_hi)
+        ax_scatter.set_ylim(xy_lo, xy_hi)
         ax_scatter.set_aspect("equal", adjustable="box")
         ax_scatter.set_xlabel("Empirical efficiency")
         ax_scatter.set_ylabel("Simulated efficiency")
@@ -741,6 +788,8 @@ def _plot_relerr_report(
         if not np.isfinite(rel_hi) or rel_hi <= 0.0:
             rel_hi = 1.0
         ax_rel.set_ylim(0.0, max(rel_hi, 1.0))
+        rel_x_lo, rel_x_hi = _tight_unit_interval_bounds(x_non[relm_non], x_dic[relm_dic], fit_x)
+        ax_rel.set_xlim(rel_x_lo, rel_x_hi)
         ax_rel.set_xlabel("Empirical efficiency")
         ax_rel.set_ylabel("Relative error [%]")
         ax_rel.set_title(f"Plane {plane}: relerr ({'fit' if rel_col == rel_fit_col else 'raw'})")

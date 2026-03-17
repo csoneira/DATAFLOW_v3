@@ -30,6 +30,7 @@ state of each dataset.
 """
 # Standard Library
 import argparse
+import atexit
 import builtins
 import csv
 from datetime import datetime, timedelta
@@ -115,6 +116,13 @@ from MASTER.common.selection_config import load_selection_for_paths, station_is_
 from MASTER.common.status_csv import initialize_status_row, update_status_progress
 from MASTER.common.reprocessing_utils import get_reprocessing_value
 from MASTER.common.simulated_data_utils import resolve_simulated_z_positions
+from MASTER.common.step1_activation import (
+    compute_conditional_matrices_by_tt,
+    compute_conditional_matrix_from_boolean_arrays,
+    detect_streamer_threshold,
+    store_activation_matrices_by_tt_metadata,
+    store_activation_matrix_metadata,
+)
 from MASTER.common.step1_shared import (
     add_normalized_count_metadata,
     apply_step1_task_parameter_overrides,
@@ -132,7 +140,9 @@ from MASTER.common.step1_shared import (
     prune_redundant_count_metadata,
     save_metadata,
     set_global_rate_from_tt_rates,
+    load_step1_task_plot_catalog,
     resolve_step1_plot_options,
+    step1_task_plot_enabled,
     validate_step1_input_file_args,
     y_pos,
 )
@@ -145,6 +155,78 @@ _prof_t0 = time.perf_counter()
 _prof = {}
 
 STATION_CHOICES = ("0", "1", "2", "3", "4")
+TASK2_PLOT_ALIASES: tuple[str, ...] = (
+    "debug_suite",
+    "usual_suite",
+    "essential_suite",
+    "strip_activation_matrix_before_after",
+    "streamer_contagion_matrix_strip",
+    "cumulative_distribution_q_ch_before_calibration",
+    "new_calibration",
+    "scatter_new_calibration",
+    "new_calibration_calibrated_charge",
+    "scatter_new_calibration_calibrated_charge",
+    "charge_dif_vs_charge_sum_cal",
+    "timing",
+    "grand_figure_q_pedestal",
+    "grand_figure_q_pedestal_zoom",
+    "grand_figure_q_pedestal_less_zoom",
+    "grand_figure_q_fc",
+    "grand_figure_q_pedestal_st",
+    "grand_figure_q_pedestal_zoom_st",
+    "grand_figure_q_pedestal_less_zoom_st",
+    "grand_figure_t_dif_cal",
+    "grand_figure_t_dif_cal_st",
+    "uncalibrated",
+    "tsum_spread_histograms_og",
+    "tsum_spread_histograms_filtered_og",
+    "uncalibrated_filtered",
+    "calibrated_filtered_before_fb_corr",
+    "calibrated_filtered",
+    "calibrated_filtered_removed_zeroes",
+    "calibrated_filtered_removed_zeroes_st",
+    "dx_vs_tsum",
+    "dx_vs_travel_time",
+    "slewing",
+    "slewing_3d",
+    "slewing_3d_fitproj",
+    "model_validation_simple",
+    "positions_travel_time_tzeros",
+    "cross_talk_filtering_zoom",
+    "cross_talk_filtering_zoom_check_no_subs_pedestal",
+    "cross_talk_filtering_zoom_check",
+    "cross_talk_filtering_zoom_check_by_tt",
+    "r2_scores",
+    "time_calibrated_filtered_removed_zeroes",
+    "tsum_pair_charge_correlations",
+    "stat_window_accumulation",
+)
+task2_plot_status_by_alias: dict[str, str] = {}
+
+
+def task2_plot_enabled(alias: str) -> bool:
+    if not task2_plot_status_by_alias:
+        return True
+    return step1_task_plot_enabled(alias, task2_plot_status_by_alias, plot_mode)
+
+
+def task2_plot_requested(alias: str, *, essential: bool = False, debug: bool = False) -> bool:
+    if debug:
+        return create_debug_plots and task2_plot_enabled(alias)
+    if essential:
+        return (create_plots or create_essential_plots) and task2_plot_enabled(alias)
+    return create_plots and task2_plot_enabled(alias)
+
+
+def apply_task2_plot_catalog_modes() -> None:
+    global create_plots, create_essential_plots, create_debug_plots, save_plots, create_pdf
+    if not task2_plot_status_by_alias:
+        return
+    create_plots = create_plots and task2_plot_enabled("usual_suite")
+    create_essential_plots = create_essential_plots and task2_plot_enabled("essential_suite")
+    create_debug_plots = create_debug_plots and task2_plot_enabled("debug_suite")
+    save_plots = bool(create_plots or create_essential_plots or create_debug_plots)
+    create_pdf = save_plots
 
 CLI_PARSER = build_step1_cli_parser("Run Stage 1 STEP_1 TASK_2 (CLEAN->CAL).", STATION_CHOICES)
 CLI_ARGS = CLI_PARSER.parse_args()
@@ -209,15 +291,30 @@ plt.close = _guarded_close
 
 _direct_pdf_pages: PdfPages | None = None
 _direct_pdf_page_count = 0
+_direct_pdf_target_path: str | None = None
+_direct_pdf_temp_path: str | None = None
+
+
+def _build_temp_pdf_path(target_path: str) -> str:
+    """Return a non-colliding temporary PDF path near the final target."""
+    base = f"{target_path}.tmp.{os.getpid()}"
+    candidate = base
+    counter = 1
+    while os.path.exists(candidate):
+        candidate = f"{base}.{counter}"
+        counter += 1
+    return candidate
 
 def save_plot_figure(save_path: str, fig: mpl.figure.Figure | None = None, **savefig_kwargs) -> None:
     """Save a figure to PNG or directly append it to the task PDF."""
-    global _direct_pdf_pages, _direct_pdf_page_count
+    global _direct_pdf_pages, _direct_pdf_page_count, _direct_pdf_target_path, _direct_pdf_temp_path
     target_fig = fig if fig is not None else plt.gcf()
     direct_pdf_path = globals().get("save_pdf_path")
     if globals().get("create_pdf", False) and direct_pdf_path:
         if _direct_pdf_pages is None:
-            _direct_pdf_pages = PdfPages(direct_pdf_path)
+            _direct_pdf_target_path = str(direct_pdf_path)
+            _direct_pdf_temp_path = _build_temp_pdf_path(_direct_pdf_target_path)
+            _direct_pdf_pages = PdfPages(_direct_pdf_temp_path)
         pdf_kwargs = dict(savefig_kwargs)
         dpi = int(pdf_kwargs.pop("dpi", 150))
         pdf_kwargs.pop("format", None)
@@ -227,10 +324,23 @@ def save_plot_figure(save_path: str, fig: mpl.figure.Figure | None = None, **sav
     target_fig.savefig(save_path, **savefig_kwargs)
 
 def close_direct_pdf_writer() -> None:
-    global _direct_pdf_pages
+    global _direct_pdf_pages, _direct_pdf_page_count, _direct_pdf_target_path, _direct_pdf_temp_path
     if _direct_pdf_pages is not None:
         _direct_pdf_pages.close()
         _direct_pdf_pages = None
+
+    if _direct_pdf_temp_path and os.path.exists(_direct_pdf_temp_path):
+        if _direct_pdf_page_count > 0 and _direct_pdf_target_path:
+            os.replace(_direct_pdf_temp_path, _direct_pdf_target_path)
+        else:
+            os.remove(_direct_pdf_temp_path)
+
+    _direct_pdf_page_count = 0
+    _direct_pdf_target_path = None
+    _direct_pdf_temp_path = None
+
+
+atexit.register(close_direct_pdf_writer)
 
 
 CALIBRATION_METADATA_PATTERN = re.compile(
@@ -305,6 +415,14 @@ config_file_path = (
     / "TASK_2"
     / "config_task_2.yaml"
 )
+plot_catalog_file_path = (
+    config_root
+    / "STAGE_1"
+    / "EVENT_DATA"
+    / "STEP_1"
+    / "TASK_2"
+    / "config_plots_task_2.yaml"
+)
 parameter_config_file_path = (
     config_root
     / "STAGE_1"
@@ -321,8 +439,15 @@ fallback_parameter_config_file_path = (
     / "config_parameters.csv"
 )
 print(f"Using config file: {config_file_path}")
+print(f"Using plot catalog file: {plot_catalog_file_path}")
 with config_file_path.open("r", encoding="utf-8") as config_file:
     config = yaml.safe_load(config_file)
+task2_plot_status_by_alias = load_step1_task_plot_catalog(
+    plot_catalog_file_path,
+    TASK2_PLOT_ALIASES,
+    "Task 2",
+    log_fn=print,
+)
 debug_mode = False
 
 home_path = str(resolve_home_path_from_config(config))
@@ -429,6 +554,7 @@ last_file_test = config["last_file_test"]
     show_plots,
     create_debug_plots,
 ) = resolve_step1_plot_options(config)
+apply_task2_plot_catalog_modes()
 limit_number = config.get("limit_number", None)
 limit = limit_number is not None
 number_of_time_cal_figures = config["number_of_time_cal_figures"]
@@ -542,6 +668,10 @@ csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metada
 csv_path_rate_histogram = os.path.join(
     metadata_directory,
     f"task_{task_number}_metadata_rate_histogram.csv",
+)
+csv_path_activation = os.path.join(
+    metadata_directory,
+    f"task_{task_number}_metadata_activation.csv",
 )
 csv_path_trigger_type = os.path.join(
     metadata_directory,
@@ -689,6 +819,7 @@ if files:  # Check if the directory contains any files
 
 # Charge calibration to fC
 calibrate_charge_ns_to_fc = config["calibrate_charge_ns_to_fc"]
+streamer_high_charge_factor = float(config.get("streamer_high_charge_factor", 0.2))
 
 # Slewing correction
 # (charge_front_back_mode is read later with the other calibration modes)
@@ -1004,6 +1135,7 @@ Q_clip_max_ST = Q_clip_max_ST
 global_variables = {
     'analysis_mode': 0,
 }
+activation_metadata: dict[str, object] = {}
 
 TT_COUNT_VALUES: tuple[int, ...] = (
     0, 1, 2, 3, 4, 12, 13, 14, 23, 24, 34, 123, 124, 134, 234, 1234
@@ -1227,6 +1359,307 @@ def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[s
     # If the value is smaller than 10, put a NaN, to indicate invalid TT
     df.loc[df[column_name] < 10, column_name] = np.nan
     return df
+
+
+TASK2_STRIP_LABELS: tuple[str, ...] = tuple(
+    f"P{plane}S{strip}"
+    for plane in range(1, 5)
+    for strip in range(1, 5)
+)
+TASK2_STRIP_GROUP_IDS: list[int] = [
+    plane - 1
+    for plane in range(1, 5)
+    for _strip in range(1, 5)
+]
+
+
+def _task2_strip_charge_column_names() -> list[str]:
+    return [
+        f"Q{plane}_Q_sum_{strip}"
+        for plane in range(1, 5)
+        for strip in range(1, 5)
+    ]
+
+
+def _task2_strip_charge_arrays(df: pd.DataFrame) -> tuple[list[str], list[np.ndarray]]:
+    labels: list[str] = []
+    arrays: list[np.ndarray] = []
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            column_name = f"Q{plane}_Q_sum_{strip}"
+            if column_name in df.columns:
+                arr = pd.to_numeric(df[column_name], errors="coerce").to_numpy(dtype=float)
+            else:
+                arr = np.full(len(df), np.nan, dtype=float)
+            labels.append(f"P{plane}S{strip}")
+            arrays.append(arr)
+    return labels, arrays
+
+
+def _task2_cal_tt_columns_map(df: pd.DataFrame) -> dict[int, list[str]]:
+    columns_map: dict[int, list[str]] = {}
+    for plane in range(1, 5):
+        columns_map[plane] = [
+            f"Q{plane}_Q_sum_{strip}" for strip in range(1, 5)
+            if f"Q{plane}_Q_sum_{strip}" in df.columns
+        ] + [
+            f"Q{plane}_Q_dif_{strip}" for strip in range(1, 5)
+            if f"Q{plane}_Q_dif_{strip}" in df.columns
+        ] + [
+            f"T{plane}_T_sum_{strip}" for strip in range(1, 5)
+            if f"T{plane}_T_sum_{strip}" in df.columns
+        ] + [
+            f"T{plane}_T_dif_{strip}" for strip in range(1, 5)
+            if f"T{plane}_T_dif_{strip}" in df.columns
+        ]
+    return columns_map
+
+
+def compute_task2_strip_tt_series(df: pd.DataFrame) -> pd.Series:
+    tt_df = compute_tt(df, "__task2_strip_tt__", _task2_cal_tt_columns_map(df))
+    return pd.to_numeric(tt_df["__task2_strip_tt__"], errors="coerce")
+
+
+def store_task2_strip_activation_snapshot(
+    *,
+    activation_meta: dict[str, object],
+    scalar_meta: dict[str, object],
+    df: pd.DataFrame,
+    snapshot_label: str,
+    tt_series: pd.Series,
+    streamer_high_charge_factor_value: float,
+) -> dict[str, object]:
+    labels, charge_arrays = _task2_strip_charge_arrays(df)
+    signal_arrays = [np.isfinite(arr) & (arr > 0) for arr in charge_arrays]
+    signal_matrix, signal_given_counts = compute_conditional_matrix_from_boolean_arrays(
+        labels,
+        signal_arrays,
+    )
+    store_activation_matrix_metadata(
+        activation_meta,
+        f"activation_strip_signal_to_signal_{snapshot_label}",
+        labels,
+        signal_matrix,
+        signal_given_counts,
+        group_ids=TASK2_STRIP_GROUP_IDS,
+    )
+    selected_tts, matrices_by_tt, given_counts_by_tt, event_counts_by_tt = (
+        compute_conditional_matrices_by_tt(
+            tt_series,
+            labels,
+            signal_arrays,
+        )
+    )
+    store_activation_matrices_by_tt_metadata(
+        activation_meta,
+        f"activation_strip_signal_to_signal_{snapshot_label}_by_tt",
+        labels,
+        labels,
+        selected_tts,
+        matrices_by_tt,
+        given_counts_by_tt,
+        event_counts_by_tt,
+    )
+
+    q_sum_cols = _task2_strip_charge_column_names()
+    streamer_threshold = detect_streamer_threshold(df, q_sum_cols)
+    scalar_meta[f"streamer_threshold_selected_{snapshot_label}"] = (
+        round(float(streamer_threshold), 6) if streamer_threshold is not None else ""
+    )
+
+    high_charge_threshold = None
+    if streamer_threshold is not None:
+        high_charge_threshold = float(streamer_threshold) * float(streamer_high_charge_factor_value)
+        scalar_meta[f"streamer_high_charge_threshold_selected_{snapshot_label}"] = round(
+            high_charge_threshold,
+            6,
+        )
+    else:
+        scalar_meta[f"streamer_high_charge_threshold_selected_{snapshot_label}"] = ""
+
+    if snapshot_label == "filtered":
+        scalar_meta["streamer_high_charge_factor"] = round(
+            float(streamer_high_charge_factor_value), 6
+        )
+        scalar_meta["streamer_threshold_selected"] = scalar_meta[
+            f"streamer_threshold_selected_{snapshot_label}"
+        ]
+        scalar_meta["streamer_high_charge_threshold_selected"] = scalar_meta[
+            f"streamer_high_charge_threshold_selected_{snapshot_label}"
+        ]
+
+    if streamer_threshold is None or high_charge_threshold is None:
+        return {
+            "labels": labels,
+            "signal_matrix": signal_matrix,
+            "streamer_matrix": np.empty((0, 0), dtype=float),
+        }
+
+    streamer_arrays = [np.isfinite(arr) & (arr > float(streamer_threshold)) for arr in charge_arrays]
+    high_charge_arrays = [np.isfinite(arr) & (arr > float(high_charge_threshold)) for arr in charge_arrays]
+
+    for label, signal_mask, streamer_mask in zip(labels, signal_arrays, streamer_arrays):
+        n_signal = int(np.sum(signal_mask))
+        n_streamer = int(np.sum(streamer_mask))
+        rate_key = f"streamer_rate_strip_{snapshot_label}_{label}"
+        scalar_meta[rate_key] = round(float(n_streamer) / float(n_signal), 6) if n_signal > 0 else ""
+        if snapshot_label == "filtered":
+            scalar_meta[f"streamer_rate_strip_{label}"] = scalar_meta[rate_key]
+
+    variant_specs = [
+        ("streamer_to_streamer", streamer_arrays, streamer_arrays),
+        ("streamer_to_signal", streamer_arrays, signal_arrays),
+        ("streamer_to_highcharge", streamer_arrays, high_charge_arrays),
+    ]
+    streamer_matrix = np.empty((0, 0), dtype=float)
+    for variant_name, source_arrays, target_arrays in variant_specs:
+        variant_matrix, variant_given_counts = compute_conditional_matrix_from_boolean_arrays(
+            labels,
+            source_arrays,
+            target_labels=labels,
+            target_arrays=target_arrays,
+        )
+        if variant_name == "streamer_to_streamer":
+            streamer_matrix = variant_matrix
+        store_activation_matrix_metadata(
+            activation_meta,
+            f"activation_strip_{variant_name}_{snapshot_label}",
+            labels,
+            variant_matrix,
+            variant_given_counts,
+            target_labels=labels,
+            group_ids=TASK2_STRIP_GROUP_IDS,
+        )
+        selected_tts, matrices_by_tt, given_counts_by_tt, event_counts_by_tt = (
+            compute_conditional_matrices_by_tt(
+                tt_series,
+                labels,
+                source_arrays,
+                target_labels=labels,
+                target_arrays=target_arrays,
+            )
+        )
+        store_activation_matrices_by_tt_metadata(
+            activation_meta,
+            f"activation_strip_{variant_name}_{snapshot_label}_by_tt",
+            labels,
+            labels,
+            selected_tts,
+            matrices_by_tt,
+            given_counts_by_tt,
+            event_counts_by_tt,
+        )
+
+    return {
+        "labels": labels,
+        "signal_matrix": signal_matrix,
+        "streamer_matrix": streamer_matrix,
+    }
+
+
+def plot_task2_strip_activation_before_after(
+    initial_snapshot: dict[str, object],
+    filtered_snapshot: dict[str, object],
+    fig_idx_value: int,
+) -> int:
+    labels_initial = initial_snapshot.get("labels", [])
+    labels_filtered = filtered_snapshot.get("labels", [])
+    matrix_initial = initial_snapshot.get("signal_matrix")
+    matrix_filtered = filtered_snapshot.get("signal_matrix")
+
+    if (
+        not isinstance(labels_initial, list)
+        or not isinstance(labels_filtered, list)
+        or labels_initial != labels_filtered
+        or not isinstance(matrix_initial, np.ndarray)
+        or not isinstance(matrix_filtered, np.ndarray)
+        or matrix_initial.size == 0
+        or matrix_filtered.size == 0
+    ):
+        return fig_idx_value
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, 7.5), constrained_layout=True)
+    last_im = None
+    for ax, matrix, title_text in zip(
+        axes,
+        [matrix_initial, matrix_filtered],
+        ["Initial strip activation", "Filtered strip activation"],
+    ):
+        last_im = ax.imshow(matrix, cmap="viridis", vmin=0, vmax=1, aspect="equal")
+        ax.set_xticks(range(len(labels_initial)))
+        ax.set_xticklabels(labels_initial, fontsize=6, rotation=90)
+        ax.set_yticks(range(len(labels_initial)))
+        ax.set_yticklabels(labels_initial, fontsize=6)
+        ax.set_title(title_text, fontsize=11)
+        ax.set_xlabel("Target strip active")
+        ax.set_ylabel("Given strip active")
+        for boundary in range(4, len(labels_initial), 4):
+            ax.axhline(boundary - 0.5, color="white", linewidth=0.8, alpha=0.6)
+            ax.axvline(boundary - 0.5, color="white", linewidth=0.8, alpha=0.6)
+
+    if last_im is not None:
+        fig.colorbar(
+            last_im,
+            ax=axes,
+            label="P(target strip active | given strip active)",
+            shrink=0.85,
+        )
+    fig.suptitle("Task 2 strip activation matrix: initial to filtered", fontsize=13)
+    if save_plots:
+        final_filename = f"{fig_idx_value}_strip_activation_matrix_before_after.png"
+        fig_idx_value += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        save_plot_figure(save_fig_path, fig=fig, format="png", dpi=150)
+    if show_plots:
+        plt.show()
+    plt.close(fig)
+    return fig_idx_value
+
+
+def plot_task2_filtered_streamer_matrix(
+    filtered_snapshot: dict[str, object],
+    fig_idx_value: int,
+) -> int:
+    labels = filtered_snapshot.get("labels", [])
+    matrix = filtered_snapshot.get("streamer_matrix")
+    if (
+        not isinstance(labels, list)
+        or not isinstance(matrix, np.ndarray)
+        or matrix.size == 0
+    ):
+        return fig_idx_value
+
+    fig, ax = plt.subplots(figsize=(10, 9))
+    im = ax.imshow(matrix, cmap="YlOrRd", vmin=0, vmax=1, aspect="equal")
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels(labels, fontsize=7, rotation=90)
+    ax.set_yticks(range(len(labels)))
+    ax.set_yticklabels(labels, fontsize=7)
+    ax.set_xlabel("Target strip streamer")
+    ax.set_ylabel("Given strip streamer")
+    ax.set_title("Task 2 filtered strip streamer contagion matrix")
+    for i in range(len(labels)):
+        for j in range(len(labels)):
+            value = matrix[i, j]
+            if np.isfinite(value) and value > 0.005:
+                text_color = "white" if value > 0.5 else "black"
+                ax.text(j, i, f"{value:.2f}", ha="center", va="center", fontsize=6, color=text_color)
+    for boundary in range(4, len(labels), 4):
+        ax.axhline(boundary - 0.5, color="grey", linewidth=0.8, alpha=0.6)
+        ax.axvline(boundary - 0.5, color="grey", linewidth=0.8, alpha=0.6)
+    fig.colorbar(im, ax=ax, label="P(target streamer | given streamer)", shrink=0.8)
+    fig.tight_layout()
+    if save_plots:
+        final_filename = f"{fig_idx_value}_streamer_contagion_matrix_strip.png"
+        fig_idx_value += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        save_plot_figure(save_fig_path, fig=fig, format="png", dpi=150)
+    if show_plots:
+        plt.show()
+    plt.close(fig)
+    return fig_idx_value
 
 reprocessing_parameters = pd.DataFrame()
 
@@ -1680,11 +2113,7 @@ print("----------------------------------------------------------------------")
 # Defining the directories that will store the data
 save_full_filename = f"full_list_events_{save_filename_suffix}.txt"
 save_filename = f"list_events_{save_filename_suffix}.txt"
-save_pdf_filename = f"pdf_{save_filename_suffix}.pdf"
-
-if create_plots == False:
-    if create_essential_plots == True:
-        save_pdf_filename = "essential_" + save_pdf_filename
+save_pdf_filename = f"mingo{str(station).zfill(2)}_task2_{save_filename_suffix}.pdf"
 
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
 
@@ -3661,6 +4090,15 @@ def record_strip_entries(df: pd.DataFrame, suffix: str) -> None:
             global_variables[f"P{plane}_s{strip}_entries_{suffix}"] = count
 
 record_strip_entries(working_df, "original")
+task2_initial_strip_tt = compute_task2_strip_tt_series(working_df)
+task2_activation_initial = store_task2_strip_activation_snapshot(
+    activation_meta=activation_metadata,
+    scalar_meta=global_variables,
+    df=working_df,
+    snapshot_label="initial",
+    tt_series=task2_initial_strip_tt,
+    streamer_high_charge_factor_value=streamer_high_charge_factor,
+)
 
 if self_trigger:
 
@@ -6896,14 +7334,20 @@ if create_pdf:
             plt.close(fig)
         close_direct_pdf_writer()
     elif existing_pngs:
-        with PdfPages(save_pdf_path) as pdf:
-            for png in existing_pngs:
-                img = Image.open(png)
-                fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
-                ax.imshow(img)
-                ax.axis('off')
-                pdf_save_rasterized_page(pdf, fig, bbox_inches='tight')
-                plt.close(fig)
+        temp_pdf_path = _build_temp_pdf_path(save_pdf_path)
+        try:
+            with PdfPages(temp_pdf_path) as pdf:
+                for png in existing_pngs:
+                    img = Image.open(png)
+                    fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
+                    ax.imshow(img)
+                    ax.axis('off')
+                    pdf_save_rasterized_page(pdf, fig, bbox_inches='tight')
+                    plt.close(fig)
+            os.replace(temp_pdf_path, save_pdf_path)
+        finally:
+            if os.path.exists(temp_pdf_path):
+                os.remove(temp_pdf_path)
 
     # Remove PNG files after creating the PDF (or after direct PDF append path).
     for png in existing_pngs:
@@ -7036,6 +7480,21 @@ print(f"Final number of events in the dataframe: {final_number_of_events}")
 #     print(f" - {col}")
 
 record_strip_entries(working_df, "final")
+task2_activation_filtered = store_task2_strip_activation_snapshot(
+    activation_meta=activation_metadata,
+    scalar_meta=global_variables,
+    df=working_df,
+    snapshot_label="filtered",
+    tt_series=pd.to_numeric(working_df["cal_tt"], errors="coerce"),
+    streamer_high_charge_factor_value=streamer_high_charge_factor,
+)
+if create_plots or create_essential_plots:
+    fig_idx = plot_task2_strip_activation_before_after(
+        task2_activation_initial,
+        task2_activation_filtered,
+        fig_idx,
+    )
+    fig_idx = plot_task2_filtered_streamer_matrix(task2_activation_filtered, fig_idx)
 
 # Data purity
 data_purity = final_number_of_events / original_number_of_events * 100
@@ -7116,6 +7575,12 @@ _prof["execution_timestamp"] = execution_timestamp
 _prof["param_hash"] = param_hash_value
 _prof["total_s"] = round(time.perf_counter() - _prof_t0, 2)
 save_metadata(csv_path_profiling, _prof)
+
+activation_metadata["filename_base"] = filename_base
+activation_metadata["execution_timestamp"] = execution_timestamp
+activation_metadata["param_hash"] = param_hash_value
+metadata_activation_csv_path = save_metadata(csv_path_activation, activation_metadata)
+print(f"Metadata (activation) CSV updated at: {metadata_activation_csv_path}")
 
 # -------------------------------------------------------------------------------
 # Specific metadata ------------------------------------------------------------

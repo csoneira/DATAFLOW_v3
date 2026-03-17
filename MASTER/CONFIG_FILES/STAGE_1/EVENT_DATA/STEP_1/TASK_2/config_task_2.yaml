@@ -4,9 +4,10 @@ selection:
   date_ranges:
     - start: 2024-09-27
       end: 2024-10-01
-complete_reanalysis: false
+complete_reanalysis: true
 article_format: false
-# create_plots options: null | debug | usual | all
+# create_plots options: null | debug | usual | essential | all
+# Task 2 plot alias statuses live in config_plots_task_2.yaml
 create_plots: null
 limit_number: null
 number_of_time_cal_figures: 3

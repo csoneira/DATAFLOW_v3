@@ -8,7 +8,8 @@ selection:
 self_trigger: false
 timeseries_and_fits: false
 complete_reanalysis: false
-# create_plots options: null | debug | usual | all
+# create_plots options: null | debug | usual | essential | all
+# Task 4 plot alias statuses live in config_plots_task_4.yaml
 create_plots: null
 save_rejected_rows: false
 create_reject_plots: false

@@ -1,0 +1,4 @@
+plots:
+  debug_suite: debug
+  usual_suite: usual
+  essential_suite: essential

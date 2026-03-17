@@ -68,6 +68,7 @@ log = logging.getLogger("STEP_2.1")
 sys.path.insert(0, str(INFERENCE_DIR))
 try:
     from estimate_parameters import (
+        build_step15_runtime_inverse_mapping_cfg,
         estimate_from_dataframes,
         load_distance_definition,
     )
@@ -416,39 +417,55 @@ def main() -> int:
 
     # Config knobs (with sensible defaults)
     inv_cfg = cfg_21.get("inverse_mapping", {})
-    k = int(inv_cfg.get("neighbor_count", 10))
-    idw_power = float(inv_cfg.get("inverse_distance_power", 2.0))
-    ridge_lambda = 1e6  # default: pure IDW (no local-linear)
-
+    interpolation_k_requested = inv_cfg.get("neighbor_count", 10)
+    if interpolation_k_requested in (None, "", "null", "None"):
+        interpolation_k_requested = None
+    else:
+        interpolation_k_requested = int(interpolation_k_requested)
     # Load distance definition from step 1.5 artifact (shared function)
     dd = load_distance_definition(feature_cols, path=DEFAULT_DISTANCE_DEFINITION)
     dist_mode_name: str = "l2_standard_zscore_fallback"
 
     if dd["available"]:
         dist_mode_name = dd.get("selected_mode", "unknown")
-        # Override k and lambda from artifact if available
-        if "optimal_k" in dd:
-            k = int(dd["optimal_k"])
-        if "optimal_lambda" in dd:
-            ridge_lambda = float(dd["optimal_lambda"])
         n_active = int(np.sum(dd["weights"] > 0))
-        regression_mode = "local-linear ridge" if ridge_lambda < 1e5 else "IDW²"
+        regression_mode = (
+            "local-linear ridge"
+            if float(dd.get("optimal_lambda", 1e6)) < 1e5
+            else "IDW^2"
+        )
         log.info(
             "Loaded distance definition from step 1.5: %s (p=%.1f, k=%d, λ=%.0e [%s], %d/%d active features)",
-            dist_mode_name, dd["p_norm"], k, ridge_lambda, regression_mode, n_active, len(feature_cols),
+            dist_mode_name,
+            dd["p_norm"],
+            int(dd.get("optimal_k", 5)),
+            float(dd.get("optimal_lambda", 1e6)),
+            regression_mode,
+            n_active,
+            len(feature_cols),
         )
     else:
         log.warning("Distance definition not available: %s; falling back to standard z-score.", dd.get("reason"))
         dd = None
 
-    # Determine aggregation mode from ridge_lambda
-    aggregation = "local_linear" if ridge_lambda < 1e5 else "weighted_mean"
+    runtime_inverse_mapping_cfg = build_step15_runtime_inverse_mapping_cfg(
+        inverse_mapping_cfg=inv_cfg,
+        interpolation_k=interpolation_k_requested,
+        distance_definition=dd,
+    )
 
     log.info("Dictionary: %s (%d rows)", dict_path, len(dict_df))
     log.info("Dataset:    %s (%d rows)", data_path, len(data_df))
     log.info("Feature columns: %d", len(feature_cols))
     log.info("Parameter columns: %s", param_cols)
-    log.info("k=%d, IDW power=%.1f, ridge λ=%.0e, aggregation=%s", k, idw_power, ridge_lambda, aggregation)
+    log.info(
+        "STEP 1.5 runtime inverse mapping: selection=%s k=%d weighting=%s idw_power=%.1f aggregation=%s",
+        runtime_inverse_mapping_cfg["neighbor_selection"],
+        int(runtime_inverse_mapping_cfg["neighbor_count"]),
+        runtime_inverse_mapping_cfg["weighting"],
+        float(runtime_inverse_mapping_cfg["inverse_distance_power"]),
+        runtime_inverse_mapping_cfg["aggregation"],
+    )
 
     # ── Run estimation using the shared engine ─────────────────
     result_df = estimate_from_dataframes(
@@ -463,13 +480,7 @@ def main() -> int:
         shared_parameter_exclusion_ignore=(),
         density_weighting_cfg=None,
         include_global_rate=False,
-        inverse_mapping_cfg={
-            "neighbor_selection": "knn",
-            "neighbor_count": k,
-            "weighting": "inverse_distance",
-            "inverse_distance_power": idw_power,
-            "aggregation": aggregation,
-        },
+        inverse_mapping_cfg=runtime_inverse_mapping_cfg,
         distance_definition=dd,
     )
 
@@ -521,9 +532,10 @@ def main() -> int:
         "distance_mode": dist_mode_name,
         "distance_definition_used": dd is not None,
         "distance_definition_mode": dd.get("selected_mode") if dd is not None else None,
-        "k": k,
-        "idw_power": idw_power,
-        "aggregation": aggregation,
+        "k": int(runtime_inverse_mapping_cfg["neighbor_count"]),
+        "idw_power": float(runtime_inverse_mapping_cfg["inverse_distance_power"]),
+        "aggregation": runtime_inverse_mapping_cfg["aggregation"],
+        "inverse_mapping_runtime_applied": runtime_inverse_mapping_cfg,
         "feature_columns": feature_cols,
         "feature_columns_count": len(feature_cols),
         "parameter_columns": param_cols,

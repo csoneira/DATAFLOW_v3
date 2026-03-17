@@ -4,10 +4,11 @@ selection:
   date_ranges:
     - start: 2024-09-27
       end: 2024-10-01
-complete_reanalysis: false
+complete_reanalysis: true
 force_replacement: true
 article_format: false
-# create_plots options: null | debug | usual | all
+# create_plots options: null | debug | usual | essential | all
+# Task 1 plot alias statuses live in config_plots_task_1.yaml
 create_plots: null
 limit_number: null
 EXPECTED_COLUMNS_config: 71

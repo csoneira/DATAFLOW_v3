@@ -30,6 +30,7 @@ of the Stage 1 event workflow.
 """
 # Standard Library
 import argparse
+import atexit
 import builtins
 import csv
 from datetime import datetime, timedelta
@@ -114,6 +115,11 @@ from MASTER.common.selection_config import load_selection_for_paths, station_is_
 from MASTER.common.status_csv import initialize_status_row, update_status_progress
 from MASTER.common.reprocessing_utils import get_reprocessing_value
 from MASTER.common.simulated_data_utils import SIM_PARAMS_DEFAULT, resolve_simulated_z_positions
+from MASTER.common.step1_activation import (
+    compute_conditional_matrices_by_tt,
+    store_activation_matrices_by_tt_metadata,
+    store_activation_matrix_metadata,
+)
 from MASTER.common.step1_shared import (
     add_normalized_count_metadata,
     apply_step1_task_parameter_overrides,
@@ -131,7 +137,9 @@ from MASTER.common.step1_shared import (
     prune_redundant_count_metadata,
     save_metadata,
     set_global_rate_from_tt_rates,
+    load_step1_task_plot_catalog,
     resolve_step1_plot_options,
+    step1_task_plot_enabled,
     validate_step1_input_file_args,
     y_pos,
 )
@@ -144,6 +152,39 @@ _prof_t0 = time.perf_counter()
 _prof = {}
 
 STATION_CHOICES = ("0", "1", "2", "3", "4")
+TASK1_PLOT_ALIASES: tuple[str, ...] = (
+    "debug_suite",
+    "usual_suite",
+    "essential_suite",
+    "raw_tt_overview",
+    "channel_histograms_raw",
+    "tq_scatter_raw",
+    "channel_histograms_filtered",
+    "tq_scatter_filtered",
+    "tsum_spread_diagnostics",
+    "channel_contamination_matrix_32",
+    "channel_contagion_by_tt",
+    "channel_contamination_matrix_32_raw",
+    "channel_contagion_by_tt_raw",
+)
+task1_plot_status_by_alias: dict[str, str] = {}
+
+
+def task1_plot_enabled(alias: str) -> bool:
+    if not task1_plot_status_by_alias:
+        return True
+    return step1_task_plot_enabled(alias, task1_plot_status_by_alias, plot_mode)
+
+
+def apply_task1_plot_catalog_modes() -> None:
+    global create_plots, create_essential_plots, create_debug_plots, save_plots, create_pdf
+    if not task1_plot_status_by_alias:
+        return
+    create_plots = create_plots and task1_plot_enabled("usual_suite")
+    create_essential_plots = create_essential_plots and task1_plot_enabled("essential_suite")
+    create_debug_plots = create_debug_plots and task1_plot_enabled("debug_suite")
+    save_plots = bool(create_plots or create_essential_plots or create_debug_plots)
+    create_pdf = save_plots
 
 CLI_PARSER = build_step1_cli_parser("Run Stage 1 STEP_1 TASK_1 (RAW->CLEAN).", STATION_CHOICES)
 CLI_ARGS = CLI_PARSER.parse_args()
@@ -208,15 +249,30 @@ plt.close = _guarded_close
 
 _direct_pdf_pages: PdfPages | None = None
 _direct_pdf_page_count = 0
+_direct_pdf_target_path: str | None = None
+_direct_pdf_temp_path: str | None = None
+
+
+def _build_temp_pdf_path(target_path: str) -> str:
+    """Return a non-colliding temporary PDF path near the final target."""
+    base = f"{target_path}.tmp.{os.getpid()}"
+    candidate = base
+    counter = 1
+    while os.path.exists(candidate):
+        candidate = f"{base}.{counter}"
+        counter += 1
+    return candidate
 
 def save_plot_figure(save_path: str, fig: mpl.figure.Figure | None = None, **savefig_kwargs) -> None:
     """Save a figure to PNG or directly append it to the task PDF."""
-    global _direct_pdf_pages, _direct_pdf_page_count
+    global _direct_pdf_pages, _direct_pdf_page_count, _direct_pdf_target_path, _direct_pdf_temp_path
     target_fig = fig if fig is not None else plt.gcf()
     direct_pdf_path = globals().get("save_pdf_path")
     if globals().get("create_pdf", False) and direct_pdf_path:
         if _direct_pdf_pages is None:
-            _direct_pdf_pages = PdfPages(direct_pdf_path)
+            _direct_pdf_target_path = str(direct_pdf_path)
+            _direct_pdf_temp_path = _build_temp_pdf_path(_direct_pdf_target_path)
+            _direct_pdf_pages = PdfPages(_direct_pdf_temp_path)
         pdf_kwargs = dict(savefig_kwargs)
         dpi = int(pdf_kwargs.pop("dpi", 150))
         pdf_kwargs.pop("format", None)
@@ -226,10 +282,69 @@ def save_plot_figure(save_path: str, fig: mpl.figure.Figure | None = None, **sav
     target_fig.savefig(save_path, **savefig_kwargs)
 
 def close_direct_pdf_writer() -> None:
-    global _direct_pdf_pages
+    global _direct_pdf_pages, _direct_pdf_page_count, _direct_pdf_target_path, _direct_pdf_temp_path
     if _direct_pdf_pages is not None:
         _direct_pdf_pages.close()
         _direct_pdf_pages = None
+
+    if _direct_pdf_temp_path and os.path.exists(_direct_pdf_temp_path):
+        if _direct_pdf_page_count > 0 and _direct_pdf_target_path:
+            os.replace(_direct_pdf_temp_path, _direct_pdf_target_path)
+        else:
+            os.remove(_direct_pdf_temp_path)
+
+    _direct_pdf_page_count = 0
+    _direct_pdf_target_path = None
+    _direct_pdf_temp_path = None
+
+
+def finalize_saved_plots_to_pdf() -> None:
+    if not create_pdf:
+        return
+
+    print(f"Creating PDF with all plots in {save_pdf_path}")
+    existing_pngs = [png for png in plot_list if os.path.exists(png)]
+
+    if _direct_pdf_pages is not None:
+        for png in existing_pngs:
+            img = Image.open(png)
+            fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
+            ax.imshow(img)
+            ax.axis('off')
+            pdf_save_rasterized_page(_direct_pdf_pages, fig, bbox_inches='tight')
+            plt.close(fig)
+        close_direct_pdf_writer()
+    elif existing_pngs:
+        temp_pdf_path = _build_temp_pdf_path(save_pdf_path)
+        try:
+            with PdfPages(temp_pdf_path) as pdf:
+                for png in existing_pngs:
+                    img = Image.open(png)
+                    fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
+                    ax.imshow(img)
+                    ax.axis('off')
+                    pdf_save_rasterized_page(pdf, fig, bbox_inches='tight')
+                    plt.close(fig)
+            os.replace(temp_pdf_path, save_pdf_path)
+        finally:
+            if os.path.exists(temp_pdf_path):
+                os.remove(temp_pdf_path)
+
+    for png in existing_pngs:
+        try:
+            os.remove(png)
+        except OSError as e:
+            print(f"Error: {e.filename} - {e.strerror}.")
+
+    figure_directory = base_directories["figure_directory"]
+    if os.path.exists(figure_directory):
+        if not os.listdir(figure_directory):
+            os.rmdir(figure_directory)
+        else:
+            print(f"Figure directory not empty, skipping removal: {figure_directory}")
+
+
+atexit.register(close_direct_pdf_writer)
 
 # Warning Filters
 warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
@@ -237,6 +352,9 @@ warnings.filterwarnings("ignore", message=".*Data has no positive values, and th
 start_timer(__file__)
 config_root = get_master_config_root()
 config_file_path = config_root / "STAGE_1" / "EVENT_DATA" / "STEP_1" / "TASK_1" / "config_task_1.yaml"
+plot_catalog_file_path = (
+    config_root / "STAGE_1" / "EVENT_DATA" / "STEP_1" / "TASK_1" / "config_plots_task_1.yaml"
+)
 parameter_config_file_path = (
     config_root / "STAGE_1" / "EVENT_DATA" / "STEP_1" / "TASK_1" / "config_parameters_task_1.csv"
 )
@@ -244,8 +362,15 @@ fallback_parameter_config_file_path = (
     config_root / "STAGE_1" / "EVENT_DATA" / "STEP_1" / "config_parameters.csv"
 )
 print(f"Using config file: {config_file_path}")
+print(f"Using plot catalog file: {plot_catalog_file_path}")
 with config_file_path.open("r", encoding="utf-8") as config_file:
     config = yaml.safe_load(config_file)
+task1_plot_status_by_alias = load_step1_task_plot_catalog(
+    plot_catalog_file_path,
+    TASK1_PLOT_ALIASES,
+    "Task 1",
+    log_fn=print,
+)
 debug_mode = False
 
 home_path = str(resolve_home_path_from_config(config))
@@ -367,6 +492,7 @@ base_directories = {
     show_plots,
     create_debug_plots,
 ) = resolve_step1_plot_options(config)
+apply_task1_plot_catalog_modes()
 
 debug_plot_directory = os.path.join(
     base_directories["base_plots_directory"],
@@ -424,6 +550,10 @@ csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metada
 csv_path_rate_histogram = os.path.join(
     metadata_directory,
     f"task_{task_number}_metadata_rate_histogram.csv",
+)
+csv_path_activation = os.path.join(
+    metadata_directory,
+    f"task_{task_number}_metadata_activation.csv",
 )
 csv_path_trigger_type = os.path.join(
     metadata_directory,
@@ -619,6 +749,7 @@ last_file_test = config["last_file_test"]
     show_plots,
     create_debug_plots,
 ) = resolve_step1_plot_options(config)
+apply_task1_plot_catalog_modes()
 limit_number = config.get("limit_number", None)
 limit = limit_number is not None
 force_replacement = config["force_replacement"]
@@ -903,6 +1034,25 @@ global_variables = {
     'analysis_mode': 0,
 }
 
+CHANNEL_CONTAGION_METADATA_FIELDS: tuple[str, ...] = (
+    "mean_off_diagonal_global_raw",
+    "max_off_diagonal_global_raw",
+    "mean_off_diagonal_interplane_global_raw",
+    "mean_off_diagonal_global_clean",
+    "max_off_diagonal_global_clean",
+    "mean_off_diagonal_interplane_global_clean",
+    "mean_off_diagonal_by_tt_raw",
+    "max_off_diagonal_by_tt_raw",
+    "mean_off_diagonal_interplane_by_tt_raw",
+    "mean_off_diagonal_by_tt_clean",
+    "max_off_diagonal_by_tt_clean",
+    "mean_off_diagonal_interplane_by_tt_clean",
+)
+channel_contagion_metrics: dict[str, float] = {
+    key: float("nan") for key in CHANNEL_CONTAGION_METADATA_FIELDS
+}
+activation_metadata: dict[str, object] = {}
+
 TT_COUNT_VALUES: tuple[int, ...] = (
     0, 1, 2, 3, 4, 12, 13, 14, 23, 24, 34, 123, 124, 134, 234, 1234
 )
@@ -918,6 +1068,213 @@ TASK1_CHANNEL_PATTERN_ORDER: tuple[tuple[int, int, str], ...] = tuple(
     for strip in range(1, 5)
     for side in ("F", "B")
 )
+
+
+def _compute_channel_contagion_inputs(
+    df: pd.DataFrame,
+) -> tuple[list[str], np.ndarray] | None:
+    """Return channel labels and active-mask matrix (rows=events, cols=channels)."""
+    ch_labels: list[str] = []
+    ch_cols: list[str] = []
+    for _p, _s, _sd in TASK1_CHANNEL_PATTERN_ORDER:
+        col = f"Q{_p}_{_sd}_{_s}"
+        if col in df.columns:
+            ch_labels.append(f"P{_p}S{_s}{_sd}")
+            ch_cols.append(col)
+    if not ch_cols:
+        return None
+    vals = df[ch_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    active = vals != 0
+    return ch_labels, active
+
+
+def _compute_channel_conditional_matrix_from_active(active: np.ndarray) -> np.ndarray:
+    """Compute P(ch_j active | ch_i active) from boolean activity matrix."""
+    co = active.T.astype(np.int64) @ active.astype(np.int64)
+    diag = np.diag(co).astype(float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        cond = np.divide(
+            co.astype(float),
+            diag[:, None],
+            out=np.full_like(co, np.nan, dtype=float),
+            where=diag[:, None] > 0,
+        )
+    return cond
+
+
+def _compute_channel_conditional_matrix(df: pd.DataFrame) -> tuple[list[str], np.ndarray] | None:
+    """Compute full-table conditional channel activation matrix."""
+    inputs = _compute_channel_contagion_inputs(df)
+    if inputs is None:
+        return None
+    ch_labels, active = inputs
+    return ch_labels, _compute_channel_conditional_matrix_from_active(active)
+
+
+def _compute_channel_conditional_matrix_for_tt(
+    df: pd.DataFrame,
+    tt_column: str,
+    tt_value: int,
+) -> tuple[list[str], np.ndarray] | None:
+    """Compute conditional channel activation matrix for a specific TT value."""
+    if tt_column not in df.columns:
+        return None
+    inputs = _compute_channel_contagion_inputs(df)
+    if inputs is None:
+        return None
+    ch_labels, active = inputs
+    tt_s = pd.to_numeric(df[tt_column], errors="coerce").fillna(0).astype(int)
+    mask_tt = (tt_s == int(tt_value)).to_numpy(dtype=bool)
+    if not np.any(mask_tt):
+        return None
+    return ch_labels, _compute_channel_conditional_matrix_from_active(active[mask_tt])
+
+
+def _summarize_channel_conditional_matrix(cond: np.ndarray) -> tuple[float, float, float]:
+    """Return mean/max off-diagonal and mean off-diagonal inter-plane values."""
+    n_ch = int(cond.shape[0])
+    if n_ch <= 1:
+        return (float("nan"), float("nan"), float("nan"))
+
+    idx = np.arange(n_ch)
+    offdiag_mask = idx[:, None] != idx[None, :]
+    offdiag_vals = cond[offdiag_mask]
+    offdiag_finite = offdiag_vals[np.isfinite(offdiag_vals)]
+    mean_offdiag = float(np.mean(offdiag_finite)) if offdiag_finite.size else float("nan")
+    max_offdiag = float(np.max(offdiag_finite)) if offdiag_finite.size else float("nan")
+
+    plane_ids = idx // 8
+    interplane_mask = offdiag_mask & (plane_ids[:, None] != plane_ids[None, :])
+    inter_vals = cond[interplane_mask]
+    inter_finite = inter_vals[np.isfinite(inter_vals)]
+    mean_interplane = float(np.mean(inter_finite)) if inter_finite.size else float("nan")
+    return (mean_offdiag, max_offdiag, mean_interplane)
+
+
+def _store_channel_contagion_metrics_variant(
+    variant: str,
+    matrix_data: tuple[list[str], np.ndarray] | None,
+) -> None:
+    """Store global/by-TT channel contagion summary metrics for a variant."""
+    key_mean = f"mean_off_diagonal_{variant}"
+    key_max = f"max_off_diagonal_{variant}"
+    key_inter = f"mean_off_diagonal_interplane_{variant}"
+    if matrix_data is None:
+        channel_contagion_metrics[key_mean] = float("nan")
+        channel_contagion_metrics[key_max] = float("nan")
+        channel_contagion_metrics[key_inter] = float("nan")
+        return
+    _, cond = matrix_data
+    mean_offdiag, max_offdiag, mean_interplane = _summarize_channel_conditional_matrix(cond)
+    channel_contagion_metrics[key_mean] = mean_offdiag
+    channel_contagion_metrics[key_max] = max_offdiag
+    channel_contagion_metrics[key_inter] = mean_interplane
+
+def _plot_channel_contamination_global(
+    df: pd.DataFrame,
+    stage_label: str,
+    fig_idx_val: int,
+    base_dir: str,
+    save: bool,
+    show: bool,
+    plist: list[str],
+) -> int:
+    """Plot a single 32×32 channel contamination heatmap."""
+    matrix_data = _compute_channel_conditional_matrix(df)
+    if matrix_data is None:
+        return fig_idx_val
+    ch_labels, cond = matrix_data
+    fig, ax = plt.subplots(figsize=(13, 11))
+    sns.heatmap(cond, vmin=0.0, vmax=1.0, cmap="viridis",
+                xticklabels=ch_labels, yticklabels=ch_labels, ax=ax,
+                cbar_kws={"label": "P(ch j active | ch i active)"})
+    ax.set_title(f"Task 1 {stage_label} — 32-channel contamination matrix")
+    ax.set_xlabel("Channel j")
+    ax.set_ylabel("Channel i")
+    ax.tick_params(axis="x", labelrotation=90, labelsize=7)
+    ax.tick_params(axis="y", labelrotation=0, labelsize=7)
+    fig.tight_layout()
+    if save:
+        fname = f"{fig_idx_val}_{stage_label.lower().replace(' ', '_')}_channel_contamination_matrix_32.png"
+        fig_idx_val += 1
+        spath = os.path.join(base_dir, fname)
+        plist.append(spath)
+        save_plot_figure(spath, fig=fig, format="png", dpi=150)
+    if show:
+        plt.show()
+    plt.close(fig)
+    return fig_idx_val
+
+
+def _plot_channel_contagion_by_tt(
+    df: pd.DataFrame,
+    tt_column: str,
+    stage_label: str,
+    fig_idx_val: int,
+    base_dir: str,
+    save: bool,
+    show: bool,
+    plist: list[str],
+    min_events: int = 30,
+    max_tt_panels: int = 6,
+) -> int:
+    """Plot 32-channel contagion matrices split by TT."""
+    required_tts: tuple[int, int] = (124, 134)
+    inputs = _compute_channel_contagion_inputs(df)
+    if inputs is None or tt_column not in df.columns:
+        return fig_idx_val
+    ch_labels_global, active = inputs
+    n_ch = len(ch_labels_global)
+    ch_labels = [lbl.replace("S", "") for lbl in ch_labels_global]
+    tt_s = pd.to_numeric(df[tt_column], errors="coerce").fillna(0).astype(int)
+    tt_cts = tt_s.value_counts()
+    required_present = [tt for tt in required_tts if int(tt_cts.get(tt, 0)) > 0]
+    optional_pool = [
+        tt for tt, cnt in tt_cts.items()
+        if tt >= 10 and cnt >= min_events and tt not in required_tts
+    ]
+    # Keep required TTs visible even when panel count is capped.
+    sel_tts = required_present + optional_pool
+    sel_tts = sel_tts[:max(max_tt_panels, len(required_present))]
+    if not sel_tts:
+        return fig_idx_val
+    ncols_tt = len(sel_tts)
+    fig_w = max(7, 6.0 * ncols_tt)
+    fig, axes = plt.subplots(1, ncols_tt, figsize=(fig_w, 7.0 + 0.15 * n_ch), squeeze=False)
+    _im = None
+    for ci, tv in enumerate(sel_tts):
+        ax = axes[0, ci]
+        mtt = (tt_s == tv).to_numpy(dtype=bool)
+        ntt = int(np.sum(mtt))
+        cond = _compute_channel_conditional_matrix_from_active(active[mtt])
+        _im = ax.imshow(cond, cmap="viridis", vmin=0, aspect="equal")
+        ax.set_xticks(range(n_ch))
+        ax.set_xticklabels(ch_labels, fontsize=4, rotation=90)
+        ax.set_yticks(range(n_ch))
+        ax.set_yticklabels(ch_labels, fontsize=4)
+        for bnd in range(8, n_ch, 8):
+            ax.axhline(bnd - 0.5, color="grey", linewidth=0.7, alpha=0.6)
+            ax.axvline(bnd - 0.5, color="grey", linewidth=0.7, alpha=0.6)
+        ax.set_title(f"TT {tv} (N={ntt})", fontsize=10)
+    if _im is not None:
+        fig.colorbar(_im, ax=axes[0, -1], label="P(ch j | ch i)", shrink=0.75, pad=0.02)
+    fig.suptitle(
+        f"Task 1 {stage_label} — channel contagion by TT\n"
+        "P(channel j active | channel i active)",
+        fontsize=13,
+    )
+    fig.tight_layout(rect=[0, 0, 0.97, 0.93])
+    if save:
+        fname = f"{fig_idx_val}_{stage_label.lower().replace(' ', '_')}_channel_contagion_by_tt.png"
+        fig_idx_val += 1
+        spath = os.path.join(base_dir, fname)
+        plist.append(spath)
+        save_plot_figure(spath, fig=fig, format="png", dpi=150)
+    if show:
+        plt.show()
+    plt.close(fig)
+    return fig_idx_val
+
 
 FILTER_METRIC_NAMES: tuple[str, ...] = (
     "q_front_back_zero_rows_pct",
@@ -2355,11 +2712,7 @@ print("----------------------------------------------------------------------")
 # Defining the directories that will store the data
 save_full_filename = f"full_list_events_{save_filename_suffix}.txt"
 save_filename = f"list_events_{save_filename_suffix}.txt"
-save_pdf_filename = f"pdf_{save_filename_suffix}.pdf"
-
-if create_plots == False:
-    if create_essential_plots == True:
-        save_pdf_filename = "essential_" + save_pdf_filename
+save_pdf_filename = f"mingo{str(station).zfill(2)}_task1_{save_filename_suffix}.pdf"
 
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
 
@@ -2503,6 +2856,54 @@ for tt_value, count in raw_tt_counts.items():
 raw_channel_patterns = build_task1_channel_pattern_series(working_df)
 store_pattern_rates(global_variables, raw_channel_patterns, "raw_channel_pattern", working_df)
 
+# Always compute raw-stage channel contagion metrics for metadata.
+raw_channel_matrix_data = _compute_channel_conditional_matrix(working_df)
+_store_channel_contagion_metrics_variant(
+    "global_raw",
+    raw_channel_matrix_data,
+)
+raw_channel_by_tt_data = _compute_channel_conditional_matrix_for_tt(working_df, "raw_tt", 1234)
+_store_channel_contagion_metrics_variant(
+    "by_tt_raw",
+    raw_channel_by_tt_data,
+)
+raw_channel_inputs = _compute_channel_contagion_inputs(working_df)
+if raw_channel_matrix_data is not None and raw_channel_inputs is not None:
+    raw_channel_labels, raw_channel_active = raw_channel_inputs
+    _, raw_channel_matrix = raw_channel_matrix_data
+    raw_channel_arrays = [
+        raw_channel_active[:, idx] for idx in range(raw_channel_active.shape[1])
+    ]
+    raw_channel_given_counts = {
+        label: int(np.sum(raw_channel_arrays[idx]))
+        for idx, label in enumerate(raw_channel_labels)
+    }
+    store_activation_matrix_metadata(
+        activation_metadata,
+        "activation_channel_signal_to_signal_initial",
+        raw_channel_labels,
+        raw_channel_matrix,
+        raw_channel_given_counts,
+        group_ids=[idx // 8 for idx in range(len(raw_channel_labels))],
+    )
+    raw_selected_tts, raw_tt_matrices, raw_tt_given_counts, raw_tt_event_counts = (
+        compute_conditional_matrices_by_tt(
+            pd.to_numeric(working_df["raw_tt"], errors="coerce").fillna(0).astype(int),
+            raw_channel_labels,
+            raw_channel_arrays,
+        )
+    )
+    store_activation_matrices_by_tt_metadata(
+        activation_metadata,
+        "activation_channel_signal_to_signal_initial_by_tt",
+        raw_channel_labels,
+        raw_channel_labels,
+        raw_selected_tts,
+        raw_tt_matrices,
+        raw_tt_given_counts,
+        raw_tt_event_counts,
+    )
+
 # Print the counts of each raw_tt value and the percentage
 total_events = len(working_df)
 print("Raw TT counts and percentages:")
@@ -2522,7 +2923,7 @@ _debug_plot_filter_group(
     max_cols_per_fig=20,
 )
 
-if create_plots :
+if create_plots and task1_plot_enabled("raw_tt_overview"):
     event_counts = working_df['raw_tt'].value_counts()
 
     plt.figure(figsize=(10, 6))
@@ -2542,10 +2943,22 @@ if create_plots :
 
     if show_plots: plt.show()
     plt.close()
-    
+
+# --- Pre-filter (raw) channel contamination matrices ---
+if (create_plots or create_essential_plots) and task1_plot_enabled("channel_contamination_matrix_32_raw"):
+    fig_idx = _plot_channel_contamination_global(
+        working_df, "raw", fig_idx, base_directories["figure_directory"],
+        save_plots, show_plots, plot_list,
+    )
+
+if (create_plots or create_essential_plots) and task1_plot_enabled("channel_contagion_by_tt_raw"):
+    fig_idx = _plot_channel_contagion_by_tt(
+        working_df, "raw_tt", "raw", fig_idx, base_directories["figure_directory"],
+        save_plots, show_plots, plot_list,
+    )
 
 if self_trigger:
-    if create_essential_plots or create_plots:
+    if (create_essential_plots or create_plots) and task1_plot_enabled("tsum_spread_diagnostics"):
    
         event_counts = working_st_df['raw_tt'].value_counts()
 
@@ -2571,7 +2984,7 @@ if self_trigger:
 # New channel-wise plot -------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-if create_plots:
+if create_plots and task1_plot_enabled("channel_histograms_raw"):
     # Create the grand figure for T values
     fig_T, axes_T = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
     axes_T = axes_T.flatten()
@@ -2730,7 +3143,7 @@ if self_trigger:
 
 # -----------------------------------------------------------------------------------------------
 
-if create_plots:
+if create_plots and task1_plot_enabled("tq_scatter_raw"):
     # Initialize figure and axes for scatter plot of Time vs Charge
     fig_TQ, axes_TQ = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
     axes_TQ = axes_TQ.flatten()
@@ -2851,7 +3264,7 @@ if self_trigger:
 # New channel-wise plot -------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-if create_plots:
+if create_plots and task1_plot_enabled("channel_histograms_filtered"):
     # Create the grand figure for T values
     fig_T, axes_T = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
     axes_T = axes_T.flatten()
@@ -3009,7 +3422,7 @@ if create_plots or create_super_essential_plots:
         if show_plots: plt.show()
         plt.close(fig_Q)
 
-if create_plots or create_essential_plots:
+if (create_plots or create_essential_plots) and task1_plot_enabled("tq_scatter_filtered"):
     # Initialize figure and axes for scatter plot of Time vs Charge
     fig_TQ, axes_TQ = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
     axes_TQ = axes_TQ.flatten()
@@ -3067,7 +3480,7 @@ if create_plots or create_essential_plots:
     plt.close(fig_TQ)
 
 if self_trigger:
-    if create_plots or create_essential_plots:
+    if (create_plots or create_essential_plots) and task1_plot_enabled("tq_scatter_filtered"):
         # Initialize figure and axes for scatter plot of Time vs Charge
         fig_TQ, axes_TQ = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
         axes_TQ = axes_TQ.flatten()
@@ -3224,7 +3637,7 @@ if time_window_filtering:
     spread_df = pd.concat(spread_results, ignore_index=True)
     spread_df_OG = spread_df.copy()
    
-    if create_essential_plots or create_plots:
+    if (create_essential_plots or create_plots) and task1_plot_enabled("tsum_spread_diagnostics"):
         fig, axs = plt.subplots(3, 3, figsize=(15, 10), sharex=True, sharey=False)
         axs = axs.flatten()
         for i, tt in enumerate(sorted(spread_df["raw_tt"].unique())):
@@ -3300,7 +3713,7 @@ if os.path.exists(temp_file):
     print("Removing temporary file...")
     os.remove(temp_file)
 
-if create_plots or create_essential_plots:
+if (create_plots or create_essential_plots) and task1_plot_enabled("tq_scatter_filtered"):
     # Initialize figure and axes for scatter plot of Time vs Charge
     fig_TQ, axes_TQ = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
     axes_TQ = axes_TQ.flatten()
@@ -3356,49 +3769,6 @@ if create_plots or create_essential_plots:
 
     # Close the plot to avoid excessive memory usage
     plt.close(fig_TQ)
-
-# -----------------------------------------------------------------------------
-# Create and save the PDF -----------------------------------------------------
-# -----------------------------------------------------------------------------
-
-if create_pdf:
-    print(f"Creating PDF with all plots in {save_pdf_path}")
-    existing_pngs = [png for png in plot_list if os.path.exists(png)]
-
-    if _direct_pdf_pages is not None:
-        for png in existing_pngs:
-            img = Image.open(png)
-            fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
-            ax.imshow(img)
-            ax.axis('off')
-            pdf_save_rasterized_page(_direct_pdf_pages, fig, bbox_inches='tight')
-            plt.close(fig)
-        close_direct_pdf_writer()
-    elif existing_pngs:
-        with PdfPages(save_pdf_path) as pdf:
-            for png in existing_pngs:
-                img = Image.open(png)
-                fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
-                ax.imshow(img)
-                ax.axis('off')
-                pdf_save_rasterized_page(pdf, fig, bbox_inches='tight')
-                plt.close(fig)
-
-    # Remove PNG files after creating the PDF (or after direct PDF append path).
-    for png in existing_pngs:
-        try:
-            os.remove(png)
-        except OSError as e:
-            print(f"Error: {e.filename} - {e.strerror}.")
-    
-    # Remove run-specific figure directory if all PNGs were deleted.
-    figure_directory = base_directories["figure_directory"]
-    if os.path.exists(figure_directory):
-        if not os.listdir(figure_directory):
-            os.rmdir(figure_directory)
-        else:
-            print(f"Figure directory not empty, skipping removal: {figure_directory}")
-                
 
 # Path to save the cleaned dataframe
 # Create output directory if it does not exist.
@@ -3495,6 +3865,71 @@ for combo_value, count in raw_to_clean_counts.items():
 clean_channel_patterns = build_task1_channel_pattern_series(working_df)
 store_pattern_rates(global_variables, clean_channel_patterns, "clean_channel_pattern", working_df)
 
+# Always compute clean-stage channel contagion metrics for metadata.
+clean_channel_matrix_data = _compute_channel_conditional_matrix(working_df)
+_store_channel_contagion_metrics_variant(
+    "global_clean",
+    clean_channel_matrix_data,
+)
+_store_channel_contagion_metrics_variant(
+    "by_tt_clean",
+    _compute_channel_conditional_matrix_for_tt(working_df, "clean_tt", 1234),
+)
+clean_channel_inputs = _compute_channel_contagion_inputs(working_df)
+if clean_channel_matrix_data is not None and clean_channel_inputs is not None:
+    clean_channel_labels, clean_channel_active = clean_channel_inputs
+    _, clean_channel_matrix = clean_channel_matrix_data
+    clean_channel_arrays = [
+        clean_channel_active[:, idx] for idx in range(clean_channel_active.shape[1])
+    ]
+    clean_channel_given_counts = {
+        label: int(np.sum(clean_channel_arrays[idx]))
+        for idx, label in enumerate(clean_channel_labels)
+    }
+    store_activation_matrix_metadata(
+        activation_metadata,
+        "activation_channel_signal_to_signal_filtered",
+        clean_channel_labels,
+        clean_channel_matrix,
+        clean_channel_given_counts,
+        group_ids=[idx // 8 for idx in range(len(clean_channel_labels))],
+    )
+    clean_selected_tts, clean_tt_matrices, clean_tt_given_counts, clean_tt_event_counts = (
+        compute_conditional_matrices_by_tt(
+            pd.to_numeric(working_df["clean_tt"], errors="coerce").fillna(0).astype(int),
+            clean_channel_labels,
+            clean_channel_arrays,
+        )
+    )
+    store_activation_matrices_by_tt_metadata(
+        activation_metadata,
+        "activation_channel_signal_to_signal_filtered_by_tt",
+        clean_channel_labels,
+        clean_channel_labels,
+        clean_selected_tts,
+        clean_tt_matrices,
+        clean_tt_given_counts,
+        clean_tt_event_counts,
+    )
+
+# --- Post-filter (clean) channel contamination matrices ---
+if (create_plots or create_essential_plots) and task1_plot_enabled("channel_contamination_matrix_32"):
+    fig_idx = _plot_channel_contamination_global(
+        working_df, "clean", fig_idx, base_directories["figure_directory"],
+        save_plots, show_plots, plot_list,
+    )
+
+if (create_plots or create_essential_plots) and task1_plot_enabled("channel_contagion_by_tt"):
+    fig_idx = _plot_channel_contagion_by_tt(
+        working_df, "clean_tt", "clean", fig_idx, base_directories["figure_directory"],
+        save_plots, show_plots, plot_list,
+    )
+
+# -----------------------------------------------------------------------------
+# Create and save the PDF (deferred until all plots are generated) ------------
+# -----------------------------------------------------------------------------
+finalize_saved_plots_to_pdf()
+
 # Final number of events
 final_number_of_events = len(working_df)
 print(f"Final number of events in the dataframe: {final_number_of_events}")
@@ -3576,6 +4011,9 @@ print(f"Execution timestamp: {execution_timestamp}")
 print(f"Data purity percentage: {data_purity_percentage:.2f}%")
 print(f"Total execution time: {total_execution_time_minutes:.2f} minutes")
 
+for _metric_name, _metric_value in channel_contagion_metrics.items():
+    global_variables[_metric_name] = _metric_value
+
 metadata_execution_csv_path = save_metadata(
     csv_path,
     {
@@ -3584,7 +4022,16 @@ metadata_execution_csv_path = save_metadata(
         "param_hash": param_hash_value,
         "data_purity_percentage": round(float(data_purity_percentage), 4),
         "total_execution_time_minutes": round(float(total_execution_time_minutes), 4),
+        **channel_contagion_metrics,
     },
+    preferred_fieldnames=(
+        "filename_base",
+        "execution_timestamp",
+        "param_hash",
+        "data_purity_percentage",
+        "total_execution_time_minutes",
+        *CHANNEL_CONTAGION_METADATA_FIELDS,
+    ),
 )
 print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
 
@@ -3593,6 +4040,12 @@ _prof["execution_timestamp"] = execution_timestamp
 _prof["param_hash"] = param_hash_value
 _prof["total_s"] = round(time.perf_counter() - _prof_t0, 2)
 save_metadata(csv_path_profiling, _prof)
+
+activation_metadata["filename_base"] = filename_base
+activation_metadata["execution_timestamp"] = execution_timestamp
+activation_metadata["param_hash"] = param_hash_value
+metadata_activation_csv_path = save_metadata(csv_path_activation, activation_metadata)
+print(f"Metadata (activation) CSV updated at: {metadata_activation_csv_path}")
 
 # -------------------------------------------------------------------------------
 # Specific metadata ------------------------------------------------------------

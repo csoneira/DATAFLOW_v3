@@ -1391,6 +1391,56 @@ def resolve_inverse_mapping_cfg(
     return cfg
 
 
+def build_step15_runtime_inverse_mapping_cfg(
+    *,
+    inverse_mapping_cfg: Mapping[str, object] | None,
+    interpolation_k: int | None = 5,
+    distance_definition: Mapping[str, object] | None = None,
+) -> dict:
+    """
+    Build the post-STEP-1.5 runtime inverse-mapping config.
+
+    STEP 1.5 only tunes the feature-space distance definition, neighbor count,
+    and local-linear ridge scale. Downstream runtime estimation should therefore
+    stay on the simple STEP 2.1 path: single-stage kNN with inverse-distance
+    weighting and local-linear aggregation when the tuned lambda indicates it.
+    """
+    requested = resolve_inverse_mapping_cfg(
+        inverse_mapping_cfg=inverse_mapping_cfg,
+        interpolation_k=interpolation_k,
+    )
+
+    neighbor_count = requested.get("neighbor_count")
+    if isinstance(distance_definition, Mapping) and bool(distance_definition.get("available")):
+        if distance_definition.get("optimal_k") is not None:
+            neighbor_count = max(1, int(distance_definition["optimal_k"]))
+        optimal_lambda = _safe_float(distance_definition.get("optimal_lambda"), 1e6)
+    else:
+        optimal_lambda = 1e6
+
+    if neighbor_count is None:
+        if interpolation_k is not None:
+            neighbor_count = max(1, int(interpolation_k))
+        else:
+            neighbor_count = int(_INVERSE_MAPPING_DEFAULTS["neighbor_count"])
+
+    aggregation = "local_linear" if optimal_lambda < 1e5 else "weighted_mean"
+    return {
+        "estimation_mode": "single_stage",
+        "neighbor_selection": "knn",
+        "neighbor_count": int(neighbor_count),
+        "weighting": "inverse_distance",
+        "inverse_distance_power": max(
+            _safe_float(
+                requested.get("inverse_distance_power"),
+                float(_INVERSE_MAPPING_DEFAULTS["inverse_distance_power"]),
+            ),
+            0.0,
+        ),
+        "aggregation": aggregation,
+    }
+
+
 def _resolve_shared_parameter_exclusion_mode(
     mode_value: object | None,
     legacy_flag: bool = False,

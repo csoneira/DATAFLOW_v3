@@ -21,7 +21,7 @@ import fcntl
 import math
 import re
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -177,6 +177,10 @@ def is_redundant_count_metadata_column(column_name: str) -> bool:
 
 
 def is_specific_metadata_excluded_column(column_name: str) -> bool:
+    if column_name.startswith("activation_"):
+        return True
+    if column_name.startswith("streamer_contagion_"):
+        return True
     return is_redundant_count_metadata_column(column_name) or is_rate_histogram_metadata_column(
         column_name
     )
@@ -420,11 +424,13 @@ def _normalize_plot_mode(raw_value: object) -> str:
         return "debug"
     if mode in {"usual", "standard", "normal"}:
         return "usual"
+    if mode in {"essential"}:
+        return "essential"
     if mode in {"all", "true", "1", "on"}:
         return "all"
 
     raise ValueError(
-        "Invalid create_plots value. Use one of: null/none, debug, usual, all."
+        "Invalid create_plots value. Use one of: null/none, debug, usual, essential, all."
     )
 
 
@@ -440,7 +446,7 @@ def resolve_step1_plot_options(
     plot_mode = _normalize_plot_mode(config_obj.get("create_plots", None))
     create_plots = plot_mode in {"usual", "all"}
     create_debug_plots = plot_mode in {"debug", "all"}
-    create_essential_plots = create_plots
+    create_essential_plots = plot_mode in {"usual", "essential", "all"}
     save_plots = plot_mode != "none"
     create_pdf = save_plots
     show_plots = False
@@ -453,6 +459,104 @@ def resolve_step1_plot_options(
         show_plots,
         create_debug_plots,
     )
+
+
+STEP1_PLOT_STATUSES: Tuple[str, ...] = ("none", "debug", "usual", "essential")
+
+
+def _normalize_step1_plot_catalog_status(raw_status: object) -> str:
+    if raw_status is None:
+        return "none"
+    if isinstance(raw_status, bool):
+        return "usual" if raw_status else "none"
+
+    status = str(raw_status).strip().lower()
+    if status in {"", "none", "null", "false", "0", "off"}:
+        return "none"
+    if status in {"true", "1", "on"}:
+        return "usual"
+    if status in {"debug", "usual", "essential"}:
+        return status
+    return status
+
+
+def load_step1_task_plot_catalog(
+    catalog_path: Path,
+    plot_aliases: Sequence[str],
+    task_label: str,
+    log_fn: Callable[..., None] = builtins.print,
+) -> Dict[str, str]:
+    """Load and validate a STEP_1 task plot catalog YAML.
+
+    Expected YAML shape:
+      plots:
+        alias_name: null|debug|usual|essential
+    """
+    if not catalog_path.exists():
+        raise FileNotFoundError(f"{task_label} plot catalog not found: {catalog_path}")
+
+    import yaml
+
+    with catalog_path.open("r", encoding="utf-8") as handle:
+        loaded = yaml.safe_load(handle) or {}
+
+    if not isinstance(loaded, Mapping):
+        raise ValueError(f"{task_label} plot catalog must be a mapping: {catalog_path}")
+
+    raw_plots = loaded.get("plots", {})
+    if not isinstance(raw_plots, Mapping):
+        raise ValueError(f"'plots' entry in {catalog_path} must be a mapping.")
+
+    aliases_set = set(plot_aliases)
+    catalog: Dict[str, str] = {}
+    for alias, raw_status in raw_plots.items():
+        alias_name = str(alias)
+        status = _normalize_step1_plot_catalog_status(raw_status)
+        if status not in STEP1_PLOT_STATUSES:
+            raise ValueError(
+                f"Invalid status {raw_status!r} for {task_label} plot alias {alias_name!r} in {catalog_path}."
+            )
+        if alias_name not in aliases_set:
+            log_fn(
+                f"{task_label} plot catalog entry {alias_name!r} is unknown and will be ignored.",
+            )
+            continue
+        catalog[alias_name] = status
+
+    for alias in plot_aliases:
+        if alias not in catalog:
+            log_fn(
+                f"{task_label} plot alias {alias!r} missing in {catalog_path.name}; defaulting to 'usual'."
+            )
+            catalog[alias] = "usual"
+
+    return catalog
+
+
+def step1_task_plot_enabled(
+    alias: str,
+    status_by_alias: Mapping[str, str],
+    plot_mode: str,
+) -> bool:
+    """Return whether a task plot alias is enabled for the current mode."""
+    if alias not in status_by_alias:
+        raise KeyError(f"Unknown STEP_1 task plot alias: {alias}")
+
+    status = status_by_alias[alias]
+
+    if plot_mode == "none":
+        return False
+    if status == "none":
+        return False
+    if plot_mode == "all":
+        return True
+    if plot_mode == "debug":
+        return status == "debug"
+    if plot_mode == "usual":
+        return status in {"usual", "essential"}
+    if plot_mode == "essential":
+        return status == "essential"
+    return False
 
 
 def sanitize_analysis_mode_rows(rows: List[Dict[str, object]]) -> int:

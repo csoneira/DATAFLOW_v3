@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -61,6 +62,9 @@ DEFAULT_LUT = (
 )
 DEFAULT_LUT_META = (
     PIPELINE_DIR / "STEP_2_INFERENCE" / "STEP_2_3_UNCERTAINTY" / "OUTPUTS" / "FILES" / "uncertainty_lut_meta.json"
+)
+DEFAULT_BUILD_SUMMARY = (
+    PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_3_BUILD_DICTIONARY" / "OUTPUTS" / "FILES" / "build_summary.json"
 )
 
 FILES_DIR = STEP_DIR / "OUTPUTS" / "FILES"
@@ -116,6 +120,19 @@ log = logging.getLogger("STEP_3.3")
 CANONICAL_FLUX_COLUMN = "flux_cm2_min"
 CANONICAL_EFF_COLUMN = "eff_sim_1"
 
+MODULES_DIR = PIPELINE_DIR / "MODULES"
+if str(MODULES_DIR) not in sys.path:
+    sys.path.insert(0, str(MODULES_DIR))
+try:
+    from efficiency_fit_utils import (  # noqa: E402
+        POLY_CORRECTED_EFFPROD_COL_TEMPLATE,
+        append_polynomial_corrected_efficiency_columns,
+        load_efficiency_fit_models,
+    )
+except Exception as exc:
+    log.error("Failed to import efficiency_fit_utils from %s: %s", MODULES_DIR, exc)
+    raise
+
 # Import estimation function from STEP 2 module.
 INFERENCE_DIR = PIPELINE_DIR / "STEP_2_INFERENCE"
 if str(INFERENCE_DIR) not in sys.path:
@@ -127,9 +144,9 @@ try:
         _auto_feature_columns as _shared_auto_feature_columns,
         _derived_feature_columns as _shared_derived_feature_columns,
         _normalize_derived_physics_features,
+        build_step15_runtime_inverse_mapping_cfg,
         estimate_from_dataframes,
         load_distance_definition,
-        resolve_inverse_mapping_cfg,
     )
     from feature_columns_config import (  # noqa: E402
         parse_explicit_feature_columns,
@@ -263,6 +280,52 @@ def _load_step12_selected_feature_columns(path: Path) -> tuple[list[str], dict]:
     info["selected_count"] = int(len(selected))
     info["selection_strategy"] = payload.get("selection_strategy", None)
     return selected, info
+
+
+def _load_step13_efficiency_fit(path: Path) -> tuple[dict[int, dict[str, object]], dict]:
+    """Load STEP 1.3 empirical-efficiency polynomial fit metadata."""
+    fit_models, fit_status, payload = load_efficiency_fit_models(path)
+    efficiency_fit = payload.get("efficiency_fit", {}) if isinstance(payload, dict) else {}
+    info: dict[str, object] = {
+        "path": str(path),
+        "exists": bool(path.exists()),
+        "status": fit_status,
+        "planes_loaded": sorted(int(plane) for plane in fit_models.keys()),
+        "polynomial_order_requested": (
+            efficiency_fit.get("polynomial_order_requested")
+            if isinstance(efficiency_fit, dict)
+            else None
+        ),
+    }
+    return fit_models, info
+
+
+def _append_step13_polynomial_efficiency_products(
+    df: pd.DataFrame,
+    *,
+    build_summary_path: Path,
+) -> dict[str, object]:
+    """Append STEP 1.3 polynomial-corrected efficiency columns for TT diagnostics."""
+    fit_models, load_info = _load_step13_efficiency_fit(build_summary_path)
+    append_info = append_polynomial_corrected_efficiency_columns(df, fit_models)
+    info = dict(load_info)
+    info["application"] = append_info
+    if append_info.get("status") == "ok":
+        log.info(
+            "Applied STEP 1.3 polynomial efficiency correction from %s: planes=%s, products=%s",
+            build_summary_path,
+            append_info.get("planes_applied", []),
+            append_info.get("efficiency_product_columns_created", []),
+        )
+    else:
+        log.warning(
+            "STEP 1.3 polynomial efficiency correction unavailable for STEP 3.3 TT plot "
+            "(summary=%s, load_status=%s, apply_status=%s).",
+            build_summary_path,
+            load_info.get("status"),
+            append_info.get("status"),
+        )
+    return info
 
 
 def _choose_eff_column(df: pd.DataFrame, preferred: str) -> str:
@@ -2016,73 +2079,150 @@ _EFFPROD_SUFFIX_TO_TT_LABEL = {
     "123": "123",
     "234": "234",
     "12": "12",
+    "23": "23",
     "34": "34",
 }
 
 
+def _resolve_tt_rate_breakdown_entries(
+    df: pd.DataFrame,
+) -> list[tuple[str, str | None, str, str, str]]:
+    """Resolve TT panels for the breakdown plot.
+
+    Returns tuples:
+    (tt_label, rate_col, effprod_col, effprod_source, rate_source)
+    where rate_source is one of {"tt_specific", "shared_global", "missing"}.
+    """
+    global_rate_col = None
+    for candidate in ("events_per_second_global_rate", "global_rate_hz_mean", "global_rate_hz_mid"):
+        if candidate in df.columns and pd.to_numeric(df[candidate], errors="coerce").notna().any():
+            global_rate_col = candidate
+            break
+
+    tt_entries: list[tuple[str, str | None, str, str, str]] = []
+    for suffix, tt_label in _EFFPROD_SUFFIX_TO_TT_LABEL.items():
+        corrected_col = POLY_CORRECTED_EFFPROD_COL_TEMPLATE.format(suffix=suffix)
+        raw_col = f"efficiency_product_{suffix}"
+        effprod_col = None
+        effprod_source = "feature_space"
+        if corrected_col in df.columns and pd.to_numeric(df[corrected_col], errors="coerce").notna().any():
+            effprod_col = corrected_col
+            effprod_source = "poly_corrected"
+        elif raw_col in df.columns and pd.to_numeric(df[raw_col], errors="coerce").notna().any():
+            effprod_col = raw_col
+        if effprod_col is None:
+            continue
+
+        pattern = re.compile(rf"^.+_tt_{re.escape(tt_label)}_rate_hz$")
+        candidates = [
+            c
+            for c in df.columns
+            if pattern.match(str(c)) and pd.to_numeric(df[c], errors="coerce").notna().any()
+        ]
+        if candidates:
+            tt_rate_col = sorted(candidates, key=lambda c: (len(str(c)), str(c)))[0]
+            tt_entries.append((tt_label, tt_rate_col, effprod_col, effprod_source, "tt_specific"))
+        else:
+            tt_entries.append((tt_label, global_rate_col, effprod_col, effprod_source, ("shared_global" if global_rate_col else "missing")))
+    return tt_entries
+
+
 def _plot_tt_rate_breakdown(df: pd.DataFrame) -> int:
-    """Plot per-TT global rate, efficiency product, and rate/eff_product in a 3×N grid."""
+    """Plot per-TT rate diagnostics.
+
+    When TT-specific rate columns are unavailable in the synthetic/corrected table,
+    the shared-global-rate row is omitted to avoid repeating the same series in every panel.
+    """
     x, x_label = _time_axis(df)
 
-    # Identify available TT combinations from efficiency_product columns
-    tt_entries: list[tuple[str, str, str]] = []  # (label, rate_col, effprod_col)
-    for suffix, tt_label in _EFFPROD_SUFFIX_TO_TT_LABEL.items():
-        effprod_col = f"efficiency_product_{suffix}"
-        if effprod_col not in df.columns:
-            continue
-        flux_proxy_col = (
-            "flux_proxy_rate_div_effprod" if suffix == "4planes"
-            else f"flux_proxy_rate_div_effprod_{suffix}"
-        )
-        # Use global rate as the "rate" for all TT (no per-TT rates in synthetic data)
-        rate_col = "events_per_second_global_rate"
-        if rate_col not in df.columns:
-            continue
-        tt_entries.append((tt_label, rate_col, effprod_col))
+    tt_entries = _resolve_tt_rate_breakdown_entries(df)
 
     if not tt_entries:
         return 0
 
+    has_tt_specific_rate = any(rate_source == "tt_specific" for _, _, _, _, rate_source in tt_entries)
     n_tt = len(tt_entries)
+    n_rows = 3 if has_tt_specific_rate else 2
     fig, axes = plt.subplots(
-        3, n_tt,
-        figsize=(4.0 * n_tt, 9.0),
+        n_rows, n_tt,
+        figsize=(4.0 * n_tt, 3.0 * n_rows),
         squeeze=False,
     )
 
     # Share y-axis within each row and x-axis within each column
-    for row in range(3):
+    for row in range(n_rows):
         for col in range(1, n_tt):
             axes[row, col].sharey(axes[row, 0])
     for col in range(n_tt):
-        for row in range(2):
-            axes[row, col].sharex(axes[2, col])
+        for row in range(n_rows - 1):
+            axes[row, col].sharex(axes[n_rows - 1, col])
 
     colors = ["#4C72B0", "#DD8452", "#55A868", "#C44E52", "#8172B3"]
-    row_labels = ["Global rate [Hz]", "Eff. product", "Rate / Eff. prod."]
+    use_poly_corrected = any(source == "poly_corrected" for _, _, _, source, _ in tt_entries)
+    if has_tt_specific_rate:
+        row_labels = [
+            "TT rate [Hz]",
+            ("Poly-corrected eff. product" if use_poly_corrected else "Eff. product"),
+            ("Rate / poly-corrected eff. prod." if use_poly_corrected else "Rate / eff. prod."),
+        ]
+    else:
+        row_labels = [
+            ("Poly-corrected eff. product" if use_poly_corrected else "Eff. product"),
+            ("Global rate / poly-corrected eff. prod." if use_poly_corrected else "Global rate / eff. prod."),
+        ]
+        log.info(
+            "STEP 3.3 TT breakdown: no TT-specific rate columns found; omitting repeated shared-global-rate top row."
+        )
 
-    for j, (tt_label, rate_col, effprod_col) in enumerate(tt_entries):
-        rate = pd.to_numeric(df[rate_col], errors="coerce").to_numpy(dtype=float)
+    for j, (tt_label, rate_col, effprod_col, effprod_source, rate_source) in enumerate(tt_entries):
+        rate = (
+            pd.to_numeric(df[rate_col], errors="coerce").to_numpy(dtype=float)
+            if rate_col is not None
+            else np.full(len(df), np.nan, dtype=float)
+        )
         effprod = pd.to_numeric(df[effprod_col], errors="coerce").to_numpy(dtype=float)
         color = colors[j % len(colors)]
 
-        # Row 0: global rate
-        ax = axes[0, j]
-        ok = np.isfinite(rate)
-        if ok.any():
-            ax.scatter(x[ok], rate[ok], s=8, color=color, alpha=0.6, edgecolors="none")
-        ax.set_title(f"TT {tt_label}", fontsize=9, fontweight="bold")
-        ax.grid(True, alpha=0.2, linewidth=0.5)
+        title = f"TT {tt_label}"
+        if effprod_source == "poly_corrected":
+            title += " (poly)"
+        if has_tt_specific_rate and rate_source != "tt_specific":
+            title += " / global"
 
-        # Row 1: efficiency product
-        ax = axes[1, j]
+        eff_row = 1 if has_tt_specific_rate else 0
+        ratio_row = 2 if has_tt_specific_rate else 1
+
+        if has_tt_specific_rate:
+            ax = axes[0, j]
+            ok = np.isfinite(rate)
+            if rate_source == "tt_specific" and ok.any():
+                ax.scatter(x[ok], rate[ok], s=8, color=color, alpha=0.6, edgecolors="none")
+            elif rate_source == "shared_global" and ok.any():
+                ax.text(
+                    0.5,
+                    0.5,
+                    "No TT-specific rate\n(shared global rate only)",
+                    ha="center",
+                    va="center",
+                    transform=ax.transAxes,
+                    fontsize=7.5,
+                )
+            else:
+                ax.text(0.5, 0.5, "No rate values", ha="center", va="center", transform=ax.transAxes, fontsize=7.5)
+            ax.set_title(title, fontsize=9, fontweight="bold")
+            ax.grid(True, alpha=0.2, linewidth=0.5)
+
+        # Efficiency product
+        ax = axes[eff_row, j]
         ok = np.isfinite(effprod)
         if ok.any():
             ax.scatter(x[ok], effprod[ok], s=8, color=color, alpha=0.6, edgecolors="none")
+        if not has_tt_specific_rate:
+            ax.set_title(title, fontsize=9, fontweight="bold")
         ax.grid(True, alpha=0.2, linewidth=0.5)
 
-        # Row 2: rate / eff_product
-        ax = axes[2, j]
+        # Rate / efficiency product
+        ax = axes[ratio_row, j]
         both_ok = np.isfinite(rate) & np.isfinite(effprod) & (effprod > 0)
         if both_ok.any():
             ratio = rate[both_ok] / effprod[both_ok]
@@ -2090,18 +2230,22 @@ def _plot_tt_rate_breakdown(df: pd.DataFrame) -> int:
         ax.grid(True, alpha=0.2, linewidth=0.5)
 
     # Y-axis labels only on leftmost column
-    for row in range(3):
+    for row in range(n_rows):
         axes[row, 0].set_ylabel(row_labels[row], fontsize=8)
         for col in range(1, n_tt):
             plt.setp(axes[row, col].get_yticklabels(), visible=False)
 
     # X-axis labels only on bottom row
     for col in range(n_tt):
-        axes[2, col].set_xlabel(x_label, fontsize=7)
-        for row in range(2):
+        axes[n_rows - 1, col].set_xlabel(x_label, fontsize=7)
+        for row in range(n_rows - 1):
             plt.setp(axes[row, col].get_xticklabels(), visible=False)
 
-    fig.tight_layout()
+    if not has_tt_specific_rate:
+        fig.suptitle("TT breakdown: TT-specific rates unavailable in STEP 3.3 outputs", fontsize=10)
+        fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.97])
+    else:
+        fig.tight_layout()
     _save_figure(fig, PLOTS_DIR / "tt_rate_breakdown.png", dpi=170)
     plt.close(fig)
     return n_tt
@@ -2237,6 +2381,7 @@ def main() -> int:
     dataset_template_csv_cfg = cfg_33.get("dataset_template_csv", cfg_32.get("dataset_template_csv", None))
     lut_csv_cfg = cfg_33.get("uncertainty_lut_csv", None)
     lut_meta_cfg = cfg_33.get("uncertainty_lut_meta_json", None)
+    build_summary_cfg = cfg_33.get("build_summary_json", None)
     step32_center_csv_cfg = cfg_33.get(
         "step32_diagnostic_center_csv",
         cfg_32.get("diagnostic_center_series_csv", None),
@@ -2249,6 +2394,7 @@ def main() -> int:
     dataset_template_path = _resolve_input_path(dataset_template_csv_cfg or DEFAULT_DATASET_TEMPLATE)
     lut_path = _resolve_input_path(args.lut_csv or lut_csv_cfg or DEFAULT_LUT)
     lut_meta_path = _resolve_input_path(args.lut_meta_json or lut_meta_cfg or DEFAULT_LUT_META)
+    build_summary_path = _resolve_input_path(build_summary_cfg or DEFAULT_BUILD_SUMMARY)
     step32_center_path = _resolve_input_path(step32_center_csv_cfg or DEFAULT_STEP32_DIAGNOSTIC_CENTER)
 
     for label, p in (
@@ -2273,15 +2419,10 @@ def main() -> int:
         interpolation_k: int | None = None
     else:
         interpolation_k = int(interpolation_k_raw)
-    inverse_mapping_cfg = resolve_inverse_mapping_cfg(
-        inverse_mapping_cfg=cfg_21.get("inverse_mapping", {}),
-        interpolation_k=interpolation_k,
-        histogram_distance_weight=float(cfg_21.get("histogram_distance_weight", 1.0)),
-        histogram_distance_blend_mode=str(cfg_21.get("histogram_distance_blend_mode", "normalized")),
-    )
+    inverse_mapping_cfg_requested = cfg_21.get("inverse_mapping", {})
     include_global_rate = _safe_bool(cfg_21.get("include_global_rate", True), True)
     global_rate_col = str(cfg_21.get("global_rate_col", "events_per_second_global_rate"))
-    exclude_same_file = _safe_bool(cfg_33.get("exclude_same_file", True), True)
+    exclude_same_file_cfg = _safe_bool(cfg_33.get("exclude_same_file", True), True)
     uncertainty_quantile = _safe_float(cfg_33.get("uncertainty_quantile", 0.68), 0.68)
     uncertainty_quantile = float(np.clip(uncertainty_quantile, 0.0, 1.0))
 
@@ -2305,16 +2446,8 @@ def main() -> int:
     log.info("Complete curve:   %s", complete_curve_path)
     log.info("Dictionary:       %s", dictionary_path)
     log.info("LUT:              %s", lut_path)
+    log.info("STEP 1.3 fit summary: %s", build_summary_path)
     log.info("Metric=%s, k=%s, uncertainty_quantile=%.3f", distance_metric, interpolation_k, uncertainty_quantile)
-    log.info(
-        "Inverse mapping: selection=%s k=%s weighting=%s aggregation=%s hist_weight=%.3g hist_blend=%s",
-        inverse_mapping_cfg.get("neighbor_selection"),
-        ("all" if inverse_mapping_cfg.get("neighbor_count") is None else str(inverse_mapping_cfg.get("neighbor_count"))),
-        inverse_mapping_cfg.get("weighting"),
-        inverse_mapping_cfg.get("aggregation"),
-        float(inverse_mapping_cfg.get("histogram_distance_weight", 1.0)),
-        inverse_mapping_cfg.get("histogram_distance_blend_mode"),
-    )
 
     synthetic_df = pd.read_csv(synthetic_path, low_memory=False)
     if synthetic_df.empty:
@@ -2399,16 +2532,52 @@ def main() -> int:
         log.warning("Distance definition not available: %s", dd.get("reason"))
         dd = None
 
+    inverse_mapping_cfg = build_step15_runtime_inverse_mapping_cfg(
+        inverse_mapping_cfg=inverse_mapping_cfg_requested,
+        interpolation_k=interpolation_k,
+        distance_definition=dd,
+    )
+    if exclude_same_file_cfg:
+        log.info(
+            "Ignoring step_3_3.exclude_same_file=%s; using STEP 2.1 runtime behavior (exclude_same_file=false).",
+            exclude_same_file_cfg,
+        )
+    log.info(
+        "STEP 1.5 runtime inverse mapping: selection=%s k=%d weighting=%s idw_power=%.1f aggregation=%s",
+        inverse_mapping_cfg["neighbor_selection"],
+        int(inverse_mapping_cfg["neighbor_count"]),
+        inverse_mapping_cfg["weighting"],
+        float(inverse_mapping_cfg["inverse_distance_power"]),
+        inverse_mapping_cfg["aggregation"],
+    )
+
     # ── 1) Inference over synthetic dataset ─────────────────────────
+    param_columns = [
+        col
+        for col in (
+            "flux_cm2_min",
+            "cos_n",
+            "eff_sim_1",
+            "eff_sim_2",
+            "eff_sim_3",
+            "eff_sim_4",
+        )
+        if col in dict_work.columns
+    ]
     est_df = estimate_from_dataframes(
         dict_df=dict_work,
         data_df=synthetic_work,
         feature_columns=resolved_feature_columns,
         distance_metric=distance_metric,
+        param_columns=param_columns,
         interpolation_k=interpolation_k,
-        include_global_rate=include_global_rate,
+        exclude_same_file=False,
+        shared_parameter_exclusion_mode="full",
+        shared_parameter_exclusion_columns=["param_set_id"],
+        shared_parameter_exclusion_ignore=(),
+        density_weighting_cfg=None,
+        include_global_rate=False,
         global_rate_col=global_rate_col,
-        exclude_same_file=exclude_same_file,
         inverse_mapping_cfg=inverse_mapping_cfg,
         distance_definition=dd,
     )
@@ -2575,6 +2744,10 @@ def main() -> int:
     merged["relerr_eff_pct"] = (e_eff - t_eff) / t_eff.replace({0.0: np.nan}) * 100.0
     merged["abs_relerr_flux_pct"] = merged["relerr_flux_pct"].abs()
     merged["abs_relerr_eff_pct"] = merged["relerr_eff_pct"].abs()
+    step13_poly_correction_info = _append_step13_polynomial_efficiency_products(
+        merged,
+        build_summary_path=build_summary_path,
+    )
 
     # ── Save outputs ────────────────────────────────────────────────
     out_csv = FILES_DIR / "corrected_by_inference.csv"
@@ -2609,6 +2782,12 @@ def main() -> int:
         ):
             if c in merged.columns and c not in corrected_curve_cols:
                 corrected_curve_cols.append(c)
+    for c in step13_poly_correction_info.get("application", {}).get("efficiency_columns_created", []):
+        if c in merged.columns and c not in corrected_curve_cols:
+            corrected_curve_cols.append(c)
+    for c in step13_poly_correction_info.get("application", {}).get("efficiency_product_columns_created", []):
+        if c in merged.columns and c not in corrected_curve_cols:
+            corrected_curve_cols.append(c)
     corrected_curve_df = merged[corrected_curve_cols].copy()
     out_curve_csv = FILES_DIR / "corrected_curve.csv"
     corrected_curve_df.to_csv(out_curve_csv, index=False)
@@ -2655,6 +2834,7 @@ def main() -> int:
         "lut_param_names_used": lut_params,
         "density_center_available": bool(center_flux is not None and center_eff is not None),
         "correction_method": correction_summary,
+        "step13_polynomial_efficiency_correction": step13_poly_correction_info,
         "parameter_space_columns_config": parameter_space_cfg,
         "parameter_space_columns_used": parameter_space_cols,
         "efficiency_columns_in_overview_plot": eff_cols_for_plot,

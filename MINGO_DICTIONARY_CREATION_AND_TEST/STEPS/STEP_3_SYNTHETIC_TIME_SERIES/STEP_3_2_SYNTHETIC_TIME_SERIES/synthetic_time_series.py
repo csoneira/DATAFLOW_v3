@@ -145,6 +145,7 @@ STEP32_WEIGHTING_KEYS = {
     "basis_n_events_tolerance_pct",
     "basis_n_events_tolerance",
     "basis_min_rows",
+    "basis_event_filter_mode",
     "weighting_method",
     "interpolation_aggregation",
     "distance_hardness",
@@ -173,12 +174,13 @@ STEP32_WEIGHTING_LEGACY_IGNORED_KEYS = {
 }
 
 STEP32_WEIGHTING_DEFAULTS = {
-    "basis_source": "dataset",
+    "basis_source": "auto",
     "basis_n_events_column": "n_events",
     "basis_parameter_set_column": "param_hash_x",
     "parameter_space_columns": None,
     "basis_n_events_tolerance_pct": 25,
     "basis_min_rows": 1,
+    "basis_event_filter_mode": "event_tolerance",
     "weighting_method": "inverse_distance",
     "interpolation_aggregation": "local_linear",
     "distance_hardness": 2.0,
@@ -202,6 +204,79 @@ def _normalize_weighting_method(value: object) -> str:
     if text == "softmax":
         return "softmax"
     return "gaussian"
+
+
+def _normalize_basis_source(value: object) -> str:
+    text = str(value).strip().lower() if value is not None else ""
+    if text in {"", "auto", "default"}:
+        return "auto"
+    if text in {"dataset", "data", "template"}:
+        return "dataset"
+    if text in {"dictionary", "dict"}:
+        return "dictionary"
+    return text
+
+
+def _resolve_basis_source(value: object, *, weighting_method: str) -> tuple[str, bool]:
+    normalized = _normalize_basis_source(value)
+    if normalized == "auto":
+        return ("dataset" if weighting_method == "closest_point" else "dictionary"), True
+    return normalized, False
+
+
+def _normalize_step31_curve_data_mode(value: object) -> str:
+    text = str(value).strip().lower().replace("-", "_").replace(" ", "_") if value is not None else ""
+    if text in {
+        "",
+        "synthetic",
+        "synthetic_curve",
+        "synthetic_data_curve",
+        "parameter_curve",
+        "parameter_space_curve",
+    }:
+        return "synthetic_data_curve"
+    if text in {
+        "dataset",
+        "dataset_curve",
+        "dataset_data_curve",
+        "dataset_entries",
+        "real_entries",
+        "real_data_curve",
+        "control",
+    }:
+        return "dataset_data_curve"
+    return "synthetic_data_curve"
+
+
+def _resolve_step31_curve_data_mode(time_df: pd.DataFrame) -> tuple[str, bool]:
+    if "step31_curve_data_mode" not in time_df.columns:
+        return "synthetic_data_curve", False
+    raw = pd.Series(time_df["step31_curve_data_mode"], index=time_df.index).dropna().astype(str).str.strip()
+    if raw.empty:
+        return "synthetic_data_curve", False
+    modes = sorted({_normalize_step31_curve_data_mode(v) for v in raw.tolist() if str(v).strip()})
+    if not modes:
+        return "synthetic_data_curve", False
+    if len(modes) > 1:
+        raise ValueError(f"STEP 3.1 curve data mode is inconsistent across rows: {modes}")
+    return modes[0], True
+
+
+def _normalize_basis_event_filter_mode(value: object) -> str:
+    text = str(value).strip().lower().replace(" ", "_").replace("-", "_") if value is not None else ""
+    if text in {"", "default", "event_tolerance", "tolerance", "strict"}:
+        return "event_tolerance"
+    if text in {"ignore_events", "disabled", "off", "none", "all_rows"}:
+        return "ignore_events"
+    if text in {
+        "tolerance_then_param_nearest",
+        "param_nearest_fallback",
+        "closest_n_fallback",
+        "nearest_n_fallback",
+        "pad_param_nearest",
+    }:
+        return "tolerance_then_param_nearest"
+    return "event_tolerance"
 
 
 def _load_config(path: Path) -> dict:
@@ -562,13 +637,21 @@ def _build_event_mask(
     *,
     tolerance_pct: float,
     min_rows: int,
+    filter_mode: str = "event_tolerance",
+    basis_param_matrix: np.ndarray | None = None,
+    target_param_matrix: np.ndarray | None = None,
 ) -> tuple[np.ndarray | None, dict]:
     """Build per-target basis mask from event-count proximity."""
+    mode = _normalize_basis_event_filter_mode(filter_mode)
     info = {
         "mode": "disabled",
+        "filter_mode": mode,
         "tolerance_pct": float(tolerance_pct),
         "min_rows_fallback": int(max(1, int(min_rows))),
     }
+    if mode == "ignore_events":
+        info["mode"] = "disabled_by_config"
+        return None, info
     if basis_events is None or target_events is None:
         return None, info
 
@@ -594,7 +677,23 @@ def _build_event_mask(
     mask = np.zeros((n_targets, n_basis), dtype=bool)
     counts = np.zeros(n_targets, dtype=int)
     fallback_points = 0
+    param_nearest_padding_points = 0
     finite_idx = np.where(finite_basis)[0]
+    finite_param_rows: np.ndarray | None = None
+    finite_target_params: np.ndarray | None = None
+    basis_params_std: np.ndarray | None = None
+    target_params_std: np.ndarray | None = None
+    if (
+        mode == "tolerance_then_param_nearest"
+        and basis_param_matrix is not None
+        and target_param_matrix is not None
+    ):
+        basis_params_std, target_params_std, _ = _prepare_standardized_param_space(
+            dict_param_matrix=np.asarray(basis_param_matrix, dtype=float),
+            target_param_matrix=np.asarray(target_param_matrix, dtype=float),
+        )
+        finite_param_rows = np.all(np.isfinite(basis_params_std), axis=1)
+        finite_target_params = np.all(np.isfinite(target_params_std), axis=1)
 
     for i in range(n_targets):
         if not finite_targets[i]:
@@ -608,15 +707,76 @@ def _build_event_mask(
                 m = np.zeros(n_basis, dtype=bool)
                 m[nearest] = True
                 fallback_points += 1
+        if (
+            mode == "tolerance_then_param_nearest"
+            and int(np.sum(m)) < keep_n
+            and finite_param_rows is not None
+            and finite_target_params is not None
+            and basis_params_std is not None
+            and target_params_std is not None
+            and bool(finite_target_params[i])
+        ):
+            candidates = np.flatnonzero(finite_param_rows & ~m)
+            if candidates.size:
+                d = np.sum((basis_params_std[candidates] - target_params_std[i][None, :]) ** 2, axis=1)
+                take = min(keep_n - int(np.sum(m)), candidates.size)
+                nearest = candidates[np.argsort(d)[:take]]
+                m[nearest] = True
+                param_nearest_padding_points += 1
         mask[i] = m
         counts[i] = int(np.sum(m))
 
     info["mode"] = "enabled"
     info["fallback_points_count"] = int(fallback_points)
+    info["param_nearest_padding_points_count"] = int(param_nearest_padding_points)
     info["allowed_rows_per_target_min"] = int(np.min(counts))
     info["allowed_rows_per_target_median"] = float(np.median(counts))
     info["allowed_rows_per_target_max"] = int(np.max(counts))
     return mask, info
+
+
+def _resolve_step31_dataset_curve_basis_positions(
+    *,
+    time_df: pd.DataFrame,
+    basis_df: pd.DataFrame,
+    valid_basis_mask: np.ndarray,
+) -> np.ndarray:
+    n_targets = len(time_df)
+    valid_positions = np.flatnonzero(np.asarray(valid_basis_mask, dtype=bool))
+    pos_by_row_index = {int(src_idx): int(pos) for pos, src_idx in enumerate(valid_positions.tolist())}
+
+    row_index_series = pd.to_numeric(time_df.get("step31_source_row_index"), errors="coerce")
+    filename_series = pd.Series(time_df.get("step31_source_filename_base"), index=time_df.index)
+
+    basis_filename_to_pos: dict[str, int] = {}
+    if "filename_base" in basis_df.columns:
+        basis_filename = basis_df.loc[valid_positions, "filename_base"].astype(str).fillna("")
+        for pos, text in enumerate(basis_filename.tolist()):
+            if text and text not in basis_filename_to_pos:
+                basis_filename_to_pos[text] = int(pos)
+
+    out = np.full(n_targets, -1, dtype=int)
+    missing_rows: list[int] = []
+    for i in range(n_targets):
+        pos = -1
+        row_value = row_index_series.iloc[i] if i < len(row_index_series) else np.nan
+        if np.isfinite(row_value):
+            pos = int(pos_by_row_index.get(int(row_value), -1))
+        if pos < 0 and i < len(filename_series):
+            name = str(filename_series.iloc[i]).strip()
+            if name:
+                pos = int(basis_filename_to_pos.get(name, -1))
+        if pos < 0:
+            missing_rows.append(i)
+        out[i] = pos
+
+    if missing_rows:
+        preview = ", ".join(str(i) for i in missing_rows[:8])
+        raise ValueError(
+            "STEP 3.1 dataset_data_curve rows could not be resolved in STEP 3.2 basis "
+            f"(missing {len(missing_rows)} row(s), first indices: {preview})."
+        )
+    return out
 
 
 def _select_parameter_set_column(df: pd.DataFrame, configured: str | None) -> str | None:
@@ -1144,6 +1304,91 @@ def _rebuild_efficiencies_string(df: pd.DataFrame) -> None:
     df["efficiencies"] = pd.Series(eff_matrix.tolist(), index=df.index).astype(str)
 
 
+def _rebuild_weighted_step12_helper_columns(df: pd.DataFrame) -> dict[str, object]:
+    """
+    Rebuild deterministic STEP 1.2 helper columns after weighted STEP 3.2 output.
+
+    In weighted mode, STEP 3.2 ultimately forces the parameter-space columns to the
+    STEP 3.1 targets. Columns derived deterministically from those parameters must
+    therefore be rebuilt from the final target values rather than kept from the
+    independently interpolated numeric feature blend.
+    """
+    info: dict[str, object] = {
+        "applied": False,
+        "synced_eff_alias_columns": [],
+        "rebuilt_efficiency_product_columns": [],
+        "rebuilt_flux_proxy_columns": [],
+    }
+
+    eff_source_cols: list[str] = []
+    for plane in (1, 2, 3, 4):
+        sim_col = f"eff_sim_{plane}"
+        alias_col = f"eff_p{plane}"
+        if sim_col not in df.columns:
+            eff_source_cols = []
+            break
+        sim_vals = pd.to_numeric(df[sim_col], errors="coerce")
+        if alias_col in df.columns:
+            df[alias_col] = sim_vals
+            casted = pd.to_numeric(df[alias_col], errors="coerce")
+            info["synced_eff_alias_columns"].append(alias_col)
+            eff_source_cols.append(alias_col)
+        else:
+            eff_source_cols.append(sim_col)
+
+    if len(eff_source_cols) != 4:
+        return info
+
+    eff_vals = {
+        col: pd.to_numeric(df[col], errors="coerce")
+        for col in eff_source_cols
+    }
+    eff_matrix = pd.DataFrame(eff_vals, index=df.index)
+    valid_all = eff_matrix.notna().all(axis=1)
+    prod_specs = {
+        "efficiency_product_4planes": eff_source_cols,
+        "efficiency_product_123": eff_source_cols[:3],
+        "efficiency_product_234": eff_source_cols[1:],
+        "efficiency_product_12": eff_source_cols[:2],
+        "efficiency_product_34": eff_source_cols[2:],
+    }
+    for out_col, src_cols in prod_specs.items():
+        if len(src_cols) == 4:
+            prod = eff_matrix[src_cols].prod(axis=1, min_count=4).where(valid_all, np.nan)
+        else:
+            prod = pd.to_numeric(df[src_cols[0]], errors="coerce")
+            for src_col in src_cols[1:]:
+                prod = prod * pd.to_numeric(df[src_col], errors="coerce")
+        df[out_col] = prod
+        info["rebuilt_efficiency_product_columns"].append(out_col)
+
+    if "events_per_second_global_rate" in df.columns:
+        rate = pd.to_numeric(df["events_per_second_global_rate"], errors="coerce")
+        proxy_specs = {
+            "flux_proxy_rate_div_effprod": "efficiency_product_4planes",
+            "flux_proxy_rate_div_effprod_123": "efficiency_product_123",
+            "flux_proxy_rate_div_effprod_234": "efficiency_product_234",
+            "flux_proxy_rate_div_effprod_12": "efficiency_product_12",
+            "flux_proxy_rate_div_effprod_34": "efficiency_product_34",
+        }
+        for proxy_col, prod_col in proxy_specs.items():
+            if prod_col not in df.columns:
+                continue
+            prod = pd.to_numeric(df[prod_col], errors="coerce")
+            proxy = pd.Series(np.nan, index=df.index, dtype=float)
+            valid = prod.notna() & (prod > 0.0) & rate.notna()
+            proxy.loc[valid] = rate.loc[valid] / prod.loc[valid]
+            df[proxy_col] = proxy
+            info["rebuilt_flux_proxy_columns"].append(proxy_col)
+
+    info["applied"] = bool(
+        info["synced_eff_alias_columns"]
+        or info["rebuilt_efficiency_product_columns"]
+        or info["rebuilt_flux_proxy_columns"]
+    )
+    return info
+
+
 def _load_trigger_type_consistency_catalog() -> tuple[str, list[str]]:
     """Read trigger-type consistency selector from config_columns.json when present."""
     prefix = "last"
@@ -1442,7 +1687,7 @@ def _make_synthetic_dataset(
 
     # Dominant row gives categorical/non-numeric morphology.
     dominant_idx = np.argmax(weights, axis=1)
-    copy_closest_basis_row = feature_generation_mode == "closest_point"
+    copy_closest_basis_row = feature_generation_mode in {"closest_point", "dataset_data_curve"}
     if copy_closest_basis_row:
         for col in common_cols:
             out[col] = dictionary_df[col].to_numpy()[dominant_idx]
@@ -1593,6 +1838,7 @@ def _make_synthetic_dataset(
         "global_rate_hz_source": weighted_rate,
         "dominant_dictionary_index": dominant_idx,
         "step32_feature_generation_mode": np.full(n_targets, feature_generation_mode, dtype=object),
+        "step31_curve_data_mode": pd.Series(time_df.get("step31_curve_data_mode"), index=time_df.index).fillna(feature_generation_mode),
     }, index=out.index)
     if "filename_base" in dictionary_df.columns:
         extras["dominant_dictionary_filename_base"] = dictionary_df["filename_base"].astype(str).to_numpy()[dominant_idx]
@@ -2264,7 +2510,8 @@ def main() -> int:
             len(cfg13_weighting_keys),
             ", ".join(cfg13_weighting_keys),
         )
-    basis_source_cfg = str(cfg_32.get("basis_source", "dataset")).strip().lower()
+    method_cfg = _normalize_weighting_method(cfg_32.get("weighting_method", "inverse_distance"))
+    basis_source_cfg_raw = cfg_32.get("basis_source", "auto")
 
     # Input paths
     if args.time_series_csv:
@@ -2299,8 +2546,6 @@ def main() -> int:
         ("Time series", time_series_path),
         ("Dataset template", template_path),
     ]
-    if basis_source_cfg == "dictionary":
-        required_paths.append(("Dictionary", dictionary_path))
     for label, p in required_paths:
         if not p.exists():
             log.error("%s CSV not found: %s", label, p)
@@ -2318,16 +2563,46 @@ def main() -> int:
     if time_df.empty:
         log.error("Time series CSV is empty: %s", time_series_path)
         return 1
-    if basis_source_cfg == "dictionary" and dictionary_df.empty:
-        log.error("Dictionary CSV is empty: %s", dictionary_path)
-        return 1
     if template_df.empty:
         log.error("Dataset template CSV is empty: %s", template_path)
         return 1
 
+    try:
+        step31_curve_data_mode, step31_mode_explicit = _resolve_step31_curve_data_mode(time_df)
+    except ValueError as exc:
+        log.error("%s", exc)
+        return 1
+
+    method = method_cfg
+    if step31_curve_data_mode == "dataset_data_curve":
+        basis_source_cfg = "dataset"
+        basis_source_auto = False
+        log.info(
+            "STEP 3.2 following STEP 3.1 dataset_data_curve: exact source rows will be copied from the dataset template."
+        )
+    else:
+        if step31_mode_explicit and method_cfg == "closest_point":
+            log.warning(
+                "STEP 3.1 requested synthetic_data_curve; ignoring step_3_2 weighting_method=closest_point and using inverse_distance."
+            )
+            method = "inverse_distance"
+        basis_source_cfg, basis_source_auto = _resolve_basis_source(
+            basis_source_cfg_raw,
+            weighting_method=method,
+        )
+        if basis_source_auto:
+            log.info(
+                "STEP 3.2 auto basis source resolved to '%s' for weighting_method=%s.",
+                basis_source_cfg,
+                method,
+            )
+    if basis_source_cfg == "dictionary" and dictionary_df.empty:
+        log.error("Dictionary CSV is empty: %s", dictionary_path)
+        return 1
+
     flux_col = CANONICAL_FLUX_COLUMN
     eff_pref = CANONICAL_EFF_COLUMN
-    basis_source = str(cfg_32.get("basis_source", "dataset")).strip().lower()
+    basis_source = basis_source_cfg
     if basis_source == "dictionary":
         basis_input_df = dictionary_df
         basis_label = "Dictionary"
@@ -2337,7 +2612,10 @@ def main() -> int:
         basis_label = "Dataset"
         basis_path = template_path
     else:
-        log.error("Invalid step_3_2.basis_source='%s'. Use 'dataset' or 'dictionary'.", basis_source)
+        log.error(
+            "Invalid step_3_2.basis_source='%s'. Use 'auto', 'dataset', or 'dictionary'.",
+            basis_source,
+        )
         return 1
 
     if flux_col not in time_df.columns or flux_col not in basis_input_df.columns:
@@ -2430,6 +2708,9 @@ def main() -> int:
     )
     basis_parameter_set_col_cfg = cfg_32.get("basis_parameter_set_column", None)
     basis_min_rows = _safe_int(cfg_32.get("basis_min_rows", 200), 200, minimum=1)
+    basis_event_filter_mode = _normalize_basis_event_filter_mode(
+        cfg_32.get("basis_event_filter_mode", "event_tolerance")
+    )
 
     basis_param_all = (
         basis_input_df[parameter_space_cols]
@@ -2502,6 +2783,9 @@ def main() -> int:
         target_events=target_events,
         tolerance_pct=basis_events_tol_pct,
         min_rows=basis_min_rows,
+        filter_mode=basis_event_filter_mode,
+        basis_param_matrix=basis_param_matrix,
+        target_param_matrix=target_param_matrix,
     )
     if event_mask_extra is None:
         event_mask = one_per_set_mask
@@ -2516,6 +2800,7 @@ def main() -> int:
         "parameter_set_column": basis_parameter_set_col if basis_parameter_set_col is not None else "__row_index__",
         "basis_n_events_tolerance_pct_config": float(basis_events_tol_pct),
         "basis_min_rows_config": int(basis_min_rows),
+        "basis_event_filter_mode_config": basis_event_filter_mode,
         "event_tolerance_filter_info": extra_info,
         "allowed_rows_per_target_min": int(np.min(sel_counts)) if sel_counts.size else 0,
         "allowed_rows_per_target_median": float(np.median(sel_counts)) if sel_counts.size else 0.0,
@@ -2549,11 +2834,15 @@ def main() -> int:
         int(len(hist_rate_consistency_cols)),
     )
 
-    method = _normalize_weighting_method(cfg_32.get("weighting_method", "inverse_distance"))
     interpolation_aggregation = _normalize_interpolation_aggregation(
         cfg_32.get("interpolation_aggregation", "local_linear")
     )
-    feature_generation_mode = "closest_point" if method == "closest_point" else "weighted_interpolation"
+    if step31_curve_data_mode == "dataset_data_curve":
+        feature_generation_mode = "dataset_data_curve"
+    elif step31_mode_explicit:
+        feature_generation_mode = "synthetic_data_curve"
+    else:
+        feature_generation_mode = "closest_point" if method == "closest_point" else "weighted_interpolation"
     show_diagnostic_center = _safe_bool(cfg_32.get("show_diagnostic_center", False), False)
     top_k_raw = cfg_32.get("top_k", None)
     top_k = None if top_k_raw in (None, "", 0) else _safe_int(top_k_raw, 8, minimum=1)
@@ -2566,6 +2855,8 @@ def main() -> int:
     density_k = _safe_int(cfg_32.get("density_correction_k_neighbors", 10), 10, minimum=1)
     if method in {"inverse_distance", "nearest", "closest_point", "softmax"} and density_enabled:
         log.info("Ignoring density correction for weighting_method=%s to match STEP 2 weighting behavior.", method)
+        density_enabled = False
+    if feature_generation_mode == "dataset_data_curve":
         density_enabled = False
     log.info(
         "Interpolation config: weighting_method=%s, generation_mode=%s, aggregation=%s, top_k=%s, weight_power=%.3g, show_diagnostic_center=%s",
@@ -2590,7 +2881,39 @@ def main() -> int:
             )
     density_scaling = None
     density_info = {"enabled": bool(density_enabled)}
-    if density_enabled:
+    if feature_generation_mode == "dataset_data_curve":
+        selected_basis_positions = _resolve_step31_dataset_curve_basis_positions(
+            time_df=time_df,
+            basis_df=basis_input_df,
+            valid_basis_mask=valid_basis,
+        )
+        weights = np.zeros((len(time_df), len(dictionary_work)), dtype=float)
+        weights[np.arange(len(time_df), dtype=int), selected_basis_positions] = 1.0
+        event_mask = weights > 0.0
+        basis_filter_info = {
+            "mode": "step31_dataset_curve_exact_rows",
+            "parameter_set_mode": "step31_exact_source_rows",
+            "n_parameter_sets": int(len(dictionary_work)),
+            "parameter_set_column": basis_parameter_set_col if basis_parameter_set_col is not None else "__row_index__",
+            "basis_n_events_tolerance_pct_config": float(basis_events_tol_pct),
+            "basis_min_rows_config": int(basis_min_rows),
+            "basis_event_filter_mode_config": basis_event_filter_mode,
+            "event_tolerance_filter_info": {
+                "mode": "bypassed_by_step31_dataset_curve",
+            },
+            "allowed_rows_per_target_min": 1,
+            "allowed_rows_per_target_median": 1.0,
+            "allowed_rows_per_target_max": 1,
+            "targets_with_zero_selected_rows": 0,
+        }
+        density_info = {
+            "enabled": False,
+            "bypassed_by_step31_dataset_curve": True,
+        }
+        log.info(
+            "STEP 3.2 exact-row mode: one source dataset row per target, resolved directly from STEP 3.1."
+        )
+    elif density_enabled:
         density_scaling, density_info = _compute_inverse_density_scaling(
             basis_param_matrix=basis_param_matrix,
             k_neighbors=density_k,
@@ -2598,17 +2921,27 @@ def main() -> int:
             clip_min=CANONICAL_DENSITY_CLIP_MIN,
             clip_max=CANONICAL_DENSITY_CLIP_MAX,
         )
-
-    weights = _build_weights(
-        dict_param_matrix=basis_param_matrix,
-        target_param_matrix=target_param_matrix,
-        method=method,
-        top_k=top_k,
-        distance_hardness=distance_hardness,
-        density_scaling=density_scaling,
-        event_mask=event_mask,
-        enforce_distance_monotonic_weights=enforce_distance_monotonic_weights,
-    )
+        weights = _build_weights(
+            dict_param_matrix=basis_param_matrix,
+            target_param_matrix=target_param_matrix,
+            method=method,
+            top_k=top_k,
+            distance_hardness=distance_hardness,
+            density_scaling=density_scaling,
+            event_mask=event_mask,
+            enforce_distance_monotonic_weights=enforce_distance_monotonic_weights,
+        )
+    else:
+        weights = _build_weights(
+            dict_param_matrix=basis_param_matrix,
+            target_param_matrix=target_param_matrix,
+            method=method,
+            top_k=top_k,
+            distance_hardness=distance_hardness,
+            density_scaling=density_scaling,
+            event_mask=event_mask,
+            enforce_distance_monotonic_weights=enforce_distance_monotonic_weights,
+        )
     # Diagnostic center in parameter space: weighted by the same basis weights
     # used for synthetic-column generation (includes density modulation when enabled).
     diagnostic_columns: list[str] = []
@@ -2645,7 +2978,9 @@ def main() -> int:
             else None
         )
     center_prefix = "Density-modulated " if density_enabled else ""
-    if interpolation_aggregation == "local_linear":
+    if feature_generation_mode == "dataset_data_curve":
+        diagnostic_center_label = "Exact STEP 3.1 dataset-backed row"
+    elif interpolation_aggregation == "local_linear":
         diagnostic_center_label = f"{center_prefix}local-linear parameter-space center (diagnostic)"
     else:
         diagnostic_center_label = f"{center_prefix}weighted parameter-space center (diagnostic)"
@@ -2689,11 +3024,25 @@ def main() -> int:
                     time_df[col],
                     errors="coerce",
                 ).to_numpy(dtype=float)
-    else:
+    elif feature_generation_mode in {"weighted_interpolation", "synthetic_data_curve"}:
         # Keep parameter-space coordinates exactly equal to STEP 3.1 targets.
         for col in parameter_space_cols:
             if col in synthetic_df.columns and col in time_df.columns:
                 synthetic_df[col] = pd.to_numeric(time_df[col], errors="coerce").to_numpy(dtype=float)
+        helper_rebuild_info = _rebuild_weighted_step12_helper_columns(synthetic_df)
+        _rebuild_efficiencies_string(synthetic_df)
+        if bool(helper_rebuild_info.get("applied")):
+            log.info(
+                "Rebuilt weighted STEP 1.2 helper columns after target-parameter override: "
+                "synced_eff_alias=%d products=%d proxies=%d",
+                int(len(helper_rebuild_info.get("synced_eff_alias_columns", []))),
+                int(len(helper_rebuild_info.get("rebuilt_efficiency_product_columns", []))),
+                int(len(helper_rebuild_info.get("rebuilt_flux_proxy_columns", []))),
+            )
+    else:
+        helper_rebuild_info = {"applied": False}
+    if feature_generation_mode == "closest_point":
+        helper_rebuild_info = {"applied": False}
 
     rate_consistency_info = dict(synthetic_df.attrs.get("rate_consistency_info", {}))
     rate_consistency_info["tt_prefix_selected"] = tt_rate_consistency_prefix
@@ -2900,18 +3249,29 @@ def main() -> int:
         "basis_events_column_used": basis_events_col,
         "basis_events_column_resolution": basis_events_col_mode,
         "basis_events_filter": basis_filter_info,
+        "basis_event_filter_mode": basis_event_filter_mode,
+        "step31_curve_data_mode": step31_curve_data_mode,
+        "step31_curve_data_mode_explicit": bool(step31_mode_explicit),
         "feature_generation_mode": feature_generation_mode,
         "flux_eff_assignment_method": (
-            "copied_from_closest_basis_row"
+            "copied_from_step31_dataset_curve_row"
+            if feature_generation_mode == "dataset_data_curve"
+            else "copied_from_closest_basis_row"
             if feature_generation_mode == "closest_point"
             else "target_discretized_from_step_3_1"
         ),
         "global_rate_assignment_method": (
-            "copied_from_closest_basis_row"
+            "copied_from_step31_dataset_curve_row"
+            if feature_generation_mode == "dataset_data_curve"
+            else "copied_from_closest_basis_row"
             if feature_generation_mode == "closest_point"
             else "weighted_feature_space_from_step_3_2"
         ),
-        "diagnostic_center_method": "weighted_parameter_space_center_not_used_for_output",
+        "diagnostic_center_method": (
+            "exact_step31_dataset_row"
+            if feature_generation_mode == "dataset_data_curve"
+            else "weighted_parameter_space_center_not_used_for_output"
+        ),
         "diagnostic_flux_eff_center_label": diagnostic_center_label,
         "diagnostic_parameter_mae_vs_target": diagnostic_param_mae,
         "diagnostic_flux_center_mae_vs_target": diagnostic_flux_mae,
@@ -2933,7 +3293,11 @@ def main() -> int:
         "n_basis_points": int(len(dictionary_work)),
         "n_dictionary_points": int(len(dictionary_work)),
         "n_synthetic_rows": int(len(synthetic_df)),
-        "weighting_method": method,
+        "weighting_method": (
+            "step31_dataset_curve_exact_copy"
+            if feature_generation_mode == "dataset_data_curve"
+            else method
+        ),
         "interpolation_aggregation": interpolation_aggregation,
         "distance_definition": "standardized_euclidean_in_parameter_space",
         "distance_hardness": float(distance_hardness),
@@ -2982,6 +3346,7 @@ def main() -> int:
             float(pd.to_numeric(synthetic_df.get("events_per_second_global_rate"), errors="coerce").min()),
             float(pd.to_numeric(synthetic_df.get("events_per_second_global_rate"), errors="coerce").max()),
         ],
+        "weighted_helper_rebuild": helper_rebuild_info,
         "rate_consistency_constraints": rate_consistency_info,
         "diagnostic_center_series_csv": str(out_center),
     }

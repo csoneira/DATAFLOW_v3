@@ -129,6 +129,50 @@ def _load_parameter_space_columns(path: Path) -> list[str]:
     return []
 
 
+def _grid_boundary_detail(
+    *,
+    axis_name: str,
+    best_value: object,
+    tested_values: list[object],
+) -> dict[str, object]:
+    values = list(tested_values)
+    if not values:
+        return {
+            "axis": axis_name,
+            "tested_values": [],
+            "selected_value": best_value,
+            "grid_size": 0,
+            "on_lower_boundary": False,
+            "on_upper_boundary": False,
+            "is_boundary": False,
+        }
+
+    lower = values[0]
+    upper = values[-1]
+    if isinstance(best_value, (float, int, np.floating, np.integer)) and isinstance(lower, (float, int, np.floating, np.integer)):
+        on_lower = bool(np.isclose(float(best_value), float(lower)))
+        on_upper = bool(np.isclose(float(best_value), float(upper)))
+    else:
+        on_lower = best_value == lower
+        on_upper = best_value == upper
+
+    if len(values) <= 1:
+        on_lower = False
+        on_upper = False
+
+    return {
+        "axis": axis_name,
+        "tested_values": values,
+        "selected_value": best_value,
+        "grid_size": int(len(values)),
+        "lower_boundary_value": lower,
+        "upper_boundary_value": upper,
+        "on_lower_boundary": bool(on_lower),
+        "on_upper_boundary": bool(on_upper),
+        "is_boundary": bool(on_lower or on_upper),
+    }
+
+
 # ── Tuning functions ─────────────────────────────────────────────────
 
 def _compute_normalization_params(
@@ -453,16 +497,67 @@ def _auto_tune_distance(
     log.info("  Best grid: norm=%s, p=%.1f, k=%d, λ=%.0e (error %.3f %%)",
              best_norm, best_p, best_k, best_lambda, best_score)
 
+    grid_boundary_details = {
+        "normalization": _grid_boundary_detail(
+            axis_name="normalization",
+            best_value=best_norm,
+            tested_values=norms_to_try,
+        ),
+        "p_norm": _grid_boundary_detail(
+            axis_name="p_norm",
+            best_value=float(best_p),
+            tested_values=[float(v) for v in ps_to_try],
+        ),
+        "k": _grid_boundary_detail(
+            axis_name="k",
+            best_value=int(best_k),
+            tested_values=[int(v) for v in k_candidates],
+        ),
+        "lambda": _grid_boundary_detail(
+            axis_name="lambda",
+            best_value=float(best_lambda),
+            tested_values=[float(v) for v in _LAMBDA_GRID],
+        ),
+    }
+    grid_boundary_axes = [
+        axis_name
+        for axis_name, detail in grid_boundary_details.items()
+        if bool(detail.get("is_boundary"))
+    ]
+    grid_boundary_warning = bool(grid_boundary_axes) and forced_mode is None
+    if grid_boundary_warning:
+        parts: list[str] = []
+        for axis_name in grid_boundary_axes:
+            detail = grid_boundary_details[axis_name]
+            side = "lower" if detail.get("on_lower_boundary") else "upper"
+            parts.append(
+                f"{axis_name}={detail.get('selected_value')} ({side} tested edge)"
+            )
+        log.warning(
+            "Selected STEP 1.5 optimum lies on tested-grid boundary for %s. "
+            "This suggests the current search grid may still be truncating a better solution.",
+            ", ".join(parts),
+        )
+
     # ── Phase 2: coordinate descent on per-feature weights (at best k) ──
     center, scale = _compute_normalization_params(x_raw, best_norm)
     z = (x_raw - center) / scale
 
     weights = np.ones(d, dtype=float)
     current_score = best_score
+    log.info(
+        "  Starting weight tuning at the selected grid point: %d feature(s), up to %d round(s), %d candidate weight(s) per feature.",
+        d,
+        _MAX_WEIGHT_ROUNDS,
+        max(len(_WEIGHT_CANDIDATES) - 1, 0),
+    )
 
     for rnd in range(1, _MAX_WEIGHT_ROUNDS + 1):
+        log.info("  Weight round %d/%d: evaluating feature weights...", rnd, _MAX_WEIGHT_ROUNDS)
         improved_count = 0
         for j in range(d):
+            if j == 0 or (j + 1) == d or ((j + 1) % 10 == 0):
+                log.info("    Weight round %d progress: feature %d/%d", rnd, j + 1, d)
             w_orig = weights[j]
             best_wj = w_orig
             best_wj_score = current_score
@@ -527,6 +622,14 @@ def _auto_tune_distance(
         "weights": weights.tolist(),
         "grid_results": grid_results,
         "grid_best_score": round(best_score, 4),
+        "_grid_boundary_warning_comment": (
+            "If grid_boundary_warning is true, the selected STEP 1.5 optimum "
+            "touched at least one boundary of the tested search grid. "
+            "That suggests there may be room for improvement by expanding the grid."
+        ),
+        "grid_boundary_warning": grid_boundary_warning,
+        "grid_boundary_axes": grid_boundary_axes,
+        "grid_boundary_details": grid_boundary_details,
         "weight_tuned_score": round(weight_tuned_score, 4),
         "n_active_features": int(np.sum(weights > 0)),
         "n_zeroed_features": int(np.sum(weights == 0)),
@@ -635,6 +738,7 @@ def main() -> int:
     log.info("Wrote distance definition artifact: %s", out_path)
 
     # ── LOO validation plots ─────────────────────────────────────────
+    log.info("Starting final LOO validation predictions for STEP 1.5 plots...")
     center = np.asarray(tune_result["center"])
     scale = np.asarray(tune_result["scale"])
     weights_arr = np.asarray(tune_result["weights"])
@@ -644,6 +748,7 @@ def main() -> int:
         dm_final, y_param, tune_result["optimal_k"],
         z_feat=z_tuned, ridge_lambda=tune_result["optimal_lambda"],
     )
+    log.info("Generating STEP 1.5 validation plots...")
     _plot_loo_true_vs_estimated(y_param, y_loo, param_cols)
     _plot_loo_relative_error_histograms(y_param, y_loo, param_cols)
     log.info(

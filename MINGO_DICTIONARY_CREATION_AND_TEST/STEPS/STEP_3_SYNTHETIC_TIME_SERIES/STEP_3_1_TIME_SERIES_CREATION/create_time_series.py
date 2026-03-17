@@ -91,6 +91,30 @@ DEFAULT_PARAM_CURVE_COLS = [
 ]
 
 
+def _normalize_curve_data_mode(value: object) -> str:
+    text = str(value).strip().lower().replace("-", "_").replace(" ", "_") if value is not None else ""
+    if text in {
+        "",
+        "synthetic",
+        "synthetic_curve",
+        "synthetic_data_curve",
+        "parameter_curve",
+        "parameter_space_curve",
+    }:
+        return "synthetic_data_curve"
+    if text in {
+        "dataset",
+        "dataset_curve",
+        "dataset_data_curve",
+        "dataset_entries",
+        "real_entries",
+        "real_data_curve",
+        "control",
+    }:
+        return "dataset_data_curve"
+    return "synthetic_data_curve"
+
+
 def _save_figure(fig: plt.Figure, path: Path, **kwargs) -> None:
     global _FIGURE_COUNTER
     _FIGURE_COUNTER += 1
@@ -400,6 +424,342 @@ def _resolve_parameter_ranges(
         ranges[col] = (lo, hi)
 
     return ranges
+
+
+def _resolve_dataset_curve_event_counts(
+    source_df: pd.DataFrame,
+    *,
+    fallback_events_per_row: int,
+) -> tuple[pd.Series, str]:
+    for col in ("n_events", "selected_rows", "requested_rows"):
+        if col not in source_df.columns:
+            continue
+        vals = pd.to_numeric(source_df[col], errors="coerce")
+        if vals.notna().any():
+            return vals, col
+    return (
+        pd.Series(np.full(len(source_df), float(fallback_events_per_row), dtype=float), index=source_df.index),
+        "config_events_per_file_fallback",
+    )
+
+
+def _resolve_dataset_curve_durations(
+    source_df: pd.DataFrame,
+    *,
+    rate_series: pd.Series,
+    events_series: pd.Series,
+    fallback_events_per_row: int,
+) -> tuple[pd.Series, str]:
+    for col in ("duration_seconds", "count_rate_denominator_seconds", "events_per_second_total_seconds"):
+        if col not in source_df.columns:
+            continue
+        vals = pd.to_numeric(source_df[col], errors="coerce")
+        valid = vals.notna() & (vals > 0.0)
+        if valid.any():
+            return vals, col
+
+    rate = pd.to_numeric(rate_series, errors="coerce")
+    events = pd.to_numeric(events_series, errors="coerce")
+    duration_from_rate = pd.Series(np.nan, index=source_df.index, dtype=float)
+    valid = rate.notna() & (rate > 0.0) & events.notna() & (events > 0.0)
+    duration_from_rate.loc[valid] = events.loc[valid] / rate.loc[valid]
+    if duration_from_rate.notna().any():
+        return duration_from_rate, "events_over_rate"
+
+    fallback = pd.Series(np.nan, index=source_df.index, dtype=float)
+    valid_rate = rate.notna() & (rate > 0.0)
+    fallback.loc[valid_rate] = float(fallback_events_per_row) / rate.loc[valid_rate]
+    return fallback, "config_events_per_file_over_rate"
+
+
+def _standardize_param_matrix(param_matrix: np.ndarray) -> np.ndarray:
+    x = np.asarray(param_matrix, dtype=float)
+    if x.ndim != 2 or x.shape[0] == 0:
+        return np.zeros((0, 0), dtype=float)
+    center = np.nanmean(x, axis=0)
+    scale = np.nanstd(x, axis=0)
+    scale = np.where(np.isfinite(scale) & (scale > 1e-12), scale, 1.0)
+    x_std = (x - center) / scale
+    return np.where(np.isfinite(x_std), x_std, 0.0)
+
+
+def _dataset_curve_order_scores(param_matrix: np.ndarray) -> np.ndarray:
+    x_std = _standardize_param_matrix(param_matrix)
+    if x_std.ndim != 2 or x_std.shape[0] == 0:
+        return np.zeros(0, dtype=float)
+    if x_std.shape[0] == 1:
+        return np.zeros(1, dtype=float)
+
+    try:
+        _, _, vh = np.linalg.svd(x_std, full_matrices=False)
+        if vh.ndim == 2 and vh.shape[0] > 0:
+            return np.asarray(x_std @ vh[0], dtype=float)
+    except np.linalg.LinAlgError:
+        pass
+    return np.asarray(x_std[:, 0], dtype=float)
+
+
+def _select_dataset_curve_positions(n_available: int, n_target: int) -> np.ndarray:
+    if n_available <= 0:
+        return np.zeros(0, dtype=int)
+    n_take = max(1, int(n_target))
+    if n_take <= n_available:
+        return np.floor(np.linspace(0.0, float(n_available) - 1e-9, n_take)).astype(int)
+
+    cycles = n_take // n_available
+    remainder = n_take % n_available
+    parts = [np.arange(n_available, dtype=int) for _ in range(cycles)]
+    if remainder > 0:
+        parts.append(np.floor(np.linspace(0.0, float(n_available) - 1e-9, remainder)).astype(int))
+    return np.concatenate(parts) if parts else np.zeros(0, dtype=int)
+
+
+def _select_dataset_curve_smooth_order(
+    param_matrix: np.ndarray,
+    n_target: int,
+    *,
+    rng: np.random.Generator | None = None,
+) -> tuple[np.ndarray, dict[str, object]]:
+    x_std = _standardize_param_matrix(param_matrix)
+    n_available = int(x_std.shape[0])
+    if n_available <= 0:
+        return np.zeros(0, dtype=int), {
+            "ordering_mode": "empty",
+            "selection_window_radius": 0,
+            "selection_anchor_weight": 0.0,
+            "selection_cost": "none",
+        }
+
+    order_scores = _dataset_curve_order_scores(param_matrix)
+    order = np.argsort(order_scores, kind="mergesort")
+    n_take = max(1, int(n_target))
+    if n_available == 1 or n_take == 1:
+        center_pos = int(np.clip(np.rint(0.5 * (n_available - 1)), 0, n_available - 1))
+        return order[[center_pos]], {
+            "ordering_mode": "pca1_windowed_continuity_path",
+            "selection_window_radius": 0,
+            "selection_anchor_weight": 0.35,
+            "selection_cost": "squared_standardized_jump",
+        }
+
+    if n_take >= n_available:
+        repeated = _select_dataset_curve_positions(n_available, n_take)
+        return order[repeated], {
+            "ordering_mode": "pca1_sorted_with_repeats",
+            "selection_window_radius": 0,
+            "selection_anchor_weight": 0.0,
+            "selection_cost": "pca1_sorted_repeat_cycle",
+        }
+
+    x_sorted = x_std[order]
+    centers = np.linspace(0.0, float(n_available - 1), n_take, dtype=float)
+    nominal_step = float(n_available - 1) / max(n_take - 1, 1)
+    window_radius = max(3, int(np.ceil(0.8 * nominal_step)))
+    anchor_weight = 0.35
+    center_jitter_scale = 0.45 * min(window_radius, max(1.0, nominal_step))
+    phase_offset = 0.0
+
+    if rng is not None and n_take > 2 and center_jitter_scale > 0.0:
+        phase_offset = float(rng.uniform(-0.5, 0.5) * center_jitter_scale)
+        local_jitter = rng.normal(0.0, 0.6 * center_jitter_scale, size=n_take - 2)
+        if local_jitter.size > 1:
+            local_jitter = _moving_average(local_jitter, min(local_jitter.size, 5))
+        centers[1:-1] = centers[1:-1] + phase_offset + local_jitter
+        centers[1:-1] = np.clip(centers[1:-1], 1.0, float(n_available - 2))
+        centers[1:-1] = np.maximum.accumulate(centers[1:-1])
+        for idx in range(n_take - 3, -1, -1):
+            centers[idx + 1] = min(centers[idx + 1], centers[idx + 2] - 1e-6)
+        centers[1:-1] = np.clip(centers[1:-1], 1.0, float(n_available - 2))
+
+    candidate_positions: list[np.ndarray] = []
+    anchor_costs: list[np.ndarray] = []
+    for idx, center in enumerate(centers):
+        if idx == 0:
+            candidate_positions.append(np.array([0], dtype=int))
+            anchor_costs.append(np.zeros(1, dtype=float))
+            continue
+        if idx == n_take - 1:
+            candidate_positions.append(np.array([n_available - 1], dtype=int))
+            anchor_costs.append(np.zeros(1, dtype=float))
+            continue
+        lo = max(0, int(np.floor(center)) - window_radius)
+        hi = min(n_available - 1, int(np.ceil(center)) + window_radius)
+        positions = np.arange(lo, hi + 1, dtype=int)
+        if positions.size == 0:
+            positions = np.array([int(np.clip(np.rint(center), 0, n_available - 1))], dtype=int)
+        candidate_positions.append(positions)
+        anchor_cost = anchor_weight * np.abs(positions.astype(float) - center) / max(window_radius, 1)
+        if rng is not None:
+            anchor_cost = anchor_cost + rng.uniform(0.0, 0.03, size=positions.size)
+        anchor_costs.append(anchor_cost)
+
+    dp = anchor_costs[0].copy()
+    backrefs: list[np.ndarray] = []
+    for idx in range(1, n_take):
+        prev_pos = candidate_positions[idx - 1]
+        curr_pos = candidate_positions[idx]
+        jump_cost = np.sum(
+            (x_sorted[prev_pos][:, None, :] - x_sorted[curr_pos][None, :, :]) ** 2,
+            axis=2,
+        )
+        valid_transitions = curr_pos[None, :] > prev_pos[:, None]
+        total_cost = dp[:, None] + np.where(valid_transitions, jump_cost, np.inf) + anchor_costs[idx][None, :]
+        best_prev = np.argmin(total_cost, axis=0)
+        best_cost = total_cost[best_prev, np.arange(total_cost.shape[1])]
+        backrefs.append(best_prev.astype(int))
+        dp = best_cost
+
+    if not np.isfinite(dp).any():
+        fallback = _select_dataset_curve_positions(n_available, n_take)
+        return order[fallback], {
+            "ordering_mode": "pca1_sorted_fallback",
+            "selection_window_radius": window_radius,
+            "selection_anchor_weight": anchor_weight,
+            "selection_cost": "pca1_even_spacing_fallback",
+        }
+
+    cursor = int(np.nanargmin(dp))
+    chosen_candidate_indices = [cursor]
+    for stage in range(n_take - 2, -1, -1):
+        cursor = int(backrefs[stage][cursor])
+        chosen_candidate_indices.append(cursor)
+    chosen_candidate_indices.reverse()
+
+    sorted_positions = np.array(
+        [candidate_positions[idx][chosen_candidate_indices[idx]] for idx in range(n_take)],
+        dtype=int,
+    )
+    return order[sorted_positions], {
+        "ordering_mode": "pca1_windowed_continuity_path",
+        "selection_window_radius": window_radius,
+        "selection_anchor_weight": anchor_weight,
+        "selection_cost": "squared_standardized_jump",
+        "selection_randomized": bool(rng is not None),
+        "selection_center_jitter_scale": float(center_jitter_scale),
+        "selection_phase_offset": float(phase_offset),
+    }
+
+
+def _build_dataset_backed_curve(
+    *,
+    source_df: pd.DataFrame,
+    param_cols: list[str],
+    rate_col: str,
+    duration_seconds_target: float,
+    events_per_file_fallback: int,
+    start_time: pd.Timestamp,
+    rng: np.random.Generator | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, object]]:
+    if source_df.empty:
+        raise ValueError("Dataset-backed curve requires a non-empty source table.")
+    if rate_col not in source_df.columns:
+        raise ValueError(f"Dataset-backed curve source must contain rate column '{rate_col}'.")
+
+    param_df = source_df[param_cols].apply(pd.to_numeric, errors="coerce")
+    rate_series = pd.to_numeric(source_df[rate_col], errors="coerce")
+    event_counts, event_count_source = _resolve_dataset_curve_event_counts(
+        source_df,
+        fallback_events_per_row=events_per_file_fallback,
+    )
+    durations, duration_source = _resolve_dataset_curve_durations(
+        source_df,
+        rate_series=rate_series,
+        events_series=event_counts,
+        fallback_events_per_row=events_per_file_fallback,
+    )
+
+    valid = (
+        param_df.notna().all(axis=1)
+        & rate_series.notna()
+        & (rate_series > 0.0)
+        & pd.to_numeric(durations, errors="coerce").notna()
+        & (pd.to_numeric(durations, errors="coerce") > 0.0)
+    )
+    if not valid.any():
+        raise ValueError(
+            "Dataset-backed curve could not find any source rows with finite parameter columns, rate, and duration."
+        )
+
+    valid_source = source_df.loc[valid].copy().reset_index(drop=True)
+    valid_param = param_df.loc[valid].reset_index(drop=True)
+    valid_rate = rate_series.loc[valid].reset_index(drop=True)
+    valid_events = pd.to_numeric(event_counts.loc[valid], errors="coerce").reset_index(drop=True)
+    valid_duration = pd.to_numeric(durations.loc[valid], errors="coerce").reset_index(drop=True)
+    fill_events = valid_events.isna() | (valid_events <= 0.0)
+    if fill_events.any():
+        valid_events.loc[fill_events] = (
+            valid_rate.loc[fill_events].to_numpy(dtype=float)
+            * valid_duration.loc[fill_events].to_numpy(dtype=float)
+        )
+    source_row_positions = np.flatnonzero(valid.to_numpy())
+
+    finite_durations = valid_duration[np.isfinite(valid_duration) & (valid_duration > 0.0)]
+    median_duration = float(np.median(finite_durations)) if not finite_durations.empty else 0.0
+    if not np.isfinite(median_duration) or median_duration <= 0.0:
+        median_duration = max(float(duration_seconds_target), 1.0)
+    n_target_rows = max(1, int(np.round(float(duration_seconds_target) / median_duration)))
+
+    selected_order, selection_info = _select_dataset_curve_smooth_order(
+        valid_param.to_numpy(dtype=float),
+        n_target_rows,
+        rng=rng,
+    )
+    chosen = valid_source.iloc[selected_order].reset_index(drop=True)
+    chosen_rate = pd.to_numeric(valid_rate.iloc[selected_order], errors="coerce").reset_index(drop=True)
+    chosen_events = pd.to_numeric(valid_events.iloc[selected_order], errors="coerce").reset_index(drop=True)
+    chosen_duration = pd.to_numeric(valid_duration.iloc[selected_order], errors="coerce").reset_index(drop=True)
+    chosen_row_positions = source_row_positions[selected_order]
+
+    elapsed_end = np.cumsum(chosen_duration.to_numpy(dtype=float))
+    elapsed_start = elapsed_end - chosen_duration.to_numpy(dtype=float)
+    elapsed_mid = 0.5 * (elapsed_start + elapsed_end)
+
+    file_df = pd.DataFrame(
+        {
+            "file_index": np.arange(1, len(chosen) + 1, dtype=int),
+            "elapsed_seconds_start": elapsed_start,
+            "elapsed_seconds_end": elapsed_end,
+            "elapsed_seconds": elapsed_mid,
+            "elapsed_hours_start": elapsed_start / 3600.0,
+            "elapsed_hours_end": elapsed_end / 3600.0,
+            "elapsed_hours": elapsed_mid / 3600.0,
+            "duration_seconds": chosen_duration.to_numpy(dtype=float),
+            "n_events_expected": chosen_events.to_numpy(dtype=float),
+            "n_events": np.rint(chosen_events.to_numpy(dtype=float)).astype(int),
+            "target_events_per_file": np.rint(chosen_events.to_numpy(dtype=float)).astype(int),
+            "global_rate_hz_mid": chosen_rate.to_numpy(dtype=float),
+            "global_rate_hz_mean": chosen_rate.to_numpy(dtype=float),
+            "step31_curve_data_mode": np.full(len(chosen), "dataset_data_curve", dtype=object),
+            "step31_source_row_index": chosen_row_positions.astype(int),
+        }
+    )
+    for col in param_cols:
+        file_df[col] = pd.to_numeric(chosen[col], errors="coerce").to_numpy(dtype=float)
+
+    if "filename_base" in chosen.columns:
+        file_df["step31_source_filename_base"] = chosen["filename_base"].astype(str).to_numpy(dtype=object)
+    if "param_hash_x" in chosen.columns:
+        file_df["step31_source_param_hash_x"] = chosen["param_hash_x"].astype(str).to_numpy(dtype=object)
+
+    dense_df = file_df.copy()
+    dense_df.insert(0, "curve_index", np.arange(len(dense_df), dtype=int))
+    dense_time = start_time + pd.to_timedelta(dense_df["elapsed_seconds"], unit="s")
+    dense_df["time_utc"] = dense_time.dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    info = {
+        "mode": "dataset_data_curve",
+        "ordering_mode": selection_info.get("ordering_mode"),
+        "n_reference_points": int(len(valid_source)),
+        "n_anchor_points": None,
+        "anchor_indices_in_valid_reference": [],
+        "event_count_source_column": event_count_source,
+        "duration_source_column": duration_source,
+        "selected_source_rows": int(len(chosen)),
+        "selected_source_row_indices": chosen_row_positions.astype(int).tolist(),
+        "selected_source_unique_rows": int(np.unique(chosen_row_positions).size),
+    }
+    info.update(selection_info)
+    return dense_df, file_df, info
 
 
 def _build_parameter_curve(
@@ -852,6 +1212,7 @@ def main() -> int:
     _clear_plots_dir()
     config = _load_config(Path(args.config))
     cfg_31 = config.get("step_3_1", {})
+    curve_data_mode = _normalize_curve_data_mode(cfg_31.get("curve_data_mode", "synthetic_data_curve"))
     deprecated_weighting_keys = (
         "weighted_feature_columns",
         "weighting_top_k",
@@ -869,6 +1230,8 @@ def main() -> int:
         source_path = _resolve_input_path(args.source_csv)
     elif cfg_31.get("source_csv"):
         source_path = _resolve_input_path(str(cfg_31.get("source_csv")))
+    elif curve_data_mode == "dataset_data_curve":
+        source_path = DEFAULT_DATASET
     elif source_table == "dictionary":
         source_path = DEFAULT_DICTIONARY
     else:
@@ -882,6 +1245,11 @@ def main() -> int:
     if source_df.empty:
         log.error("Source CSV is empty: %s", source_path)
         return 1
+    if curve_data_mode == "dataset_data_curve" and source_table != "dataset" and not (args.source_csv or cfg_31.get("source_csv")):
+        log.info(
+            "STEP 3.1 dataset_data_curve forces dataset source rows; source_table=%s is ignored.",
+            source_table,
+        )
 
     if cfg_31.get("rate_dictionary_csv"):
         rate_path = _resolve_input_path(str(cfg_31.get("rate_dictionary_csv")))
@@ -954,7 +1322,7 @@ def main() -> int:
         )
     eff_cols_cfg = [c for c in param_cols if c.startswith("eff_sim_")]
     curve_generation_mode = str(cfg_31.get("curve_generation_mode", "convex_hull")).strip().lower()
-    if eff_cols_cfg:
+    if eff_cols_cfg and curve_data_mode == "synthetic_data_curve":
         eff_ranges_used = {c: [float(param_ranges[c][0]), float(param_ranges[c][1])] for c in eff_cols_cfg}
         log.info(
             "Efficiency ranges: %s | spread requested (ignored): %s | curve_generation_mode=%s",
@@ -1003,46 +1371,85 @@ def main() -> int:
         log.error("No valid dictionary rows in parameter-space columns: %s", param_cols)
         return 1
 
-    # Build dense parameter-space trajectory.
-    u = _normalised_axis(dense_points)
-    curve, curve_build_info = _build_parameter_curve(
-        u=u,
-        param_cols=param_cols,
-        param_ranges=param_ranges,
-        rng=rng,
-        cfg_31=cfg_31,
-        identical_efficiencies=identical_efficiencies,
-        reference_df=rate_work[param_cols],
-    )
+    if curve_data_mode == "dataset_data_curve":
+        try:
+            dense_df, file_df, curve_build_info = _build_dataset_backed_curve(
+                source_df=source_df,
+                param_cols=param_cols,
+                rate_col=rate_col,
+                duration_seconds_target=duration_seconds,
+                events_per_file_fallback=events_per_file,
+                start_time=start_time,
+                rng=rng,
+            )
+        except ValueError as exc:
+            log.error("%s", exc)
+            return 1
+        total_events = float(pd.to_numeric(file_df["n_events_expected"], errors="coerce").sum())
+        plot_reference_df = source_df[param_cols].apply(pd.to_numeric, errors="coerce")
+    else:
+        # Build dense parameter-space trajectory.
+        u = _normalised_axis(dense_points)
+        curve, curve_build_info = _build_parameter_curve(
+            u=u,
+            param_cols=param_cols,
+            param_ranges=param_ranges,
+            rng=rng,
+            cfg_31=cfg_31,
+            identical_efficiencies=identical_efficiencies,
+            reference_df=rate_work[param_cols],
+        )
+
+        dense_rate_hz = _build_global_rate_curve_from_parameters(
+            curve=curve,
+            param_cols=param_cols,
+            cfg_31=cfg_31,
+            rate_range_hz=rate_range_hz,
+        )
+
+        dense_time_s = np.linspace(0.0, duration_seconds, dense_points, dtype=float)
+        dense_time = start_time + pd.to_timedelta(dense_time_s, unit="s")
+
+        dense_df = pd.DataFrame(
+            {
+                "curve_index": np.arange(len(dense_time_s), dtype=int),
+                "time_utc": dense_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "elapsed_seconds": dense_time_s,
+                "elapsed_hours": dense_time_s / 3600.0,
+            }
+        )
+
+        for col in param_cols:
+            dense_df[col] = np.asarray(curve[col], dtype=float)
+
+        dense_tracks: dict[str, np.ndarray] = {}
+        for col in [*param_cols]:
+            if col in dense_df.columns and col not in dense_tracks:
+                dense_tracks[col] = pd.to_numeric(dense_df[col], errors="coerce").to_numpy(dtype=float)
+
+        try:
+            file_df, total_events = _discretize_curve_by_events(
+                dense_time_s=dense_time_s,
+                dense_rate_hz=dense_rate_hz,
+                dense_tracks=dense_tracks,
+                events_per_file=events_per_file,
+                include_partial_last_file=include_partial_last_file,
+            )
+        except ValueError as exc:
+            log.error("%s", exc)
+            return 1
+        plot_reference_df = rate_work[param_cols]
+
     log.info(
-        "Curve generation: mode=%s, reference_points=%s, anchors=%s",
+        "Curve generation: data_mode=%s, mode=%s, reference_points=%s, anchors=%s",
+        curve_data_mode,
         curve_build_info.get("mode"),
         curve_build_info.get("n_reference_points"),
         curve_build_info.get("n_anchor_points"),
     )
 
-    dense_rate_hz = _build_global_rate_curve_from_parameters(
-        curve=curve,
-        param_cols=param_cols,
-        cfg_31=cfg_31,
-        rate_range_hz=rate_range_hz,
-    )
-
-    dense_time_s = np.linspace(0.0, duration_seconds, dense_points, dtype=float)
-    dense_cum_events = _cumulative_events(dense_time_s, dense_rate_hz)
-    dense_time = start_time + pd.to_timedelta(dense_time_s, unit="s")
-
-    dense_df = pd.DataFrame(
-        {
-            "curve_index": np.arange(len(dense_time_s), dtype=int),
-            "time_utc": dense_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "elapsed_seconds": dense_time_s,
-            "elapsed_hours": dense_time_s / 3600.0,
-        }
-    )
-
-    for col in param_cols:
-        dense_df[col] = np.asarray(curve[col], dtype=float)
+    if "step31_curve_data_mode" not in dense_df.columns:
+        dense_df["step31_curve_data_mode"] = curve_data_mode
 
     # Canonical aliases expected by downstream tooling/plots.
     if CANONICAL_FLUX_COLUMN in dense_df.columns:
@@ -1062,23 +1469,6 @@ def main() -> int:
     out_dense_csv = FILES_DIR / "complete_curve_time_series.csv"
     dense_df.to_csv(out_dense_csv, index=False)
     log.info("Wrote complete curve CSV: %s (%d rows)", out_dense_csv, len(dense_df))
-
-    dense_tracks: dict[str, np.ndarray] = {}
-    for col in [*param_cols]:
-        if col in dense_df.columns and col not in dense_tracks:
-            dense_tracks[col] = pd.to_numeric(dense_df[col], errors="coerce").to_numpy(dtype=float)
-
-    try:
-        file_df, total_events = _discretize_curve_by_events(
-            dense_time_s=dense_time_s,
-            dense_rate_hz=dense_rate_hz,
-            dense_tracks=dense_tracks,
-            events_per_file=events_per_file,
-            include_partial_last_file=include_partial_last_file,
-        )
-    except ValueError as exc:
-        log.error("%s", exc)
-        return 1
 
     if len(file_df) < 3:
         log.warning(
@@ -1100,6 +1490,9 @@ def main() -> int:
             file_df["eff"] = pd.to_numeric(file_df[eff_cols[0]], errors="coerce")
         else:
             file_df["eff"] = np.nan
+
+    if "step31_curve_data_mode" not in file_df.columns:
+        file_df["step31_curve_data_mode"] = curve_data_mode
 
     time_start = start_time + pd.to_timedelta(file_df["elapsed_seconds_start"], unit="s")
     time_end = start_time + pd.to_timedelta(file_df["elapsed_seconds_end"], unit="s")
@@ -1125,6 +1518,10 @@ def main() -> int:
         "eff",
         "flux_cm2_min",
         "eff_sim_1",
+        "step31_curve_data_mode",
+        "step31_source_row_index",
+        "step31_source_filename_base",
+        "step31_source_param_hash_x",
     ]
 
     extra_param_cols = [
@@ -1172,6 +1569,8 @@ def main() -> int:
     summary = {
         "source_csv": str(source_path),
         "rate_dictionary_csv": str(rate_path),
+        "curve_data_mode_requested": curve_data_mode,
+        "curve_data_mode_used": curve_data_mode,
         "parameter_curve_columns": param_cols,
         "parameter_ranges_used": {k: [float(v[0]), float(v[1])] for k, v in param_ranges.items()},
         "identical_efficiencies": bool(identical_efficiencies),
@@ -1191,6 +1590,18 @@ def main() -> int:
         "end_time_utc": str(out_df["time_end_utc"].iloc[-1]),
         "mean_file_duration_seconds": float(out_df["duration_seconds"].mean()),
     }
+    for key in (
+        "ordering_mode",
+        "event_count_source_column",
+        "duration_source_column",
+        "selected_source_rows",
+        "selected_source_unique_rows",
+        "selection_randomized",
+        "selection_center_jitter_scale",
+        "selection_phase_offset",
+    ):
+        if key in curve_build_info:
+            summary[key] = curve_build_info.get(key)
     summary.update(dense_eff_spread_stats)
     summary.update(file_eff_spread_stats)
     out_summary = FILES_DIR / "time_series_summary.json"
@@ -1200,7 +1611,7 @@ def main() -> int:
 
     _plot_time_series(dense_df, out_df, PLOTS_DIR / "time_series_flux_eff.png")
     _plot_parameter_space_lower_triangle(
-        reference_df=rate_work,
+        reference_df=plot_reference_df,
         dense_df=dense_df,
         file_df=out_df,
         param_cols=param_cols,

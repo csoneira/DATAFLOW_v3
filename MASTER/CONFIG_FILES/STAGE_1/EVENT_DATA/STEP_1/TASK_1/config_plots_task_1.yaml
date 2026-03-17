@@ -1,0 +1,14 @@
+plots:
+  debug_suite: debug
+  usual_suite: essential
+  essential_suite: essential
+  raw_tt_overview: essential
+  channel_histograms_raw: essential
+  tq_scatter_raw: essential
+  channel_histograms_filtered: essential
+  tq_scatter_filtered: essential
+  tsum_spread_diagnostics: essential
+  channel_contamination_matrix_32: essential
+  channel_contagion_by_tt: essential
+  channel_contamination_matrix_32_raw: essential
+  channel_contagion_by_tt_raw: essential

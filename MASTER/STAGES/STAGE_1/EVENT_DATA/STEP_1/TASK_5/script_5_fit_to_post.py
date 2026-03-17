@@ -30,6 +30,7 @@ a coherent, traceable set of corrected datasets per station.
 # Standard Library
 from ast import literal_eval
 import argparse
+import atexit
 import builtins
 import csv
 from datetime import datetime, timedelta
@@ -134,7 +135,9 @@ from MASTER.common.step1_shared import (
     prune_redundant_count_metadata,
     save_metadata,
     set_global_rate_from_tt_rates,
+    load_step1_task_plot_catalog,
     resolve_step1_plot_options,
+    step1_task_plot_enabled,
     validate_step1_input_file_args,
     y_pos,
 )
@@ -147,6 +150,29 @@ _prof_t0 = time.perf_counter()
 _prof = {}
 
 STATION_CHOICES = ("0", "1", "2", "3", "4")
+TASK5_PLOT_ALIASES: tuple[str, ...] = (
+    "debug_suite",
+    "usual_suite",
+    "essential_suite",
+)
+task5_plot_status_by_alias: dict[str, str] = {}
+
+
+def task5_plot_enabled(alias: str) -> bool:
+    if not task5_plot_status_by_alias:
+        return True
+    return step1_task_plot_enabled(alias, task5_plot_status_by_alias, plot_mode)
+
+
+def apply_task5_plot_catalog_modes() -> None:
+    global create_plots, create_essential_plots, create_debug_plots, save_plots, create_pdf
+    if not task5_plot_status_by_alias:
+        return
+    create_plots = create_plots and task5_plot_enabled("usual_suite")
+    create_essential_plots = create_essential_plots and task5_plot_enabled("essential_suite")
+    create_debug_plots = create_debug_plots and task5_plot_enabled("debug_suite")
+    save_plots = bool(create_plots or create_essential_plots or create_debug_plots)
+    create_pdf = save_plots
 
 CLI_PARSER = build_step1_cli_parser("Run Stage 1 STEP_1 TASK_5 (FIT->CORR).", STATION_CHOICES)
 CLI_ARGS = CLI_PARSER.parse_args()
@@ -211,15 +237,30 @@ plt.close = _guarded_close
 
 _direct_pdf_pages: PdfPages | None = None
 _direct_pdf_page_count = 0
+_direct_pdf_target_path: str | None = None
+_direct_pdf_temp_path: str | None = None
+
+
+def _build_temp_pdf_path(target_path: str) -> str:
+    """Return a non-colliding temporary PDF path near the final target."""
+    base = f"{target_path}.tmp.{os.getpid()}"
+    candidate = base
+    counter = 1
+    while os.path.exists(candidate):
+        candidate = f"{base}.{counter}"
+        counter += 1
+    return candidate
 
 def save_plot_figure(save_path: str, fig: mpl.figure.Figure | None = None, **savefig_kwargs) -> None:
     """Save a figure to PNG or directly append it to the task PDF."""
-    global _direct_pdf_pages, _direct_pdf_page_count
+    global _direct_pdf_pages, _direct_pdf_page_count, _direct_pdf_target_path, _direct_pdf_temp_path
     target_fig = fig if fig is not None else plt.gcf()
     direct_pdf_path = globals().get("save_pdf_path")
     if globals().get("create_pdf", False) and direct_pdf_path:
         if _direct_pdf_pages is None:
-            _direct_pdf_pages = PdfPages(direct_pdf_path)
+            _direct_pdf_target_path = str(direct_pdf_path)
+            _direct_pdf_temp_path = _build_temp_pdf_path(_direct_pdf_target_path)
+            _direct_pdf_pages = PdfPages(_direct_pdf_temp_path)
         pdf_kwargs = dict(savefig_kwargs)
         dpi = int(pdf_kwargs.pop("dpi", 150))
         pdf_kwargs.pop("format", None)
@@ -229,10 +270,23 @@ def save_plot_figure(save_path: str, fig: mpl.figure.Figure | None = None, **sav
     target_fig.savefig(save_path, **savefig_kwargs)
 
 def close_direct_pdf_writer() -> None:
-    global _direct_pdf_pages
+    global _direct_pdf_pages, _direct_pdf_page_count, _direct_pdf_target_path, _direct_pdf_temp_path
     if _direct_pdf_pages is not None:
         _direct_pdf_pages.close()
         _direct_pdf_pages = None
+
+    if _direct_pdf_temp_path and os.path.exists(_direct_pdf_temp_path):
+        if _direct_pdf_page_count > 0 and _direct_pdf_target_path:
+            os.replace(_direct_pdf_temp_path, _direct_pdf_target_path)
+        else:
+            os.remove(_direct_pdf_temp_path)
+
+    _direct_pdf_page_count = 0
+    _direct_pdf_target_path = None
+    _direct_pdf_temp_path = None
+
+
+atexit.register(close_direct_pdf_writer)
 
 # Warning Filters
 warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
@@ -246,6 +300,14 @@ config_file_path = (
     / "STEP_1"
     / "TASK_5"
     / "config_task_5.yaml"
+)
+plot_catalog_file_path = (
+    config_root
+    / "STAGE_1"
+    / "EVENT_DATA"
+    / "STEP_1"
+    / "TASK_5"
+    / "config_plots_task_5.yaml"
 )
 parameter_config_file_path = (
     config_root
@@ -263,8 +325,15 @@ fallback_parameter_config_file_path = (
     / "config_parameters.csv"
 )
 print(f"Using config file: {config_file_path}")
+print(f"Using plot catalog file: {plot_catalog_file_path}")
 with config_file_path.open("r", encoding="utf-8") as config_file:
     config = yaml.safe_load(config_file)
+task5_plot_status_by_alias = load_step1_task_plot_catalog(
+    plot_catalog_file_path,
+    TASK5_PLOT_ALIASES,
+    "Task 5",
+    log_fn=print,
+)
 debug_mode = False
 
 home_path = str(resolve_home_path_from_config(config))
@@ -349,6 +418,7 @@ else:
     show_plots,
     create_debug_plots,
 ) = resolve_step1_plot_options(config)
+apply_task5_plot_catalog_modes()
 
 print("Creating the necessary directories...")
 
@@ -1085,6 +1155,7 @@ last_file_test = config["last_file_test"]
     show_plots,
     create_debug_plots,
 ) = resolve_step1_plot_options(config)
+apply_task5_plot_catalog_modes()
 
 # Charge calibration to fC
 
@@ -1334,6 +1405,7 @@ last_file_test = config["last_file_test"]
     show_plots,
     create_debug_plots,
 ) = resolve_step1_plot_options(config)
+apply_task5_plot_catalog_modes()
 
 # Charge calibration to fC
 
@@ -1582,11 +1654,7 @@ print("----------------------------------------------------------------------")
 # Defining the directories that will store the data
 save_full_filename = f"full_list_events_{save_filename_suffix}.txt"
 save_filename = f"list_events_{save_filename_suffix}.txt"
-save_pdf_filename = f"pdf_{save_filename_suffix}.pdf"
-
-if create_plots == False:
-    if create_essential_plots == True:
-        save_pdf_filename = "essential_" + save_pdf_filename
+save_pdf_filename = f"mingo{str(station).zfill(2)}_task5_{save_filename_suffix}.pdf"
 
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
 
@@ -1687,6 +1755,7 @@ last_file_test = config["last_file_test"]
     show_plots,
     create_debug_plots,
 ) = resolve_step1_plot_options(config)
+apply_task5_plot_catalog_modes()
 
 # Charge calibration to fC
 
@@ -2658,14 +2727,20 @@ if create_pdf:
             plt.close(fig)
         close_direct_pdf_writer()
     elif existing_pngs:
-        with PdfPages(save_pdf_path) as pdf:
-            for png in existing_pngs:
-                img = Image.open(png)
-                fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
-                ax.imshow(img)
-                ax.axis('off')
-                pdf_save_rasterized_page(pdf, fig, bbox_inches='tight')
-                plt.close(fig)
+        temp_pdf_path = _build_temp_pdf_path(save_pdf_path)
+        try:
+            with PdfPages(temp_pdf_path) as pdf:
+                for png in existing_pngs:
+                    img = Image.open(png)
+                    fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
+                    ax.imshow(img)
+                    ax.axis('off')
+                    pdf_save_rasterized_page(pdf, fig, bbox_inches='tight')
+                    plt.close(fig)
+            os.replace(temp_pdf_path, save_pdf_path)
+        finally:
+            if os.path.exists(temp_pdf_path):
+                os.remove(temp_pdf_path)
 
     # Remove PNG files after creating the PDF (or after direct PDF append path).
     for png in existing_pngs:
