@@ -37,13 +37,23 @@ SIM_STATION = "MINGO00"
 REAL_STATION = "MINGO01"
 
 TASK3_REL = Path("STAGE_1/EVENT_DATA/STEP_1/TASK_3/OUTPUT_FILES")
+# Fallback: listed files may have been consumed downstream by Task 4
+TASK4_INPUT_REL = Path("STAGE_1/EVENT_DATA/STEP_1/TASK_4/INPUT_FILES/COMPLETED_DIRECTORY")
 
 
 def find_parquets(station: str) -> list[Path]:
-    station_dir = REPO_ROOT / "STATIONS" / station / TASK3_REL
-    if not station_dir.exists():
-        return []
-    return sorted(station_dir.glob("listed_*.parquet"), key=lambda p: p.stat().st_mtime, reverse=True)
+    """Search Task 3 OUTPUT_FILES first; fall back to Task 4 INPUT_FILES/COMPLETED_DIRECTORY."""
+    for rel_path in (TASK3_REL, TASK4_INPUT_REL):
+        station_dir = REPO_ROOT / "STATIONS" / station / rel_path
+        if station_dir.exists():
+            matches = sorted(
+                station_dir.glob("listed_*.parquet"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if matches:
+                return matches
+    return []
 
 
 def load_first_parquet(station: str) -> pd.DataFrame | None:
@@ -868,6 +878,641 @@ def main():
     fig15.savefig(p15, dpi=150)
     plt.close(fig15)
     print(f"Saved: {p15}")
+
+    # -----------------------------------------------------------------------
+    # FIGURE 16: Noise-promoted fraction in native-4 — sim vs real survival
+    # The sim native-4 survival is pure signal. The real native-4 survival
+    # drops faster at low percentiles because it contains noise-promoted
+    # events (3-plane events that got a fake 4th plane from cross-talk).
+    # noise_promoted_frac(p) = 1 - f4_real(p) / f4_sim(p)
+    # where f4 = native4_surviving / native4_at_Q0
+    # -----------------------------------------------------------------------
+    print("Computing noise-promoted fraction in native-4 events...")
+    fig16, axes16 = plt.subplots(1, 2, figsize=(14, 6))
+
+    # Left panel: overlay the native-4 survival curves (normalized)
+    ax = axes16[0]
+    if frozen4_sim[0] > 0:
+        f4s = frozen4_sim / frozen4_sim[0]
+        ax.plot(percentiles, f4s, "o-", color="steelblue", ms=4, lw=1.8,
+                label=f"{SIM_STATION} native-4 (N₀={int(frozen4_sim[0])})")
+    if frozen4_real[0] > 0:
+        f4r = frozen4_real / frozen4_real[0]
+        ax.plot(percentiles, f4r, "s-", color="firebrick", ms=4, lw=1.8,
+                label=f"{REAL_STATION} native-4 (N₀={int(frozen4_real[0])})")
+    ax.set_xlabel("Charge percentile")
+    ax.set_ylabel("Survival fraction (native-4)")
+    ax.set_title("Native-4 survival: sim (pure signal) vs real (signal + noise)")
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
+
+    # Right panel: noise-promoted fraction
+    ax = axes16[1]
+    if frozen4_sim[0] > 0 and frozen4_real[0] > 0:
+        f4s = frozen4_sim / frozen4_sim[0]
+        f4r = frozen4_real / frozen4_real[0]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            # If real drops faster than sim, the excess loss = noise being cleaned
+            noise_prom = np.where(
+                (f4s > 0.01) & (f4r > 0.001),
+                1.0 - f4r / f4s,
+                np.nan,
+            )
+        ax.plot(percentiles, noise_prom, "ko-", ms=4, lw=1.5,
+                label="noise_promoted_frac = 1 − f4_real/f4_sim")
+        ax.axhline(0, color="grey", ls="--", lw=0.8)
+        ax.fill_between(percentiles, 0, np.nan_to_num(noise_prom, 0),
+                         where=np.nan_to_num(noise_prom, 0) > 0,
+                         alpha=0.25, color="red", label="Real loses faster (noise cleaned)")
+        ax.fill_between(percentiles, 0, np.nan_to_num(noise_prom, 0),
+                         where=np.nan_to_num(noise_prom, 0) < 0,
+                         alpha=0.25, color="blue", label="Sim loses faster")
+
+        finite = np.isfinite(noise_prom)
+        if np.any(finite):
+            peak_idx = np.nanargmax(noise_prom)
+            peak_pct = percentiles[peak_idx]
+            peak_val = noise_prom[peak_idx]
+            ax.annotate(
+                f"Peak: {peak_val:.3f} ({peak_val*100:.1f}%)\nat p{peak_pct:.0f}",
+                xy=(peak_pct, peak_val),
+                xytext=(peak_pct + 12, peak_val + 0.02),
+                fontsize=9,
+                arrowprops=dict(arrowstyle="->", color="black"),
+                bbox=dict(boxstyle="round,pad=0.3", fc="lightyellow", ec="grey"),
+            )
+            print(f"\n=== NOISE-PROMOTED FRACTION (frozen native-4) ===")
+            print(f"Peak: {peak_val:.4f} ({peak_val*100:.1f}%) at percentile {peak_pct:.0f}")
+            print(f"  Native-4 at Q=0: sim={int(frozen4_sim[0])}, real={int(frozen4_real[0])}")
+
+    ax.set_xlabel("Charge percentile")
+    ax.set_ylabel("Noise-promoted fraction")
+    ax.set_title("Fraction of native-4 events that are noise-promoted\n(excess survival loss in real vs sim)")
+    ax.legend(fontsize=7)
+    ax.grid(True, alpha=0.3)
+
+    fig16.suptitle(
+        "Noise-promoted fraction in native-4 population\n"
+        "Compares frozen native-4 survival: sim (pure signal) vs real (signal + cross-talk noise)",
+        fontsize=11,
+    )
+    fig16.tight_layout(rect=[0, 0, 1, 0.90])
+    p16 = OUT_DIR / "16_noise_promoted_fraction_native4.png"
+    fig16.savefig(p16, dpi=150)
+    plt.close(fig16)
+    print(f"Saved: {p16}")
+
+    # -----------------------------------------------------------------------
+    # FIGURE 17: Which plane is the fake 4th in noise-promoted events?
+    # For native-4 events in REAL data that lose a plane between consecutive
+    # thresholds, track WHICH plane they lose. Compare with sim.
+    # The plane lost preferentially at low thresholds in real (but not sim)
+    # is the cross-talk plane.
+    # -----------------------------------------------------------------------
+    print("Computing per-plane loss profile for native-4 events...")
+    fig17, axes17 = plt.subplots(1, 2, figsize=(14, 5))
+
+    for ax, (label, df, thr_arr, mask_n4_0) in zip(
+        axes17,
+        [
+            (SIM_STATION, df_sim, thr_sim, (compute_threshold_tt(df_sim, 0.0) == 1234).to_numpy()),
+            (REAL_STATION, df_real, thr_real, (compute_threshold_tt(df_real, 0.0) == 1234).to_numpy()),
+        ],
+    ):
+        # Pre-extract charges for native-4 events
+        q_n4 = {}
+        for p in range(1, 5):
+            col = f"P{p}_Q_sum_final"
+            q_n4[p] = pd.to_numeric(df.loc[mask_n4_0, col], errors="coerce").to_numpy(dtype=float)
+
+        lost_by_plane = {k: np.zeros(len(thr_arr) - 1) for k in range(1, 5)}
+        for i in range(1, len(thr_arr)):
+            thr_prev = float(thr_arr[i - 1])
+            thr_curr = float(thr_arr[i])
+            # Events that had all 4 planes above prev threshold
+            had4 = np.ones(mask_n4_0.sum(), dtype=bool)
+            for p in range(1, 5):
+                had4 &= q_n4[p] > thr_prev
+            for k in range(1, 5):
+                # Now plane k falls below current threshold but other 3 still above
+                lost_k = had4 & (q_n4[k] <= thr_curr)
+                others_ok = np.ones(mask_n4_0.sum(), dtype=bool)
+                for p in range(1, 5):
+                    if p != k:
+                        others_ok &= q_n4[p] > thr_curr
+                lost_by_plane[k][i - 1] = np.sum(lost_k & others_ok)
+
+        mid_pct = 0.5 * (percentiles[:-1] + percentiles[1:])
+        total_lost = sum(lost_by_plane[k] for k in range(1, 5))
+        for k in range(1, 5):
+            with np.errstate(divide="ignore", invalid="ignore"):
+                frac = np.where(total_lost > 5, lost_by_plane[k] / total_lost, np.nan)
+            ax.plot(mid_pct, frac, "o-", color=plane_colors[k], ms=4, lw=1.5,
+                    label=f"P{k}")
+        ax.axhline(0.25, color="grey", ls=":", lw=0.8, label="Uniform (25%)")
+        ax.set_xlabel("Charge percentile (midpoint)")
+        ax.set_ylabel("Fraction of native-4 losses attributed to plane k")
+        ax.set_title(f"{label}")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim(0, 0.8)
+
+    fig17.suptitle(
+        "Which plane is lost first in native-4 events?\n"
+        "In real data at low percentiles, the cross-talk plane dominates losses. Sim should be ~uniform.",
+        fontsize=11,
+    )
+    fig17.tight_layout(rect=[0, 0, 1, 0.90])
+    p17 = OUT_DIR / "17_native4_plane_loss_identity.png"
+    fig17.savefig(p17, dpi=150)
+    plt.close(fig17)
+    print(f"Saved: {p17}")
+
+    # -----------------------------------------------------------------------
+    # FIGURE 18: Cumulative noise-promoted events — absolute count estimate
+    # At each percentile, how many native-4 real events have been lost
+    # IN EXCESS of what the sim predicts? This excess = noise-promoted events
+    # being cleaned out.
+    # -----------------------------------------------------------------------
+    print("Computing cumulative noise-promoted event count...")
+    fig18, ax18 = plt.subplots(figsize=(10, 6))
+
+    if frozen4_sim[0] > 0 and frozen4_real[0] > 0:
+        # Expected real native-4 survival if it were pure signal (like sim)
+        f4s = frozen4_sim / frozen4_sim[0]
+        expected_real_n4 = frozen4_real[0] * f4s
+        excess_lost = expected_real_n4 - frozen4_real
+        # Cumulative noise-promoted events removed up to each percentile
+        ax18.plot(percentiles, excess_lost, "ro-", ms=4, lw=1.5,
+                  label="Excess native-4 events lost (real − expected)")
+        ax18.axhline(0, color="grey", ls="--", lw=0.8)
+        ax18.fill_between(percentiles, 0, excess_lost,
+                           where=excess_lost > 0, alpha=0.2, color="red")
+
+        # Also show as fraction of initial real native-4
+        ax18b = ax18.twinx()
+        frac_excess = excess_lost / frozen4_real[0]
+        ax18b.plot(percentiles, frac_excess * 100, "b--", lw=1, alpha=0.6,
+                   label="As % of real native-4")
+        ax18b.set_ylabel("% of initial real native-4 events", color="blue", fontsize=10)
+        ax18b.tick_params(axis="y", labelcolor="blue")
+
+        # Summary stats
+        finite_mask = np.isfinite(excess_lost)
+        if np.any(finite_mask):
+            max_excess = np.nanmax(excess_lost)
+            max_frac = max_excess / frozen4_real[0]
+            print(f"\n=== CUMULATIVE NOISE-PROMOTED COUNT ===")
+            print(f"Max excess lost: {max_excess:.0f} events ({max_frac*100:.1f}% of native-4)")
+            print(f"  out of {int(frozen4_real[0])} native-4 events at Q=0")
+            ax18.annotate(
+                f"Max excess: {max_excess:.0f} events\n({max_frac*100:.1f}% of native-4)",
+                xy=(percentiles[np.nanargmax(excess_lost)], max_excess),
+                xytext=(percentiles[np.nanargmax(excess_lost)] - 20, max_excess * 0.8),
+                fontsize=9,
+                arrowprops=dict(arrowstyle="->", color="black"),
+                bbox=dict(boxstyle="round,pad=0.3", fc="lightyellow", ec="grey"),
+            )
+
+    ax18.set_xlabel("Charge percentile")
+    ax18.set_ylabel("Excess native-4 events lost (count)")
+    ax18.set_title(
+        "Cumulative noise-promoted events removed from native-4 population\n"
+        "Expected = real_N4(Q=0) × sim_survival_fraction(p). Excess = noise cleaned out.",
+    )
+    lines1, labels1 = ax18.get_legend_handles_labels()
+    lines2, labels2 = ax18b.get_legend_handles_labels() if frozen4_sim[0] > 0 else ([], [])
+    ax18.legend(lines1 + lines2, labels1 + labels2, fontsize=8)
+    ax18.grid(True, alpha=0.3)
+    fig18.tight_layout()
+    p18 = OUT_DIR / "18_cumulative_noise_promoted_count.png"
+    fig18.savefig(p18, dpi=150)
+    plt.close(fig18)
+    print(f"Saved: {p18}")
+
+    # -----------------------------------------------------------------------
+    # FIGURE 19: Summary table — noise decomposition numbers
+    # -----------------------------------------------------------------------
+    print("\n" + "=" * 70)
+    print("NOISE DECOMPOSITION SUMMARY")
+    print("=" * 70)
+
+    if frozen4_sim[0] > 0 and frozen4_real[0] > 0:
+        f4s = frozen4_sim / frozen4_sim[0]
+        f4r = frozen4_real / frozen4_real[0]
+
+        # Find the percentile where noise-promoted events are mostly cleaned
+        # (where the survival ratio stabilizes — derivative of noise_prom ≈ 0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            noise_prom = np.where(f4s > 0.01, 1.0 - f4r / f4s, np.nan)
+
+        # Estimate at p50 (a reasonable "cleaned" point)
+        p50_idx = np.argmin(np.abs(percentiles - 50))
+        noise_at_p50 = noise_prom[p50_idx] if np.isfinite(noise_prom[p50_idx]) else 0.0
+
+        # Total native-4 and native-3 at Q=0
+        total_native4_real = int(frozen4_real[0])
+        total_native3_real = {k: int(frozen3_real[k][0]) for k in range(1, 5)}
+
+        # Estimated noise-promoted events
+        n_noise_promoted = total_native4_real * noise_at_p50
+
+        print(f"\nReal data ({REAL_STATION}):")
+        print(f"  Native 4-plane events at Q=0: {total_native4_real}")
+        for k in range(1, 5):
+            print(f"  Native 3-plane-miss-P{k} at Q=0: {total_native3_real[k]}")
+        print(f"\n  Estimated noise-promoted fraction at p50: {noise_at_p50:.4f} ({noise_at_p50*100:.1f}%)")
+        print(f"  Estimated noise-promoted count: ~{n_noise_promoted:.0f} events")
+        print(f"  These are originally 3-plane events promoted to 4-plane by cross-talk.")
+        print(f"\nSim data ({SIM_STATION}):")
+        print(f"  Native 4-plane events at Q=0: {int(frozen4_sim[0])}")
+        for k in range(1, 5):
+            print(f"  Native 3-plane-miss-P{k} at Q=0: {int(frozen3_sim[k][0])}")
+        print(f"  (Sim is pure signal — no noise-promoted events expected)")
+
+    print(f"\nAll plots saved to: {OUT_DIR}")
+
+    # -----------------------------------------------------------------------
+    # FIGURE 20: Charge-ratio distribution for native-4 events
+    # ratio = Q_min / Q_mean_other3
+    # Noise-promoted events have a low ratio (fake 4th plane has anomalously
+    # low charge). Sim (pure signal) should have a unimodal distribution at
+    # high ratios; real data should show an excess at low ratios.
+    # -----------------------------------------------------------------------
+    print("\nComputing charge-ratio distribution for native-4 events...")
+
+    def compute_charge_ratio_native4(df):
+        """For each native-4 event at Q=0, compute Q_min / Q_mean_other3."""
+        tt0 = compute_threshold_tt(df, 0.0)
+        mask = (tt0 == 1234).to_numpy()
+        q = {}
+        for p in range(1, 5):
+            col = f"P{p}_Q_sum_final"
+            q[p] = pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=float)
+        # Stack: shape (n_native4, 4)
+        charges = np.column_stack([q[p][mask] for p in range(1, 5)])
+        q_min = charges.min(axis=1)
+        q_sum = charges.sum(axis=1)
+        q_mean_other3 = (q_sum - q_min) / 3.0
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = np.where(q_mean_other3 > 0, q_min / q_mean_other3, np.nan)
+        return ratio, charges, mask
+
+    ratio_sim, charges_sim, mask_n4_sim = compute_charge_ratio_native4(df_sim)
+    ratio_real, charges_real, mask_n4_real = compute_charge_ratio_native4(df_real)
+
+    ratio_cuts = [0.0, 0.1, 0.2, 0.3, 0.4]  # thresholds to test
+    ratio_cut_colors = ["grey", "steelblue", "darkorange", "seagreen", "firebrick"]
+
+    fig20, axes20 = plt.subplots(1, 2, figsize=(14, 6))
+    bins = np.linspace(0, 1.5, 60)
+    for ax, (label, ratio) in zip(
+        axes20,
+        [(SIM_STATION, ratio_sim), (REAL_STATION, ratio_real)],
+    ):
+        r = ratio[np.isfinite(ratio)]
+        ax.hist(r, bins=bins, density=True, alpha=0.7,
+                color="steelblue" if "00" in label else "firebrick",
+                label=f"{label} (N={len(r)})")
+        for cut, col in zip(ratio_cuts[1:], ratio_cut_colors[1:]):
+            frac = np.mean(r >= cut)
+            ax.axvline(cut, color=col, ls="--", lw=1.2,
+                       label=f"cut={cut:.1f} → {frac*100:.1f}% pass")
+        ax.set_xlabel("Q_min / Q_mean_other3")
+        ax.set_ylabel("Density")
+        ax.set_title(f"{label}: charge-ratio of native-4 events")
+        ax.legend(fontsize=7)
+        ax.grid(True, alpha=0.3)
+
+    fig20.suptitle(
+        "Charge-ratio distribution in native-4 events\n"
+        "ratio = Q_min / Q_mean(other 3 planes). "
+        "Noise-promoted events have low ratio (weak fake plane).",
+        fontsize=11,
+    )
+    fig20.tight_layout(rect=[0, 0, 1, 0.90])
+    p20 = OUT_DIR / "20_charge_ratio_distribution_native4.png"
+    fig20.savefig(p20, dpi=150)
+    plt.close(fig20)
+    print(f"Saved: {p20}")
+
+    # -----------------------------------------------------------------------
+    # FIGURE 21: Charge-ratio efficiency — efficiency using only "clean-4"
+    # subset of native-4 events (those passing Q_min/Q_mean_other3 > cut).
+    # Compare across multiple ratio cuts and against the standard formula.
+    # -----------------------------------------------------------------------
+    print("Computing charge-ratio cut efficiency...")
+
+    def build_ratio_cut_efficiency(df, thr_arr, ratio_cut):
+        """Frozen efficiency restricted to clean-4 events (ratio > ratio_cut at Q=0)."""
+        tt0 = compute_threshold_tt(df, 0.0)
+        q = {}
+        for p in range(1, 5):
+            col = f"P{p}_Q_sum_final"
+            q[p] = pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=float)
+
+        # Classify at Q=0
+        mask_native4 = (tt0 == 1234).to_numpy()
+        mask_native3 = {k: (tt0 == MISSING_TT[k]).to_numpy() for k in range(1, 5)}
+
+        # Within native-4, keep only clean events
+        charges = np.column_stack([q[p] for p in range(1, 5)])
+        q_min = np.where(mask_native4, charges.min(axis=1), np.nan)
+        q_sum = np.where(mask_native4, charges.sum(axis=1), np.nan)
+        q_mean_other3 = (q_sum - q_min) / 3.0
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = np.where(q_mean_other3 > 0, q_min / q_mean_other3, np.nan)
+        mask_clean4 = mask_native4 & (np.nan_to_num(ratio, nan=0.0) > ratio_cut)
+
+        ref_planes = {1: [2, 3, 4], 2: [1, 3, 4], 3: [1, 2, 4], 4: [1, 2, 3]}
+
+        n_clean4 = np.zeros(len(thr_arr))
+        n_native3 = {k: np.zeros(len(thr_arr)) for k in range(1, 5)}
+
+        for i, thr in enumerate(thr_arr):
+            all_above = np.ones(len(df), dtype=bool)
+            for p in range(1, 5):
+                all_above &= q[p] > float(thr)
+            n_clean4[i] = np.sum(mask_clean4 & all_above)
+
+            for k in range(1, 5):
+                ref_above = np.ones(len(df), dtype=bool)
+                for p in ref_planes[k]:
+                    ref_above &= q[p] > float(thr)
+                n_native3[k][i] = np.sum(mask_native3[k] & ref_above)
+
+        return n_clean4, n_native3
+
+    fig21, axes21 = plt.subplots(2, 2, figsize=(14, 11), sharex=True)
+
+    for ax, k in zip(axes21.flat, range(1, 5)):
+        # Standard efficiency for reference
+        eff_std_real = compute_efficiency_standard(n4_real, n3_real[k])
+        ax.plot(percentiles, eff_std_real, "k:", lw=1.5, alpha=0.6,
+                label="standard (real)")
+
+        # Frozen (no cut) as baseline
+        denom_frz = frozen4_real + frozen3_real[k]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            eff_frz = np.divide(frozen4_real, denom_frz,
+                                out=np.full(len(frozen4_real), np.nan),
+                                where=denom_frz > 0)
+        ax.plot(percentiles, eff_frz, "k--", lw=1.5, alpha=0.8,
+                label="frozen (no cut, real)")
+
+        # Sim frozen for ground truth
+        denom_sim = frozen4_sim + frozen3_sim[k]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            eff_sim = np.divide(frozen4_sim, denom_sim,
+                                out=np.full(len(frozen4_sim), np.nan),
+                                where=denom_sim > 0)
+        ax.plot(percentiles, eff_sim, "b-", lw=2, alpha=0.5,
+                label="frozen sim (ground truth)")
+
+        # Ratio-cut efficiencies
+        for cut, col in zip(ratio_cuts[1:], ratio_cut_colors[1:]):
+            nc4, nn3 = build_ratio_cut_efficiency(df_real, thr_real, cut)
+            denom = nc4 + nn3[k]
+            with np.errstate(divide="ignore", invalid="ignore"):
+                eff_cut = np.divide(nc4, denom,
+                                    out=np.full(len(nc4), np.nan), where=denom > 0)
+            n0 = int(nc4[0])
+            ax.plot(percentiles, eff_cut, "o-", color=col, ms=4, lw=1.5,
+                    label=f"ratio>{cut:.1f} (N4={n0})")
+
+        ax.set_ylabel("Efficiency")
+        ax.set_title(f"P{k} efficiency")
+        ax.legend(fontsize=6, ncol=2)
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim(0, 1.05)
+
+    for ax in axes21[1]:
+        ax.set_xlabel("Charge percentile")
+
+    fig21.suptitle(
+        "Charge-ratio cut efficiency — real data\n"
+        "ratio = Q_min/Q_mean_other3 > cut selects 'clean-4' events (no noise-promoted).\n"
+        "Dotted = standard, dashed = frozen no-cut, solid blue = sim (ground truth).",
+        fontsize=11,
+    )
+    fig21.tight_layout(rect=[0, 0, 1, 0.88])
+    p21 = OUT_DIR / "21_charge_ratio_cut_efficiency.png"
+    fig21.savefig(p21, dpi=150)
+    plt.close(fig21)
+    print(f"Saved: {p21}")
+
+    # -----------------------------------------------------------------------
+    # FIGURE 22: Ratio-cut efficiency flatness — how much does the dip
+    # reduce as we tighten the ratio cut?
+    # Quantify: for each cut, compute max − min of efficiency over p5–p60
+    # (the dip region). A smaller range = flatter = less noise contamination.
+    # -----------------------------------------------------------------------
+    print("Quantifying dip flatness vs ratio cut...")
+    fig22, axes22 = plt.subplots(1, 2, figsize=(12, 6))
+
+    # Left: efficiency range (max-min) in the dip region vs cut, per plane
+    ax = axes22[0]
+    dip_mask = (percentiles >= 5) & (percentiles <= 60)
+
+    all_cuts_range = {k: [] for k in range(1, 5)}
+    cuts_tested = ratio_cuts
+
+    for cut in cuts_tested:
+        nc4, nn3 = build_ratio_cut_efficiency(df_real, thr_real, cut)
+        for k in range(1, 5):
+            denom = nc4 + nn3[k]
+            with np.errstate(divide="ignore", invalid="ignore"):
+                eff = np.divide(nc4, denom,
+                                out=np.full(len(nc4), np.nan), where=denom > 0)
+            eff_dip = eff[dip_mask]
+            finite = eff_dip[np.isfinite(eff_dip)]
+            rng = float(np.max(finite) - np.min(finite)) if len(finite) > 1 else np.nan
+            all_cuts_range[k].append(rng)
+
+    for k in range(1, 5):
+        ax.plot(cuts_tested, all_cuts_range[k], "o-", color=plane_colors[k],
+                lw=1.5, ms=6, label=f"P{k}")
+
+    ax.set_xlabel("Ratio cut threshold (Q_min/Q_mean_other3 > cut)")
+    ax.set_ylabel("Efficiency range (max−min) in dip region [p5–p60]")
+    ax.set_title("Dip amplitude vs charge-ratio cut\n(smaller = flatter curve = less noise)")
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
+
+    # Right: N(clean-4) surviving at Q=0 vs cut (shows cost of tightening cut)
+    ax = axes22[1]
+    n_clean4_at0_real = []
+    n_clean4_at0_sim = []
+    for cut in cuts_tested:
+        nc4_r, _ = build_ratio_cut_efficiency(df_real, thr_real, cut)
+        nc4_s, _ = build_ratio_cut_efficiency(df_sim, thr_sim, cut)
+        n_clean4_at0_real.append(nc4_r[0])
+        n_clean4_at0_sim.append(nc4_s[0])
+
+    ax2b = ax.twinx()
+    ax.plot(cuts_tested, n_clean4_at0_real, "rs-", lw=1.5, ms=6,
+            label=f"{REAL_STATION} N(clean-4)")
+    ax.plot(cuts_tested, n_clean4_at0_sim, "bs-", lw=1.5, ms=6,
+            label=f"{SIM_STATION} N(clean-4)")
+    # Fraction retained
+    if frozen4_real[0] > 0:
+        frac_r = [n / frozen4_real[0] for n in n_clean4_at0_real]
+        ax2b.plot(cuts_tested, [f * 100 for f in frac_r], "r--", lw=1, alpha=0.5,
+                  label="real % retained")
+    if frozen4_sim[0] > 0:
+        frac_s = [n / frozen4_sim[0] for n in n_clean4_at0_sim]
+        ax2b.plot(cuts_tested, [f * 100 for f in frac_s], "b--", lw=1, alpha=0.5,
+                  label="sim % retained")
+    ax.set_xlabel("Ratio cut threshold")
+    ax.set_ylabel("N(clean-4) at Q=0", color="black")
+    ax2b.set_ylabel("% of original native-4 retained")
+    ax.set_title("Sample size cost of tightening the ratio cut")
+    lines1, labels1 = ax.get_legend_handles_labels()
+    lines2, labels2 = ax2b.get_legend_handles_labels()
+    ax.legend(lines1 + lines2, labels1 + labels2, fontsize=7)
+    ax.grid(True, alpha=0.3)
+
+    fig22.suptitle(
+        "Trade-off: ratio cut stringency vs efficiency flatness\n"
+        "Left: how much the dip shrinks. Right: statistical cost (events lost).",
+        fontsize=11,
+    )
+    fig22.tight_layout(rect=[0, 0, 1, 0.91])
+    p22 = OUT_DIR / "22_ratio_cut_dip_flatness_tradeoff.png"
+    fig22.savefig(p22, dpi=150)
+    plt.close(fig22)
+    print(f"Saved: {p22}")
+
+    # -----------------------------------------------------------------------
+    # FIGURE 23: Per-plane charge comparison — native-4 vs native-3 events
+    # The dip hypothesis: native-4 events spread charge over 4 planes, so
+    # each plane individually has less charge than in native-3 events (which
+    # concentrate the same total muon signal over only 3 planes).
+    # If this is true, native-3-miss-k events are inherently harder and
+    # survive threshold increases better → ε(Q) = N4/(N4+N3k) dips
+    # even for pure signal, because the denominator is more robust.
+    # Test: compare per-plane charge distributions between populations.
+    # -----------------------------------------------------------------------
+    print("Computing per-plane charge comparison (native-4 vs native-3)...")
+
+    fig23, axes23 = plt.subplots(2, 4, figsize=(20, 10))
+
+    for row_idx, (label, df) in enumerate([(SIM_STATION, df_sim), (REAL_STATION, df_real)]):
+        tt0 = compute_threshold_tt(df, 0.0)
+        mask_n4 = (tt0 == 1234).to_numpy()
+
+        q_all = {}
+        for p in range(1, 5):
+            col = f"P{p}_Q_sum_final"
+            q_all[p] = pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=float)
+
+        for col_idx, k in enumerate(range(1, 5)):
+            ax = axes23[row_idx, col_idx]
+            mask_n3k = (tt0 == MISSING_TT[k]).to_numpy()
+
+            # Collect all active-plane charges for each group
+            # For native-4: all 4 planes; for native-3-miss-k: the 3 present planes
+            ref_planes_k = [p for p in range(1, 5) if p != k]
+
+            q_n4_planes = np.concatenate([q_all[p][mask_n4] for p in range(1, 5)])
+            q_n3k_planes = np.concatenate([q_all[p][mask_n3k] for p in ref_planes_k])
+
+            # Keep only positive charges
+            q_n4_planes = q_n4_planes[q_n4_planes > 0]
+            q_n3k_planes = q_n3k_planes[q_n3k_planes > 0]
+
+            # Shared bin range up to 95th percentile of combined
+            if len(q_n4_planes) > 0 and len(q_n3k_planes) > 0:
+                cap = np.percentile(np.concatenate([q_n4_planes, q_n3k_planes]), 97)
+                bins = np.linspace(0, cap, 50)
+
+                ax.hist(q_n4_planes, bins=bins, density=True, alpha=0.55,
+                        color="steelblue", label=f"native-4 (N_ev={mask_n4.sum()})")
+                ax.hist(q_n3k_planes, bins=bins, density=True, alpha=0.55,
+                        color="firebrick", label=f"native-3-miss-P{k} (N_ev={mask_n3k.sum()})")
+
+                med_n4 = np.median(q_n4_planes)
+                med_n3k = np.median(q_n3k_planes)
+                ax.axvline(med_n4, color="steelblue", ls="--", lw=1.5,
+                           label=f"med4={med_n4:.1f}")
+                ax.axvline(med_n3k, color="firebrick", ls="--", lw=1.5,
+                           label=f"med3k={med_n3k:.1f}")
+
+                ax.set_title(f"{label}: missing P{k}\nmed shift = {med_n3k - med_n4:+.1f}")
+            ax.set_xlabel("Q_sum per active plane")
+            ax.set_ylabel("Density")
+            ax.legend(fontsize=6)
+            ax.grid(True, alpha=0.3)
+
+    fig23.suptitle(
+        "Per-plane charge: native-4 vs native-3-miss-k events\n"
+        "Hypothesis: native-3 events concentrate muon charge over 3 planes → higher per-plane Q\n"
+        "→ native-3 survives threshold scan better → denominator of ε(Q) drops slower → dip",
+        fontsize=11,
+    )
+    fig23.tight_layout(rect=[0, 0, 1, 0.90])
+    p23 = OUT_DIR / "23_perplane_charge_n4_vs_n3k.png"
+    fig23.savefig(p23, dpi=150)
+    plt.close(fig23)
+    print(f"Saved: {p23}")
+
+    # -----------------------------------------------------------------------
+    # FIGURE 24: Median per-plane charge — native-4 vs native-3 across planes
+    # Compact summary: median Q per active plane for native-4 and each
+    # native-3-miss-k group. If native-3 medians are consistently higher,
+    # the structural bias hypothesis is confirmed.
+    # -----------------------------------------------------------------------
+    fig24, axes24 = plt.subplots(1, 2, figsize=(12, 6))
+
+    for ax, (label, df) in zip(axes24, [(SIM_STATION, df_sim), (REAL_STATION, df_real)]):
+        tt0 = compute_threshold_tt(df, 0.0)
+        mask_n4 = (tt0 == 1234).to_numpy()
+        q_all = {}
+        for p in range(1, 5):
+            col = f"P{p}_Q_sum_final"
+            q_all[p] = pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=float)
+
+        # Median per-plane Q for native-4
+        med_n4 = np.median(
+            np.concatenate([q_all[p][mask_n4 & (q_all[p] > 0)] for p in range(1, 5)])
+        )
+
+        groups = ["native-4"] + [f"native-3\nmiss-P{k}" for k in range(1, 5)]
+        medians = [med_n4]
+        n_events = [mask_n4.sum()]
+
+        for k in range(1, 5):
+            mask_n3k = (tt0 == MISSING_TT[k]).to_numpy()
+            ref = [p for p in range(1, 5) if p != k]
+            q_pool = np.concatenate([q_all[p][mask_n3k & (q_all[p] > 0)] for p in ref])
+            medians.append(np.median(q_pool) if len(q_pool) > 0 else np.nan)
+            n_events.append(mask_n3k.sum())
+
+        colors = ["steelblue"] + [plane_colors[k] for k in range(1, 5)]
+        bars = ax.bar(range(5), medians, color=colors, alpha=0.75, edgecolor="k", lw=0.8)
+        ax.axhline(med_n4, color="steelblue", ls="--", lw=1, alpha=0.6)
+
+        for i, (bar, n, m) in enumerate(zip(bars, n_events, medians)):
+            ax.text(bar.get_x() + bar.get_width() / 2, m + 0.3,
+                    f"N={n}", ha="center", va="bottom", fontsize=7)
+
+        ax.set_xticks(range(5))
+        ax.set_xticklabels(groups, fontsize=8)
+        ax.set_ylabel("Median per-plane Q_sum")
+        ax.set_title(f"{label}")
+        ax.grid(True, alpha=0.3, axis="y")
+
+    fig24.suptitle(
+        "Median per-plane charge by topology group\n"
+        "If native-3-miss-Pk bars are above the native-4 bar (blue dashed), "
+        "the structural denominator-robustness bias is confirmed.",
+        fontsize=11,
+    )
+    fig24.tight_layout(rect=[0, 0, 1, 0.88])
+    p24 = OUT_DIR / "24_median_charge_by_topology.png"
+    fig24.savefig(p24, dpi=150)
+    plt.close(fig24)
+    print(f"Saved: {p24}")
 
     print(f"\nAll plots saved to: {OUT_DIR}")
 

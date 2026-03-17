@@ -6,6 +6,8 @@ import numpy as np
 import pandas as pd
 from scipy.ndimage import gaussian_filter1d
 
+ACTIVATION_METADATA_DECIMALS = 3
+
 
 def _as_bool_matrix(arrays: Iterable[np.ndarray]) -> np.ndarray:
     matrix_parts = [np.asarray(arr, dtype=bool) for arr in arrays]
@@ -15,6 +17,34 @@ def _as_bool_matrix(arrays: Iterable[np.ndarray]) -> np.ndarray:
     if len(lengths) != 1:
         raise ValueError("All boolean arrays must have the same length.")
     return np.column_stack(matrix_parts)
+
+
+def _compute_conditional_matrix_from_bool_matrices(
+    source_labels: list[str],
+    source_matrix: np.ndarray,
+    target_labels: list[str],
+    target_matrix: np.ndarray,
+) -> tuple[np.ndarray, dict[str, int]]:
+    """Compute P(target | source) from pre-built boolean matrices."""
+    if source_matrix.shape[0] != target_matrix.shape[0]:
+        raise ValueError("Source and target boolean arrays must have the same number of events.")
+
+    co_counts = source_matrix.T.astype(np.int64, copy=False) @ target_matrix.astype(
+        np.int64,
+        copy=False,
+    )
+    given_counts = source_matrix.sum(axis=0, dtype=np.int64).astype(int, copy=False)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        cond = np.divide(
+            co_counts.astype(float, copy=False),
+            given_counts[:, None],
+            out=np.full(co_counts.shape, np.nan, dtype=float),
+            where=given_counts[:, None] > 0,
+        )
+
+    return cond, {
+        label: int(given_counts[idx]) for idx, label in enumerate(source_labels)
+    }
 
 
 def compute_conditional_matrix_from_boolean_arrays(
@@ -34,22 +64,12 @@ def compute_conditional_matrix_from_boolean_arrays(
 
     source_matrix = _as_bool_matrix(source_arrays)
     target_matrix = _as_bool_matrix(target_arrays)
-    if source_matrix.shape[0] != target_matrix.shape[0]:
-        raise ValueError("Source and target boolean arrays must have the same number of events.")
-
-    co_counts = source_matrix.T.astype(np.int64) @ target_matrix.astype(np.int64)
-    given_counts = source_matrix.sum(axis=0).astype(int)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        cond = np.divide(
-            co_counts.astype(float),
-            given_counts[:, None],
-            out=np.full(co_counts.shape, np.nan, dtype=float),
-            where=given_counts[:, None] > 0,
-        )
-
-    return cond, {
-        label: int(given_counts[idx]) for idx, label in enumerate(source_labels)
-    }
+    return _compute_conditional_matrix_from_bool_matrices(
+        source_labels,
+        source_matrix,
+        target_labels,
+        target_matrix,
+    )
 
 
 def summarize_conditional_matrix(
@@ -88,10 +108,16 @@ def summarize_conditional_matrix(
             mean_cross_group = float(np.mean(cross_group_values))
 
     return {
-        "mean_off_diagonal": round(mean_off_diag, 6) if mean_off_diag != "" else "",
-        "max_off_diagonal": round(max_off_diag, 6) if max_off_diag != "" else "",
+        "mean_off_diagonal": (
+            round(mean_off_diag, ACTIVATION_METADATA_DECIMALS) if mean_off_diag != "" else ""
+        ),
+        "max_off_diagonal": (
+            round(max_off_diag, ACTIVATION_METADATA_DECIMALS) if max_off_diag != "" else ""
+        ),
         "mean_off_diagonal_cross_group": (
-            round(mean_cross_group, 6) if mean_cross_group != "" else ""
+            round(mean_cross_group, ACTIVATION_METADATA_DECIMALS)
+            if mean_cross_group != ""
+            else ""
         ),
     }
 
@@ -131,7 +157,7 @@ def store_activation_matrix_metadata(
         for j, dst_label in enumerate(target_labels):
             value = matrix[i, j]
             metadata[f"{prefix}_{src_label}_to_{dst_label}"] = (
-                round(float(value), 6) if np.isfinite(value) else ""
+                round(float(value), ACTIVATION_METADATA_DECIMALS) if np.isfinite(value) else ""
             )
 
 
@@ -173,11 +199,11 @@ def compute_conditional_matrices_by_tt(
     for tt_value in selected_tts:
         mask_tt = (tt_numeric == int(tt_value)).to_numpy(dtype=bool)
         event_counts_by_tt[tt_value] = int(np.sum(mask_tt))
-        cond, given_counts = compute_conditional_matrix_from_boolean_arrays(
+        cond, given_counts = _compute_conditional_matrix_from_bool_matrices(
             source_labels,
-            [source_matrix[:, idx] & mask_tt for idx in range(source_matrix.shape[1])],
-            target_labels=target_labels,
-            target_arrays=[target_matrix[:, idx] for idx in range(target_matrix.shape[1])],
+            source_matrix[mask_tt],
+            target_labels,
+            target_matrix[mask_tt],
         )
         matrices[tt_value] = cond
         given_counts_by_tt[tt_value] = given_counts
@@ -213,7 +239,9 @@ def store_activation_matrices_by_tt_metadata(
             for j, dst_label in enumerate(target_labels):
                 value = matrix[i, j]
                 metadata[f"{prefix}_tt{tt_value}_{src_label}_to_{dst_label}"] = (
-                    round(float(value), 6) if np.isfinite(value) else ""
+                    round(float(value), ACTIVATION_METADATA_DECIMALS)
+                    if np.isfinite(value)
+                    else ""
                 )
 
 

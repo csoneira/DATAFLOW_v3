@@ -154,6 +154,11 @@ TASK5_PLOT_ALIASES: tuple[str, ...] = (
     "debug_suite",
     "usual_suite",
     "essential_suite",
+    "theta_phi_definitive_tt_2d",
+    "polar_theta_phi_definitive_tt_2d_detail_pre",
+    "polar_theta_phi_definitive_tt_2d_detail_angle_correction",
+    "polar_theta_phi_definitive_tt_2d_detail_final",
+    "theta_efficiency_simple_3v4",
 )
 task5_plot_status_by_alias: dict[str, str] = {}
 
@@ -162,6 +167,17 @@ def task5_plot_enabled(alias: str) -> bool:
     if not task5_plot_status_by_alias:
         return True
     return step1_task_plot_enabled(alias, task5_plot_status_by_alias, plot_mode)
+
+
+def resolve_task5_plot_alias(save_path: str, alias: str | None = None) -> str | None:
+    if alias is not None:
+        return alias if alias in TASK5_PLOT_ALIASES else None
+
+    stem = os.path.splitext(os.path.basename(str(save_path)))[0].lower()
+    stem = re.sub(r"^\d+_", "", stem)
+    if stem in TASK5_PLOT_ALIASES:
+        return stem
+    return None
 
 
 def apply_task5_plot_catalog_modes() -> None:
@@ -251,9 +267,17 @@ def _build_temp_pdf_path(target_path: str) -> str:
         counter += 1
     return candidate
 
-def save_plot_figure(save_path: str, fig: mpl.figure.Figure | None = None, **savefig_kwargs) -> None:
+def save_plot_figure(
+    save_path: str,
+    fig: mpl.figure.Figure | None = None,
+    alias: str | None = None,
+    **savefig_kwargs,
+) -> None:
     """Save a figure to PNG or directly append it to the task PDF."""
     global _direct_pdf_pages, _direct_pdf_page_count, _direct_pdf_target_path, _direct_pdf_temp_path
+    plot_alias = resolve_task5_plot_alias(save_path, alias=alias)
+    if plot_alias is not None and not task5_plot_enabled(plot_alias):
+        return
     target_fig = fig if fig is not None else plt.gcf()
     direct_pdf_path = globals().get("save_pdf_path")
     if globals().get("create_pdf", False) and direct_pdf_path:
@@ -898,7 +922,12 @@ print(f"Analysis date and time: {analysis_date}")
 
 # Modify the time of the processing file to the current time so it looks fresh
 now = time.time()
-os.utime(processing_file_path, (now, now))
+if os.path.exists(processing_file_path):
+    os.utime(processing_file_path, (now, now))
+else:
+    print(
+        f"Warning: processing file path not found for timestamp refresh: {processing_file_path}"
+    )
 
 # Check the station number in the datafile
 try:
@@ -2082,7 +2111,7 @@ if create_plots:
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        save_plot_figure(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, format='png', alias="theta_phi_definitive_tt_2d")
 
     if show_plots:
         plt.show()
@@ -2175,7 +2204,11 @@ if create_plots or create_essential_plots:
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        save_plot_figure(save_fig_path, format='png')
+        save_plot_figure(
+            save_fig_path,
+            format='png',
+            alias="polar_theta_phi_definitive_tt_2d_detail_pre",
+        )
     if show_plots:
         plt.show()
     plt.close()
@@ -2367,7 +2400,11 @@ if correct_angle:
                 fig_idx += 1
                 save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                 plot_list.append(save_fig_path)
-                save_plot_figure(save_fig_path, format='png')
+                save_plot_figure(
+                    save_fig_path,
+                    format='png',
+                    alias="polar_theta_phi_definitive_tt_2d_detail_angle_correction",
+                )
             if show_plots:
                 plt.show()
             plt.close()
@@ -2468,7 +2505,11 @@ if create_plots or create_essential_plots:
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        save_plot_figure(save_fig_path, format='png')
+        save_plot_figure(
+            save_fig_path,
+            format='png',
+            alias="polar_theta_phi_definitive_tt_2d_detail_final",
+        )
     if show_plots:
         plt.show()
     plt.close()
@@ -2699,7 +2740,7 @@ if create_plots or create_essential_plots:
                     fig_idx += 1
                     save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                     plot_list.append(save_fig_path)
-                    save_plot_figure(save_fig_path, format="png")
+                    save_plot_figure(save_fig_path, format="png", alias="theta_efficiency_simple_3v4")
                 if show_plots:
                     plt.show()
                 plt.close()

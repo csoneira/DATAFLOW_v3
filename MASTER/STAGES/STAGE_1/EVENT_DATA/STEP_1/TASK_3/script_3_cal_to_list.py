@@ -114,6 +114,7 @@ from MASTER.common.status_csv import initialize_status_row, update_status_progre
 from MASTER.common.reprocessing_utils import get_reprocessing_value
 from MASTER.common.simulated_data_utils import resolve_simulated_z_positions
 from MASTER.common.step1_activation import (
+    ACTIVATION_METADATA_DECIMALS,
     compute_conditional_matrices_by_tt,
     compute_conditional_matrix_from_boolean_arrays,
     store_activation_matrices_by_tt_metadata,
@@ -147,6 +148,7 @@ start_execution_time_counting = datetime.now()
 _prof_t0 = time.perf_counter()
 _prof = {}
 activation_metadata: dict[str, object] = {}
+pattern_metadata: dict[str, object] = {}
 
 STATION_CHOICES = ("0", "1", "2", "3", "4")
 TASK3_PLOT_STATUSES: tuple[str, ...] = ("none", "debug", "usual", "essential")
@@ -978,10 +980,16 @@ def summarize_strip_activation_matrix(labels: list[str], matrix: np.ndarray) -> 
     )
 
     return {
-        "mean_off_diagonal": round(mean_off_diag, 6) if mean_off_diag != "" else "",
-        "max_off_diagonal": round(max_off_diag, 6) if max_off_diag != "" else "",
+        "mean_off_diagonal": (
+            round(mean_off_diag, ACTIVATION_METADATA_DECIMALS) if mean_off_diag != "" else ""
+        ),
+        "max_off_diagonal": (
+            round(max_off_diag, ACTIVATION_METADATA_DECIMALS) if max_off_diag != "" else ""
+        ),
         "mean_off_diagonal_interplane": (
-            round(mean_off_diag_interplane, 6) if mean_off_diag_interplane != "" else ""
+            round(mean_off_diag_interplane, ACTIVATION_METADATA_DECIMALS)
+            if mean_off_diag_interplane != ""
+            else ""
         ),
     }
 
@@ -1011,7 +1019,9 @@ def store_strip_activation_matrix_metadata(
         for j, dst_label in enumerate(labels):
             value = matrix[i, j]
             field = f"strip_activation_conditional_{prefix}_{src_label}_to_{dst_label}"
-            metadata[field] = round(float(value), 6) if np.isfinite(value) else ""
+            metadata[field] = (
+                round(float(value), ACTIVATION_METADATA_DECIMALS) if np.isfinite(value) else ""
+            )
 
 
 TASK3_PLANE_LABELS: tuple[str, ...] = tuple(f"P{plane}" for plane in range(1, 5))
@@ -1029,6 +1039,25 @@ def _task3_plane_charge_arrays(df: pd.DataFrame) -> tuple[list[str], list[np.nda
         labels.append(f"P{plane}")
         arrays.append(arr)
     return labels, arrays
+
+
+def _format_activation_scalar(value: float | None) -> float | str:
+    if value is None:
+        return ""
+    value_float = float(value)
+    if not np.isfinite(value_float):
+        return ""
+    return round(value_float, ACTIVATION_METADATA_DECIMALS)
+
+
+def _store_activation_scalar(
+    activation_meta: dict[str, object],
+    scalar_meta: dict[str, object],
+    key: str,
+    value: object,
+) -> None:
+    activation_meta[key] = value
+    scalar_meta.pop(key, None)
 
 
 def store_task3_plane_activation_snapshot(
@@ -1074,36 +1103,66 @@ def store_task3_plane_activation_snapshot(
 
     q_sum_cols = [f"P{plane}_Q_sum_final" for plane in range(1, 5)]
     streamer_threshold = detect_streamer_threshold(df, q_sum_cols)
-    scalar_meta[f"streamer_threshold_selected_{snapshot_label}"] = (
-        round(float(streamer_threshold), 6) if streamer_threshold is not None else ""
+    threshold_key = f"streamer_threshold_selected_{snapshot_label}"
+    _store_activation_scalar(
+        activation_meta,
+        scalar_meta,
+        threshold_key,
+        _format_activation_scalar(streamer_threshold),
     )
 
     high_charge_threshold = None
     if streamer_threshold is not None:
         high_charge_threshold = float(streamer_threshold) * float(streamer_high_charge_factor_value)
-        scalar_meta[f"streamer_high_charge_threshold_selected_{snapshot_label}"] = round(
-            high_charge_threshold,
-            6,
+        _store_activation_scalar(
+            activation_meta,
+            scalar_meta,
+            f"streamer_high_charge_threshold_selected_{snapshot_label}",
+            _format_activation_scalar(high_charge_threshold),
         )
     else:
-        scalar_meta[f"streamer_high_charge_threshold_selected_{snapshot_label}"] = ""
+        _store_activation_scalar(
+            activation_meta,
+            scalar_meta,
+            f"streamer_high_charge_threshold_selected_{snapshot_label}",
+            "",
+        )
 
     if snapshot_label == "filtered":
-        scalar_meta["streamer_high_charge_factor"] = round(
-            float(streamer_high_charge_factor_value), 6
+        _store_activation_scalar(
+            activation_meta,
+            scalar_meta,
+            "streamer_high_charge_factor",
+            _format_activation_scalar(streamer_high_charge_factor_value),
         )
-        scalar_meta["streamer_threshold_selected"] = scalar_meta[
-            f"streamer_threshold_selected_{snapshot_label}"
-        ]
-        scalar_meta["streamer_high_charge_threshold_selected"] = scalar_meta[
-            f"streamer_high_charge_threshold_selected_{snapshot_label}"
-        ]
+        _store_activation_scalar(
+            activation_meta,
+            scalar_meta,
+            "streamer_threshold_selected",
+            activation_meta.get(threshold_key, ""),
+        )
+        _store_activation_scalar(
+            activation_meta,
+            scalar_meta,
+            "streamer_high_charge_threshold_selected",
+            activation_meta.get(f"streamer_high_charge_threshold_selected_{snapshot_label}", ""),
+        )
 
     if streamer_threshold is None or high_charge_threshold is None:
         for plane in range(1, 5):
-            scalar_meta[f"streamer_rate_plane_{snapshot_label}_{plane}"] = ""
+            _store_activation_scalar(
+                activation_meta,
+                scalar_meta,
+                f"streamer_rate_plane_{snapshot_label}_{plane}",
+                "",
+            )
             if snapshot_label == "filtered":
-                scalar_meta[f"streamer_rate_plane_{plane}"] = ""
+                _store_activation_scalar(
+                    activation_meta,
+                    scalar_meta,
+                    f"streamer_rate_plane_{plane}",
+                    "",
+                )
         return {
             "labels": labels,
             "signal_matrix": signal_matrix,
@@ -1117,9 +1176,19 @@ def store_task3_plane_activation_snapshot(
         n_signal = int(np.sum(signal_mask))
         n_streamer = int(np.sum(streamer_mask))
         rate_key = f"streamer_rate_plane_{snapshot_label}_{plane}"
-        scalar_meta[rate_key] = round(float(n_streamer) / float(n_signal), 6) if n_signal > 0 else ""
+        _store_activation_scalar(
+            activation_meta,
+            scalar_meta,
+            rate_key,
+            _format_activation_scalar(float(n_streamer) / float(n_signal)) if n_signal > 0 else "",
+        )
         if snapshot_label == "filtered":
-            scalar_meta[f"streamer_rate_plane_{plane}"] = scalar_meta[rate_key]
+            _store_activation_scalar(
+                activation_meta,
+                scalar_meta,
+                f"streamer_rate_plane_{plane}",
+                activation_meta.get(rate_key, ""),
+            )
 
     variant_specs = [
         ("streamer_to_streamer", streamer_arrays, streamer_arrays),
@@ -1605,7 +1674,9 @@ def store_strip_contagion_by_tt_metadata(
                 field = (
                     f"streamer_contagion_{variant_prefix}_tt{tt_val}_{src_label}_to_{dst_label}"
                 )
-                metadata[field] = round(float(value), 6) if np.isfinite(value) else ""
+                metadata[field] = (
+                    round(float(value), ACTIVATION_METADATA_DECIMALS) if np.isfinite(value) else ""
+                )
 
 
 def plot_strip_contagion_by_tt(
@@ -1862,6 +1933,7 @@ debug_fig_idx = 1
 
 csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execution.csv")
 csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metadata_specific.csv")
+csv_path_pattern = os.path.join(metadata_directory, f"task_{task_number}_metadata_pattern.csv")
 csv_path_rate_histogram = os.path.join(
     metadata_directory,
     f"task_{task_number}_metadata_rate_histogram.csv",
@@ -2979,7 +3051,12 @@ print(f"Analysis date and time: {analysis_date}")
 
 # Modify the time of the processing file to the current time so it looks fresh
 now = time.time()
-os.utime(processing_file_path, (now, now))
+if os.path.exists(processing_file_path):
+    os.utime(processing_file_path, (now, now))
+else:
+    print(
+        f"Warning: processing file path not found for timestamp refresh: {processing_file_path}"
+    )
 
 # Check the station number in the datafile
 try:
@@ -3289,7 +3366,7 @@ for plane_id in range(1, 5):
         global_variables[f"{col_name}_{pattern}_count"] = int(counts.get(pattern, 0))
 
 cal_strip_patterns = build_task3_full_strip_pattern_series(working_df)
-store_pattern_rates(global_variables, cal_strip_patterns, "cal_strip_pattern", working_df)
+store_pattern_rates(pattern_metadata, cal_strip_patterns, "cal_strip_pattern", working_df)
 
 if task3_plot_enabled("active_strip_patterns_overview"):
 
@@ -6816,9 +6893,6 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
             if f"P{p}_Q_sum_final" in working_df.columns
         ]
         streamer_thr = detect_streamer_threshold(working_df, streamer_q_cols)
-        global_variables["streamer_threshold_selected"] = (
-            round(float(streamer_thr), 6) if streamer_thr is not None else ""
-        )
 
         plane_q_arr: dict[int, np.ndarray] = {}
         plane_is_active: dict[int, np.ndarray] = {}
@@ -6828,27 +6902,20 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
         for p in range(1, 5):
             col = f"P{p}_Q_sum_final"
             if col not in working_df.columns:
-                global_variables[f"streamer_rate_plane_{p}"] = ""
                 continue
 
             arr = pd.to_numeric(working_df[col], errors="coerce").to_numpy(dtype=float)
             plane_q_arr[p] = arr
             plane_active = np.isfinite(arr) & (arr > 0)
             plane_is_active[p] = plane_active
-            n_active = int(np.sum(plane_active))
 
             if streamer_thr is None:
-                global_variables[f"streamer_rate_plane_{p}"] = ""
                 continue
 
             plane_streamer = plane_active & (arr > streamer_thr)
             plane_is_streamer[p] = plane_streamer
             any_streamer |= plane_streamer
             n_streamer_planes += plane_streamer.astype(int)
-            n_streamer = int(np.sum(plane_streamer))
-            global_variables[f"streamer_rate_plane_{p}"] = (
-                round(float(n_streamer) / float(n_active), 6) if n_active > 0 else ""
-            )
 
         streamer_plots_requested = task3_any_plot_enabled(
             "streamer_charge_histograms",
@@ -7347,7 +7414,7 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                     plt.close(fig_ea)
 
 list_strip_patterns = build_task3_full_strip_pattern_series(working_df)
-store_pattern_rates(global_variables, list_strip_patterns, "list_strip_pattern", working_df)
+store_pattern_rates(pattern_metadata, list_strip_patterns, "list_strip_pattern", working_df)
 
 if task3_plot_enabled("strip_activation_matrix_before_after"):
     fig_idx = plot_task3_plane_activation_before_after(
@@ -7484,6 +7551,16 @@ activation_metadata["param_hash"] = param_hash_value
 metadata_activation_csv_path = save_metadata(csv_path_activation, activation_metadata)
 print(f"Metadata (activation) CSV updated at: {metadata_activation_csv_path}")
 
+pattern_metadata["filename_base"] = filename_base
+pattern_metadata["execution_timestamp"] = execution_timestamp
+pattern_metadata["param_hash"] = param_hash_value
+metadata_pattern_csv_path = save_metadata(
+    csv_path_pattern,
+    pattern_metadata,
+    preferred_fieldnames=("filename_base", "execution_timestamp", "param_hash"),
+)
+print(f"Metadata (pattern) CSV updated at: {metadata_pattern_csv_path}")
+
 # -------------------------------------------------------------------------------
 # Specific metadata ------------------------------------------------------------
 # -------------------------------------------------------------------------------
@@ -7555,6 +7632,8 @@ metadata_specific_csv_path = save_metadata(
     global_variables,
     drop_field_predicate=lambda column_name: (
         is_specific_metadata_excluded_column(column_name)
+        or column_name.startswith("cal_strip_pattern_")
+        or column_name.startswith("list_strip_pattern_")
         or is_trigger_type_metadata_column(column_name, trigger_type_prefixes)
         or column_name in FILTER6_NONZERO_COUNTER_NAMES
     ),

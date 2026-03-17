@@ -2,3 +2,31 @@ plots:
   debug_suite: debug
   usual_suite: usual
   essential_suite: essential
+  flat_values_histogram: usual
+  detached_timeseries_combo: usual
+  detached_residuals_combo: usual
+  timtrack_timeseries_combo: usual
+  timtrack_residuals_combo: usual
+  combined_timeseries_combo: usual
+  combined_residuals_combo: usual
+  hist_core_errs_combined: essential
+  hist_core_errs_combined_with_fits: essential
+  stat_window_accumulation: usual
+  trigger_types_raw_and_list: usual
+  trigger_types_tracking_and_list: usual
+  trigger_types_tracking_and_raw: usual
+  trigger_types_definitive_tt_and_raw: usual
+  timtrack_results_hexbin_combination_projections: usual
+  theta_det_theta_zoom_tracking_tt: usual
+  polar_theta_phi_definitive_tt_2d: essential
+  polar_theta_phi_tracking_tt_2d: usual
+  events_per_second_by_plane_cardinality_double_row: usual
+  timtrack_residuals_gaussian: usual
+  external_residuals_gaussian: usual
+  all_channels_charge: usual
+  event_display_sample: essential
+  track_consistency_loo_residuals: essential
+  strip_hit_occupancy: essential
+  track_based_efficiency: essential
+  track_based_efficiency_vs_theta: essential
+  chi2_charge_populations: essential

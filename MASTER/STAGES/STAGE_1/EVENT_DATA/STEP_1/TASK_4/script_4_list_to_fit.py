@@ -150,6 +150,34 @@ TASK4_PLOT_ALIASES: tuple[str, ...] = (
     "debug_suite",
     "usual_suite",
     "essential_suite",
+    "flat_values_histogram",
+    "detached_timeseries_combo",
+    "detached_residuals_combo",
+    "timtrack_timeseries_combo",
+    "timtrack_residuals_combo",
+    "combined_timeseries_combo",
+    "combined_residuals_combo",
+    "hist_core_errs_combined",
+    "hist_core_errs_combined_with_fits",
+    "stat_window_accumulation",
+    "trigger_types_raw_and_list",
+    "trigger_types_tracking_and_list",
+    "trigger_types_tracking_and_raw",
+    "trigger_types_definitive_tt_and_raw",
+    "timtrack_results_hexbin_combination_projections",
+    "theta_det_theta_zoom_tracking_tt",
+    "polar_theta_phi_definitive_tt_2d",
+    "polar_theta_phi_tracking_tt_2d",
+    "events_per_second_by_plane_cardinality_double_row",
+    "timtrack_residuals_gaussian",
+    "external_residuals_gaussian",
+    "all_channels_charge",
+    "event_display_sample",
+    "track_consistency_loo_residuals",
+    "strip_hit_occupancy",
+    "track_based_efficiency",
+    "track_based_efficiency_vs_theta",
+    "chi2_charge_populations",
 )
 task4_plot_status_by_alias: dict[str, str] = {}
 
@@ -158,6 +186,34 @@ def task4_plot_enabled(alias: str) -> bool:
     if not task4_plot_status_by_alias:
         return True
     return step1_task_plot_enabled(alias, task4_plot_status_by_alias, plot_mode)
+
+
+TASK4_PLOT_PREFIX_ALIASES: tuple[tuple[str, str], ...] = (
+    ("detached_timeseries_combo_", "detached_timeseries_combo"),
+    ("detached_residuals_combo_", "detached_residuals_combo"),
+    ("timtrack_timeseries_combo_", "timtrack_timeseries_combo"),
+    ("timtrack_residuals_combo_", "timtrack_residuals_combo"),
+    ("combined_timeseries_combo_", "combined_timeseries_combo"),
+    ("combined_residuals_combo_", "combined_residuals_combo"),
+    ("stat_window_accumulation_", "stat_window_accumulation"),
+    ("timtrack_residuals_with_gaussian_for_processed_type_", "timtrack_residuals_gaussian"),
+    ("external_residuals_with_gaussian_for_processed_type_", "external_residuals_gaussian"),
+    ("all_channels_charge_mingo0", "all_channels_charge"),
+)
+
+
+def resolve_task4_plot_alias(save_path: str, alias: str | None = None) -> str | None:
+    if alias is not None:
+        return alias if alias in TASK4_PLOT_ALIASES else None
+
+    stem = os.path.splitext(os.path.basename(str(save_path)))[0].lower()
+    stem = re.sub(r"^\d+_", "", stem)
+    if stem in TASK4_PLOT_ALIASES:
+        return stem
+    for prefix, mapped_alias in TASK4_PLOT_PREFIX_ALIASES:
+        if stem.startswith(prefix):
+            return mapped_alias
+    return None
 
 
 def apply_task4_plot_catalog_modes() -> None:
@@ -247,9 +303,17 @@ def _build_temp_pdf_path(target_path: str) -> str:
         counter += 1
     return candidate
 
-def save_plot_figure(save_path: str, fig: mpl.figure.Figure | None = None, **savefig_kwargs) -> None:
+def save_plot_figure(
+    save_path: str,
+    fig: mpl.figure.Figure | None = None,
+    alias: str | None = None,
+    **savefig_kwargs,
+) -> None:
     """Save a figure to PNG or directly append it to the task PDF."""
     global _direct_pdf_pages, _direct_pdf_page_count, _direct_pdf_target_path, _direct_pdf_temp_path
+    plot_alias = resolve_task4_plot_alias(save_path, alias=alias)
+    if plot_alias is not None and not task4_plot_enabled(plot_alias):
+        return
     target_fig = fig if fig is not None else plt.gcf()
     direct_pdf_path = globals().get("save_pdf_path")
     if globals().get("create_pdf", False) and direct_pdf_path:
@@ -1392,7 +1456,12 @@ print(f"Analysis date and time: {analysis_date}")
 
 # Modify the time of the processing file to the current time so it looks fresh
 now = time.time()
-os.utime(processing_file_path, (now, now))
+if os.path.exists(processing_file_path):
+    os.utime(processing_file_path, (now, now))
+else:
+    print(
+        f"Warning: processing file path not found for timestamp refresh: {processing_file_path}"
+    )
 
 # Check the station number in the datafile
 try:
@@ -6405,6 +6474,743 @@ if create_plots or create_essential_plots:
     if show_plots:
         plt.show()
     plt.close()
+
+# ---------------------------------------------------------------------------
+# Track-consistency: sample 4-fold event displays — XZ and YZ projections
+# Z on vertical axis; equal mm scale so real detector proportions are visible
+# ---------------------------------------------------------------------------
+if (create_essential_plots or create_plots) and task4_plot_enabled("event_display_sample"):
+    _evd_y_cols = [f"P{p}_Y_final" for p in range(1, 5)]
+    _evd_td_cols = [f"P{p}_T_dif_final" for p in range(1, 5)]
+    _evd_q_cols = [f"P{p}_Q_sum_final" for p in range(1, 5)]
+    _evd_have = all(c in df_plot_ancillary.columns for c in _evd_y_cols + _evd_td_cols + _evd_q_cols)
+    _evd_have_track = all(c in df_plot_ancillary.columns for c in ("x", "y", "xp", "yp"))
+    if _evd_have and _evd_have_track:
+        _evd_pool = df_plot_ancillary[df_plot_ancillary["definitive_tt"] == 1234]
+        n_evd = min(16, len(_evd_pool))
+        if n_evd > 0:
+            rng_evd = np.random.default_rng(42)
+            idx_evd = rng_evd.choice(len(_evd_pool), size=n_evd, replace=False)
+            _evd_sample = _evd_pool.iloc[sorted(idx_evd)]
+
+            z_arr = np.asarray(z_positions, dtype=float)
+            z_margin = 25.0
+            z_lo = z_arr.min() - z_margin
+            z_hi = z_arr.max() + z_margin
+            z_span = z_hi - z_lo                       # mm
+            x_span = 2.0 * strip_half                  # mm
+            y_span = 2.0 * width_half                  # mm
+
+            # Figure sized so that 1 mm ≈ px_per_mm inches on screen
+            # → GridSpec columns proportional to physical width → set_aspect('equal')
+            #   will fill each subplot box exactly, showing true detector proportions.
+            px_per_mm = 0.008
+            col_h_in = z_span * px_per_mm
+            col_xz_w_in = x_span * px_per_mm
+            col_yz_w_in = y_span * px_per_mm
+            events_per_row = 4
+            n_rows_evd = 4
+            fig_w = (col_xz_w_in + col_yz_w_in) * events_per_row + 1.5
+            fig_h = col_h_in * n_rows_evd + 1.5
+
+            fig = plt.figure(figsize=(fig_w, fig_h))
+            # Columns alternate [XZ, YZ] for each of the 4 events per row
+            gs = GridSpec(
+                n_rows_evd, events_per_row * 2,
+                figure=fig,
+                width_ratios=[x_span, y_span] * events_per_row,
+                hspace=0.55,
+                wspace=0.20,
+            )
+
+            z_line = np.linspace(z_lo, z_hi, 80)
+
+            for ev_i, (_, row) in enumerate(_evd_sample.iterrows()):
+                r_idx = ev_i // events_per_row
+                c_ev = ev_i % events_per_row
+                ax_xz = fig.add_subplot(gs[r_idx, c_ev * 2])
+                ax_yz = fig.add_subplot(gs[r_idx, c_ev * 2 + 1])
+
+                y_meas = np.array([row.get(c, np.nan) for c in _evd_y_cols], dtype=float)
+                td_meas = np.array([row.get(c, np.nan) for c in _evd_td_cols], dtype=float)
+                x_meas = td_meas * tdiff_to_x
+                q_meas = np.array([row.get(c, 0.0) for c in _evd_q_cols], dtype=float)
+                active = np.isfinite(y_meas) & (y_meas != 0)
+
+                x0_ev = float(row.get("x", 0.0))
+                y0_ev = float(row.get("y", 0.0))
+                xp_ev = float(row.get("xp", 0.0))
+                yp_ev = float(row.get("yp", 0.0))
+                x_line = x0_ev + xp_ev * z_line
+                y_line = y0_ev + yp_ev * z_line
+
+                # Plane-position guidelines (horizontal lines at each plane's Z)
+                for zp in z_arr:
+                    ax_xz.axhline(zp, color="lightgray", lw=0.4, zorder=0)
+                    ax_yz.axhline(zp, color="lightgray", lw=0.4, zorder=0)
+                # Strip Y-centre guidelines on YZ panel
+                for sy in y_pos_P1_and_P3:
+                    ax_yz.axvline(sy, color="lightgray", lw=0.4, ls="--", zorder=0)
+
+                # Measured hits — errorbar (behind) + marker (in front)
+                # X (T_dif): the "better" direction  → thin, subtle bar
+                # Y (strip): the "worse"  direction  → slightly thicker/opaque bar
+                for pp in range(4):
+                    if active[pp]:
+                        sz_ev = float(np.clip(q_meas[pp] * 4, 20, 200)) if q_meas[pp] > 0 else 20
+                        ax_xz.errorbar(
+                            x_meas[pp], z_arr[pp], xerr=anc_sx,
+                            fmt="none", ecolor=f"C{pp}",
+                            elinewidth=0.7, capsize=1.5, capthick=0.6,
+                            alpha=0.30, zorder=2,
+                        )
+                        ax_yz.errorbar(
+                            y_meas[pp], z_arr[pp], xerr=anc_sy,
+                            fmt="none", ecolor=f"C{pp}",
+                            elinewidth=1.1, capsize=2.5, capthick=0.9,
+                            alpha=0.45, zorder=2,
+                        )
+                        ax_xz.scatter(x_meas[pp], z_arr[pp], s=sz_ev,
+                                      c=f"C{pp}", zorder=3, alpha=0.9)
+                        ax_yz.scatter(y_meas[pp], z_arr[pp], s=sz_ev,
+                                      c=f"C{pp}", zorder=3, alpha=0.9)
+
+                # Fitted track line
+                ax_xz.plot(x_line, z_line, "r-", lw=0.9, alpha=0.8, zorder=2)
+                ax_yz.plot(y_line, z_line, "r-", lw=0.9, alpha=0.8, zorder=2)
+
+                # Axis limits — real mm detector dimensions
+                ax_xz.set_xlim(-strip_half, strip_half)
+                ax_xz.set_ylim(z_lo, z_hi)
+                ax_xz.set_aspect("equal")
+                ax_xz.set_xlabel("X (mm)", fontsize=5)
+                ax_xz.set_ylabel("Z (mm)", fontsize=5)
+                ax_xz.tick_params(labelsize=4)
+                ax_xz.set_title(f"ev{ev_i + 1} XZ", fontsize=6)
+
+                ax_yz.set_xlim(-width_half, width_half)
+                ax_yz.set_ylim(z_lo, z_hi)
+                ax_yz.set_aspect("equal")
+                ax_yz.set_xlabel("Y (mm)", fontsize=5)
+                ax_yz.set_ylabel("Z (mm)", fontsize=5)
+                ax_yz.tick_params(labelsize=4)
+                ax_yz.set_title(f"ev{ev_i + 1} YZ", fontsize=6)
+
+            plt.suptitle(
+                "Sample 4-fold event displays — equal mm scale (Z vertical)\n"
+                "C0–C3 = planes 1–4  |  marker size ~ charge  |  red line = fitted track  |  "
+                f"detector: X={x_span:.0f} mm  Y={y_span:.0f} mm  Z={z_arr[-1]:.0f} mm\n"
+                f"errorbars: XZ = ±σ_X (T_dif, {anc_sx:.0f} mm, thin)  ·  "
+                f"YZ = ±σ_Y (strip, {anc_sy:.0f} mm, thick)",
+                fontsize=8,
+            )
+            plt.tight_layout(rect=[0, 0, 1, 0.96])
+            if save_plots:
+                final_filename = f"{fig_idx}_event_display_sample.png"
+                fig_idx += 1
+                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                plot_list.append(save_fig_path)
+                save_plot_figure(save_fig_path, format="png", alias="event_display_sample")
+            if show_plots:
+                plt.show()
+            plt.close()
+
+# ---------------------------------------------------------------------------
+# Track-consistency: LOO (leave-one-out) residuals per plane (2D histograms)
+# ---------------------------------------------------------------------------
+if (create_essential_plots or create_plots) and task4_plot_enabled("track_consistency_loo_residuals"):
+    _loo_y_cols = [f"ext_res_ystr_{p}" for p in range(1, 5)]
+    _loo_td_cols = [f"ext_res_tdif_{p}" for p in range(1, 5)]
+    _loo_have = all(c in df_plot_ancillary.columns for c in _loo_y_cols + _loo_td_cols + ["definitive_tt"])
+    if _loo_have:
+        # 3-fold combos containing each plane — removing that plane leaves a 2-plane telescope,
+        # which is nearly degenerate (5 params, 6 equations → residuals ≈ 0).
+        # 4-fold events (1234) — removing any plane leaves a proper 3-plane telescope.
+        _loo_3fold_by_plane = {
+            1: [123, 124, 134],
+            2: [123, 124, 234],
+            3: [123, 134, 234],
+            4: [124, 134, 234],
+        }
+        _loo_row_defs = [
+            (lambda p: [1234],                  "4-fold  (3-plane telescope — non-degenerate)"),
+            (lambda p: _loo_3fold_by_plane[p],  "3-fold  (2-plane telescope — degenerate, residuals → 0)"),
+        ]
+
+        fig_loo, axes_loo = plt.subplots(
+            2, 4, figsize=(18, 9), squeeze=False,
+            gridspec_kw={"hspace": 0.50, "wspace": 0.35},
+        )
+        _loo_df_all = df_plot_ancillary.copy()
+
+        for _ri, (tt_fn, row_label) in enumerate(_loo_row_defs):
+            for _pi in range(4):
+                p = _pi + 1
+                ax = axes_loo[_ri][_pi]
+                _tt_filter = tt_fn(p)
+                _mask_tt = _loo_df_all["definitive_tt"].isin(_tt_filter)
+                _sub = _loo_df_all[_mask_tt]
+
+                ry = pd.to_numeric(_sub[f"ext_res_ystr_{p}"], errors="coerce")
+                rx = pd.to_numeric(_sub[f"ext_res_tdif_{p}"], errors="coerce") * tdiff_to_x
+
+                # For the non-degenerate row: exclude events where LOO wasn't run (default 0)
+                # For the degenerate row: keep all (zeros ARE the point)
+                if _ri == 0:
+                    _mask_loo = ry.notna() & rx.notna() & (ry != 0) & (rx != 0)
+                else:
+                    _mask_loo = ry.notna() & rx.notna()
+
+                ry = ry[_mask_loo]
+                rx = rx[_mask_loo]
+
+                if len(rx) < 5:
+                    ax.text(0.5, 0.5, "no data", ha="center", va="center",
+                            transform=ax.transAxes, fontsize=9)
+                    ax.set_title(f"Plane {p}", fontsize=9)
+                    ax.set_visible(False)
+                    continue
+
+                xlim = max(float(rx.abs().quantile(0.99)), 1.0)
+                ylim = max(float(ry.abs().quantile(0.99)), 1.0)
+                hb = ax.hexbin(rx, ry, gridsize=40, cmap="viridis",
+                               extent=(-xlim, xlim, -ylim, ylim), mincnt=1)
+                plt.colorbar(hb, ax=ax, label="counts", pad=0.02)
+                ax.axhline(0, color="red", lw=0.8, ls="--", alpha=0.6)
+                ax.axvline(0, color="red", lw=0.8, ls="--", alpha=0.6)
+                ax.set_xlabel("LOO X residual (mm)", fontsize=8)
+                if _pi == 0:
+                    ax.set_ylabel(f"LOO Y residual (mm)\n[{row_label}]", fontsize=7)
+                else:
+                    ax.set_ylabel("LOO Y residual (mm)", fontsize=8)
+                ax.set_xlim(-xlim, xlim)
+                ax.set_ylim(-ylim, ylim)
+                ax.set_title(
+                    f"Plane {p}  |  tt∈{_tt_filter}\nn={len(rx):,}",
+                    fontsize=8,
+                )
+                ax.grid(True, alpha=0.3)
+
+        fig_loo.suptitle(
+            "Track-consistency: leave-one-out (LOO) residuals per plane\n"
+            "Top: 4-fold events — 3-plane telescope (proper, non-degenerate)  |  "
+            "Bottom: 3-fold events — 2-plane telescope (degenerate → residuals collapse to 0)\n"
+            "X residual = (predicted − measured) × strip_speed  |  Y residual = predicted − measured strip Y",
+            fontsize=9,
+        )
+        plt.tight_layout(rect=[0, 0, 1, 0.90])
+        if save_plots:
+            final_filename = f"{fig_idx}_track_consistency_loo_residuals.png"
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            save_plot_figure(save_fig_path, format="png", alias="track_consistency_loo_residuals")
+        if show_plots:
+            plt.show()
+        plt.close()
+
+# ---------------------------------------------------------------------------
+# Strip hit occupancy: 2D hit map per plane (X from T_dif, Y from Y_final)
+# ---------------------------------------------------------------------------
+if (create_essential_plots or create_plots) and task4_plot_enabled("strip_hit_occupancy"):
+    _occ_y_cols = [f"P{p}_Y_final" for p in range(1, 5)]
+    _occ_td_cols = [f"P{p}_T_dif_final" for p in range(1, 5)]
+    _occ_have = all(c in df_plot_ancillary.columns for c in _occ_y_cols + _occ_td_cols)
+    if _occ_have:
+        fig, axes = plt.subplots(1, 4, figsize=(16, 4), squeeze=False)
+        for pp in range(4):
+            ax = axes[0][pp]
+            y_hits = pd.to_numeric(df_plot_ancillary[f"P{pp + 1}_Y_final"], errors="coerce")
+            x_hits = pd.to_numeric(df_plot_ancillary[f"P{pp + 1}_T_dif_final"], errors="coerce") * tdiff_to_x
+            mask_occ = y_hits.notna() & x_hits.notna() & (y_hits != 0) & (x_hits != 0)
+            x_hits = x_hits[mask_occ]
+            y_hits = y_hits[mask_occ]
+            if len(x_hits) < 5:
+                ax.set_title(f"Plane {pp + 1}: no data", fontsize=9)
+                ax.set_visible(False)
+                continue
+            hb = ax.hexbin(x_hits, y_hits, gridsize=30, cmap="hot_r", mincnt=1,
+                           extent=(-strip_half, strip_half, -width_half, width_half))
+            plt.colorbar(hb, ax=ax, label="hits")
+            y_centers = y_pos_P1_and_P3 if pp % 2 == 0 else y_pos_P2_and_P4
+            for sy in y_centers:
+                ax.axhline(sy, color="cyan", lw=0.7, ls="--", alpha=0.8)
+            ax.set_xlim(-strip_half, strip_half)
+            ax.set_ylim(-width_half, width_half)
+            ax.set_xlabel("X from T_dif (mm)", fontsize=9)
+            ax.set_ylabel("Y_final (mm)", fontsize=9)
+            ax.set_title(f"Plane {pp + 1} hit map  (n={len(x_hits)})", fontsize=9)
+            ax.grid(True, alpha=0.2)
+        plt.suptitle(
+            "Strip hit occupancy: 2D hit density per plane\n"
+            "Cyan dashed = strip Y centres",
+            fontsize=11,
+        )
+        plt.tight_layout(rect=[0, 0, 1, 0.90])
+        if save_plots:
+            final_filename = f"{fig_idx}_strip_hit_occupancy.png"
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            save_plot_figure(save_fig_path, format="png", alias="strip_hit_occupancy")
+        if show_plots:
+            plt.show()
+        plt.close()
+
+# ---------------------------------------------------------------------------
+# Track-based single-plane efficiency (telescope method)
+# Use 3 planes as a telescope, project to the 4th, ask: did the 4th fire?
+# ---------------------------------------------------------------------------
+if (create_essential_plots or create_plots) and task4_plot_enabled("track_based_efficiency"):
+    _eff_cols_need = ("x", "y", "xp", "yp", "definitive_tt")
+    _eff_have = all(c in df_plot_ancillary.columns for c in _eff_cols_need)
+    if _eff_have:
+        z_arr_eff = np.asarray(z_positions, dtype=float)
+
+        # For each plane under test, which trigger-type values form the telescope pool?
+        # Pool = events where the OTHER 3 planes all fired (3-plane + 4-plane events).
+        # "fired" = definitively_tt == 1234 (the test plane also fired).
+        plane_pool_tt = {
+            1: [234, 1234],
+            2: [134, 1234],
+            3: [124, 1234],
+            4: [123, 1234],
+        }
+
+        fig, axes = plt.subplots(3, 4, figsize=(18, 13), squeeze=False)
+
+        x_all = pd.to_numeric(df_plot_ancillary["x"], errors="coerce").to_numpy(dtype=float)
+        y_all = pd.to_numeric(df_plot_ancillary["y"], errors="coerce").to_numpy(dtype=float)
+        xp_all = pd.to_numeric(df_plot_ancillary["xp"], errors="coerce").to_numpy(dtype=float)
+        yp_all = pd.to_numeric(df_plot_ancillary["yp"], errors="coerce").to_numpy(dtype=float)
+        dtt_all = pd.to_numeric(df_plot_ancillary["definitive_tt"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
+
+        n_x_bins = 15
+        n_y_bins = 20
+        x_bins = np.linspace(-strip_half, strip_half, n_x_bins + 1)
+        y_bins = np.linspace(-width_half, width_half, n_y_bins + 1)
+
+        for plane_idx, p in enumerate(range(1, 5)):
+            ax_2d  = axes[0][plane_idx]
+            ax_1dy = axes[1][plane_idx]
+            ax_1dx = axes[2][plane_idx]
+
+            pool_tt_vals = plane_pool_tt[p]
+            pool_mask = np.isin(dtt_all, pool_tt_vals)
+
+            if pool_mask.sum() < 20:
+                ax_2d.set_visible(False)
+                ax_1dy.set_visible(False)
+                ax_1dx.set_visible(False)
+                continue
+
+            z_test = float(z_arr_eff[p - 1])
+            x_pred = x_all[pool_mask] + xp_all[pool_mask] * z_test
+            y_pred = y_all[pool_mask] + yp_all[pool_mask] * z_test
+            fired = (dtt_all[pool_mask] == 1234).astype(float)
+
+            # Restrict to detector acceptance
+            in_acc = (
+                np.isfinite(x_pred) & np.isfinite(y_pred)
+                & (np.abs(x_pred) <= strip_half)
+                & (np.abs(y_pred) <= width_half)
+            )
+            x_pred = x_pred[in_acc]
+            y_pred = y_pred[in_acc]
+            fired = fired[in_acc]
+
+            if len(x_pred) < 10:
+                ax_2d.set_visible(False)
+                ax_1dy.set_visible(False)
+                ax_1dx.set_visible(False)
+                continue
+
+            overall_eff = float(fired.mean()) * 100
+            n_denom = len(fired)
+            y_ctrs = y_pos_P1_and_P3 if (p - 1) % 2 == 0 else y_pos_P2_and_P4
+
+            # --- 2D efficiency map ---
+            num_2d, _, _ = np.histogram2d(
+                x_pred[fired > 0.5], y_pred[fired > 0.5], bins=[x_bins, y_bins]
+            )
+            den_2d, _, _ = np.histogram2d(x_pred, y_pred, bins=[x_bins, y_bins])
+            with np.errstate(invalid="ignore", divide="ignore"):
+                eff_2d = np.where(den_2d > 0, num_2d / den_2d, np.nan)
+
+            im = ax_2d.imshow(
+                eff_2d.T,
+                origin="lower",
+                aspect="auto",
+                extent=[-strip_half, strip_half, -width_half, width_half],
+                vmin=0,
+                vmax=1,
+                cmap="RdYlGn",
+            )
+            plt.colorbar(im, ax=ax_2d, label="efficiency")
+            for sy in y_ctrs:
+                ax_2d.axhline(sy, color="cyan", lw=0.7, ls="--", alpha=0.7)
+            ax_2d.set_xlabel("Projected X (mm)", fontsize=8)
+            ax_2d.set_ylabel("Projected Y (mm)", fontsize=8)
+            ax_2d.set_title(
+                f"Plane {p}  eff={overall_eff:.1f}%  (n={n_denom})", fontsize=9
+            )
+
+            # --- 1D efficiency vs projected Y ---
+            num_1dy, _ = np.histogram(y_pred[fired > 0.5], bins=y_bins)
+            den_1dy, _ = np.histogram(y_pred, bins=y_bins)
+            y_centers = 0.5 * (y_bins[:-1] + y_bins[1:])
+            with np.errstate(invalid="ignore", divide="ignore"):
+                eff_1dy = np.where(den_1dy > 0, num_1dy / den_1dy, np.nan)
+                err_1dy = np.where(
+                    den_1dy > 0,
+                    np.sqrt(np.maximum(eff_1dy * (1.0 - eff_1dy) / np.maximum(den_1dy, 1), 0)),
+                    np.nan,
+                )
+            valid_y = np.isfinite(eff_1dy) & (den_1dy > 0)
+            median_eff_y = float(np.nanmedian(eff_1dy[valid_y]))
+            ax_1dy.errorbar(
+                y_centers[valid_y], eff_1dy[valid_y], yerr=err_1dy[valid_y],
+                fmt="o-", ms=4, color=f"C{p - 1}", alpha=0.85,
+            )
+            for sy in y_ctrs:
+                ax_1dy.axvline(sy, color="lightgray", lw=0.9, ls="--", alpha=0.8)
+            ax_1dy.axhline(
+                median_eff_y, color="red", lw=0.8, ls="--", alpha=0.6,
+                label=f"median {median_eff_y * 100:.1f}%",
+            )
+            ax_1dy.set_ylim(0, 1.08)
+            ax_1dy.set_xlim(-width_half, width_half)
+            ax_1dy.set_xlabel("Projected Y (mm)", fontsize=8)
+            ax_1dy.set_ylabel("Efficiency", fontsize=8)
+            ax_1dy.legend(fontsize=7)
+            ax_1dy.grid(True, alpha=0.3)
+
+            # --- 1D efficiency vs projected X ---
+            num_1dx, _ = np.histogram(x_pred[fired > 0.5], bins=x_bins)
+            den_1dx, _ = np.histogram(x_pred, bins=x_bins)
+            x_centers = 0.5 * (x_bins[:-1] + x_bins[1:])
+            with np.errstate(invalid="ignore", divide="ignore"):
+                eff_1dx = np.where(den_1dx > 0, num_1dx / den_1dx, np.nan)
+                err_1dx = np.where(
+                    den_1dx > 0,
+                    np.sqrt(np.maximum(eff_1dx * (1.0 - eff_1dx) / np.maximum(den_1dx, 1), 0)),
+                    np.nan,
+                )
+            valid_x = np.isfinite(eff_1dx) & (den_1dx > 0)
+            median_eff_x = float(np.nanmedian(eff_1dx[valid_x]))
+            ax_1dx.errorbar(
+                x_centers[valid_x], eff_1dx[valid_x], yerr=err_1dx[valid_x],
+                fmt="o-", ms=4, color=f"C{p - 1}", alpha=0.85,
+            )
+            ax_1dx.axhline(
+                median_eff_x, color="red", lw=0.8, ls="--", alpha=0.6,
+                label=f"median {median_eff_x * 100:.1f}%",
+            )
+            ax_1dx.set_ylim(0, 1.08)
+            ax_1dx.set_xlim(-strip_half, strip_half)
+            ax_1dx.set_xlabel("Projected X (mm)", fontsize=8)
+            ax_1dx.set_ylabel("Efficiency", fontsize=8)
+            ax_1dx.legend(fontsize=7)
+            ax_1dx.grid(True, alpha=0.3)
+
+        plt.suptitle(
+            "Track-based single-plane efficiency (telescope method)\n"
+            "3 planes build a track → project to test plane → did the test plane fire?",
+            fontsize=11,
+        )
+        plt.tight_layout(rect=[0, 0, 1, 0.94])
+        if save_plots:
+            final_filename = f"{fig_idx}_track_based_efficiency.png"
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            save_plot_figure(save_fig_path, format="png", alias="track_based_efficiency")
+        if show_plots:
+            plt.show()
+        plt.close()
+
+# ---------------------------------------------------------------------------
+# Track-based efficiency vs theta — 4 planes on one figure
+# Same telescope method; reveals angular efficiency dependence for
+# comparison between real data and simulation.
+# ---------------------------------------------------------------------------
+if (create_essential_plots or create_plots) and task4_plot_enabled("track_based_efficiency_vs_theta"):
+    _teff_need = ("x", "y", "xp", "yp", "theta", "definitive_tt")
+    _teff_have = all(c in df_plot_ancillary.columns for c in _teff_need)
+    if _teff_have:
+        z_arr_teff = np.asarray(z_positions, dtype=float)
+        plane_pool_tt_t = {1: [234, 1234], 2: [134, 1234], 3: [124, 1234], 4: [123, 1234]}
+
+        x_all_t  = pd.to_numeric(df_plot_ancillary["x"],   errors="coerce").to_numpy(dtype=float)
+        y_all_t  = pd.to_numeric(df_plot_ancillary["y"],   errors="coerce").to_numpy(dtype=float)
+        xp_all_t = pd.to_numeric(df_plot_ancillary["xp"],  errors="coerce").to_numpy(dtype=float)
+        yp_all_t = pd.to_numeric(df_plot_ancillary["yp"],  errors="coerce").to_numpy(dtype=float)
+        th_all_t = pd.to_numeric(df_plot_ancillary["theta"], errors="coerce").to_numpy(dtype=float)
+        dtt_all_t = pd.to_numeric(df_plot_ancillary["definitive_tt"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
+
+        n_theta_bins = 20
+        theta_lo = float(np.nanpercentile(th_all_t[np.isfinite(th_all_t)], 0.5))
+        theta_hi = float(np.nanpercentile(th_all_t[np.isfinite(th_all_t)], 99.5))
+        theta_bins_t = np.linspace(theta_lo, theta_hi, n_theta_bins + 1)
+        theta_centers = 0.5 * (theta_bins_t[:-1] + theta_bins_t[1:])
+
+        fig, axes = plt.subplots(1, 4, figsize=(16, 4), squeeze=False)
+
+        for plane_idx, p in enumerate(range(1, 5)):
+            ax = axes[0][plane_idx]
+            pool_mask_t = np.isin(dtt_all_t, plane_pool_tt_t[p])
+            if pool_mask_t.sum() < 20:
+                ax.set_visible(False)
+                continue
+
+            z_test_t = float(z_arr_teff[p - 1])
+            x_pred_t = x_all_t[pool_mask_t] + xp_all_t[pool_mask_t] * z_test_t
+            y_pred_t = y_all_t[pool_mask_t] + yp_all_t[pool_mask_t] * z_test_t
+            theta_t  = th_all_t[pool_mask_t]
+            fired_t  = (dtt_all_t[pool_mask_t] == 1234).astype(float)
+
+            in_acc_t = (
+                np.isfinite(x_pred_t) & np.isfinite(y_pred_t) & np.isfinite(theta_t)
+                & (np.abs(x_pred_t) <= strip_half)
+                & (np.abs(y_pred_t) <= width_half)
+            )
+            theta_t = theta_t[in_acc_t]
+            fired_t = fired_t[in_acc_t]
+
+            if len(theta_t) < 10:
+                ax.set_visible(False)
+                continue
+
+            num_th, _ = np.histogram(theta_t[fired_t > 0.5], bins=theta_bins_t)
+            den_th, _ = np.histogram(theta_t, bins=theta_bins_t)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                eff_th = np.where(den_th > 0, num_th / den_th, np.nan)
+                err_th = np.where(
+                    den_th > 0,
+                    np.sqrt(np.maximum(eff_th * (1.0 - eff_th) / np.maximum(den_th, 1), 0)),
+                    np.nan,
+                )
+            valid_th = np.isfinite(eff_th) & (den_th > 0)
+            median_eff_th = float(np.nanmedian(eff_th[valid_th]))
+
+            ax.errorbar(
+                np.degrees(theta_centers[valid_th]),
+                eff_th[valid_th],
+                yerr=err_th[valid_th],
+                fmt="o-", ms=4, color=f"C{p - 1}", alpha=0.85,
+            )
+            ax.axhline(
+                median_eff_th, color="red", lw=0.8, ls="--", alpha=0.6,
+                label=f"median {median_eff_th * 100:.1f}%",
+            )
+            ax.set_ylim(0, 1.08)
+            ax.set_xlabel("θ (deg)", fontsize=9)
+            ax.set_ylabel("Efficiency", fontsize=9)
+            ax.set_title(f"Plane {p}  (n={int(den_th.sum())})", fontsize=10)
+            ax.legend(fontsize=8)
+            ax.grid(True, alpha=0.3)
+
+        plt.suptitle(
+            "Track-based efficiency vs polar angle θ (telescope method)\n"
+            "Useful for sim/data comparison of angular efficiency dependence",
+            fontsize=11,
+        )
+        plt.tight_layout(rect=[0, 0, 1, 0.91])
+        if save_plots:
+            final_filename = f"{fig_idx}_track_based_efficiency_vs_theta.png"
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            save_plot_figure(save_fig_path, format="png", alias="track_based_efficiency_vs_theta")
+        if show_plots:
+            plt.show()
+        plt.close()
+
+# ── chi2 vs charge population diagnostic ─────────────────────────────────────
+# 3 figures (one per charge metric): rows = missed / hit (separate panels),
+# cols = 4 test planes.  Right marginal: chi2 histogram (horizontal, log count,
+# shared Y).  Bottom marginal: charge histogram (log count, shared X per col).
+# Hexbin (log-norm) per panel so density is visible even at large N.
+# -----------------------------------------------------------------------------
+if (create_essential_plots or create_plots) and task4_plot_enabled("chi2_charge_populations"):
+    _chi2pop_need = ("tim_th_chi", "charge_event",
+                     "charge_1", "charge_2", "charge_3", "charge_4",
+                     "definitive_tt")
+    _chi2pop_have = all(c in df_plot_ancillary.columns for c in _chi2pop_need)
+    if not _chi2pop_have:
+        print("[chi2_charge_populations] required columns not found, skipping.")
+    else:
+        _plane_pool_tt = {1: [234, 1234], 2: [134, 1234], 3: [124, 1234], 4: [123, 1234]}
+        _tel_planes    = {1: [2, 3, 4],   2: [1, 3, 4],   3: [1, 2, 4],   4: [1, 2, 3]}
+        _3pl_tt        = {1: 234, 2: 134, 3: 124, 4: 123}
+        _pop_cmaps     = ["Blues", "Reds"]
+        _pop_colors    = ["steelblue", "tomato"]
+        _pop_labels    = ["Missed  (3-fold: test plane not fired)", "Hit  (4-fold: all planes fired)"]
+
+        # Pre-compute numpy arrays once for the whole ancillary frame
+        _chi2_log_all = np.log1p(np.clip(
+            df_plot_ancillary["tim_th_chi"].values.astype(float), 0.0, None
+        ))
+        _qev_all    = df_plot_ancillary["charge_event"].values.astype(float)
+        _def_tt_arr = df_plot_ancillary["definitive_tt"].values.astype(float)
+
+        _q_min_by_tp  = {}
+        _q_asym_by_tp = {}
+        for _p in [1, 2, 3, 4]:
+            _tq  = np.column_stack([df_plot_ancillary[f"charge_{q}"].values.astype(float)
+                                    for q in _tel_planes[_p]])
+            _qmn = np.nanmin(_tq, axis=1)
+            _qmx = np.nanmax(_tq, axis=1)
+            _den = _qmx + _qmn
+            _q_min_by_tp[_p]  = _qmn
+            _q_asym_by_tp[_p] = np.where(_den > 0, (_qmx - _qmn) / _den, np.nan)
+
+        # Global chi2 Y limit — same across all scatter panels for easy comparison
+        _chi2_finite = _chi2_log_all[np.isfinite(_chi2_log_all) & (_chi2_log_all > 0)]
+        _global_chi2_ylim = float(np.nanpercentile(_chi2_finite, 99.5)) if _chi2_finite.size > 0 else 5.0
+
+        _metrics = [
+            ("charge_event", "Total charge (a.u.)"),
+            ("min_q_tel",    "Min telescope-plane charge (a.u.)"),
+            ("q_asym",       r"Charge asymmetry  $(q_\mathrm{max}-q_\mathrm{min})/(q_\mathrm{max}+q_\mathrm{min})$"),
+        ]
+
+        for _mi, (_metric_key, _metric_label) in enumerate(_metrics):
+            # GridSpec: 3 rows × 5 cols
+            #   rows 0-1 = missed/hit scatter;  row 2 = charge marginal histograms
+            #   cols 0-3 = test planes;  col 4 = chi2 marginal histogram (spans rows 0-1)
+            fig_cp = plt.figure(figsize=(20, 12))
+            gs_cp  = GridSpec(
+                3, 5, figure=fig_cp,
+                width_ratios=[3, 3, 3, 3, 1.1],
+                height_ratios=[3, 3, 1.1],
+                hspace=0.07, wspace=0.10,
+            )
+            fig_cp.suptitle(
+                rf"$\chi^2$ vs {_metric_label} — population diagnostics" + "\n"
+                "Top row: missed (3-fold)  |  Bottom row: hit (4-fold)  |  "
+                "Right: χ² marginal (all planes)  |  Bottom: charge marginal",
+                fontsize=9,
+            )
+
+            _ref_y_ax  = None     # shared chi2 Y axis across all 8 scatter panels
+            _col_x_ref = {}       # per-column shared X axis (charge metric)
+            _chi2_miss_pool = []  # for right marginal histogram
+            _chi2_hit_pool  = []
+
+            for _pi, _p in enumerate([1, 2, 3, 4]):
+                _pool_idx = np.where(np.isin(_def_tt_arr, _plane_pool_tt[_p]))[0]
+                if _pool_idx.size == 0:
+                    continue
+
+                _chi2_p = _chi2_log_all[_pool_idx]
+                _xd_p   = (
+                    _qev_all[_pool_idx]          if _metric_key == "charge_event"
+                    else _q_min_by_tp[_p][_pool_idx]  if _metric_key == "min_q_tel"
+                    else _q_asym_by_tp[_p][_pool_idx]
+                )
+                _tt_p      = _def_tt_arr[_pool_idx]
+                _miss_sel  = _tt_p == _3pl_tt[_p]
+                _hit_sel   = _tt_p == 1234
+
+                # X limit: 99.5th percentile of the full pool (both populations)
+                _valid_pool = np.isfinite(_xd_p) & np.isfinite(_chi2_p)
+                _xlim_p = (float(np.nanpercentile(_xd_p[_valid_pool], 99.5))
+                           if _valid_pool.sum() > 0 else 1.0)
+
+                for _ri, (_sel, _lbl, _cmap) in enumerate(zip(
+                    [_miss_sel, _hit_sel], _pop_labels, _pop_cmaps
+                )):
+                    _sharey = _ref_y_ax
+                    _sharex = _col_x_ref.get(_pi)
+                    ax_sc = fig_cp.add_subplot(gs_cp[_ri, _pi], sharey=_sharey, sharex=_sharex)
+                    if _ref_y_ax is None:
+                        _ref_y_ax = ax_sc
+                    if _pi not in _col_x_ref:
+                        _col_x_ref[_pi] = ax_sc
+
+                    _valid = _sel & np.isfinite(_xd_p) & np.isfinite(_chi2_p)
+                    if _valid.sum() >= 5:
+                        ax_sc.hexbin(
+                            _xd_p[_valid], _chi2_p[_valid],
+                            gridsize=30, cmap=_cmap, bins="log", mincnt=1,
+                            extent=(0, _xlim_p, 0, _global_chi2_ylim),
+                        )
+                        (_chi2_miss_pool if _ri == 0 else _chi2_hit_pool).append(_chi2_p[_valid])
+
+                    # Title: only top row (missed) carries the plane + count info
+                    if _ri == 0:
+                        ax_sc.set_title(
+                            f"Test P{_p}  (pool tt∈{_plane_pool_tt[_p]})\n"
+                            f"missed={int(_miss_sel.sum()):,}   hit={int(_hit_sel.sum()):,}",
+                            fontsize=7,
+                        )
+                    if _pi == 0:
+                        ax_sc.set_ylabel(
+                            r"$\log(1+\chi^2)$" + f"\n[{_lbl.split('  ')[0]}]", fontsize=7
+                        )
+                    plt.setp(ax_sc.get_xticklabels(), visible=False)
+                    ax_sc.tick_params(labelsize=6)
+
+                # Lock X limit for this column (affects all shared-X axes)
+                _col_x_ref[_pi].set_xlim(0, _xlim_p)
+
+                # Bottom charge histogram — shared X with scatter column
+                ax_qh = fig_cp.add_subplot(gs_cp[2, _pi], sharex=_col_x_ref[_pi])
+                _bins_q = np.linspace(0, _xlim_p, 60)
+                for _sel, _col in [(_miss_sel, _pop_colors[0]), (_hit_sel, _pop_colors[1])]:
+                    _valid_q = _sel & np.isfinite(_xd_p)
+                    if _valid_q.sum() > 0:
+                        ax_qh.hist(_xd_p[_valid_q], bins=_bins_q,
+                                   color=_col, alpha=0.55, histtype="stepfilled")
+                ax_qh.set_yscale("log")
+                ax_qh.set_xlabel(_metric_label, fontsize=7)
+                if _pi == 0:
+                    ax_qh.set_ylabel("count", fontsize=7)
+                ax_qh.tick_params(labelsize=6, axis="x", rotation=25)
+                ax_qh.tick_params(labelsize=6, axis="y")
+
+            # Lock shared chi2 Y axis
+            if _ref_y_ax is not None:
+                _ref_y_ax.set_ylim(0, _global_chi2_ylim)
+
+            # Right chi2 marginal histograms — one per population row, shared Y with scatter
+            _bins_chi2 = np.linspace(0, _global_chi2_ylim, 60)
+            _chi2h_ref_ax = None
+            for _ri, (_pool_list, _col, _lbl) in enumerate(zip(
+                [_chi2_miss_pool, _chi2_hit_pool],
+                _pop_colors,
+                ["missed", "hit"],
+            )):
+                ax_chi2h = fig_cp.add_subplot(
+                    gs_cp[_ri, 4],
+                    sharey=_ref_y_ax,
+                    sharex=_chi2h_ref_ax,
+                )
+                if _chi2h_ref_ax is None:
+                    _chi2h_ref_ax = ax_chi2h
+                _arr = np.concatenate(_pool_list) if _pool_list else np.array([])
+                _arr = _arr[np.isfinite(_arr)]
+                if _arr.size > 0:
+                    ax_chi2h.hist(_arr, bins=_bins_chi2, orientation="horizontal",
+                                  color=_col, alpha=0.65, histtype="stepfilled")
+                ax_chi2h.set_xscale("log")
+                ax_chi2h.set_title(rf"$\chi^2$ marginal [{_lbl}]", fontsize=7)
+                if _ri == 1:
+                    ax_chi2h.set_xlabel("count (log)", fontsize=7)
+                ax_chi2h.tick_params(labelsize=6)
+                plt.setp(ax_chi2h.get_yticklabels(), visible=False)
+                plt.setp(ax_chi2h.get_xticklabels(), visible=(_ri == 1))
+
+            if save_plots:
+                _chi2pop_fn = f"{fig_idx}_chi2_charge_populations_m{_mi + 1}.png"
+                fig_idx += 1
+                _chi2pop_path = os.path.join(base_directories["figure_directory"], _chi2pop_fn)
+                plot_list.append(_chi2pop_path)
+                save_plot_figure(_chi2pop_path, format="png", alias="chi2_charge_populations")
+            if show_plots:
+                plt.show()
+            plt.close()
 
 if create_plots:
     df_filtered = df_plot_ancillary

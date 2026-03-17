@@ -31,6 +31,7 @@ of the Stage 1 event workflow.
 # Standard Library
 import argparse
 import atexit
+from array import array
 import builtins
 import csv
 from datetime import datetime, timedelta
@@ -547,6 +548,7 @@ for directory in base_directories.values():
 
 csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execution.csv")
 csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metadata_specific.csv")
+csv_path_pattern = os.path.join(metadata_directory, f"task_{task_number}_metadata_pattern.csv")
 csv_path_rate_histogram = os.path.join(
     metadata_directory,
     f"task_{task_number}_metadata_rate_histogram.csv",
@@ -1052,6 +1054,7 @@ channel_contagion_metrics: dict[str, float] = {
     key: float("nan") for key in CHANNEL_CONTAGION_METADATA_FIELDS
 }
 activation_metadata: dict[str, object] = {}
+pattern_metadata: dict[str, object] = {}
 
 TT_COUNT_VALUES: tuple[int, ...] = (
     0, 1, 2, 3, 4, 12, 13, 14, 23, 24, 34, 123, 124, 134, 234, 1234
@@ -1083,7 +1086,7 @@ def _compute_channel_contagion_inputs(
             ch_cols.append(col)
     if not ch_cols:
         return None
-    vals = df[ch_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    vals = df.loc[:, ch_cols].fillna(0).to_numpy(dtype=np.float32, copy=False)
     active = vals != 0
     return ch_labels, active
 
@@ -2381,10 +2384,9 @@ if limit:
 # ------------------------------------------------------------------------------------------------------
 
 # Move rejected_file to the rejected file folder
-temp_file = os.path.join(base_directories["temp_files_directory"], f"temp_file_{date_execution}.csv")
 rejected_file = os.path.join(base_directories["rejected_files_directory"], f"temp_file_{date_execution}.csv")
 
-print(f"Temporal file is {temp_file}")
+print(f"Rejected-row log is {rejected_file}")
 EXPECTED_COLUMNS = EXPECTED_COLUMNS_config  # Expected number of columns
 
 ZERO_TOKEN_PATTERN = re.compile(r"0000\.0000")
@@ -2435,6 +2437,98 @@ def is_valid_date(values):
     except ValueError:  # In case of non-numeric values
         return False
 
+
+def _normalize_line_for_numpy(line: str) -> str:
+    """Normalize raw text just enough for fast numeric parsing."""
+    normalized = line.strip()
+    normalized = ZERO_TOKEN_PATTERN.sub("0", normalized)
+    normalized = LEADING_ZERO_PATTERN.sub(r"\1", normalized)
+    if "X20" in normalized:
+        normalized = XYEAR_PATTERN.sub(r"X \1", normalized)
+    if "-" in normalized:
+        normalized = NEG_GAP_PATTERN.sub(r"\1 -\2", normalized)
+    return normalized
+
+
+def _parse_raw_line_fast(line: str, expected_columns: int) -> np.ndarray | None:
+    """Fast path for the normal whitespace-only numeric rows."""
+    normalized = _normalize_line_for_numpy(line)
+    values = np.fromstring(normalized, sep=" ", dtype=np.float64)
+    if values.size == expected_columns and is_valid_date(values[:3]):
+        return values
+    return None
+
+
+def _build_task1_input_dataframe(
+    source_path: str,
+    rejected_path: str,
+    expected_columns: int,
+    limit_rows: int | None = None,
+) -> tuple[pd.DataFrame, int, int]:
+    """Parse the raw .dat file in one pass and build the typed input dataframe."""
+    read_lines = 0
+    written_lines = 0
+    stored_rows = 0
+    flat_values = array("d")
+
+    with open(source_path, "r") as infile, open(rejected_path, "w") as rejectfile:
+        for i, line in enumerate(infile, start=1):
+            if line.lstrip().startswith("#"):
+                continue
+            read_lines += 1
+
+            parsed_values = _parse_raw_line_fast(line, expected_columns)
+            if parsed_values is None:
+                cleaned_line = process_line(line)
+                cleaned_values = cleaned_line.split(",")
+
+                if len(cleaned_values) < 3 or not is_valid_date(cleaned_values[:3]):
+                    rejectfile.write(f"Line {i} (Invalid date): {line.strip()}\n")
+                    continue
+
+                if contains_malformed_numbers(line):
+                    rejectfile.write(f"Line {i} (Malformed number): {line.strip()}\n")
+                    continue
+
+                if len(cleaned_values) != expected_columns:
+                    rejectfile.write(f"Line {i} (Wrong column count): {line.strip()}\n")
+                    continue
+
+                parsed_values = np.fromstring(
+                    cleaned_line.replace(",", " "),
+                    sep=" ",
+                    dtype=np.float64,
+                )
+                if parsed_values.size != expected_columns:
+                    rejectfile.write(f"Line {i} (Wrong column count): {line.strip()}\n")
+                    continue
+
+            written_lines += 1
+            if limit_rows is None or stored_rows < limit_rows:
+                flat_values.extend(parsed_values)
+                stored_rows += 1
+
+    if stored_rows == 0:
+        return pd.DataFrame(), read_lines, written_lines
+
+    raw_matrix = np.frombuffer(flat_values, dtype=np.float64).reshape(stored_rows, expected_columns)
+    datetime_components = {
+        "year": np.rint(raw_matrix[:, 0]).astype(np.int16, copy=False),
+        "month": np.rint(raw_matrix[:, 1]).astype(np.int8, copy=False),
+        "day": np.rint(raw_matrix[:, 2]).astype(np.int8, copy=False),
+        "hour": np.rint(raw_matrix[:, 3]).astype(np.int8, copy=False),
+        "minute": np.rint(raw_matrix[:, 4]).astype(np.int8, copy=False),
+        "second": np.rint(raw_matrix[:, 5]).astype(np.int8, copy=False),
+    }
+    datetime_series = pd.to_datetime(datetime_components)
+
+    value_columns = [f"column_{i}" for i in range(6, expected_columns)]
+    value_data = raw_matrix[:, 6:].astype(np.float32, copy=False)
+    read_df = pd.DataFrame(value_data, columns=value_columns, copy=False)
+    read_df.insert(0, "datetime", datetime_series)
+    read_df["column_6"] = np.rint(raw_matrix[:, 6]).astype(np.int8, copy=False)
+    return read_df, read_lines, written_lines
+
 # -----------------------------------------------------------------------------------------------------------
 # -----------------------------------------------------------------------------------------------------------
 # -----------------------------------------------------------------------------------------------------------
@@ -2450,51 +2544,19 @@ def is_valid_date(values):
 # -----------------------------------------------------------------------------------------------------------
 
 # Process the file
-read_lines = 0
-written_lines = 0
-with open(file_path, 'r') as infile, open(temp_file, 'w') as outfile, open(rejected_file, 'w') as rejectfile:
-    for i, line in enumerate(infile, start=1):
-        if line.lstrip().startswith("#"):
-            continue
-        read_lines += 1
-        
-        cleaned_line = process_line(line)
-        cleaned_values = cleaned_line.split(',')  # Split into columns
-
-        # Validate line structure before further processing
-        if len(cleaned_values) < 3 or not is_valid_date(cleaned_values[:3]):
-            rejectfile.write(f"Line {i} (Invalid date): {line.strip()}\n")
-            continue  # Skip this row
-
-        if contains_malformed_numbers(line):
-            rejectfile.write(f"Line {i} (Malformed number): {line.strip()}\n")  # Save rejected row
-            continue  # Skip this row
-
-        # Ensure correct column count
-        if len(cleaned_values) == EXPECTED_COLUMNS:
-            written_lines += 1
-            outfile.write(cleaned_line + '\n')  # Save valid row
-        else:
-            rejectfile.write(f"Line {i} (Wrong column count): {line.strip()}\n")  # Save rejected row
+read_df, read_lines, written_lines = _build_task1_input_dataframe(
+    file_path,
+    rejected_file,
+    EXPECTED_COLUMNS,
+    limit_rows=limit_number if limit else None,
+)
 
 if written_lines == 0:
     print("No valid lines found after preprocessing; skipping file.")
     if user_file_selection == False:
         error_file_path = os.path.join(base_directories["error_directory"], file_name)
         process_file(file_path, error_file_path)
-    if os.path.exists(temp_file):
-        os.remove(temp_file)
     sys.exit("Empty temp file generated; no valid data to process.")
-
-read_df = pd.read_csv(
-    temp_file,
-    header=None,
-    engine="c",
-    dtype=np.float64,
-    na_values=["", " "],
-    keep_default_na=True,
-    nrows=limit_number if limit else None,
-)
 
 # Print the number of rows in input
 print(f"\nOriginal file has {read_lines} lines.")
@@ -2508,38 +2570,24 @@ print(f"--> A {valid_lines_in_dat_file:.2f}% of the lines were valid.\n")
 
 global_variables['valid_lines_in_binary_file_percentage'] =  valid_lines_in_dat_file
 
-# Assign name to the columns
-read_df.columns = ['year', 'month', 'day', 'hour', 'minute', 'second'] + [f'column_{i}' for i in range(6, 71)]
-time_columns = ['year', 'month', 'day', 'hour', 'minute', 'second']
-for col in time_columns:
-    read_df[col] = read_df[col].round().astype("Int64")
-
-read_df['datetime'] = pd.to_datetime(read_df[time_columns])
-value_columns = [col for col in read_df.columns if col not in (*time_columns, 'datetime')]
-if 'column_6' in read_df.columns:
-    read_df['column_6'] = read_df['column_6'].round().astype("Int64")
-    value_columns = [col for col in value_columns if col != 'column_6']
-if value_columns:
-    read_df[value_columns] = read_df[value_columns].astype(np.float32, copy=False)
-
 _prof["s_data_read_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("-------------------------- Filter 1: by date -------------------------")
 print("----------------------------------------------------------------------")
 
-selected_df = read_df.loc[read_df['datetime'].between(left_limit_time, right_limit_time)].copy()
-del read_df
+read_df = read_df.loc[read_df["datetime"].between(left_limit_time, right_limit_time)].copy()
 gc.collect()
-if not isinstance(selected_df.set_index('datetime').index, pd.DatetimeIndex):
+if not isinstance(read_df.set_index('datetime').index, pd.DatetimeIndex):
     raise ValueError("The index is not a DatetimeIndex. Check 'datetime' column formatting.")
 
 # Print the count frequency of the values in column_6
-print(selected_df['column_6'].value_counts())
+print(read_df['column_6'].value_counts())
 # Take only the rows in which column_6 is equal to 1
 
-self_trigger_df = selected_df[selected_df['column_6'] == 2]
-selected_df = selected_df[selected_df['column_6'] == 1]
+self_trigger_df = read_df.loc[read_df['column_6'] == 2].copy()
+selected_df = read_df.loc[read_df['column_6'] == 1].copy()
+del read_df
 self_trigger = not self_trigger_df.empty # If self_trigger_df has values, define an indicator as True
 
 raw_data_len = len(selected_df)
@@ -2734,15 +2782,17 @@ column_indices = {
     'T4_F': range(7, 11), 'T4_B': range(11, 15), 'Q4_F': range(15, 19), 'Q4_B': range(19, 23)
 }
 
-# Extract and assign appropriate column names
-columns_data = {'datetime': selected_df['datetime'].values}
+channel_source_columns: list[str] = []
+channel_rename_map: dict[str, str] = {}
 for key, idx_range in column_indices.items():
-    for i, col_idx in enumerate(idx_range):
-        column_name = f'{key}_{i+1}'
-        columns_data[column_name] = selected_df.iloc[:, col_idx].values
+    for i, col_idx in enumerate(idx_range, start=1):
+        source_column = f"column_{col_idx}"
+        target_column = f"{key}_{i}"
+        channel_source_columns.append(source_column)
+        channel_rename_map[source_column] = target_column
 
-# Create a DataFrame from the columns data
-working_df = pd.DataFrame(columns_data)
+working_df = selected_df.loc[:, ["datetime", *channel_source_columns]].copy()
+working_df = working_df.rename(columns=channel_rename_map)
 original_number_of_events = len(working_df)
 if status_execution_date is not None:
     update_status_progress(
@@ -2773,16 +2823,8 @@ if found_matching_conf and conf_value is not None:
                 working_df[[col2, col4]] = working_df[[col4, col2]].values  # swap columns
 
 if self_trigger:
-    # Extract and assign appropriate column names
-    columns_data = {'datetime': self_trigger_df['datetime'].values}
-    for key, idx_range in column_indices.items():
-        for i, col_idx in enumerate(idx_range):
-            column_name = f'{key}_{i+1}'
-            columns_data[column_name] = self_trigger_df.iloc[:, col_idx].values
-
-    # Create a DataFrame from the columns data
-    working_st_df = pd.DataFrame(columns_data)
-    working_st_df["datetime"] = self_trigger_df['datetime']
+    working_st_df = self_trigger_df.loc[:, ["datetime", *channel_source_columns]].copy()
+    working_st_df = working_st_df.rename(columns=channel_rename_map)
     working_st_df = working_st_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
     
     if found_matching_conf and conf_value is not None:
@@ -2796,6 +2838,11 @@ if self_trigger:
                     col2 = f'{key}_3'
                     col4 = f'{key}_4'
                     working_st_df[[col2, col4]] = working_st_df[[col4, col2]].values  # swap columns
+
+del selected_df
+if self_trigger:
+    del self_trigger_df
+gc.collect()
 
 # ----------------------------------------------------------------------------------
 # Count the number of non-zero entries per channel in the whole dataframe ----------
@@ -2854,7 +2901,7 @@ for tt_value, count in raw_tt_counts.items():
     global_variables[f"raw_tt_{tt_label}_count"] = int(count)
 
 raw_channel_patterns = build_task1_channel_pattern_series(working_df)
-store_pattern_rates(global_variables, raw_channel_patterns, "raw_channel_pattern", working_df)
+store_pattern_rates(pattern_metadata, raw_channel_patterns, "raw_channel_pattern", working_df)
 
 # Always compute raw-stage channel contagion metrics for metadata.
 raw_channel_matrix_data = _compute_channel_conditional_matrix(working_df)
@@ -2871,11 +2918,8 @@ raw_channel_inputs = _compute_channel_contagion_inputs(working_df)
 if raw_channel_matrix_data is not None and raw_channel_inputs is not None:
     raw_channel_labels, raw_channel_active = raw_channel_inputs
     _, raw_channel_matrix = raw_channel_matrix_data
-    raw_channel_arrays = [
-        raw_channel_active[:, idx] for idx in range(raw_channel_active.shape[1])
-    ]
     raw_channel_given_counts = {
-        label: int(np.sum(raw_channel_arrays[idx]))
+        label: int(raw_channel_active[:, idx].sum())
         for idx, label in enumerate(raw_channel_labels)
     }
     store_activation_matrix_metadata(
@@ -2890,7 +2934,7 @@ if raw_channel_matrix_data is not None and raw_channel_inputs is not None:
         compute_conditional_matrices_by_tt(
             pd.to_numeric(working_df["raw_tt"], errors="coerce").fillna(0).astype(int),
             raw_channel_labels,
-            raw_channel_arrays,
+            [raw_channel_active[:, idx] for idx in range(raw_channel_active.shape[1])],
         )
     )
     store_activation_matrices_by_tt_metadata(
@@ -2903,6 +2947,10 @@ if raw_channel_matrix_data is not None and raw_channel_inputs is not None:
         raw_tt_given_counts,
         raw_tt_event_counts,
     )
+    del raw_channel_active
+    del raw_channel_matrix
+    del raw_selected_tts, raw_tt_matrices, raw_tt_given_counts, raw_tt_event_counts
+    gc.collect()
 
 # Print the counts of each raw_tt value and the percentage
 total_events = len(working_df)
@@ -3588,36 +3636,43 @@ if time_window_filtering:
         T_F_cols = [f'{key}_F_{i+1}' for i in range(4)]
         T_B_cols = [f'{key}_B_{i+1}' for i in range(4)]
 
-        T_F = working_df[T_F_cols].values
-        T_B = working_df[T_B_cols].values
+        T_F = working_df[T_F_cols].to_numpy(dtype=np.float32, copy=False)
+        T_B = working_df[T_B_cols].to_numpy(dtype=np.float32, copy=False)
 
-        new_cols = {}
         for i in range(4):
-            new_cols[f'{key}_time_OG_sum_{i+1}'] = (T_F[:, i] + T_B[:, i]) / 2
-
-        working_df = pd.concat([working_df, pd.DataFrame(new_cols, index=working_df.index)], axis=1)
+            working_df[f'{key}_time_OG_sum_{i+1}'] = (T_F[:, i] + T_B[:, i]) / 2.0
         
     def compute_t_sum_spread(df_subset: pd.DataFrame, columns: list[str]) -> pd.Series:
         if not columns:
             return pd.Series(np.nan, index=df_subset.index, dtype=float)
-        values = df_subset.loc[:, columns].to_numpy(dtype=float, copy=False)
+        values = df_subset.loc[:, columns].to_numpy(dtype=np.float32, copy=False)
         values = np.where(values != 0, values, np.nan)
         valid_rows = np.any(~np.isnan(values), axis=1)
-        spread = np.full(values.shape[0], np.nan, dtype=float)
+        spread = np.full(values.shape[0], np.nan, dtype=np.float32)
         if np.any(valid_rows):
             valid_values = values[valid_rows]
             spread[valid_rows] = np.nanmax(valid_values, axis=1) - np.nanmin(valid_values, axis=1)
         return pd.Series(spread, index=df_subset.index)
 
+    def build_t_sum_spread_frame(df_input: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+        spreads = compute_t_sum_spread(df_input, columns)
+        return pd.DataFrame(
+            {
+                "raw_tt": df_input["raw_tt"].to_numpy(copy=False),
+                "T_sum_spread_OG": spreads.to_numpy(copy=False),
+            },
+            index=df_input.index,
+        )
+
     def zero_outlier_tsum(df_input: pd.DataFrame, threshold: float = coincidence_window_og_ns) -> pd.DataFrame:
         t_sum_cols = [col for col in df_input.columns if "T" in col]
         if not t_sum_cols:
             return df_input
-        t_sum_values = df_input.loc[:, t_sum_cols].to_numpy(dtype=float, copy=True)
+        t_sum_values = df_input.loc[:, t_sum_cols].to_numpy(dtype=np.float32, copy=True)
         nonzero_mask = t_sum_values != 0
         enough_values_mask = nonzero_mask.sum(axis=1) >= 2
         masked_values = np.where(nonzero_mask, t_sum_values, np.nan)
-        centers = np.full(t_sum_values.shape[0], np.nan, dtype=float)
+        centers = np.full(t_sum_values.shape[0], np.nan, dtype=np.float32)
         if np.any(enough_values_mask):
             centers[enough_values_mask] = np.nanmedian(masked_values[enough_values_mask], axis=1)
         deviations = np.abs(t_sum_values - centers[:, None])
@@ -3628,13 +3683,7 @@ if time_window_filtering:
 
     # Pre removal of outliers
     t_sum_columns_tt = [col for col in working_df.columns if "_time_OG_sum_" in col]
-    spread_results = []
-    for raw_tt in sorted(working_df["raw_tt"].unique()):
-        filtered_df = working_df[working_df["raw_tt"] == raw_tt].copy()
-        t_sum_spread_tt = compute_t_sum_spread(filtered_df, t_sum_columns_tt)
-        filtered_df["T_sum_spread_OG"] = t_sum_spread_tt
-        spread_results.append(filtered_df)
-    spread_df = pd.concat(spread_results, ignore_index=True)
+    spread_df = build_t_sum_spread_frame(working_df, t_sum_columns_tt)
     spread_df_OG = spread_df.copy()
    
     if (create_essential_plots or create_plots) and task1_plot_enabled("tsum_spread_diagnostics"):
@@ -3670,13 +3719,7 @@ if time_window_filtering:
     working_df = zero_outlier_tsum(working_df)
 
     # Post removal of outliers
-    spread_results = []
-    for raw_tt in sorted(working_df["raw_tt"].unique()):
-        filtered_df = working_df[working_df["raw_tt"] == raw_tt].copy()
-        t_sum_spread_tt = compute_t_sum_spread(filtered_df, t_sum_columns_tt)
-        filtered_df["T_sum_spread_OG"] = t_sum_spread_tt
-        spread_results.append(filtered_df)
-    spread_df = pd.concat(spread_results, ignore_index=True)
+    spread_df = build_t_sum_spread_frame(working_df, t_sum_columns_tt)
 
     if create_essential_plots or create_plots:
         fig, axs = plt.subplots(3, 3, figsize=(15, 10), sharex=True, sharey=False)
@@ -3708,10 +3751,6 @@ if time_window_filtering:
             save_plot_figure(hist_path, fig=fig, format='png')
         if show_plots: plt.show()
         plt.close(fig)
-
-if os.path.exists(temp_file):
-    print("Removing temporary file...")
-    os.remove(temp_file)
 
 if (create_plots or create_essential_plots) and task1_plot_enabled("tq_scatter_filtered"):
     # Initialize figure and axes for scatter plot of Time vs Charge
@@ -3863,7 +3902,7 @@ for combo_value, count in raw_to_clean_counts.items():
     global_variables[f"raw_to_clean_tt_{combo_label}_count"] = int(count)
 
 clean_channel_patterns = build_task1_channel_pattern_series(working_df)
-store_pattern_rates(global_variables, clean_channel_patterns, "clean_channel_pattern", working_df)
+store_pattern_rates(pattern_metadata, clean_channel_patterns, "clean_channel_pattern", working_df)
 
 # Always compute clean-stage channel contagion metrics for metadata.
 clean_channel_matrix_data = _compute_channel_conditional_matrix(working_df)
@@ -3879,11 +3918,8 @@ clean_channel_inputs = _compute_channel_contagion_inputs(working_df)
 if clean_channel_matrix_data is not None and clean_channel_inputs is not None:
     clean_channel_labels, clean_channel_active = clean_channel_inputs
     _, clean_channel_matrix = clean_channel_matrix_data
-    clean_channel_arrays = [
-        clean_channel_active[:, idx] for idx in range(clean_channel_active.shape[1])
-    ]
     clean_channel_given_counts = {
-        label: int(np.sum(clean_channel_arrays[idx]))
+        label: int(clean_channel_active[:, idx].sum())
         for idx, label in enumerate(clean_channel_labels)
     }
     store_activation_matrix_metadata(
@@ -3898,7 +3934,7 @@ if clean_channel_matrix_data is not None and clean_channel_inputs is not None:
         compute_conditional_matrices_by_tt(
             pd.to_numeric(working_df["clean_tt"], errors="coerce").fillna(0).astype(int),
             clean_channel_labels,
-            clean_channel_arrays,
+            [clean_channel_active[:, idx] for idx in range(clean_channel_active.shape[1])],
         )
     )
     store_activation_matrices_by_tt_metadata(
@@ -3911,6 +3947,10 @@ if clean_channel_matrix_data is not None and clean_channel_inputs is not None:
         clean_tt_given_counts,
         clean_tt_event_counts,
     )
+    del clean_channel_active
+    del clean_channel_matrix
+    del clean_selected_tts, clean_tt_matrices, clean_tt_given_counts, clean_tt_event_counts
+    gc.collect()
 
 # --- Post-filter (clean) channel contamination matrices ---
 if (create_plots or create_essential_plots) and task1_plot_enabled("channel_contamination_matrix_32"):
@@ -4047,6 +4087,16 @@ activation_metadata["param_hash"] = param_hash_value
 metadata_activation_csv_path = save_metadata(csv_path_activation, activation_metadata)
 print(f"Metadata (activation) CSV updated at: {metadata_activation_csv_path}")
 
+pattern_metadata["filename_base"] = filename_base
+pattern_metadata["execution_timestamp"] = execution_timestamp
+pattern_metadata["param_hash"] = param_hash_value
+metadata_pattern_csv_path = save_metadata(
+    csv_path_pattern,
+    pattern_metadata,
+    preferred_fieldnames=("filename_base", "execution_timestamp", "param_hash"),
+)
+print(f"Metadata (pattern) CSV updated at: {metadata_pattern_csv_path}")
+
 # -------------------------------------------------------------------------------
 # Specific metadata ------------------------------------------------------------
 # -------------------------------------------------------------------------------
@@ -4118,6 +4168,8 @@ metadata_specific_csv_path = save_metadata(
     global_variables,
     drop_field_predicate=lambda column_name: (
         is_specific_metadata_excluded_column(column_name)
+        or column_name.startswith("raw_channel_pattern_")
+        or column_name.startswith("clean_channel_pattern_")
         or is_trigger_type_metadata_column(column_name, trigger_type_prefixes)
         or column_name == "valid_lines_in_binary_file_percentage"
     ),

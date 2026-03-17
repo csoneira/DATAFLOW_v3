@@ -117,6 +117,7 @@ from MASTER.common.status_csv import initialize_status_row, update_status_progre
 from MASTER.common.reprocessing_utils import get_reprocessing_value
 from MASTER.common.simulated_data_utils import resolve_simulated_z_positions
 from MASTER.common.step1_activation import (
+    ACTIVATION_METADATA_DECIMALS,
     compute_conditional_matrices_by_tt,
     compute_conditional_matrix_from_boolean_arrays,
     detect_streamer_threshold,
@@ -218,6 +219,32 @@ def task2_plot_requested(alias: str, *, essential: bool = False, debug: bool = F
     return create_plots and task2_plot_enabled(alias)
 
 
+TASK2_PLOT_PREFIX_ALIASES: tuple[tuple[str, str], ...] = (
+    ("histogram_", "tsum_pair_charge_correlations"),
+    ("stat_window_accumulation_", "stat_window_accumulation"),
+)
+TASK2_PLOT_REGEX_ALIASES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"^\d+_cross_talk_filtering_zoom_check$"), "cross_talk_filtering_zoom_check_by_tt"),
+)
+
+
+def resolve_task2_plot_alias(save_path: str, alias: str | None = None) -> str | None:
+    if alias is not None:
+        return alias if alias in TASK2_PLOT_ALIASES else None
+
+    stem = os.path.splitext(os.path.basename(str(save_path)))[0].lower()
+    stem = re.sub(r"^\d+_", "", stem)
+    if stem in TASK2_PLOT_ALIASES:
+        return stem
+    for prefix, mapped_alias in TASK2_PLOT_PREFIX_ALIASES:
+        if stem.startswith(prefix):
+            return mapped_alias
+    for pattern, mapped_alias in TASK2_PLOT_REGEX_ALIASES:
+        if pattern.match(stem):
+            return mapped_alias
+    return None
+
+
 def apply_task2_plot_catalog_modes() -> None:
     global create_plots, create_essential_plots, create_debug_plots, save_plots, create_pdf
     if not task2_plot_status_by_alias:
@@ -305,9 +332,17 @@ def _build_temp_pdf_path(target_path: str) -> str:
         counter += 1
     return candidate
 
-def save_plot_figure(save_path: str, fig: mpl.figure.Figure | None = None, **savefig_kwargs) -> None:
+def save_plot_figure(
+    save_path: str,
+    fig: mpl.figure.Figure | None = None,
+    alias: str | None = None,
+    **savefig_kwargs,
+) -> None:
     """Save a figure to PNG or directly append it to the task PDF."""
     global _direct_pdf_pages, _direct_pdf_page_count, _direct_pdf_target_path, _direct_pdf_temp_path
+    plot_alias = resolve_task2_plot_alias(save_path, alias=alias)
+    if plot_alias is not None and not task2_plot_enabled(plot_alias):
+        return
     target_fig = fig if fig is not None else plt.gcf()
     direct_pdf_path = globals().get("save_pdf_path")
     if globals().get("create_pdf", False) and direct_pdf_path:
@@ -1420,6 +1455,25 @@ def compute_task2_strip_tt_series(df: pd.DataFrame) -> pd.Series:
     return pd.to_numeric(tt_df["__task2_strip_tt__"], errors="coerce")
 
 
+def _format_activation_scalar(value: float | None) -> float | str:
+    if value is None:
+        return ""
+    value_float = float(value)
+    if not np.isfinite(value_float):
+        return ""
+    return round(value_float, ACTIVATION_METADATA_DECIMALS)
+
+
+def _store_activation_scalar(
+    activation_meta: dict[str, object],
+    scalar_meta: dict[str, object],
+    key: str,
+    value: object,
+) -> None:
+    activation_meta[key] = value
+    scalar_meta.pop(key, None)
+
+
 def store_task2_strip_activation_snapshot(
     *,
     activation_meta: dict[str, object],
@@ -1463,32 +1517,66 @@ def store_task2_strip_activation_snapshot(
 
     q_sum_cols = _task2_strip_charge_column_names()
     streamer_threshold = detect_streamer_threshold(df, q_sum_cols)
-    scalar_meta[f"streamer_threshold_selected_{snapshot_label}"] = (
-        round(float(streamer_threshold), 6) if streamer_threshold is not None else ""
+    threshold_key = f"streamer_threshold_selected_{snapshot_label}"
+    _store_activation_scalar(
+        activation_meta,
+        scalar_meta,
+        threshold_key,
+        _format_activation_scalar(streamer_threshold),
     )
 
     high_charge_threshold = None
     if streamer_threshold is not None:
         high_charge_threshold = float(streamer_threshold) * float(streamer_high_charge_factor_value)
-        scalar_meta[f"streamer_high_charge_threshold_selected_{snapshot_label}"] = round(
-            high_charge_threshold,
-            6,
+        _store_activation_scalar(
+            activation_meta,
+            scalar_meta,
+            f"streamer_high_charge_threshold_selected_{snapshot_label}",
+            _format_activation_scalar(high_charge_threshold),
         )
     else:
-        scalar_meta[f"streamer_high_charge_threshold_selected_{snapshot_label}"] = ""
+        _store_activation_scalar(
+            activation_meta,
+            scalar_meta,
+            f"streamer_high_charge_threshold_selected_{snapshot_label}",
+            "",
+        )
 
     if snapshot_label == "filtered":
-        scalar_meta["streamer_high_charge_factor"] = round(
-            float(streamer_high_charge_factor_value), 6
+        _store_activation_scalar(
+            activation_meta,
+            scalar_meta,
+            "streamer_high_charge_factor",
+            _format_activation_scalar(streamer_high_charge_factor_value),
         )
-        scalar_meta["streamer_threshold_selected"] = scalar_meta[
-            f"streamer_threshold_selected_{snapshot_label}"
-        ]
-        scalar_meta["streamer_high_charge_threshold_selected"] = scalar_meta[
-            f"streamer_high_charge_threshold_selected_{snapshot_label}"
-        ]
+        _store_activation_scalar(
+            activation_meta,
+            scalar_meta,
+            "streamer_threshold_selected",
+            activation_meta.get(threshold_key, ""),
+        )
+        _store_activation_scalar(
+            activation_meta,
+            scalar_meta,
+            "streamer_high_charge_threshold_selected",
+            activation_meta.get(f"streamer_high_charge_threshold_selected_{snapshot_label}", ""),
+        )
 
     if streamer_threshold is None or high_charge_threshold is None:
+        for label in labels:
+            _store_activation_scalar(
+                activation_meta,
+                scalar_meta,
+                f"streamer_rate_strip_{snapshot_label}_{label}",
+                "",
+            )
+            if snapshot_label == "filtered":
+                _store_activation_scalar(
+                    activation_meta,
+                    scalar_meta,
+                    f"streamer_rate_strip_{label}",
+                    "",
+                )
         return {
             "labels": labels,
             "signal_matrix": signal_matrix,
@@ -1502,9 +1590,19 @@ def store_task2_strip_activation_snapshot(
         n_signal = int(np.sum(signal_mask))
         n_streamer = int(np.sum(streamer_mask))
         rate_key = f"streamer_rate_strip_{snapshot_label}_{label}"
-        scalar_meta[rate_key] = round(float(n_streamer) / float(n_signal), 6) if n_signal > 0 else ""
+        _store_activation_scalar(
+            activation_meta,
+            scalar_meta,
+            rate_key,
+            _format_activation_scalar(float(n_streamer) / float(n_signal)) if n_signal > 0 else "",
+        )
         if snapshot_label == "filtered":
-            scalar_meta[f"streamer_rate_strip_{label}"] = scalar_meta[rate_key]
+            _store_activation_scalar(
+                activation_meta,
+                scalar_meta,
+                f"streamer_rate_strip_{label}",
+                activation_meta.get(rate_key, ""),
+            )
 
     variant_specs = [
         ("streamer_to_streamer", streamer_arrays, streamer_arrays),
@@ -1938,7 +2036,12 @@ print(f"Analysis date and time: {analysis_date}")
 
 # Modify the time of the processing file to the current time so it looks fresh
 now = time.time()
-os.utime(processing_file_path, (now, now))
+if os.path.exists(processing_file_path):
+    os.utime(processing_file_path, (now, now))
+else:
+    print(
+        f"Warning: processing file path not found for timestamp refresh: {processing_file_path}"
+    )
 
 # Check the station number in the datafile
 try:

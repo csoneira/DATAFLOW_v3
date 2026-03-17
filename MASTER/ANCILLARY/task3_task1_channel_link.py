@@ -58,6 +58,20 @@ def task1_specific_path(station: str) -> Path:
     )
 
 
+def task1_pattern_path(station: str) -> Path:
+    return (
+        REPO_ROOT
+        / "STATIONS"
+        / station
+        / "STAGE_1"
+        / "EVENT_DATA"
+        / "STEP_1"
+        / "TASK_1"
+        / "METADATA"
+        / "task_1_metadata_pattern.csv"
+    )
+
+
 def task1_trigger_type_path(station: str) -> Path:
     return (
         REPO_ROOT
@@ -83,6 +97,20 @@ def task3_specific_path(station: str) -> Path:
         / "TASK_3"
         / "METADATA"
         / "task_3_metadata_specific.csv"
+    )
+
+
+def task3_pattern_path(station: str) -> Path:
+    return (
+        REPO_ROOT
+        / "STATIONS"
+        / station
+        / "STAGE_1"
+        / "EVENT_DATA"
+        / "STEP_1"
+        / "TASK_3"
+        / "METADATA"
+        / "task_3_metadata_pattern.csv"
     )
 
 
@@ -214,7 +242,9 @@ def task1_total_rate_df(station: str) -> pd.DataFrame:
 
 
 def load_task1_specific(station: str, family_defs: dict[str, dict[str, object]]) -> pd.DataFrame:
-    path = task1_specific_path(station)
+    path = task1_pattern_path(station)
+    if not path.exists():
+        path = task1_specific_path(station)
     header = csv_columns(path)
     raw_cols: set[str] = set()
     clean_cols: set[str] = set()
@@ -236,7 +266,9 @@ def load_task1_specific(station: str, family_defs: dict[str, dict[str, object]])
 
 
 def load_task3_selected(station: str, selected_full16: list[str], stage: str) -> pd.DataFrame:
-    path = task3_specific_path(station)
+    path = task3_pattern_path(station)
+    if not path.exists():
+        path = task3_specific_path(station)
     header = csv_columns(path)
     wanted = [f"{stage}_strip_pattern_{full16}_rate_hz" for full16 in selected_full16]
     cols = [col for col in wanted if col in header]

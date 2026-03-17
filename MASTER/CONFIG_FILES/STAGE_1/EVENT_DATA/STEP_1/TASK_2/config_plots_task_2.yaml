@@ -2,3 +2,44 @@ plots:
   debug_suite: debug
   usual_suite: usual
   essential_suite: essential
+  strip_activation_matrix_before_after: essential
+  streamer_contagion_matrix_strip: essential
+  cumulative_distribution_q_ch_before_calibration: usual
+  new_calibration: usual
+  scatter_new_calibration: usual
+  new_calibration_calibrated_charge: usual
+  scatter_new_calibration_calibrated_charge: usual
+  charge_dif_vs_charge_sum_cal: usual
+  timing: usual
+  grand_figure_q_pedestal: usual
+  grand_figure_q_pedestal_zoom: usual
+  grand_figure_q_pedestal_less_zoom: usual
+  grand_figure_q_fc: usual
+  grand_figure_q_pedestal_st: usual
+  grand_figure_q_pedestal_zoom_st: usual
+  grand_figure_q_pedestal_less_zoom_st: usual
+  grand_figure_t_dif_cal: usual
+  grand_figure_t_dif_cal_st: usual
+  uncalibrated: usual
+  tsum_spread_histograms_og: usual
+  tsum_spread_histograms_filtered_og: usual
+  uncalibrated_filtered: usual
+  calibrated_filtered_before_fb_corr: usual
+  calibrated_filtered: usual
+  calibrated_filtered_removed_zeroes: usual
+  calibrated_filtered_removed_zeroes_st: usual
+  dx_vs_tsum: usual
+  dx_vs_travel_time: usual
+  slewing: usual
+  slewing_3d: usual
+  slewing_3d_fitproj: usual
+  model_validation_simple: usual
+  positions_travel_time_tzeros: usual
+  cross_talk_filtering_zoom: usual
+  cross_talk_filtering_zoom_check_no_subs_pedestal: essential
+  cross_talk_filtering_zoom_check: usual
+  cross_talk_filtering_zoom_check_by_tt: usual
+  r2_scores: usual
+  time_calibrated_filtered_removed_zeroes: essential
+  tsum_pair_charge_correlations: usual
+  stat_window_accumulation: usual

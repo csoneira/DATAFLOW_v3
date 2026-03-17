@@ -65,6 +65,7 @@ CANONICAL_TT_LABELS: frozenset[str] = frozenset(
     }
 )
 TT_RATE_COLUMN_RE = re.compile(r"^(?P<prefix>.+_tt)_(?P<label>[^_]+)_rate_hz$")
+METADATA_MAX_FULL_SCAN_BYTES = 128 * 1024 * 1024
 
 
 def _metadata_value_is_empty(value: object) -> bool:
@@ -176,10 +177,28 @@ def is_redundant_count_metadata_column(column_name: str) -> bool:
     return False
 
 
-def is_specific_metadata_excluded_column(column_name: str) -> bool:
+def is_activation_metadata_column(column_name: str) -> bool:
     if column_name.startswith("activation_"):
         return True
     if column_name.startswith("streamer_contagion_"):
+        return True
+    if column_name.startswith("strip_activation_"):
+        return True
+    if column_name.startswith("streamer_rate_strip_"):
+        return True
+    if column_name.startswith("streamer_rate_plane_"):
+        return True
+    if column_name.startswith("streamer_threshold_selected"):
+        return True
+    if column_name.startswith("streamer_high_charge_threshold_selected"):
+        return True
+    if column_name == "streamer_high_charge_factor":
+        return True
+    return False
+
+
+def is_specific_metadata_excluded_column(column_name: str) -> bool:
+    if is_activation_metadata_column(column_name):
         return True
     return is_redundant_count_metadata_column(column_name) or is_rate_histogram_metadata_column(
         column_name
@@ -638,21 +657,27 @@ def _apply_preferred_field_order(
 def _format_metadata_row(item: Dict[str, object], fieldnames: List[str]) -> Dict[str, object]:
     formatted: Dict[str, object] = {}
     for key in fieldnames:
+        lookup_key = _normalize_metadata_tt_key(str(key)) if isinstance(key, str) else key
         if (
-            key in EVENTS_PER_SECOND_COLUMN_SET
-            or key.startswith("events_per_second_")
-            or key == "analysis_mode"
-            or key.endswith("_count")
-            or key.endswith("_rate_hz")
-            or key.endswith("_fraction")
+            lookup_key in EVENTS_PER_SECOND_COLUMN_SET
+            or (
+                isinstance(lookup_key, str)
+                and (
+                    lookup_key.startswith("events_per_second_")
+                    or lookup_key == "analysis_mode"
+                    or lookup_key.endswith("_count")
+                    or lookup_key.endswith("_rate_hz")
+                    or lookup_key.endswith("_fraction")
+                )
+            )
         ):
-            value = item.get(key, 0)
+            value = item.get(lookup_key, item.get(key, 0))
             if _metadata_value_is_empty(value):
                 formatted[key] = 0
             else:
                 formatted[key] = value
             continue
-        value = item.get(key, "")
+        value = item.get(lookup_key, item.get(key, ""))
         if value is None or (isinstance(value, float) and math.isnan(value)):
             formatted[key] = ""
         elif isinstance(value, (list, dict, np.ndarray)):
@@ -660,6 +685,75 @@ def _format_metadata_row(item: Dict[str, object], fieldnames: List[str]) -> Dict
         else:
             formatted[key] = value
     return formatted
+
+
+def _metadata_size_label(size_bytes: int) -> str:
+    return f"{size_bytes / (1024 * 1024):.1f} MiB"
+
+
+def _metadata_allows_full_scan(size_bytes: int) -> bool:
+    return size_bytes <= METADATA_MAX_FULL_SCAN_BYTES
+
+
+def _summarize_metadata_keys(keys: Iterable[str], *, max_items: int = 5) -> str:
+    unique_keys = sorted({str(key) for key in keys if str(key).strip()})
+    if not unique_keys:
+        return "none"
+    if len(unique_keys) <= max_items:
+        return ", ".join(unique_keys)
+    shown = ", ".join(unique_keys[:max_items])
+    return f"{shown}, ... (+{len(unique_keys) - max_items} more)"
+
+
+def _append_metadata_row(
+    metadata_path: Path,
+    row: Dict[str, object],
+    fieldnames: List[str],
+) -> None:
+    with metadata_path.open("a", newline="") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writerow(_format_metadata_row(row, fieldnames))
+
+
+def _append_metadata_row_with_warning(
+    metadata_path: Path,
+    row: Dict[str, object],
+    raw_existing_fields: List[str],
+    preferred_fieldnames: Iterable[str] | None,
+    log_fn: Callable[..., None],
+    *,
+    reason: str,
+    file_size_bytes: int,
+) -> None:
+    append_fields = list(raw_existing_fields)
+    used_existing_header = bool(append_fields)
+    if not append_fields:
+        append_fields = _apply_preferred_field_order(list(row.keys()), preferred_fieldnames)
+
+    append_lookup_keys = {
+        _normalize_metadata_tt_key(name) if isinstance(name, str) else name
+        for name in append_fields
+    }
+    dropped_keys = [
+        key
+        for key in row.keys()
+        if key not in append_lookup_keys
+    ]
+
+    if used_existing_header:
+        header_note = "existing header"
+    else:
+        header_note = "current row order because the on-disk header could not be trusted"
+
+    log_fn(
+        "[metadata] Warning: "
+        f"{metadata_path.name} needs a full CSV scan ({reason}), but the file is "
+        f"{_metadata_size_label(file_size_bytes)}. "
+        f"Skipping repair/rewrite and appending with the {header_note}. "
+        f"Dropped keys: {_summarize_metadata_keys(dropped_keys)}. "
+        "Manual cleanup may be needed."
+    )
+    _append_metadata_row(metadata_path, row, append_fields)
 
 
 def _save_metadata_rewrite(
@@ -824,12 +918,14 @@ def _sync_filename_base_index_from_csv(
 def _load_or_build_filename_base_index(
     metadata_path: Path,
     log_fn: Callable[..., None],
-) -> Tuple[Path, set[str]]:
+    *,
+    allow_csv_scan: bool = True,
+) -> Tuple[Path, set[str], bool]:
     index_path = _filename_base_index_path(metadata_path)
     legacy_index_path = _legacy_filename_base_index_path(metadata_path)
     if index_path.exists():
         try:
-            return index_path, _load_filename_base_index(index_path)
+            return index_path, _load_filename_base_index(index_path), True
         except OSError:
             # Fall back to rebuilding from the CSV below.
             pass
@@ -842,12 +938,15 @@ def _load_or_build_filename_base_index(
                 legacy_index_path.unlink()
             except OSError:
                 pass
-            return index_path, legacy_values
+            return index_path, legacy_values, True
         except OSError:
             # Fall back to rebuilding from CSV below.
             pass
 
-    return index_path, _sync_filename_base_index_from_csv(metadata_path, log_fn)
+    if not allow_csv_scan:
+        return index_path, set(), False
+
+    return index_path, _sync_filename_base_index_from_csv(metadata_path, log_fn), True
 
 
 def _compose_drop_field_predicate(
@@ -911,6 +1010,7 @@ def save_metadata(
             _sync_filename_base_index_from_csv(metadata_path, log_fn)
             return metadata_path
 
+        metadata_file_size = metadata_path.stat().st_size
         try:
             with metadata_path.open("r", newline="") as csvfile:
                 reader = csv.DictReader(csvfile)
@@ -918,10 +1018,52 @@ def save_metadata(
                 existing_fields = _normalize_metadata_fieldnames(raw_existing_fields)
         except csv.Error as exc:
             if "field larger than field limit" in str(exc).lower():
-                fixed = repair_metadata_file(metadata_path)
-                log_fn(
-                    f"Detected oversized analysis_mode entries in {metadata_path}; normalized {fixed} row(s)."
+                if _metadata_allows_full_scan(metadata_file_size):
+                    fixed = repair_metadata_file(metadata_path)
+                    log_fn(
+                        f"Detected oversized analysis_mode entries in {metadata_path}; normalized {fixed} row(s)."
+                    )
+                    _save_metadata_rewrite(
+                        metadata_path,
+                        row_data,
+                        preferred_fieldnames,
+                        log_fn,
+                        drop_field_predicate=effective_drop_field_predicate,
+                    )
+                    _sync_filename_base_index_from_csv(metadata_path, log_fn)
+                    return metadata_path
+                _append_metadata_row_with_warning(
+                    metadata_path,
+                    row_data,
+                    [],
+                    preferred_fieldnames,
+                    log_fn,
+                    reason="oversized fields detected while opening the metadata file",
+                    file_size_bytes=metadata_file_size,
                 )
+                return metadata_path
+            raise
+
+        existing_field_set = set(existing_fields)
+        rewrite_reason = ""
+        if not existing_fields:
+            rewrite_reason = "missing or empty header"
+        elif existing_fields != raw_existing_fields:
+            rewrite_reason = "header normalization mismatch"
+        elif effective_drop_field_predicate and any(
+            isinstance(name, str) and effective_drop_field_predicate(name) for name in existing_fields
+        ):
+            rewrite_reason = "header contains columns that should now be dropped"
+        else:
+            new_keys = [key for key in row_data.keys() if key not in existing_field_set]
+            if new_keys:
+                rewrite_reason = (
+                    "new columns not present in header: "
+                    f"{_summarize_metadata_keys(new_keys)}"
+                )
+
+        if rewrite_reason:
+            if _metadata_allows_full_scan(metadata_file_size):
                 _save_metadata_rewrite(
                     metadata_path,
                     row_data,
@@ -931,72 +1073,43 @@ def save_metadata(
                 )
                 _sync_filename_base_index_from_csv(metadata_path, log_fn)
                 return metadata_path
-            raise
-
-        if not existing_fields:
-            _save_metadata_rewrite(
+            _append_metadata_row_with_warning(
                 metadata_path,
                 row_data,
+                raw_existing_fields,
                 preferred_fieldnames,
                 log_fn,
-                drop_field_predicate=effective_drop_field_predicate,
+                reason=rewrite_reason,
+                file_size_bytes=metadata_file_size,
             )
-            _sync_filename_base_index_from_csv(metadata_path, log_fn)
-            return metadata_path
-
-        if existing_fields != raw_existing_fields:
-            _save_metadata_rewrite(
-                metadata_path,
-                row_data,
-                preferred_fieldnames,
-                log_fn,
-                drop_field_predicate=effective_drop_field_predicate,
-            )
-            _sync_filename_base_index_from_csv(metadata_path, log_fn)
-            return metadata_path
-
-        if effective_drop_field_predicate and any(
-            isinstance(name, str) and effective_drop_field_predicate(name) for name in existing_fields
-        ):
-            _save_metadata_rewrite(
-                metadata_path,
-                row_data,
-                preferred_fieldnames,
-                log_fn,
-                drop_field_predicate=effective_drop_field_predicate,
-            )
-            _sync_filename_base_index_from_csv(metadata_path, log_fn)
-            return metadata_path
-
-        existing_field_set = set(existing_fields)
-        if any(key not in existing_field_set for key in row_data.keys()):
-            _save_metadata_rewrite(
-                metadata_path,
-                row_data,
-                preferred_fieldnames,
-                log_fn,
-                drop_field_predicate=effective_drop_field_predicate,
-            )
-            _sync_filename_base_index_from_csv(metadata_path, log_fn)
             return metadata_path
 
         basename = str(row_data.get("filename_base", "")).strip()
         index_path: Path | None = None
         index_values: set[str] = set()
+        index_is_complete = False
         duplicate_basename = False
         if basename:
-            index_path, index_values = _load_or_build_filename_base_index(metadata_path, log_fn)
+            index_path, index_values, index_is_complete = _load_or_build_filename_base_index(
+                metadata_path,
+                log_fn,
+                allow_csv_scan=_metadata_allows_full_scan(metadata_file_size),
+            )
+            if not index_is_complete:
+                log_fn(
+                    "[metadata] Warning: "
+                    f"{metadata_path.name} is {_metadata_size_label(metadata_file_size)} and its "
+                    "filename_base index is missing. Skipping full CSV scan for duplicate detection."
+                )
             duplicate_basename = basename in index_values
             if duplicate_basename:
                 log_fn(
                     f"[metadata] filename_base={basename} already present in {metadata_path.name}; appending new row."
                 )
 
-        with metadata_path.open("a", newline="") as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=existing_fields)
-            writer.writerow(_format_metadata_row(row_data, existing_fields))
+        _append_metadata_row(metadata_path, row_data, raw_existing_fields or existing_fields)
 
-        if basename and index_path is not None and not duplicate_basename:
+        if basename and index_path is not None and index_is_complete and not duplicate_basename:
             with index_path.open("a", encoding="utf-8", newline="") as handle:
                 handle.write(f"{basename}\n")
 

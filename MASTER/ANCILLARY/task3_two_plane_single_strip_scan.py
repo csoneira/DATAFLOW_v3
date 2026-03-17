@@ -8,7 +8,8 @@ Sign-off: csoneira <csoneira@ucm.es>
 Last Updated: 2026-03-16
 Runtime: python3
 Usage: python3 MASTER/ANCILLARY/task3_two_plane_single_strip_scan.py [--stage auto] [--min-separation 2] [--top-n 20]
-Inputs: task_3_metadata_specific.csv from MINGO00 and MINGO01 STAGE_1/STEP_1/TASK_3
+Inputs: task_3_metadata_pattern.csv (preferred) or legacy task_3_metadata_specific.csv
+from MINGO00 and MINGO01 STAGE_1/STEP_1/TASK_3
 Outputs: CSV tables and a markdown report in MASTER/ANCILLARY/OUTPUTS/noise_study/FILES
 Notes: Deduplicates by filename_base and keeps the latest execution_timestamp per file.
 """
@@ -55,7 +56,24 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def task3_pattern_path(station: str) -> Path:
+    return (
+        REPO_ROOT
+        / "STATIONS"
+        / station
+        / "STAGE_1"
+        / "EVENT_DATA"
+        / "STEP_1"
+        / "TASK_3"
+        / "METADATA"
+        / "task_3_metadata_pattern.csv"
+    )
+
+
 def task3_metadata_path(station: str) -> Path:
+    pattern_path = task3_pattern_path(station)
+    if pattern_path.exists():
+        return pattern_path
     return (
         REPO_ROOT
         / "STATIONS"
