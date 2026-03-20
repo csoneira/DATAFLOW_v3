@@ -237,17 +237,18 @@ filename_matches_date_ranges() {
   fi
 
   local ymd="${BASH_REMATCH[1]}"
-  local file_epoch
-  file_epoch=$(date -u -d "${ymd} 12:00:00" +%s 2>/dev/null) || return 1
+  local file_day_start_epoch file_day_end_epoch
+  file_day_start_epoch=$(date -u -d "${ymd} 00:00:00" +%s 2>/dev/null) || return 1
+  file_day_end_epoch=$(date -u -d "${ymd} 23:59:59" +%s 2>/dev/null) || return 1
 
   local idx
   for idx in "${!date_ranges_start_epochs[@]}"; do
     local start_epoch="${date_ranges_start_epochs[idx]}"
     local end_epoch="${date_ranges_end_epochs[idx]}"
-    if [[ -n "$start_epoch" && "$file_epoch" -lt "$start_epoch" ]]; then
+    if [[ -n "$start_epoch" && "$file_day_end_epoch" -lt "$start_epoch" ]]; then
       continue
     fi
-    if [[ -n "$end_epoch" && "$file_epoch" -gt "$end_epoch" ]]; then
+    if [[ -n "$end_epoch" && "$file_day_start_epoch" -gt "$end_epoch" ]]; then
       continue
     fi
     return 0

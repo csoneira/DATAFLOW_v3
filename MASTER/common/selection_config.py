@@ -25,7 +25,7 @@ import yaml
 from MASTER.common.path_config import get_master_config_root
 
 
-DateRange = Tuple[Optional[date], Optional[date]]
+DateRange = Tuple[Optional[datetime], Optional[datetime]]
 MASTER_SELECTION_FILENAME = "config_selection.yaml"
 
 
@@ -47,22 +47,42 @@ def load_yaml_mapping(path: str | Path) -> Mapping[str, object]:
     return loaded if isinstance(loaded, dict) else {}
 
 
-def _parse_date_value(value: object) -> Optional[date]:
+def _normalize_datetime_value(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _parse_date_value(value: object, *, is_end: bool = False) -> Optional[datetime]:
     if value in ("", None):
         return None
-    if isinstance(value, date) and not isinstance(value, datetime):
-        return value
     if isinstance(value, datetime):
-        return value.date()
+        return _normalize_datetime_value(value)
+    if isinstance(value, date):
+        return datetime.combine(value, time.max if is_end else time.min)
 
     text = str(value).strip()
     if not text:
         return None
+    is_date_only = bool(
+        re.fullmatch(r"\d{4}-\d{2}-\d{2}", text)
+        or re.fullmatch(r"\d{4}/\d{2}/\d{2}", text)
+        or re.fullmatch(r"\d{8}", text)
+    )
     if text.endswith("Z") and "T" in text:
         text = text[:-1] + "+00:00"
 
     parsed: Optional[datetime] = None
-    for fmt in (None, "%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d", "%Y%m%d"):
+    for fmt in (
+        None,
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y/%m/%d %H:%M",
+        "%Y/%m/%d",
+        "%Y%m%d",
+    ):
         try:
             if fmt is None:
                 parsed = datetime.fromisoformat(text)
@@ -73,7 +93,10 @@ def _parse_date_value(value: object) -> Optional[date]:
             parsed = None
     if parsed is None:
         return None
-    return parsed.date()
+    parsed = _normalize_datetime_value(parsed)
+    if is_date_only:
+        return datetime.combine(parsed.date(), time.max if is_end else time.min)
+    return parsed
 
 
 def _normalize_station_list(value: object) -> Optional[Tuple[int, ...]]:
@@ -110,12 +133,15 @@ def _normalize_station_list(value: object) -> Optional[Tuple[int, ...]]:
     return None
 
 
-def _normalize_date_range(start_day: Optional[date], end_day: Optional[date]) -> Optional[DateRange]:
-    if start_day is None and end_day is None:
+def _normalize_date_range(
+    start_value: Optional[datetime],
+    end_value: Optional[datetime],
+) -> Optional[DateRange]:
+    if start_value is None and end_value is None:
         return None
-    if start_day is not None and end_day is not None and start_day > end_day:
-        start_day, end_day = end_day, start_day
-    return (start_day, end_day)
+    if start_value is not None and end_value is not None and start_value > end_value:
+        start_value, end_value = end_value, start_value
+    return (start_value, end_value)
 
 
 def _collect_ranges_from_node(node: object, out_ranges: list[DateRange]) -> None:
@@ -130,8 +156,8 @@ def _collect_ranges_from_node(node: object, out_ranges: list[DateRange]) -> None
                 if not isinstance(item, Mapping):
                     continue
                 normalized = _normalize_date_range(
-                    _parse_date_value(item.get("start")),
-                    _parse_date_value(item.get("end")),
+                    _parse_date_value(item.get("start"), is_end=False),
+                    _parse_date_value(item.get("end"), is_end=True),
                 )
                 if normalized is not None:
                     out_ranges.append(normalized)
@@ -139,8 +165,8 @@ def _collect_ranges_from_node(node: object, out_ranges: list[DateRange]) -> None
     legacy_range = node.get("date_range")
     if isinstance(legacy_range, Mapping):
         normalized = _normalize_date_range(
-            _parse_date_value(legacy_range.get("start")),
-            _parse_date_value(legacy_range.get("end")),
+            _parse_date_value(legacy_range.get("start"), is_end=False),
+            _parse_date_value(legacy_range.get("end"), is_end=True),
         )
         if normalized is not None:
             out_ranges.append(normalized)
@@ -151,8 +177,8 @@ def _collect_ranges_from_node(node: object, out_ranges: list[DateRange]) -> None
             if not isinstance(item, Mapping):
                 continue
             normalized = _normalize_date_range(
-                _parse_date_value(item.get("start")),
-                _parse_date_value(item.get("end")),
+                _parse_date_value(item.get("start"), is_end=False),
+                _parse_date_value(item.get("end"), is_end=True),
             )
             if normalized is not None:
                 out_ranges.append(normalized)
@@ -295,35 +321,65 @@ def effective_date_ranges_for_station(
 def date_in_ranges(day_value: date, ranges: Sequence[DateRange]) -> bool:
     if not ranges:
         return True
-    for start_day, end_day in ranges:
-        if start_day is not None and day_value < start_day:
+    day_start = datetime.combine(day_value, time.min)
+    day_end = datetime.combine(day_value, time.max)
+    for start_value, end_value in ranges:
+        if start_value is not None and day_end < start_value:
             continue
-        if end_day is not None and day_value > end_day:
+        if end_value is not None and day_start > end_value:
             continue
         return True
     return False
 
 
 def datetime_in_ranges(value: datetime, ranges: Sequence[DateRange]) -> bool:
-    return date_in_ranges(value.date(), ranges)
+    if not ranges:
+        return True
+    normalized_value = _normalize_datetime_value(value)
+    for start_value, end_value in ranges:
+        if start_value is not None and normalized_value < start_value:
+            continue
+        if end_value is not None and normalized_value > end_value:
+            continue
+        return True
+    return False
+
+
+def format_datetime_bound_for_display(value: Optional[datetime], *, is_end: bool) -> str:
+    if value is None:
+        return ""
+    normalized_value = _normalize_datetime_value(value)
+    boundary_time = time.max if is_end else time.min
+    if normalized_value.time() == boundary_time:
+        return normalized_value.date().isoformat()
+    timespec = "microseconds" if normalized_value.microsecond else "seconds"
+    return normalized_value.isoformat(sep=" ", timespec=timespec)
+
+
+def format_date_range_for_display(
+    start_value: Optional[datetime],
+    end_value: Optional[datetime],
+) -> str:
+    start_text = format_datetime_bound_for_display(start_value, is_end=False) or "-inf"
+    end_text = format_datetime_bound_for_display(end_value, is_end=True) or "+inf"
+    return f"{start_text} to {end_text}"
 
 
 def serialize_date_ranges_for_shell(ranges: Sequence[DateRange]) -> tuple[str, str]:
     epoch_chunks: list[str] = []
     label_chunks: list[str] = []
 
-    for start_day, end_day in ranges:
+    for start_value, end_value in ranges:
         start_epoch = ""
         end_epoch = ""
-        if start_day is not None:
-            start_dt = datetime.combine(start_day, time.min).replace(tzinfo=timezone.utc)
-            start_epoch = str(int(start_dt.timestamp()))
-        if end_day is not None:
-            end_dt = datetime.combine(end_day, time.max).replace(tzinfo=timezone.utc)
-            end_epoch = str(int(end_dt.timestamp()))
+        if start_value is not None:
+            start_epoch = str(int(start_value.replace(tzinfo=timezone.utc).timestamp()))
+        if end_value is not None:
+            end_epoch = str(int(end_value.replace(tzinfo=timezone.utc).timestamp()))
         epoch_chunks.append(f"{start_epoch},{end_epoch}")
         label_chunks.append(
-            f"{'' if start_day is None else start_day.isoformat()}|{'' if end_day is None else end_day.isoformat()}"
+            f"{format_datetime_bound_for_display(start_value, is_end=False)}|"
+            f"{format_datetime_bound_for_display(end_value, is_end=True)}"
         )
 
     return ";".join(epoch_chunks), ";".join(label_chunks)

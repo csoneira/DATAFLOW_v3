@@ -1,14 +1,19 @@
 plots:
   debug_suite: debug
-  usual_suite: essential
+  usual_suite: usual
   essential_suite: essential
-  raw_tt_overview: essential
-  channel_histograms_raw: essential
-  tq_scatter_raw: essential
-  channel_histograms_filtered: essential
-  tq_scatter_filtered: essential
-  tsum_spread_diagnostics: essential
-  channel_contamination_matrix_32: essential
-  channel_contagion_by_tt: essential
-  channel_contamination_matrix_32_raw: essential
-  channel_contagion_by_tt_raw: essential
+  raw_tt_overview: debug
+  channel_histograms_raw: debug
+  tq_scatter_raw: usual
+  channel_histograms_filtered: debug
+  tq_scatter_filtered: usual
+  tsum_spread_diagnostics: debug
+  channel_contamination_matrix_32: debug
+  channel_contagion_by_tt: debug
+  channel_contamination_matrix_32_raw: debug
+  channel_contagion_by_tt_raw: debug
+  channel_histograms_self_trigger: debug
+  tsum_spread_histograms_filtered_og: debug
+  tq_scatter_raw_by_tt: usual
+  tq_scatter_filtered_by_tt: usual
+  channel_tq_matrix_by_planepair: essential

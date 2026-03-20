@@ -34,6 +34,7 @@ import builtins
 import csv
 from datetime import datetime, timedelta
 import gc
+import hashlib
 import math
 import os
 from pathlib import Path
@@ -207,7 +208,30 @@ TASK3_PLOT_ALIASES: tuple[str, ...] = (
     "streamer_to_signal_contagion_strip_by_tt",
     "streamer_to_highcharge_contagion_strip_by_tt",
     "strip_activation_matrix_before_after",
+    "plane_combination_filter_by_tt",
+    "charge_by_strip_multiplicity_adj",
+    "charge_by_strip_multiplicity_dis",
 )
+
+TT_COUNT_VALUES: tuple[int, ...] = (
+    0, 1, 2, 3, 4, 12, 13, 14, 23, 24, 34, 123, 124, 134, 234, 1234
+)
+TT_COLOR_LABELS: tuple[str, ...] = tuple(str(tt_value) for tt_value in TT_COUNT_VALUES)
+_task3_tt_palette = sns.color_palette("tab10", n_colors=10)
+TT_COLOR_MAP: dict[str, tuple[float, float, float, float]] = {}
+_task3_multi_idx = 0
+for tt_label in TT_COLOR_LABELS:
+    if len(tt_label) == 1:
+        TT_COLOR_MAP[tt_label] = (0.60, 0.60, 0.60, 1.0)
+    else:
+        rgb = _task3_tt_palette[_task3_multi_idx % len(_task3_tt_palette)]
+        TT_COLOR_MAP[tt_label] = (float(rgb[0]), float(rgb[1]), float(rgb[2]), 1.0)
+        _task3_multi_idx += 1
+TT_COLOR_DEFAULT = (0.45, 0.45, 0.45, 1.0)
+
+
+def get_tt_color(tt_value: object) -> tuple[float, float, float, float]:
+    return TT_COLOR_MAP.get(normalize_tt_label(tt_value), TT_COLOR_DEFAULT)
 
 CLI_PARSER = build_step1_cli_parser("Run Stage 1 STEP_1 TASK_3 (CAL->LIST).", STATION_CHOICES)
 CLI_ARGS = CLI_PARSER.parse_args()
@@ -662,6 +686,33 @@ Q_dif_RPC_left = -Q_dif_RPC_abs
 Y_RPC_abs = abs(float(config.get("Y_RPC_abs", config.get("Y_RPC_right", 200))))
 Y_RPC_right = Y_RPC_abs
 Y_RPC_left = -Y_RPC_abs
+plane_combination_q_sum_sum_left = float(config.get("plane_combination_q_sum_sum_left", Q_RPC_left))
+plane_combination_q_sum_sum_right = float(config.get("plane_combination_q_sum_sum_right", Q_RPC_right))
+plane_combination_q_sum_dif_threshold = abs(
+    float(config.get("plane_combination_q_sum_dif_threshold", Q_RPC_right))
+)
+plane_combination_q_dif_sum_threshold = abs(
+    float(config.get("plane_combination_q_dif_sum_threshold", Q_dif_RPC_abs))
+)
+plane_combination_q_dif_dif_threshold = abs(
+    float(config.get("plane_combination_q_dif_dif_threshold", Q_dif_RPC_abs))
+)
+plane_combination_t_sum_sum_left = float(config.get("plane_combination_t_sum_sum_left", T_sum_RPC_left))
+plane_combination_t_sum_sum_right = float(config.get("plane_combination_t_sum_sum_right", T_sum_RPC_right))
+plane_combination_t_sum_dif_threshold = abs(
+    float(config.get("plane_combination_t_sum_dif_threshold", max(abs(T_sum_RPC_left), abs(T_sum_RPC_right))))
+)
+plane_combination_t_dif_sum_threshold = abs(
+    float(config.get("plane_combination_t_dif_sum_threshold", T_dif_RPC_abs))
+)
+plane_combination_t_dif_dif_threshold = abs(
+    float(config.get("plane_combination_t_dif_dif_threshold", T_dif_RPC_abs))
+)
+plane_combination_y_sum_left = float(config.get("plane_combination_y_sum_left", Y_RPC_left))
+plane_combination_y_sum_right = float(config.get("plane_combination_y_sum_right", Y_RPC_right))
+plane_combination_y_dif_threshold = abs(
+    float(config.get("plane_combination_y_dif_threshold", Y_RPC_abs))
+)
 
 # Alternative fitter filter
 det_pos_filter = config.get("det_pos_filter", 800)
@@ -859,6 +910,19 @@ TASK3_ACTIVE_STRIP_COLUMNS: tuple[str, ...] = tuple(f"active_strips_P{plane}" fo
 
 FILTER_METRIC_NAMES: tuple[str, ...] = (
     "filter6_new_zero_rows_pct",
+    "plane_combination_filter_rows_affected_pct",
+    "plane_combination_filter_values_zeroed_pct",
+    "plane_combination_filter_any_failed_pct",
+    "plane_combination_filter_q_sum_sum_failed_pct",
+    "plane_combination_filter_q_sum_dif_failed_pct",
+    "plane_combination_filter_q_dif_sum_failed_pct",
+    "plane_combination_filter_q_dif_dif_failed_pct",
+    "plane_combination_filter_t_sum_sum_failed_pct",
+    "plane_combination_filter_t_sum_dif_failed_pct",
+    "plane_combination_filter_t_dif_sum_failed_pct",
+    "plane_combination_filter_t_dif_dif_failed_pct",
+    "plane_combination_filter_y_sum_failed_pct",
+    "plane_combination_filter_y_dif_failed_pct",
     "q_sum_all_zero_rows_removed_pct",
     "data_purity_percentage",
     "all_components_zero_rows_removed_pct",
@@ -882,6 +946,13 @@ def record_filter_metric(name: str, removed: float, total: float) -> None:
     pct = 0.0 if total == 0 else 100.0 * float(removed) / float(total)
     filter_metrics[name] = round(pct, 4)
     print(f"[filter-metrics] {name}: removed {removed} of {total} ({pct:.2f}%)")
+
+
+def record_activity_metric(name: str, affected: float, total: float, label: str = "affected") -> None:
+    """Record a generic percentage metric for non-row-removal filter activity."""
+    pct = 0.0 if total == 0 else 100.0 * float(affected) / float(total)
+    filter_metrics[name] = round(pct, 4)
+    print(f"[filter-metrics] {name}: {label} {affected} of {total} ({pct:.2f}%)")
 
 
 def build_task3_full_strip_pattern_series(df: pd.DataFrame) -> pd.Series:
@@ -1791,6 +1862,579 @@ def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[s
             tt_str = tt_str.where(~has_charge, tt_str + str(plane))
     df.loc[:, column_name] = tt_str.replace("", "0").astype(int)
     return df
+
+
+def collect_task3_plane_final_map(df: pd.DataFrame) -> dict[int, dict[str, str]]:
+    """Return the available plane-level final columns grouped by plane."""
+    plane_map: dict[int, dict[str, str]] = {}
+    for plane in range(1, 5):
+        cols = {
+            "T_sum": f"P{plane}_T_sum_final",
+            "T_dif": f"P{plane}_T_dif_final",
+            "Q_sum": f"P{plane}_Q_sum_final",
+            "Q_dif": f"P{plane}_Q_dif_final",
+            "Y": f"P{plane}_Y_final",
+        }
+        if all(col in df.columns for col in cols.values()):
+            plane_map[plane] = cols
+    return plane_map
+
+
+def apply_task3_plane_combination_filter(
+    df_input: pd.DataFrame,
+    *,
+    q_sum_sum_left: float,
+    q_sum_sum_right: float,
+    q_sum_dif_threshold: float,
+    q_dif_sum_threshold: float,
+    q_dif_dif_threshold: float,
+    t_sum_sum_left: float,
+    t_sum_sum_right: float,
+    t_sum_dif_threshold: float,
+    t_dif_sum_threshold: float,
+    t_dif_dif_threshold: float,
+    y_sum_left: float,
+    y_sum_right: float,
+    y_dif_threshold: float,
+) -> dict[str, int]:
+    """
+    Apply a final Task 3 plane-combination consistency filter.
+
+    Distinct plane pairs are evaluated only when both planes carry non-zero
+    `Q_sum/Q_dif/T_sum/T_dif/Y`. The filter computes semisums and
+    semidifferences for the four main plane observables and zeroes the full
+    plane blocks when any configured limit fails.
+    """
+    plane_map = collect_task3_plane_final_map(df_input)
+    if len(plane_map) < 2:
+        return {
+            "tracked_plane_count": len(plane_map),
+            "valid_pair_observations": 0,
+            "failed_pair_any": 0,
+            "failed_pair_q_sum_sum": 0,
+            "failed_pair_q_sum_dif": 0,
+            "failed_pair_q_dif_sum": 0,
+            "failed_pair_q_dif_dif": 0,
+            "failed_pair_t_sum_sum": 0,
+            "failed_pair_t_sum_dif": 0,
+            "failed_pair_t_dif_sum": 0,
+            "failed_pair_t_dif_dif": 0,
+            "failed_pair_y_sum": 0,
+            "failed_pair_y_dif": 0,
+            "rows_affected": 0,
+            "values_zeroed": 0,
+        }
+
+    plane_fail_masks = {
+        plane_key: np.zeros(len(df_input), dtype=bool)
+        for plane_key in plane_map
+    }
+    summary = {
+        "tracked_plane_count": len(plane_map),
+        "valid_pair_observations": 0,
+        "failed_pair_any": 0,
+        "failed_pair_q_sum_sum": 0,
+        "failed_pair_q_sum_dif": 0,
+        "failed_pair_q_dif_sum": 0,
+        "failed_pair_q_dif_dif": 0,
+        "failed_pair_t_sum_sum": 0,
+        "failed_pair_t_sum_dif": 0,
+        "failed_pair_t_dif_sum": 0,
+        "failed_pair_t_dif_dif": 0,
+        "failed_pair_y_sum": 0,
+        "failed_pair_y_dif": 0,
+        "rows_affected": 0,
+        "values_zeroed": 0,
+    }
+
+    for plane_a, plane_b in combinations(sorted(plane_map), 2):
+        cols_a = plane_map[plane_a]
+        cols_b = plane_map[plane_b]
+        q_sum_a = pd.to_numeric(df_input[cols_a["Q_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        q_sum_b = pd.to_numeric(df_input[cols_b["Q_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        q_dif_a = pd.to_numeric(df_input[cols_a["Q_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        q_dif_b = pd.to_numeric(df_input[cols_b["Q_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_sum_a = pd.to_numeric(df_input[cols_a["T_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_sum_b = pd.to_numeric(df_input[cols_b["T_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_dif_a = pd.to_numeric(df_input[cols_a["T_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_dif_b = pd.to_numeric(df_input[cols_b["T_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        y_a = pd.to_numeric(df_input[cols_a["Y"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        y_b = pd.to_numeric(df_input[cols_b["Y"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+
+        valid_mask = (
+            np.isfinite(q_sum_a)
+            & np.isfinite(q_sum_b)
+            & np.isfinite(q_dif_a)
+            & np.isfinite(q_dif_b)
+            & np.isfinite(t_sum_a)
+            & np.isfinite(t_sum_b)
+            & np.isfinite(t_dif_a)
+            & np.isfinite(t_dif_b)
+            & np.isfinite(y_a)
+            & np.isfinite(y_b)
+            & (q_sum_a != 0)
+            & (q_sum_b != 0)
+            & (q_dif_a != 0)
+            & (q_dif_b != 0)
+            & (t_sum_a != 0)
+            & (t_sum_b != 0)
+            & (t_dif_a != 0)
+            & (t_dif_b != 0)
+            & (y_a != 0)
+            & (y_b != 0)
+        )
+        if not np.any(valid_mask):
+            continue
+
+        summary["valid_pair_observations"] += int(np.count_nonzero(valid_mask))
+        pair_q_sum_sum = 0.5 * (q_sum_a + q_sum_b)
+        pair_q_sum_dif = 0.5 * (q_sum_a - q_sum_b)
+        pair_q_dif_sum = 0.5 * (q_dif_a + q_dif_b)
+        pair_q_dif_dif = 0.5 * (q_dif_a - q_dif_b)
+        pair_t_sum_sum = 0.5 * (t_sum_a + t_sum_b)
+        pair_t_sum_dif = 0.5 * (t_sum_a - t_sum_b)
+        pair_t_dif_sum = 0.5 * (t_dif_a + t_dif_b)
+        pair_t_dif_dif = 0.5 * (t_dif_a - t_dif_b)
+        pair_y_sum = 0.5 * (y_a + y_b)
+        pair_y_dif = 0.5 * (y_a - y_b)
+
+        fail_q_sum_sum = valid_mask & (
+            (pair_q_sum_sum < float(q_sum_sum_left))
+            | (pair_q_sum_sum > float(q_sum_sum_right))
+        )
+        fail_q_sum_dif = valid_mask & (np.abs(pair_q_sum_dif) > abs(float(q_sum_dif_threshold)))
+        fail_q_dif_sum = valid_mask & (np.abs(pair_q_dif_sum) > abs(float(q_dif_sum_threshold)))
+        fail_q_dif_dif = valid_mask & (np.abs(pair_q_dif_dif) > abs(float(q_dif_dif_threshold)))
+        fail_t_sum_sum = valid_mask & (
+            (pair_t_sum_sum < float(t_sum_sum_left))
+            | (pair_t_sum_sum > float(t_sum_sum_right))
+        )
+        fail_t_sum_dif = valid_mask & (np.abs(pair_t_sum_dif) > abs(float(t_sum_dif_threshold)))
+        fail_t_dif_sum = valid_mask & (np.abs(pair_t_dif_sum) > abs(float(t_dif_sum_threshold)))
+        fail_t_dif_dif = valid_mask & (np.abs(pair_t_dif_dif) > abs(float(t_dif_dif_threshold)))
+        fail_y_sum = valid_mask & (
+            (pair_y_sum < float(y_sum_left))
+            | (pair_y_sum > float(y_sum_right))
+        )
+        fail_y_dif = valid_mask & (np.abs(pair_y_dif) > abs(float(y_dif_threshold)))
+        fail_any = (
+            fail_q_sum_sum
+            | fail_q_sum_dif
+            | fail_q_dif_sum
+            | fail_q_dif_dif
+            | fail_t_sum_sum
+            | fail_t_sum_dif
+            | fail_t_dif_sum
+            | fail_t_dif_dif
+            | fail_y_sum
+            | fail_y_dif
+        )
+
+        summary["failed_pair_q_sum_sum"] += int(np.count_nonzero(fail_q_sum_sum))
+        summary["failed_pair_q_sum_dif"] += int(np.count_nonzero(fail_q_sum_dif))
+        summary["failed_pair_q_dif_sum"] += int(np.count_nonzero(fail_q_dif_sum))
+        summary["failed_pair_q_dif_dif"] += int(np.count_nonzero(fail_q_dif_dif))
+        summary["failed_pair_t_sum_sum"] += int(np.count_nonzero(fail_t_sum_sum))
+        summary["failed_pair_t_sum_dif"] += int(np.count_nonzero(fail_t_sum_dif))
+        summary["failed_pair_t_dif_sum"] += int(np.count_nonzero(fail_t_dif_sum))
+        summary["failed_pair_t_dif_dif"] += int(np.count_nonzero(fail_t_dif_dif))
+        summary["failed_pair_y_sum"] += int(np.count_nonzero(fail_y_sum))
+        summary["failed_pair_y_dif"] += int(np.count_nonzero(fail_y_dif))
+        summary["failed_pair_any"] += int(np.count_nonzero(fail_any))
+
+        if np.any(fail_any):
+            plane_fail_masks[plane_a] |= fail_any
+            plane_fail_masks[plane_b] |= fail_any
+
+    any_row_affected = np.zeros(len(df_input), dtype=bool)
+    for plane_key, fail_mask in plane_fail_masks.items():
+        if not np.any(fail_mask):
+            continue
+        cols = plane_map[plane_key]
+        for variable_name in ("T_sum", "T_dif", "Q_sum", "Q_dif", "Y"):
+            values = pd.to_numeric(df_input[cols[variable_name]], errors="coerce").fillna(0)
+            summary["values_zeroed"] += int((values[fail_mask] != 0).sum())
+        any_row_affected |= fail_mask
+        df_input.loc[fail_mask, list(cols.values())] = 0
+
+    summary["rows_affected"] = int(np.count_nonzero(any_row_affected))
+    return summary
+
+
+TASK3_PLANE_COMBINATION_OBSERVABLES: tuple[tuple[str, str], ...] = (
+    ("q_sum_sum", "Q_sum semisum"),
+    ("q_sum_dif", "Q_sum semidifference"),
+    ("q_dif_sum", "Q_dif semisum"),
+    ("q_dif_dif", "Q_dif semidifference"),
+    ("t_sum_sum", "T_sum semisum"),
+    ("t_sum_dif", "T_sum semidifference"),
+    ("t_dif_sum", "T_dif semisum"),
+    ("t_dif_dif", "T_dif semidifference"),
+    ("y_sum", "Y semisum"),
+    ("y_dif", "Y semidifference"),
+)
+
+
+def _task3_filter_tt_series(df: pd.DataFrame) -> pd.Series:
+    for candidate in ("list_tt", "cal_tt", "clean_tt", "raw_tt"):
+        if candidate in df.columns:
+            return df[candidate].apply(normalize_tt_label).astype(str)
+    return pd.Series(["0"] * len(df), index=df.index, dtype=str)
+
+
+def collect_task3_plane_combination_histogram_payload(
+    df_input: pd.DataFrame,
+    tt_series: pd.Series,
+) -> pd.DataFrame:
+    payload_rows: list[pd.DataFrame] = []
+    plane_map = collect_task3_plane_final_map(df_input)
+    if len(plane_map) < 2:
+        return pd.DataFrame(columns=["tt", *[observable for observable, _ in TASK3_PLANE_COMBINATION_OBSERVABLES]])
+
+    tt_series = tt_series.reindex(df_input.index).fillna("0").astype(str)
+    for plane_a, plane_b in combinations(sorted(plane_map), 2):
+        combo_label = f"{plane_a}{plane_b}"
+        cols_a = plane_map[plane_a]
+        cols_b = plane_map[plane_b]
+        q_sum_a = pd.to_numeric(df_input[cols_a["Q_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        q_sum_b = pd.to_numeric(df_input[cols_b["Q_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        q_dif_a = pd.to_numeric(df_input[cols_a["Q_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        q_dif_b = pd.to_numeric(df_input[cols_b["Q_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_sum_a = pd.to_numeric(df_input[cols_a["T_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_sum_b = pd.to_numeric(df_input[cols_b["T_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_dif_a = pd.to_numeric(df_input[cols_a["T_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_dif_b = pd.to_numeric(df_input[cols_b["T_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        y_a = pd.to_numeric(df_input[cols_a["Y"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        y_b = pd.to_numeric(df_input[cols_b["Y"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+
+        valid_mask = (
+            np.isfinite(q_sum_a)
+            & np.isfinite(q_sum_b)
+            & np.isfinite(q_dif_a)
+            & np.isfinite(q_dif_b)
+            & np.isfinite(t_sum_a)
+            & np.isfinite(t_sum_b)
+            & np.isfinite(t_dif_a)
+            & np.isfinite(t_dif_b)
+            & np.isfinite(y_a)
+            & np.isfinite(y_b)
+            & (q_sum_a != 0)
+            & (q_sum_b != 0)
+            & (q_dif_a != 0)
+            & (q_dif_b != 0)
+            & (t_sum_a != 0)
+            & (t_sum_b != 0)
+            & (t_dif_a != 0)
+            & (t_dif_b != 0)
+            & (y_a != 0)
+            & (y_b != 0)
+        )
+        if not np.any(valid_mask):
+            continue
+
+        valid_index = df_input.index[valid_mask]
+        tt_values = tt_series.loc[valid_index].to_numpy(dtype=str)
+        derived_values = {
+            "q_sum_sum": 0.5 * (q_sum_a + q_sum_b),
+            "q_sum_dif": 0.5 * (q_sum_a - q_sum_b),
+            "q_dif_sum": 0.5 * (q_dif_a + q_dif_b),
+            "q_dif_dif": 0.5 * (q_dif_a - q_dif_b),
+            "t_sum_sum": 0.5 * (t_sum_a + t_sum_b),
+            "t_sum_dif": 0.5 * (t_sum_a - t_sum_b),
+            "t_dif_sum": 0.5 * (t_dif_a + t_dif_b),
+            "t_dif_dif": 0.5 * (t_dif_a - t_dif_b),
+            "y_sum": 0.5 * (y_a + y_b),
+            "y_dif": 0.5 * (y_a - y_b),
+        }
+        payload_rows.append(
+            pd.DataFrame(
+                {
+                    "tt": tt_values,
+                    "combo": combo_label,
+                    **{
+                        observable: values[valid_mask]
+                        for observable, values in derived_values.items()
+                    },
+                }
+            )
+        )
+
+    if not payload_rows:
+        return pd.DataFrame(columns=["tt", *[observable for observable, _ in TASK3_PLANE_COMBINATION_OBSERVABLES]])
+    return pd.concat(payload_rows, ignore_index=True)
+
+
+def _task3_hist_range(
+    before_values: np.ndarray,
+    after_values: np.ndarray,
+    limits: tuple[float | None, float | None],
+) -> tuple[float, float]:
+    finite_values = np.concatenate(
+        [
+            before_values[np.isfinite(before_values)],
+            after_values[np.isfinite(after_values)],
+        ]
+    )
+    lower_limit, upper_limit = limits
+    if finite_values.size:
+        low = float(np.nanpercentile(finite_values, 1))
+        high = float(np.nanpercentile(finite_values, 99))
+        if not np.isfinite(low) or not np.isfinite(high):
+            low = float(np.nanmin(finite_values))
+            high = float(np.nanmax(finite_values))
+    else:
+        low, high = -1.0, 1.0
+    if lower_limit is not None:
+        low = min(low, float(lower_limit))
+    if upper_limit is not None:
+        high = max(high, float(upper_limit))
+    if not np.isfinite(low) or not np.isfinite(high) or low == high:
+        center = float(low if np.isfinite(low) else 0.0)
+        low, high = center - 1.0, center + 1.0
+    span = high - low
+    padding = 0.08 * span if span > 0 else 1.0
+    return low - padding, high + padding
+
+
+def _task3_population_color(label: str) -> tuple[float, float, float, float]:
+    digest = hashlib.md5(label.encode("utf-8")).digest()
+    color_pos = int.from_bytes(digest[:4], "big") / float(2**32 - 1)
+    return plt.get_cmap("turbo")(0.08 + 0.84 * color_pos)
+
+
+def plot_task3_plane_combination_filter_by_tt(
+    before_payload: pd.DataFrame,
+    after_payload: pd.DataFrame,
+    basename_no_ext_value: str,
+    fig_idx_value: int,
+    base_dir: str,
+    *,
+    show_plots: bool,
+    save_plots: bool,
+    plot_list: list[str] | None,
+    limits_by_observable: dict[str, tuple[float | None, float | None]],
+) -> int:
+    tt_labels = []
+    for payload in (before_payload, after_payload):
+        if "tt" in payload.columns:
+            tt_labels.extend(payload["tt"].astype(str).tolist())
+    ordered_tts = [
+        tt_label for tt_label in TT_COLOR_LABELS
+        if tt_label != "0" and tt_label in set(tt_labels)
+    ]
+    observable_names = [observable for observable, _ in TASK3_PLANE_COMBINATION_OBSERVABLES]
+    observable_labels = {observable: label for observable, label in TASK3_PLANE_COMBINATION_OBSERVABLES}
+    scatter_max_points = 5000
+    rng = np.random.default_rng(0)
+
+    for tt_label in ordered_tts:
+        before_tt = before_payload.loc[before_payload.get("tt", pd.Series(dtype=str)).astype(str) == tt_label].copy()
+        after_tt = after_payload.loc[after_payload.get("tt", pd.Series(dtype=str)).astype(str) == tt_label].copy()
+        if before_tt.empty and after_tt.empty:
+            continue
+
+        if len(before_tt) > scatter_max_points:
+            before_tt = before_tt.iloc[rng.choice(len(before_tt), size=scatter_max_points, replace=False)].copy()
+        if len(after_tt) > scatter_max_points:
+            after_tt = after_tt.iloc[rng.choice(len(after_tt), size=scatter_max_points, replace=False)].copy()
+
+        combo_labels = sorted(
+            set(before_tt.get("combo", pd.Series(dtype=str)).astype(str))
+            | set(after_tt.get("combo", pd.Series(dtype=str)).astype(str))
+        )
+        combo_labels = [label for label in combo_labels if label and label != "nan"]
+        combo_color_map = {label: _task3_population_color(label) for label in combo_labels}
+        before_combo_data = {
+            label: {
+                observable: pd.to_numeric(
+                    before_tt.loc[before_tt["combo"] == label, observable],
+                    errors="coerce",
+                ).to_numpy(dtype=float)
+                for observable in observable_names
+            }
+            for label in combo_labels
+        }
+        after_combo_data = {
+            label: {
+                observable: pd.to_numeric(
+                    after_tt.loc[after_tt["combo"] == label, observable],
+                    errors="coerce",
+                ).to_numpy(dtype=float)
+                for observable in observable_names
+            }
+            for label in combo_labels
+        }
+
+        n_obs = len(observable_names)
+        fig, axes = plt.subplots(n_obs, n_obs, figsize=(2.15 * n_obs, 2.15 * n_obs), constrained_layout=True)
+        any_panel_data = False
+
+        axis_ranges: dict[str, tuple[float, float]] = {}
+        for observable in observable_names:
+            before_values = pd.to_numeric(before_tt.get(observable, pd.Series(dtype=float)), errors="coerce").dropna().to_numpy(dtype=float)
+            after_values = pd.to_numeric(after_tt.get(observable, pd.Series(dtype=float)), errors="coerce").dropna().to_numpy(dtype=float)
+            axis_ranges[observable] = _task3_hist_range(
+                before_values,
+                after_values,
+                limits_by_observable.get(observable, (None, None)),
+            )
+
+        for row_idx, y_name in enumerate(observable_names):
+            for col_idx, x_name in enumerate(observable_names):
+                ax = axes[row_idx, col_idx]
+                if col_idx > row_idx:
+                    ax.set_axis_off()
+                    continue
+
+                before_x = pd.to_numeric(before_tt.get(x_name, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
+                before_y = pd.to_numeric(before_tt.get(y_name, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
+                after_x = pd.to_numeric(after_tt.get(x_name, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
+                after_y = pd.to_numeric(after_tt.get(y_name, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
+
+                if row_idx == col_idx:
+                    before_values = before_x[np.isfinite(before_x)]
+                    after_values = after_x[np.isfinite(after_x)]
+                    if before_values.size == 0 and after_values.size == 0:
+                        ax.set_axis_off()
+                        continue
+                    any_panel_data = True
+                    x_low, x_high = axis_ranges[x_name]
+                    bins = np.linspace(x_low, x_high, 60)
+                    for combo_label in combo_labels:
+                        combo_before = before_combo_data[combo_label][x_name]
+                        combo_after = after_combo_data[combo_label][x_name]
+                        combo_before = combo_before[np.isfinite(combo_before)]
+                        combo_after = combo_after[np.isfinite(combo_after)]
+                        if combo_before.size:
+                            ax.hist(
+                                combo_before,
+                                bins=bins,
+                                histtype="step",
+                                linestyle="--",
+                                linewidth=0.95,
+                                alpha=0.55,
+                                color=combo_color_map[combo_label],
+                            )
+                        if combo_after.size:
+                            ax.hist(
+                                combo_after,
+                                bins=bins,
+                                histtype="step",
+                                linestyle="-",
+                                linewidth=1.35,
+                                alpha=0.95,
+                                color=combo_color_map[combo_label],
+                            )
+                    lower_limit, upper_limit = limits_by_observable.get(x_name, (None, None))
+                    if lower_limit is not None:
+                        ax.axvline(float(lower_limit), color="lightgrey", linestyle="--", linewidth=1.1)
+                    if upper_limit is not None:
+                        ax.axvline(float(upper_limit), color="lightgrey", linestyle="--", linewidth=1.1)
+                    ax.set_xlim(x_low, x_high)
+                    ax.set_yscale("log", nonpositive="clip")
+                    ax.set_title(observable_labels[x_name], fontsize=9)
+                else:
+                    before_mask = np.isfinite(before_x) & np.isfinite(before_y)
+                    after_mask = np.isfinite(after_x) & np.isfinite(after_y)
+                    if not np.any(before_mask) and not np.any(after_mask):
+                        ax.set_axis_off()
+                        continue
+                    any_panel_data = True
+                    for combo_label in combo_labels:
+                        combo_before_x = before_combo_data[combo_label][x_name]
+                        combo_before_y = before_combo_data[combo_label][y_name]
+                        combo_after_x = after_combo_data[combo_label][x_name]
+                        combo_after_y = after_combo_data[combo_label][y_name]
+                        combo_before_mask = np.isfinite(combo_before_x) & np.isfinite(combo_before_y)
+                        combo_after_mask = np.isfinite(combo_after_x) & np.isfinite(combo_after_y)
+                        if np.any(combo_before_mask):
+                            ax.scatter(
+                                combo_before_x[combo_before_mask],
+                                combo_before_y[combo_before_mask],
+                                s=5,
+                                alpha=0.05,
+                                color=combo_color_map[combo_label],
+                                edgecolors="none",
+                                rasterized=True,
+                            )
+                        if np.any(combo_after_mask):
+                            ax.scatter(
+                                combo_after_x[combo_after_mask],
+                                combo_after_y[combo_after_mask],
+                                s=6,
+                                alpha=0.16,
+                                color=combo_color_map[combo_label],
+                                edgecolors="none",
+                                rasterized=True,
+                            )
+                    x_low, x_high = axis_ranges[x_name]
+                    y_low, y_high = axis_ranges[y_name]
+                    ax.set_xlim(x_low, x_high)
+                    ax.set_ylim(y_low, y_high)
+                    x_limits = limits_by_observable.get(x_name, (None, None))
+                    y_limits = limits_by_observable.get(y_name, (None, None))
+                    if x_limits[0] is not None:
+                        ax.axvline(float(x_limits[0]), color="lightgrey", linestyle="--", linewidth=0.9)
+                    if x_limits[1] is not None:
+                        ax.axvline(float(x_limits[1]), color="lightgrey", linestyle="--", linewidth=0.9)
+                    if y_limits[0] is not None:
+                        ax.axhline(float(y_limits[0]), color="lightgrey", linestyle="--", linewidth=0.9)
+                    if y_limits[1] is not None:
+                        ax.axhline(float(y_limits[1]), color="lightgrey", linestyle="--", linewidth=0.9)
+
+                if row_idx == n_obs - 1:
+                    ax.set_xlabel(observable_labels[x_name], fontsize=8)
+                else:
+                    ax.set_xticklabels([])
+                if col_idx == 0 and row_idx != col_idx:
+                    ax.set_ylabel(observable_labels[y_name], fontsize=8)
+                elif col_idx != 0:
+                    ax.set_yticklabels([])
+                if row_idx == col_idx:
+                    ax.set_ylabel("Counts", fontsize=8)
+                ax.tick_params(labelsize=6)
+
+        if not any_panel_data:
+            plt.close(fig)
+            continue
+
+        if combo_labels:
+            style_handles = [
+                mpl.lines.Line2D([0], [0], color="black", linestyle="--", linewidth=1.0, label="Before"),
+                mpl.lines.Line2D([0], [0], color="black", linestyle="-", linewidth=1.4, label="After"),
+            ]
+            combo_handles = [
+                mpl.lines.Line2D([0], [0], color=combo_color_map[label], linestyle="-", linewidth=1.6, label=label)
+                for label in combo_labels
+            ]
+            fig.legend(
+                handles=style_handles + combo_handles,
+                loc="upper center",
+                bbox_to_anchor=(0.5, 0.995),
+                ncol=min(6, max(2, len(combo_handles) + 2)),
+                fontsize=6,
+                frameon=False,
+                handlelength=1.8,
+                columnspacing=0.8,
+            )
+
+        fig.suptitle(
+            f"Task 3 plane-combination filter by TT {tt_label}\n{basename_no_ext_value}",
+            fontsize=11,
+            y=0.94,
+        )
+        if save_plots:
+            final_filename = f"{fig_idx_value}_plane_combination_filter_by_tt_TT_{tt_label}.png"
+            fig_idx_value += 1
+            save_fig_path = os.path.join(base_dir, final_filename)
+            if plot_list is not None:
+                plot_list.append(save_fig_path)
+            save_plot_figure(save_fig_path, fig=fig, format="png", dpi=150)
+        if show_plots:
+            plt.show()
+        plt.close(fig)
+
+    return fig_idx_value
 
 reprocessing_parameters = pd.DataFrame()
 
@@ -3092,6 +3736,9 @@ KEY = "df"
 # Load dataframe
 working_df = pd.read_parquet(file_path, engine="pyarrow")
 working_df = working_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
+if "event_id" not in working_df.columns:
+    print("Warning: 'event_id' missing in Task 3 input; reconstructing from current row order.")
+    working_df.insert(0, "event_id", np.arange(len(working_df), dtype=np.int64))
 # Ensure param_hash is persisted for downstream tasks.
 if "param_hash" not in working_df.columns:
     working_df["param_hash"] = str(simulated_param_hash) if simulated_param_hash else ""
@@ -3147,7 +3794,15 @@ for plane in range(1, 5):
         f"Q{plane}_Q_dif_{strip}" for strip in range(1, 5) if f"Q{plane}_Q_dif_{strip}" in working_df.columns
     ]
 
-working_df = compute_tt(working_df, "cal_tt", cal_tt_columns)
+# Keep cal_tt from Task 2 when present; compute only if missing.
+if "cal_tt" not in working_df.columns:
+    working_df = compute_tt(working_df, "cal_tt", cal_tt_columns)
+else:
+    working_df.loc[:, "cal_tt"] = (
+        pd.to_numeric(working_df["cal_tt"], errors="coerce")
+        .fillna(0)
+        .astype(int)
+    )
 cal_tt_counts_initial = working_df["cal_tt"].value_counts()
 for tt_value, count in cal_tt_counts_initial.items():
     tt_label = normalize_tt_label(tt_value)
@@ -3364,6 +4019,47 @@ for plane_id in range(1, 5):
     counts = working_df[col_name].value_counts()
     for pattern in active_patterns:
         global_variables[f"{col_name}_{pattern}_count"] = int(counts.get(pattern, 0))
+
+# ---------------------------------------------------------------------------
+# Adj / Dis classification
+# A plane pattern is DISPERSED when there is at least one inactive strip (0)
+# between two active strips (1), i.e. the active bits are not contiguous.
+# Method: strip leading/trailing 0s; if the result still contains a '0', the
+# pattern is dispersed.  "0000" and all single-strip patterns are always adj.
+# An event is classified "dis" if any plane carries a dispersed pattern;
+# otherwise it is "adj".
+# ---------------------------------------------------------------------------
+_DISPERSED_STRIP_PATTERNS: frozenset[str] = frozenset(
+    bits
+    for val in range(16)
+    for bits in [format(val, "04b")]
+    if (
+        (fi := bits.find("1")) != -1
+        and (li := bits.rfind("1")) > fi
+        and "0" in bits[fi : li + 1]
+    )
+)
+# Sanity check (expected: {"0101","1001","1010","1011","1101"})
+assert _DISPERSED_STRIP_PATTERNS == {"0101", "1001", "1010", "1011", "1101"}, (
+    f"Unexpected dispersed set: {_DISPERSED_STRIP_PATTERNS}"
+)
+
+_adj_dis_flags = np.zeros(len(working_df), dtype=bool)  # True = dispersed
+for _p in range(1, 5):
+    _col = f"active_strips_P{_p}"
+    if _col in working_df.columns:
+        _adj_dis_flags |= working_df[_col].isin(_DISPERSED_STRIP_PATTERNS).to_numpy()
+
+working_df["adj_dis"] = np.where(_adj_dis_flags, "dis", "adj")
+
+_adj_dis_counts = working_df["adj_dis"].value_counts()
+_n_adj = int(_adj_dis_counts.get("adj", 0))
+_n_dis = int(_adj_dis_counts.get("dis", 0))
+_n_total_adj_dis = _n_adj + _n_dis
+global_variables["adj_count"] = _n_adj
+global_variables["dis_count"] = _n_dis
+global_variables["dis_fraction"] = round(_n_dis / _n_total_adj_dis, 6) if _n_total_adj_dis > 0 else 0.0
+print(f"adj_dis column added: adj={_n_adj:,}  dis={_n_dis:,}  dis_fraction={global_variables['dis_fraction']:.4f}")
 
 cal_strip_patterns = build_task3_full_strip_pattern_series(working_df)
 store_pattern_rates(pattern_metadata, cal_strip_patterns, "cal_strip_pattern", working_df)
@@ -4980,6 +5676,155 @@ if filter6_cols and filter6_before_zero_mask is not None:
 
 record_filter6_counts(working_df, "after_filter6")
 
+print("----------------------------------------------------------------------")
+print("-------- Final plane-combination consistency filter -------------------")
+print("----------------------------------------------------------------------")
+
+# Final Task 3 filter: evaluate distinct plane pairs only when both plane
+# blocks are fully populated, then zero both planes when any derived
+# plane-combination observable falls outside the configured limits.
+_plot_plane_combination_filter_by_tt = task3_plot_enabled("plane_combination_filter_by_tt")
+if _plot_plane_combination_filter_by_tt:
+    plane_combination_tt_before = _task3_filter_tt_series(working_df).copy()
+    plane_combination_hist_before = collect_task3_plane_combination_histogram_payload(
+        working_df,
+        plane_combination_tt_before,
+    )
+else:
+    plane_combination_tt_before = pd.Series(dtype=str)
+    plane_combination_hist_before = {}
+
+plane_combination_summary = apply_task3_plane_combination_filter(
+    working_df,
+    q_sum_sum_left=plane_combination_q_sum_sum_left,
+    q_sum_sum_right=plane_combination_q_sum_sum_right,
+    q_sum_dif_threshold=plane_combination_q_sum_dif_threshold,
+    q_dif_sum_threshold=plane_combination_q_dif_sum_threshold,
+    q_dif_dif_threshold=plane_combination_q_dif_dif_threshold,
+    t_sum_sum_left=plane_combination_t_sum_sum_left,
+    t_sum_sum_right=plane_combination_t_sum_sum_right,
+    t_sum_dif_threshold=plane_combination_t_sum_dif_threshold,
+    t_dif_sum_threshold=plane_combination_t_dif_sum_threshold,
+    t_dif_dif_threshold=plane_combination_t_dif_dif_threshold,
+    y_sum_left=plane_combination_y_sum_left,
+    y_sum_right=plane_combination_y_sum_right,
+    y_dif_threshold=plane_combination_y_dif_threshold,
+)
+record_activity_metric(
+    "plane_combination_filter_rows_affected_pct",
+    plane_combination_summary["rows_affected"],
+    len(working_df) if len(working_df) else 0,
+    label="rows with plane-combination failures",
+)
+record_activity_metric(
+    "plane_combination_filter_values_zeroed_pct",
+    plane_combination_summary["values_zeroed"],
+    len(working_df) * (5 * plane_combination_summary["tracked_plane_count"])
+    if (len(working_df) and plane_combination_summary["tracked_plane_count"])
+    else 0,
+    label="plane values zeroed by plane-combination filter",
+)
+record_activity_metric(
+    "plane_combination_filter_any_failed_pct",
+    plane_combination_summary["failed_pair_any"],
+    plane_combination_summary["valid_pair_observations"],
+    label="failed plane combinations",
+)
+record_activity_metric(
+    "plane_combination_filter_q_sum_sum_failed_pct",
+    plane_combination_summary["failed_pair_q_sum_sum"],
+    plane_combination_summary["valid_pair_observations"],
+    label="Q_sum semisum failed plane combinations",
+)
+record_activity_metric(
+    "plane_combination_filter_q_sum_dif_failed_pct",
+    plane_combination_summary["failed_pair_q_sum_dif"],
+    plane_combination_summary["valid_pair_observations"],
+    label="Q_sum semidifference failed plane combinations",
+)
+record_activity_metric(
+    "plane_combination_filter_q_dif_sum_failed_pct",
+    plane_combination_summary["failed_pair_q_dif_sum"],
+    plane_combination_summary["valid_pair_observations"],
+    label="Q_dif semisum failed plane combinations",
+)
+record_activity_metric(
+    "plane_combination_filter_q_dif_dif_failed_pct",
+    plane_combination_summary["failed_pair_q_dif_dif"],
+    plane_combination_summary["valid_pair_observations"],
+    label="Q_dif semidifference failed plane combinations",
+)
+record_activity_metric(
+    "plane_combination_filter_t_sum_sum_failed_pct",
+    plane_combination_summary["failed_pair_t_sum_sum"],
+    plane_combination_summary["valid_pair_observations"],
+    label="T_sum semisum failed plane combinations",
+)
+record_activity_metric(
+    "plane_combination_filter_t_sum_dif_failed_pct",
+    plane_combination_summary["failed_pair_t_sum_dif"],
+    plane_combination_summary["valid_pair_observations"],
+    label="T_sum semidifference failed plane combinations",
+)
+record_activity_metric(
+    "plane_combination_filter_t_dif_sum_failed_pct",
+    plane_combination_summary["failed_pair_t_dif_sum"],
+    plane_combination_summary["valid_pair_observations"],
+    label="T_dif semisum failed plane combinations",
+)
+record_activity_metric(
+    "plane_combination_filter_t_dif_dif_failed_pct",
+    plane_combination_summary["failed_pair_t_dif_dif"],
+    plane_combination_summary["valid_pair_observations"],
+    label="T_dif semidifference failed plane combinations",
+)
+record_activity_metric(
+    "plane_combination_filter_y_sum_failed_pct",
+    plane_combination_summary["failed_pair_y_sum"],
+    plane_combination_summary["valid_pair_observations"],
+    label="Y semisum failed plane combinations",
+)
+record_activity_metric(
+    "plane_combination_filter_y_dif_failed_pct",
+    plane_combination_summary["failed_pair_y_dif"],
+    plane_combination_summary["valid_pair_observations"],
+    label="Y semidifference failed plane combinations",
+)
+print(
+    "[plane-combination-filter] "
+    f"valid_pair_obs={plane_combination_summary['valid_pair_observations']} "
+    f"failed_any={plane_combination_summary['failed_pair_any']} "
+    f"rows_affected={plane_combination_summary['rows_affected']}"
+)
+if _plot_plane_combination_filter_by_tt:
+    plane_combination_hist_after = collect_task3_plane_combination_histogram_payload(
+        working_df,
+        plane_combination_tt_before,
+    )
+    plane_combination_limits = {
+        "q_sum_sum": (plane_combination_q_sum_sum_left, plane_combination_q_sum_sum_right),
+        "q_sum_dif": (-abs(plane_combination_q_sum_dif_threshold), abs(plane_combination_q_sum_dif_threshold)),
+        "q_dif_sum": (-abs(plane_combination_q_dif_sum_threshold), abs(plane_combination_q_dif_sum_threshold)),
+        "q_dif_dif": (-abs(plane_combination_q_dif_dif_threshold), abs(plane_combination_q_dif_dif_threshold)),
+        "t_sum_sum": (plane_combination_t_sum_sum_left, plane_combination_t_sum_sum_right),
+        "t_sum_dif": (-abs(plane_combination_t_sum_dif_threshold), abs(plane_combination_t_sum_dif_threshold)),
+        "t_dif_sum": (-abs(plane_combination_t_dif_sum_threshold), abs(plane_combination_t_dif_sum_threshold)),
+        "t_dif_dif": (-abs(plane_combination_t_dif_dif_threshold), abs(plane_combination_t_dif_dif_threshold)),
+        "y_sum": (plane_combination_y_sum_left, plane_combination_y_sum_right),
+        "y_dif": (-abs(plane_combination_y_dif_threshold), abs(plane_combination_y_dif_threshold)),
+    }
+    fig_idx = plot_task3_plane_combination_filter_by_tt(
+        plane_combination_hist_before,
+        plane_combination_hist_after,
+        basename_no_ext,
+        fig_idx,
+        base_directories["figure_directory"],
+        show_plots=show_plots,
+        save_plots=save_plots,
+        plot_list=plot_list,
+        limits_by_observable=plane_combination_limits,
+    )
+
 # ----------------------------------------------------------------------------------------------------------------
 # if stratos_save and station == 2:
 if stratos_save:
@@ -5291,6 +6136,8 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
     "fourplane_weakest_charge",
     "fourplane_weakest_plane_identity",
     "efficiency_anatomy_by_charge_band",
+    "charge_by_strip_multiplicity_adj",
+    "charge_by_strip_multiplicity_dis",
 ):
     q_sum_final_cols = [
         f"P{i_plane}_Q_sum_final" for i_plane in range(1, 5) if f"P{i_plane}_Q_sum_final" in working_df.columns
@@ -6884,6 +7731,128 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                 if show_plots:
                     plt.show()
                 plt.close(fig_m)
+
+        # --- Charge by strip multiplicity (adj / dis events) ---
+        if task3_any_plot_enabled(
+            "charge_by_strip_multiplicity_adj",
+            "charge_by_strip_multiplicity_dis",
+        ):
+            _cbsm_have_adj_dis = "adj_dis" in working_df.columns
+            _cbsm_mult_colors = {1: "tab:blue", 2: "tab:orange", 3: "tab:green", 4: "tab:red"}
+            _cbsm_mult_labels = {1: "single", 2: "double", 3: "triple", 4: "quad"}
+
+            for _cbsm_label, _cbsm_alias in [
+                ("adj", "charge_by_strip_multiplicity_adj"),
+                ("dis", "charge_by_strip_multiplicity_dis"),
+            ]:
+                if not task3_plot_enabled(_cbsm_alias):
+                    continue
+                if not _cbsm_have_adj_dis:
+                    continue
+
+                _cbsm_df = working_df.loc[working_df["adj_dis"] == _cbsm_label]
+                if _cbsm_df.empty:
+                    continue
+
+                _cbsm_tt = pd.to_numeric(_cbsm_df["list_tt"], errors="coerce").fillna(0).astype(int)
+                _cbsm_present = set(_cbsm_tt.unique().tolist())
+                _cbsm_ordered_tt = [tt for tt in ordered_tt_values if tt in _cbsm_present]
+                _n_cbsm_cols = len(_cbsm_ordered_tt)
+                if _n_cbsm_cols == 0:
+                    continue
+
+                # Common x range from 99th percentile across all planes
+                _cbsm_all_charges: list[np.ndarray] = []
+                for p in range(1, 5):
+                    _cbsm_qcol = f"P{p}_Q_sum_final"
+                    if _cbsm_qcol in _cbsm_df.columns:
+                        _cbsm_qv = pd.to_numeric(_cbsm_df[_cbsm_qcol], errors="coerce").to_numpy(float)
+                        _cbsm_pos = _cbsm_qv[np.isfinite(_cbsm_qv) & (_cbsm_qv > 0)]
+                        if _cbsm_pos.size > 0:
+                            _cbsm_all_charges.append(_cbsm_pos)
+                if _cbsm_all_charges:
+                    _cbsm_qmax = float(np.nanpercentile(np.concatenate(_cbsm_all_charges), 99.0))
+                else:
+                    _cbsm_qmax = 100.0
+                _cbsm_qmin = max(
+                    float(np.nanmin(np.concatenate(_cbsm_all_charges))) if _cbsm_all_charges else 0.1,
+                    0.1,
+                )
+                _cbsm_bins = np.logspace(np.log10(_cbsm_qmin), np.log10(max(_cbsm_qmax, _cbsm_qmin * 10)), 60)
+
+                fig_cbsm, axes_cbsm = plt.subplots(
+                    4, _n_cbsm_cols,
+                    figsize=(max(2.5 * _n_cbsm_cols, 8), 12),
+                    sharex=True, sharey=True,
+                    squeeze=False,
+                )
+
+                for j_col, tt_val in enumerate(_cbsm_ordered_tt):
+                    _cbsm_mask_tt = _cbsm_tt == tt_val
+                    _cbsm_sub = _cbsm_df.loc[_cbsm_mask_tt]
+                    axes_cbsm[0, j_col].set_title(
+                        f"tt={tt_val}\nN={int(_cbsm_mask_tt.sum())}",
+                        fontsize=8,
+                    )
+                    for i_row, p in enumerate(range(1, 5)):
+                        ax = axes_cbsm[i_row, j_col]
+                        _cbsm_qcol = f"P{p}_Q_sum_final"
+                        _cbsm_scol = f"active_strips_P{p}"
+                        if _cbsm_qcol not in _cbsm_sub.columns or _cbsm_scol not in _cbsm_sub.columns:
+                            ax.text(0.5, 0.5, "N/A", ha="center", va="center",
+                                    transform=ax.transAxes, fontsize=9, color="gray")
+                            ax.set_axis_off()
+                            continue
+                        _cbsm_q = pd.to_numeric(_cbsm_sub[_cbsm_qcol], errors="coerce").to_numpy(float)
+                        _cbsm_s = _cbsm_sub[_cbsm_scol].astype(str).str.count("1").to_numpy(int)
+                        _cbsm_valid = np.isfinite(_cbsm_q) & (_cbsm_q > 0)
+                        for mult in [1, 2, 3, 4]:
+                            _cbsm_m = _cbsm_valid & (_cbsm_s == mult)
+                            if _cbsm_m.sum() == 0:
+                                continue
+                            ax.hist(
+                                _cbsm_q[_cbsm_m],
+                                bins=_cbsm_bins,
+                                histtype="step",
+                                color=_cbsm_mult_colors[mult],
+                                label=_cbsm_mult_labels[mult],
+                                linewidth=1.2,
+                            )
+                        ax.set_xscale("log")
+                        ax.set_yscale("log")
+                        if j_col == 0:
+                            ax.set_ylabel(f"Plane {p}", fontsize=9)
+                        if i_row == 3:
+                            ax.set_xlabel("Q sum final [a.u.]", fontsize=8)
+                        ax.tick_params(labelsize=7)
+
+                _cbsm_legend_handles = [
+                    plt.Line2D([0], [0], color=_cbsm_mult_colors[m], linewidth=1.5,
+                               label=_cbsm_mult_labels[m])
+                    for m in [1, 2, 3, 4]
+                ]
+                fig_cbsm.legend(
+                    handles=_cbsm_legend_handles,
+                    loc="upper right", fontsize=8,
+                    title="Strip mult.", title_fontsize=8,
+                    ncol=2,
+                )
+                _cbsm_title = "Adjacent" if _cbsm_label == "adj" else "Dispersed"
+                fig_cbsm.suptitle(
+                    f"{_cbsm_title} events – charge by plane and strip multiplicity\n"
+                    f"Station {station}  (N={len(_cbsm_df):,})",
+                    fontsize=12,
+                )
+                fig_cbsm.tight_layout(rect=[0, 0, 1, 0.93])
+                if save_plots:
+                    final_filename = f"{fig_idx}_{_cbsm_alias}.png"
+                    fig_idx += 1
+                    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                    plot_list.append(save_fig_path)
+                    save_plot_figure(save_fig_path, fig=fig_cbsm, format="png", dpi=150)
+                if show_plots:
+                    plt.show()
+                plt.close(fig_cbsm)
 
         # -----------------------------------------------------------------
         # Streamer investigation block

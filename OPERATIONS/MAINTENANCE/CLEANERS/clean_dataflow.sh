@@ -80,6 +80,7 @@ TEMP_ROOTS=(
 )
 CRON_LOG_DIR="${DATAFLOW_CLEAN_CRON_LOG_DIR:-$DATAFLOW_ROOT/OPERATIONS_RUNTIME/CRON_LOGS}"
 SIM_JUNK_BASE="${DATAFLOW_CLEAN_SIM_JUNK_BASE:-$DATAFLOW_PARENT/SIMULATION_DATA_JUNK}"
+PLOTS_KEEP_FRESHEST="${DATAFLOW_CLEAN_PLOTS_KEEP_FRESHEST:-5}"
 
 declare -A TYPE_BEFORE=()
 declare -A TYPE_AFTER=()
@@ -314,6 +315,11 @@ clean_plots() {
   done
   dirs=("${filtered_dirs[@]}")
 
+  if [[ ! "$PLOTS_KEEP_FRESHEST" =~ ^[0-9]+$ ]]; then
+    log_warn "Invalid DATAFLOW_CLEAN_PLOTS_KEEP_FRESHEST=$PLOTS_KEEP_FRESHEST. Falling back to 5."
+    PLOTS_KEEP_FRESHEST=5
+  fi
+
   if (( ${#dirs[@]} == 0 )); then
     log_info "No PLOTS directories found."
     TYPE_BEFORE["$type"]=0
@@ -326,26 +332,56 @@ clean_plots() {
   # Single batched du before deletion — avoids 2×N separate du calls
   local total_before
   total_before=$(du -sb "${dirs[@]}" 2>/dev/null | awk '{sum+=$1} END{print sum+0}')
+  local total_deleted=0
+  local kept_per_dir=$PLOTS_KEEP_FRESHEST
 
   for dir in "${dirs[@]}"; do
     if [[ ! -d "$dir" ]]; then
       log_warn "Skipping vanished plots path: $dir"
       continue
     fi
-    log_detail "--> Cleaning $dir"
+    log_detail "--> Cleaning $dir (keep newest $kept_per_dir file(s))"
     chmod -R u+w "$dir" 2>/dev/null || true
-    find "$dir" -mindepth 1 -delete 2>/dev/null || true
+
+    local -a ranked_entries=()
+    local entry path
+    local idx=0
+    while IFS= read -r -d '' entry; do
+      ranked_entries+=("$entry")
+    done < <(find "$dir" -type f -printf '%T@|%p\0' 2>/dev/null | sort -z -t '|' -k1,1nr)
+
+    if (( ${#ranked_entries[@]} <= kept_per_dir )); then
+      continue
+    fi
+
+    for entry in "${ranked_entries[@]}"; do
+      path="${entry#*|}"
+      if (( idx < kept_per_dir )); then
+        idx=$((idx + 1))
+        continue
+      fi
+      if rm -f -- "$path" 2>/dev/null; then
+        total_deleted=$((total_deleted + 1))
+      else
+        log_warn "Failed to remove old plot file: $path"
+      fi
+      idx=$((idx + 1))
+    done
+
+    # Remove empty subdirectories left after trimming old files.
+    find "$dir" -mindepth 1 -type d -empty -delete 2>/dev/null || true
   done
 
-  # Directories are empty after deletion; after ≈ 0
-  local total_after=0
+  local total_after
+  total_after=$(du -sb "${dirs[@]}" 2>/dev/null | awk '{sum+=$1} END{print sum+0}')
   local freed=$((total_before - total_after))
   TYPE_BEFORE["$type"]=$total_before
   TYPE_AFTER["$type"]=$total_after
   TYPE_FREED["$type"]=$freed
   TYPE_COUNTS["$type"]=${#dirs[@]}
 
-  log_info "PLOTS directories cleaned: ${#dirs[@]}"
+  log_info "PLOTS directories cleaned: ${#dirs[@]} (kept newest $kept_per_dir file(s) per directory)"
+  log_info "   Old files deleted: $total_deleted"
   log_info "   Total before: $(format_bytes "$total_before")"
   log_info "   Total after:  $(format_bytes "$total_after")"
   log_info "   Total freed:  $(format_bytes "$freed")"

@@ -382,6 +382,25 @@ def _plot_group(
     if not plot_columns:
         return None
 
+    # If these look like migration columns (<prefix>_to_<suffix>_tt_<from>_<to>...),
+    # render as an m x m matrix where m is the number of unique plane combinations.
+    migration_candidates = [_parse_migration_col(c) for c in plot_columns]
+    if any(migration_candidates):
+        try:
+            return _plot_migration_matrix(
+                df=df,
+                x_values=x_values,
+                x_label=x_label,
+                x_is_datetime=x_is_datetime,
+                columns=plot_columns,
+                station_name=station_name,
+                group_name=group_name,
+                out_dir=out_dir,
+                config=config,
+            )
+        except Exception:
+            pass
+
     plot_cfg = config.get("plots") if isinstance(config.get("plots"), dict) else {}
     ncols = int(plot_cfg.get("ncols", 4))
     dpi = int(plot_cfg.get("dpi", 150))
@@ -416,6 +435,136 @@ def _plot_group(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{station_name}_task_{TASK_ID}_{METADATA_TYPE}_{group_name}.{image_format}"
+    fig.savefig(out_path, dpi=dpi)
+    plt.close(fig)
+    return out_path
+
+
+def _parse_migration_col(col: str) -> tuple[str, str, str, str] | None:
+    # Match columns like <prefix>_to_<suffix>_tt_<from>_<to>_... and return
+    # (prefix, from_tt, to_tt, metric_suffix).
+    if "_to_" not in col or "_tt_" not in col:
+        return None
+    try:
+        prefix, tail = col.split("_tt_", 1)
+    except ValueError:
+        return None
+    if "_to_" not in prefix:
+        return None
+    # prefix is like '<something>_to_<something_else>'
+    metric_parts = tail.split("_")
+    if len(metric_parts) < 2:
+        return None
+    from_tt = metric_parts[0]
+    to_tt = metric_parts[1]
+    metric = "_".join(metric_parts[2:]) if len(metric_parts) > 2 else ""
+    return prefix, from_tt, to_tt, metric
+
+
+def _plot_migration_matrix(
+    *,
+    df: pd.DataFrame,
+    x_values: pd.Series,
+    x_label: str,
+    x_is_datetime: bool,
+    columns: list[str],
+    station_name: str,
+    group_name: str,
+    out_dir: Path,
+    config: dict[str, Any],
+) -> Path | None:
+    entries = [(_parse_migration_col(c), c) for c in columns]
+    entries = [(p, c) for p, c in entries if p is not None]
+    if not entries:
+        return None
+
+    # types are unique plane combinations found in from/to positions
+    raw_types = sorted({p[1] for p, _ in entries} | {p[2] for p, _ in entries})
+    # exclude single-plane combos (e.g. '1','2','3','4') and any 'rate' label
+    types = [t for t in raw_types if len(str(t)) > 1 and str(t).lower() != "rate"]
+    if not types:
+        return None
+
+    # order: 4-plane combos first, then 3-plane, then 2-plane; within same size sort numerically
+    def _plane_sort_key(t: str) -> tuple[int, int]:
+        digits = ''.join(ch for ch in str(t) if ch.isdigit())
+        try:
+            num = int(digits) if digits else 0
+        except Exception:
+            num = 0
+        return (-len(str(t)), num)
+
+    types = sorted(types, key=_plane_sort_key)
+
+    n = len(types)
+    plot_cfg = config.get("plots") if isinstance(config.get("plots"), dict) else {}
+    dpi = int(plot_cfg.get("dpi", 150))
+    marker_size = float(plot_cfg.get("marker_size", 2.0))
+    line_width = float(plot_cfg.get("line_width", 0.9))
+    image_format = str(plot_cfg.get("format", "png")).strip().lower()
+
+    fig_width = float(plot_cfg.get("figsize_per_col", 3.0)) * n
+    fig_height = float(plot_cfg.get("figsize_per_row", 2.6)) * n
+
+    fig, axes = plt.subplots(nrows=n, ncols=n, figsize=(fig_width, fig_height), sharex=True, sharey=True)
+
+    # build lookup for columns
+    lookup: dict[tuple[str, str], str] = {}
+    for (prefix, from_tt, to_tt, _), col in entries:
+        lookup[(from_tt, to_tt)] = col
+
+    # determine global y-limits across available columns
+    y_mins = []
+    y_maxs = []
+    for col in lookup.values():
+        y = pd.to_numeric(df[col], errors="coerce")
+        if y.notna().any():
+            y_mins.append(float(y.min()))
+            y_maxs.append(float(y.max()))
+    y_min = min(y_mins) if y_mins else None
+    y_max = max(y_maxs) if y_maxs else None
+
+    for i, from_tt in enumerate(types):
+        for j, to_tt in enumerate(types):
+            ax = axes[i, j] if n > 1 else axes
+
+            # make lower triangle empty
+            if i > j:
+                ax.axis("off")
+                continue
+
+            col = lookup.get((from_tt, to_tt))
+            if col and col in df.columns:
+                y = pd.to_numeric(df[col], errors="coerce")
+                if y.notna().any():
+                    ax.plot(x_values, y, linestyle="-", linewidth=line_width, marker="o", markersize=marker_size)
+                else:
+                    ax.text(0.5, 0.5, "no data", ha="center", va="center", color="gray", fontsize=8)
+            else:
+                # No explicit migration column for this pair
+                ax.text(0.5, 0.5, "-", ha="center", va="center", color="lightgray", fontsize=10)
+
+            if from_tt == to_tt:
+                ax.set_facecolor("#f3f3f3")
+                ax.text(0.02, 0.92, "no change", transform=ax.transAxes, fontsize=7, va="top")
+
+            if y_min is not None and y_max is not None:
+                ax.set_ylim(y_min, y_max)
+
+            if j == 0:
+                ax.set_ylabel(from_tt)
+            if i == 0:
+                ax.set_title(to_tt, fontsize=8)
+
+            ax.grid(True, alpha=0.25)
+
+    fig.suptitle(f"TASK_{TASK_ID} {station_name} trigger_types - {group_name} (x={x_label})", fontsize=11)
+    if x_is_datetime:
+        fig.autofmt_xdate(rotation=30)
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{station_name}_task_{TASK_ID}_{METADATA_TYPE}_{group_name}_migration_matrix.{image_format}"
     fig.savefig(out_path, dpi=dpi)
     plt.close(fig)
     return out_path

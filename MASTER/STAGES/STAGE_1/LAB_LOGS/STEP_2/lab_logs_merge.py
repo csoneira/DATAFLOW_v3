@@ -47,7 +47,10 @@ from MASTER.common.path_config import (
     resolve_home_path_from_config,
 )
 from MASTER.common.selection_config import (
+    date_in_ranges as day_overlaps_date_ranges,
+    datetime_in_ranges,
     effective_date_ranges_for_station,
+    format_date_range_for_display,
     load_selection_for_paths,
     station_is_selected,
 )
@@ -225,7 +228,7 @@ def _collect_date_ranges(node: Mapping[str, object], ranges: List[Tuple[Optional
 
 def load_lab_logs_date_ranges(
     station: Optional[int | str] = None,
-) -> List[Tuple[Optional[date], Optional[date]]]:
+) -> List[Tuple[Optional[datetime], Optional[datetime]]]:
     selection = load_selection_for_paths(
         [LAB_LOGS_CONFIG_SHARED, LAB_LOGS_CONFIG_STEP2],
         master_config_root=MASTER_CONFIG_ROOT,
@@ -532,11 +535,10 @@ def main() -> int:
     outlier_limits = load_outlier_limits()
     date_ranges = list(effective_date_ranges_for_station(station, selection.date_ranges))
     if date_ranges:
-        human_ranges = []
-        for start_day, end_day in date_ranges:
-            start_text = start_day.isoformat() if start_day is not None else "-inf"
-            end_text = end_day.isoformat() if end_day is not None else "+inf"
-            human_ranges.append(f"{start_text} to {end_text}")
+        human_ranges = [
+            format_date_range_for_display(start_value, end_value)
+            for start_value, end_value in date_ranges
+        ]
         print(
             "Date range filtering enabled for LAB_LOGS STEP_2: "
             + "; ".join(human_ranges)
@@ -568,7 +570,7 @@ def main() -> int:
             day_value = extract_date_from_filename(file_path)
             if day_value is None:
                 continue
-            if date_in_ranges(day_value, date_ranges):
+            if day_overlaps_date_ranges(day_value, date_ranges):
                 filtered_candidates.append(file_path)
         candidate_files = filtered_candidates
 
@@ -597,8 +599,14 @@ def main() -> int:
         for day_key, day_frame in df.groupby(df.index.date):
             if day_frame.empty:
                 continue
-            if date_ranges and not date_in_ranges(day_key, date_ranges):
-                continue
+            if date_ranges:
+                in_range_mask = [
+                    datetime_in_ranges(ts.to_pydatetime(), date_ranges)
+                    for ts in day_frame.index
+                ]
+                day_frame = day_frame.loc[in_range_mask]
+                if day_frame.empty:
+                    continue
             resampled = day_frame.resample("1min").mean()
             if resampled.empty:
                 continue

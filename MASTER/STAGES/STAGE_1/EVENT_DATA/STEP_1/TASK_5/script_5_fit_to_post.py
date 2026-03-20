@@ -963,6 +963,9 @@ KEY = "df"
 # Load dataframe
 working_df = pd.read_parquet(file_path, engine="pyarrow")
 working_df = working_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
+if "event_id" not in working_df.columns:
+    print("Warning: 'event_id' missing in Task 5 input; reconstructing from current row order.")
+    working_df.insert(0, "event_id", np.arange(len(working_df), dtype=np.int64))
 print(f"Listed dataframe reloaded from: {file_path}")
 # Ensure param_hash is persisted for downstream tasks.
 if "param_hash" not in working_df.columns:
@@ -2062,8 +2065,8 @@ main_df = working_df.copy()
 main_df['Theta_fit'] = main_df['theta']
 main_df['Phi_fit'] = main_df['phi']
 
-if create_plots:
-    
+if task5_plot_enabled("theta_phi_definitive_tt_2d"):
+
     print("-------------------------- Angular plots -----------------------------")
 
     df_filtered = df
@@ -2116,11 +2119,11 @@ if create_plots:
     if show_plots:
         plt.show()
     plt.close()
-    
-    
 
-if create_plots or create_essential_plots:
-    
+
+
+if task5_plot_enabled("polar_theta_phi_definitive_tt_2d_detail_pre"):
+
     theta_left_filter = 0
     theta_right_filter = np.pi / 2.5
         
@@ -2355,7 +2358,7 @@ if correct_angle:
     df['phi'] = df['Phi_pred']
     
     # Plotting corrected vs measured angles
-    if create_plots:
+    if task5_plot_enabled("polar_theta_phi_definitive_tt_2d_detail_angle_correction"):
         VALID_MEASURED_TYPES = ['1234', '123', '124', '234', '134', '12', '13', '14', '23', '24', '34']
         tt_lists = [ VALID_MEASURED_TYPES ]
         
@@ -2420,7 +2423,7 @@ else:
 del main_df
 gc.collect()
 
-if create_plots or create_essential_plots:
+if task5_plot_enabled("polar_theta_phi_definitive_tt_2d_detail_final"):
     
     theta_left_filter = 0
     theta_right_filter = np.pi / 2.5
@@ -2516,7 +2519,7 @@ if create_plots or create_essential_plots:
 
 _prof["s_angle_correction_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
-if create_plots or create_essential_plots:
+if task5_plot_enabled("theta_efficiency_simple_3v4"):
     print("--------------- Simple efficiency vs theta (3v4 planes) -------------")
 
     if CORR_TT_COLUMN not in df.columns:

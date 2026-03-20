@@ -9,10 +9,19 @@ article_format: false
 # create_plots options: null | debug | usual | essential | all
 # Task 2 plot alias statuses live in config_plots_task_2.yaml
 create_plots: null
+strip_pair_min_events: 10
+track_removed_rows_task2: false
+removed_marker: x
+removed_marker_size: 30
+removed_marker_alpha: 0.9
+touched_marker: +
+touched_marker_size: 24
+touched_marker_alpha: 0.95
+strip_pair_figsize: [7, 7]
 limit_number: null
 number_of_time_cal_figures: 3
 calibrate_charge_ns_to_fc: true
-validate_charge_pedestal_calibration: false
+validate_charge_pedestal_calibration: true
 # Calibration modes: null (skip) | file (load from QA CSV) | make (compute fresh)
 # Each key accepts either a scalar (all stations) or a per-station list
 # [MINGO00, MINGO01, MINGO02, MINGO03, MINGO04]; missing entries default to "make".
@@ -26,7 +35,7 @@ charge_front_back: [file]
 time_calibration: [file]
 time_dif_calibration: [file]
 slewing_correction: false
-time_window_filtering: true
+time_window_filtering: false
 old_timing_method: true
 # Calibration behaviour flags (moved here from config_parameters_task_2.csv)
 validate_pos_cal: true

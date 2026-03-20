@@ -27,7 +27,7 @@ plots:
   all_events_charge_threshold_population: usual
   source_list_tt_charge_threshold_population: usual
   list_tt_transition_matrices: usual
-  list_tt_retention_curves: essential
+  list_tt_retention_curves: usual
   list_tt_minimum_charge_distributions: usual
   list_tt_empirical_efficiency_vs_threshold: usual
   full_topology_threshold_retention: usual
@@ -41,7 +41,7 @@ plots:
   multiplicity_charge_landscape: usual
   streamer_charge_histograms: usual
   streamer_prevalence_by_plane: usual
-  streamer_multiplicity: essential
+  streamer_multiplicity: usual
   streamer_contagion_matrix: usual
   streamer_contagion_matrix_strip: usual
   streamer_efficiency_comparison: usual
@@ -52,4 +52,7 @@ plots:
   signal_contagion_strip_by_tt: usual
   streamer_to_signal_contagion_strip_by_tt: usual
   streamer_to_highcharge_contagion_strip_by_tt: usual
-  strip_activation_matrix_before_after: essential
+  strip_activation_matrix_before_after: usual
+  plane_combination_filter_by_tt: essential
+  charge_by_strip_multiplicity_adj: usual
+  charge_by_strip_multiplicity_dis: usual

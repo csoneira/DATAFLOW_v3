@@ -28,5 +28,11 @@ plots:
   track_consistency_loo_residuals: essential
   strip_hit_occupancy: essential
   track_based_efficiency: essential
+  track_based_efficiency_tt_stability: essential
   track_based_efficiency_vs_theta: essential
   chi2_charge_populations: essential
+  chi2_residuals_populations: essential
+  event_display_sample_3fold: essential
+  chi2_charge_populations_3fold: essential
+  chi2_residuals_populations_3fold: essential
+  adj_dis_comparison: essential

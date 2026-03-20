@@ -14,7 +14,7 @@ Notes: Keep behavior configuration-driven and reproducible.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 import os
 import re
 import shutil
@@ -22,7 +22,7 @@ from typing import Callable, Iterable, Mapping, Optional
 
 from MASTER.common.selection_config import (
     DateRange,
-    date_in_ranges,
+    datetime_in_ranges,
     effective_date_ranges_for_station,
     resolve_selection_from_configs,
 )
@@ -119,7 +119,7 @@ def load_date_range_from_config(
     *,
     station_id: int | str | None = None,
     master_config_root: str | os.PathLike[str] | None = None,
-) -> tuple[Optional[date], Optional[date]]:
+) -> tuple[Optional[datetime], Optional[datetime]]:
     """Compatibility helper returning the first effective date range only."""
     ranges = load_date_ranges_from_config(
         config,
@@ -168,8 +168,8 @@ def extract_run_datetime_from_name(file_name: str) -> Optional[datetime]:
 
 def file_name_in_date_range(
     file_name: str,
-    start_date: Optional[date],
-    end_date: Optional[date],
+    start_date: Optional[datetime],
+    end_date: Optional[datetime],
 ) -> bool:
     """Return True when file timestamp is inside the single date interval."""
     return file_name_in_any_date_range(file_name, [(start_date, end_date)])
@@ -196,7 +196,7 @@ def file_name_in_any_date_range(
         # Keep files with unparseable names to avoid accidental data loss.
         return True
 
-    return date_in_ranges(file_datetime.date(), ranges)
+    return datetime_in_ranges(file_datetime, ranges)
 
 
 def sync_unprocessed_with_date_range(
@@ -207,7 +207,9 @@ def sync_unprocessed_with_date_range(
     log_fn: Callable[[str], None] = print,
     station_id: int | str | None = None,
     master_config_root: str | os.PathLike[str] | None = None,
-) -> tuple[Optional[date], Optional[date]]:
+) -> tuple[Optional[datetime], Optional[datetime]]:
+    # Returns the first effective datetime range for compatibility with callers
+    # that only inspect a single interval.
     """
     Move out-of-range files out of UNPROCESSED and restore in-range files when needed.
     """

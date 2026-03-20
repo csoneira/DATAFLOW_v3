@@ -44,7 +44,9 @@ from MASTER.common.path_config import (
     resolve_home_path_from_config,
 )
 from MASTER.common.selection_config import (
+    datetime_in_ranges,
     effective_date_ranges_for_station,
+    format_date_range_for_display,
     resolve_selection_from_configs,
     station_is_selected,
 )
@@ -242,15 +244,25 @@ def resolve_requested_days(
     config: Mapping[str, object],
     *,
     hard_end_day: date,
-    configured_ranges: Optional[Sequence[Tuple[Optional[date], Optional[date]]]] = None,
+    configured_ranges: Optional[Sequence[Tuple[Optional[datetime], Optional[datetime]]]] = None,
 ) -> List[date]:
     if configured_ranges is None:
-        configured_ranges = _collect_config_date_ranges(config)
+        configured_ranges = [
+            (
+                datetime.combine(start_day, datetime.min.time())
+                if start_day is not None
+                else None,
+                datetime.combine(end_day, datetime.max.time())
+                if end_day is not None
+                else None,
+            )
+            for start_day, end_day in _collect_config_date_ranges(config)
+        ]
     if configured_ranges:
         requested_set: Set[date] = set()
-        for start_day, end_day in configured_ranges:
-            range_start = start_day if start_day is not None else date(2023, 7, 1)
-            range_end = end_day if end_day is not None else hard_end_day
+        for start_value, end_value in configured_ranges:
+            range_start = start_value.date() if start_value is not None else date(2023, 7, 1)
+            range_end = end_value.date() if end_value is not None else hard_end_day
             if range_end > hard_end_day:
                 range_end = hard_end_day
             if range_start > range_end:
@@ -336,12 +348,22 @@ def main() -> int:
     existing_days = parse_existing_days(output_root)
 
     end_day = (datetime.now() - timedelta(days=5)).date()
+    configured_ranges = list(
+        effective_date_ranges_for_station(station, selection.date_ranges)
+    )
+    if configured_ranges:
+        print(
+            "Date range filtering enabled for Copernicus: "
+            + "; ".join(
+                format_date_range_for_display(start_value, end_value)
+                for start_value, end_value in configured_ranges
+            )
+        )
+
     requested_days = resolve_requested_days(
         config,
         hard_end_day=end_day,
-        configured_ranges=list(
-            effective_date_ranges_for_station(station, selection.date_ranges)
-        ),
+        configured_ranges=configured_ranges,
     )
     if not requested_days:
         print("No valid date ranges resolved from config. Nothing to do.")
@@ -496,6 +518,14 @@ def main() -> int:
             }
         )
     )
+    df_new["Time"] = pd.to_datetime(df_new["Time"], errors="coerce")
+    df_new = df_new.dropna(subset=["Time"])
+    if configured_ranges:
+        in_range_mask = [
+            datetime_in_ranges(ts.to_pydatetime(), configured_ranges)
+            for ts in df_new["Time"]
+        ]
+        df_new = df_new.loc[in_range_mask].copy()
 
     days_written = write_daily_outputs(df_new, output_root)
     if days_written:

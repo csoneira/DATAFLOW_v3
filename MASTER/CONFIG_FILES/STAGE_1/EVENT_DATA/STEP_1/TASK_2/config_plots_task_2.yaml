@@ -2,8 +2,8 @@ plots:
   debug_suite: debug
   usual_suite: usual
   essential_suite: essential
-  strip_activation_matrix_before_after: essential
-  streamer_contagion_matrix_strip: essential
+  strip_activation_matrix_before_after: usual
+  streamer_contagion_matrix_strip: usual
   cumulative_distribution_q_ch_before_calibration: usual
   new_calibration: usual
   scatter_new_calibration: usual
@@ -36,10 +36,21 @@ plots:
   model_validation_simple: usual
   positions_travel_time_tzeros: usual
   cross_talk_filtering_zoom: usual
-  cross_talk_filtering_zoom_check_no_subs_pedestal: essential
+  cross_talk_filtering_zoom_check_no_subs_pedestal: usual
   cross_talk_filtering_zoom_check: usual
   cross_talk_filtering_zoom_check_by_tt: usual
   r2_scores: usual
-  time_calibrated_filtered_removed_zeroes: essential
+  time_calibrated_filtered_removed_zeroes: usual
   tsum_pair_charge_correlations: usual
   stat_window_accumulation: usual
+  rejected_scatter_clean_tt: usual
+  rejected_scatter_q_sum_zero: usual
+  rejected_scatter_cal_tt: usual
+  charge_front_vs_back: usual
+  time_front_vs_back: usual
+  channel_matrix_tq: usual
+  strip_pair_matrix_by_planepair: usual
+  strip_combination_filter_by_tt: essential
+  rejected_histograms_clean_tt: usual
+  rejected_histograms_q_sum_zero: usual
+  rejected_histograms_cal_tt: usual

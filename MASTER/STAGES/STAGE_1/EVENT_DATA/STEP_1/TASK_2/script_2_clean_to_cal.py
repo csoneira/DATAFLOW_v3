@@ -31,10 +31,13 @@ state of each dataset.
 # Standard Library
 import argparse
 import atexit
+import ast
 import builtins
 import csv
 from datetime import datetime, timedelta
 import gc
+import hashlib
+from itertools import combinations
 import math
 import os
 from pathlib import Path
@@ -47,7 +50,6 @@ import warnings
 from collections import defaultdict
 from functools import reduce
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from itertools import combinations
 from typing import Dict, Iterable, List, Optional, Tuple
 
 # Scientific Computing
@@ -201,6 +203,17 @@ TASK2_PLOT_ALIASES: tuple[str, ...] = (
     "time_calibrated_filtered_removed_zeroes",
     "tsum_pair_charge_correlations",
     "stat_window_accumulation",
+    "rejected_scatter_clean_tt",
+    "rejected_scatter_q_sum_zero",
+    "rejected_scatter_cal_tt",
+    "charge_front_vs_back",
+    "time_front_vs_back",
+    "channel_matrix_tq",
+    "strip_pair_matrix_by_planepair",
+    "strip_combination_filter_by_tt",
+    "rejected_histograms_clean_tt",
+    "rejected_histograms_q_sum_zero",
+    "rejected_histograms_cal_tt",
 )
 task2_plot_status_by_alias: dict[str, str] = {}
 
@@ -254,6 +267,47 @@ def apply_task2_plot_catalog_modes() -> None:
     create_debug_plots = create_debug_plots and task2_plot_enabled("debug_suite")
     save_plots = bool(create_plots or create_essential_plots or create_debug_plots)
     create_pdf = save_plots
+
+
+def _coerce_config_bool(value: object, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
+
+
+def _coerce_config_value(value: object, cast_fn, default):
+    try:
+        return cast_fn(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_figsize(value: object, default: tuple[float, float]) -> tuple[float, float]:
+    if value is None:
+        return default
+    if isinstance(value, (tuple, list)) and len(value) == 2:
+        try:
+            return (float(value[0]), float(value[1]))
+        except (TypeError, ValueError):
+            return default
+    if isinstance(value, str):
+        raw_text = value.strip()
+        if not raw_text:
+            return default
+        try:
+            parsed = ast.literal_eval(raw_text)
+        except (ValueError, SyntaxError):
+            parsed = tuple(part.strip() for part in raw_text.replace("x", ",").split(",") if part.strip())
+        return _coerce_figsize(parsed, default)
+    return default
 
 CLI_PARSER = build_step1_cli_parser("Run Stage 1 STEP_1 TASK_2 (CLEAN->CAL).", STATION_CHOICES)
 CLI_ARGS = CLI_PARSER.parse_args()
@@ -589,6 +643,7 @@ last_file_test = config["last_file_test"]
     show_plots,
     create_debug_plots,
 ) = resolve_step1_plot_options(config)
+create_super_essential_plots = False
 apply_task2_plot_catalog_modes()
 limit_number = config.get("limit_number", None)
 limit = limit_number is not None
@@ -988,6 +1043,21 @@ Q_clip_max_ST = config.get("Q_clip_max_ST", 500)
 
 log_scale = config["log_scale"]
 
+strip_pair_min_events = int(config.get("strip_pair_min_events", 10))
+track_removed_rows_task2 = _coerce_config_bool(
+    config.get("track_removed_rows_task2", False),
+    default=False,
+)
+removed_marker = str(config.get("removed_marker", "x"))
+removed_marker_size = int(config.get("removed_marker_size", 30))
+removed_marker_alpha = float(config.get("removed_marker_alpha", 0.9))
+touched_marker = str(config.get("touched_marker", "+"))
+touched_marker_size = int(config.get("touched_marker_size", 24))
+touched_marker_alpha = float(config.get("touched_marker_alpha", 0.95))
+strip_pair_figsize = _coerce_figsize(config.get("strip_pair_figsize", (7, 7)), default=(7.0, 7.0))
+strip_pair_plot_max_points = int(config.get("strip_pair_plot_max_points", 1000))
+strip_pair_fig_dpi = int(config.get("strip_pair_fig_dpi", 150))
+
 calibrate_strip_Q_pedestal_translate_charge_cal = config.get("calibrate_strip_Q_pedestal_translate_charge_cal", 0.25)
 
 calibrate_strip_Q_pedestal_percentile = config.get("calibrate_strip_Q_pedestal_percentile", 10)
@@ -1027,6 +1097,36 @@ Q_sum_semisum_right = config["Q_sum_semisum_right"]
 T_sum_corrected_dif_abs = abs(float(config.get("T_sum_corrected_dif_abs", config.get("T_sum_corrected_dif_right", 5))))
 T_sum_corrected_dif_right = T_sum_corrected_dif_abs
 T_sum_corrected_dif_left = -T_sum_corrected_dif_abs
+strip_combination_q_sum_sum_left = float(
+    config.get("strip_combination_q_sum_sum_left", Q_sum_semisum_left)
+)
+strip_combination_q_sum_sum_right = float(
+    config.get("strip_combination_q_sum_sum_right", Q_sum_semisum_right)
+)
+strip_combination_q_sum_dif_threshold = abs(
+    float(config.get("strip_combination_q_sum_dif_threshold", Q_sum_semidiff_abs))
+)
+strip_combination_q_dif_sum_threshold = abs(
+    float(config.get("strip_combination_q_dif_sum_threshold", q_dif_abs))
+)
+strip_combination_q_dif_dif_threshold = abs(
+    float(config.get("strip_combination_q_dif_dif_threshold", q_dif_abs))
+)
+strip_combination_t_sum_sum_left = float(
+    config.get("strip_combination_t_sum_sum_left", T_sum_RPC_left)
+)
+strip_combination_t_sum_sum_right = float(
+    config.get("strip_combination_t_sum_sum_right", T_sum_RPC_right)
+)
+strip_combination_t_sum_dif_threshold = abs(
+    float(config.get("strip_combination_t_sum_dif_threshold", T_sum_corrected_dif_abs))
+)
+strip_combination_t_dif_sum_threshold = abs(
+    float(config.get("strip_combination_t_dif_sum_threshold", T_dif_cal_threshold))
+)
+strip_combination_t_dif_dif_threshold = abs(
+    float(config.get("strip_combination_t_dif_dif_threshold", T_dif_cal_threshold))
+)
 slewing_residual_range = config["slewing_residual_range"]
 
 t_comparison_lim = config["t_comparison_lim"]
@@ -1175,6 +1275,27 @@ activation_metadata: dict[str, object] = {}
 TT_COUNT_VALUES: tuple[int, ...] = (
     0, 1, 2, 3, 4, 12, 13, 14, 23, 24, 34, 123, 124, 134, 234, 1234
 )
+TT_COLOR_LABELS: tuple[str, ...] = tuple(str(tt_value) for tt_value in TT_COUNT_VALUES)
+# Colour mapping for trigger-type labels.
+# Single-plane labels ('1','2','3','4') are assigned a muted gray so the
+# more informative multi-plane combinations receive the vivid palette colors.
+TT_COLOR_CMAP = plt.get_cmap("tab10")
+_palette = sns.color_palette("tab10", n_colors=10)
+TT_COLOR_MAP: dict[str, tuple[float, float, float, float]] = {}
+_multi_idx = 0
+for tt_label in TT_COLOR_LABELS:
+    if len(tt_label) == 1:
+        TT_COLOR_MAP[tt_label] = (0.60, 0.60, 0.60, 1.0)
+    else:
+        rgb = _palette[_multi_idx % len(_palette)]
+        TT_COLOR_MAP[tt_label] = (float(rgb[0]), float(rgb[1]), float(rgb[2]), 1.0)
+        _multi_idx += 1
+TT_COLOR_DEFAULT = (0.45, 0.45, 0.45, 1.0)
+
+
+def get_tt_color(tt_value: object) -> tuple[float, float, float, float]:
+    """Return a stable color for a trigger-type label across all Task 2 plots."""
+    return TT_COLOR_MAP.get(normalize_tt_label(tt_value), TT_COLOR_DEFAULT)
 
 def ensure_global_count_keys(prefixes: Iterable[str]) -> None:
     for prefix in prefixes:
@@ -1183,16 +1304,59 @@ def ensure_global_count_keys(prefixes: Iterable[str]) -> None:
 
 FILTER_METRIC_NAMES: tuple[str, ...] = (
     "clean_tt_nan_rows_removed_pct",
+    "raw_fb_pair_regularization_rows_affected_pct",
+    "raw_fb_pair_regularization_values_zeroed_pct",
+    "raw_fb_pair_regularization_q_rows_pct",
+    "raw_fb_pair_regularization_t_rows_pct",
     "strip_zeroing_stage1_rows_affected_pct",
     "strip_zeroing_stage1_values_zeroed_pct",
+    "strip_zeroing_stage1_partial_strip_rows_pct",
+    "strip_zeroing_stage1_partial_strip_blocks_pct",
+    "strip_zeroing_stage1_already_all_zero_strip_blocks_pct",
+    "strip_zeroing_stage1_q_sum_trigger_rows_pct",
+    "strip_zeroing_stage1_q_dif_trigger_rows_pct",
+    "strip_zeroing_stage1_t_sum_trigger_rows_pct",
+    "strip_zeroing_stage1_t_dif_trigger_rows_pct",
     "strip_zeroing_stage2_rows_affected_pct",
     "strip_zeroing_stage2_values_zeroed_pct",
+    "strip_zeroing_stage2_partial_strip_rows_pct",
+    "strip_zeroing_stage2_partial_strip_blocks_pct",
+    "strip_zeroing_stage2_already_all_zero_strip_blocks_pct",
+    "strip_zeroing_stage2_q_sum_trigger_rows_pct",
+    "strip_zeroing_stage2_q_dif_trigger_rows_pct",
+    "strip_zeroing_stage2_t_sum_trigger_rows_pct",
+    "strip_zeroing_stage2_t_dif_trigger_rows_pct",
     "strip_zeroing_stage3_rows_affected_pct",
     "strip_zeroing_stage3_values_zeroed_pct",
+    "strip_zeroing_stage3_partial_strip_rows_pct",
+    "strip_zeroing_stage3_partial_strip_blocks_pct",
+    "strip_zeroing_stage3_already_all_zero_strip_blocks_pct",
+    "strip_zeroing_stage3_q_sum_trigger_rows_pct",
+    "strip_zeroing_stage3_q_dif_trigger_rows_pct",
+    "strip_zeroing_stage3_t_sum_trigger_rows_pct",
+    "strip_zeroing_stage3_t_dif_trigger_rows_pct",
     "t_sum_outlier_zeroing_rows_affected_pct",
     "t_sum_outlier_zeroing_values_zeroed_pct",
     "strip_zeroing_stage4_rows_affected_pct",
     "strip_zeroing_stage4_values_zeroed_pct",
+    "strip_zeroing_stage4_partial_strip_rows_pct",
+    "strip_zeroing_stage4_partial_strip_blocks_pct",
+    "strip_zeroing_stage4_already_all_zero_strip_blocks_pct",
+    "strip_zeroing_stage4_q_sum_trigger_rows_pct",
+    "strip_zeroing_stage4_q_dif_trigger_rows_pct",
+    "strip_zeroing_stage4_t_sum_trigger_rows_pct",
+    "strip_zeroing_stage4_t_dif_trigger_rows_pct",
+    "strip_combination_filter_rows_affected_pct",
+    "strip_combination_filter_values_zeroed_pct",
+    "strip_combination_filter_any_failed_pct",
+    "strip_combination_filter_q_sum_sum_failed_pct",
+    "strip_combination_filter_q_sum_dif_failed_pct",
+    "strip_combination_filter_q_dif_sum_failed_pct",
+    "strip_combination_filter_q_dif_dif_failed_pct",
+    "strip_combination_filter_t_sum_sum_failed_pct",
+    "strip_combination_filter_t_sum_dif_failed_pct",
+    "strip_combination_filter_t_dif_sum_failed_pct",
+    "strip_combination_filter_t_dif_dif_failed_pct",
     "q_sum_all_zero_rows_removed_pct",
     "data_purity_percentage",
     "all_components_zero_rows_removed_pct",
@@ -1264,6 +1428,133 @@ def record_zeroing_step_metrics(
     record_activity_metric(rows_metric, rows_affected, n_rows, label="rows affected")
     record_activity_metric(values_metric, values_zeroed, total_values, label="values zeroed")
 
+
+def summarize_strip_component_zero_causes(df_input: pd.DataFrame) -> dict[str, object]:
+    """Summarize which strip-component zeros are driving the strip-block zeroing cascade."""
+    strip_labels: list[tuple[int, int]] = []
+    q_sum_cols: list[str] = []
+    q_dif_cols: list[str] = []
+    t_sum_cols: list[str] = []
+    t_dif_cols: list[str] = []
+
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            q_sum = f"Q{plane}_Q_sum_{strip}"
+            q_dif = f"Q{plane}_Q_dif_{strip}"
+            t_sum = f"T{plane}_T_sum_{strip}"
+            t_dif = f"T{plane}_T_dif_{strip}"
+            if all(col in df_input.columns for col in (q_sum, q_dif, t_sum, t_dif)):
+                strip_labels.append((plane, strip))
+                q_sum_cols.append(q_sum)
+                q_dif_cols.append(q_dif)
+                t_sum_cols.append(t_sum)
+                t_dif_cols.append(t_dif)
+
+    n_rows = len(df_input)
+    n_strips = len(strip_labels)
+    if n_rows == 0 or n_strips == 0:
+        empty_mask = np.empty((n_rows, 0), dtype=bool)
+        return {
+            "n_rows": n_rows,
+            "n_strips": n_strips,
+            "partial_strip_mask": empty_mask,
+            "all_zero_strip_mask": empty_mask,
+            "trigger_masks": {
+                "q_sum": empty_mask,
+                "q_dif": empty_mask,
+                "t_sum": empty_mask,
+                "t_dif": empty_mask,
+            },
+        }
+
+    q_sum_values = df_input.loc[:, q_sum_cols].to_numpy(copy=False)
+    q_dif_values = df_input.loc[:, q_dif_cols].to_numpy(copy=False)
+    t_sum_values = df_input.loc[:, t_sum_cols].to_numpy(copy=False)
+    t_dif_values = df_input.loc[:, t_dif_cols].to_numpy(copy=False)
+
+    q_sum_zero = q_sum_values == 0
+    q_dif_zero = q_dif_values == 0
+    t_sum_zero = t_sum_values == 0
+    t_dif_zero = t_dif_values == 0
+    any_zero = q_sum_zero | q_dif_zero | t_sum_zero | t_dif_zero
+    all_zero = q_sum_zero & q_dif_zero & t_sum_zero & t_dif_zero
+    partial_strip_mask = any_zero & ~all_zero
+
+    return {
+        "n_rows": n_rows,
+        "n_strips": n_strips,
+        "partial_strip_mask": partial_strip_mask,
+        "all_zero_strip_mask": all_zero,
+        "trigger_masks": {
+            "q_sum": q_sum_zero & partial_strip_mask,
+            "q_dif": q_dif_zero & partial_strip_mask,
+            "t_sum": t_sum_zero & partial_strip_mask,
+            "t_dif": t_dif_zero & partial_strip_mask,
+        },
+    }
+
+
+def record_strip_zeroing_trigger_metrics(step_prefix: str, df_before: pd.DataFrame) -> None:
+    """Record why a strip-zeroing stage is firing, not only how much it zeroes."""
+    summary = summarize_strip_component_zero_causes(df_before)
+    n_rows = int(summary["n_rows"])
+    n_strips = int(summary["n_strips"])
+    partial_strip_mask = np.asarray(summary["partial_strip_mask"], dtype=bool)
+    all_zero_strip_mask = np.asarray(summary["all_zero_strip_mask"], dtype=bool)
+    trigger_masks = summary["trigger_masks"]
+
+    metrics_to_seed = (
+        f"{step_prefix}_partial_strip_rows_pct",
+        f"{step_prefix}_partial_strip_blocks_pct",
+        f"{step_prefix}_already_all_zero_strip_blocks_pct",
+        f"{step_prefix}_q_sum_trigger_rows_pct",
+        f"{step_prefix}_q_dif_trigger_rows_pct",
+        f"{step_prefix}_t_sum_trigger_rows_pct",
+        f"{step_prefix}_t_dif_trigger_rows_pct",
+    )
+    for metric_name in metrics_to_seed:
+        filter_metrics.setdefault(metric_name, 0.0)
+
+    if n_rows == 0 or n_strips == 0:
+        for metric_name in metrics_to_seed:
+            filter_metrics[metric_name] = 0.0
+        print(f"[filter-metrics] {step_prefix}: no strip blocks available for trigger analysis.")
+        return
+
+    total_blocks = n_rows * n_strips
+    record_activity_metric(
+        f"{step_prefix}_partial_strip_rows_pct",
+        int(np.count_nonzero(np.any(partial_strip_mask, axis=1))),
+        n_rows,
+        label="rows with partially-zero strip blocks",
+    )
+    record_activity_metric(
+        f"{step_prefix}_partial_strip_blocks_pct",
+        int(np.count_nonzero(partial_strip_mask)),
+        total_blocks,
+        label="partially-zero strip blocks",
+    )
+    record_activity_metric(
+        f"{step_prefix}_already_all_zero_strip_blocks_pct",
+        int(np.count_nonzero(all_zero_strip_mask)),
+        total_blocks,
+        label="already-all-zero strip blocks",
+    )
+
+    for component_key, component_label in (
+        ("q_sum", "Q_sum"),
+        ("q_dif", "Q_dif"),
+        ("t_sum", "T_sum"),
+        ("t_dif", "T_dif"),
+    ):
+        component_mask = np.asarray(trigger_masks[component_key], dtype=bool)
+        record_activity_metric(
+            f"{step_prefix}_{component_key}_trigger_rows_pct",
+            int(np.count_nonzero(np.any(component_mask, axis=1))),
+            n_rows,
+            label=f"rows with {component_label} zero trigger",
+        )
+
 def compute_t_sum_spread(df_subset: pd.DataFrame, columns: list[str]) -> pd.Series:
     """Compute per-event spread max(non-zero) - min(non-zero) using vectorized ops."""
     if not columns:
@@ -1277,7 +1568,12 @@ def compute_t_sum_spread(df_subset: pd.DataFrame, columns: list[str]) -> pd.Seri
         spread[valid_rows] = np.nanmax(valid_values, axis=1) - np.nanmin(valid_values, axis=1)
     return pd.Series(spread, index=df_subset.index)
 
-def zero_outlier_tsum_columns(df_input: pd.DataFrame, columns: list[str], threshold: float) -> pd.DataFrame:
+def zero_outlier_tsum_columns(
+    df_input: pd.DataFrame,
+    columns: list[str],
+    threshold: float,
+    snapshot_originals=None,
+) -> pd.DataFrame:
     """Zero T_sum outliers around the row-wise median using vectorized masking."""
     t_sum_cols = [col for col in columns if col in df_input.columns]
     if not t_sum_cols:
@@ -1291,11 +1587,63 @@ def zero_outlier_tsum_columns(df_input: pd.DataFrame, columns: list[str], thresh
         centers[enough_values_mask] = np.nanmedian(masked_values[enough_values_mask], axis=1)
     deviations = np.abs(values - centers[:, None])
     outlier_mask = nonzero_mask & (deviations > (threshold / 2.0)) & enough_values_mask[:, None]
+    if snapshot_originals is not None and np.any(outlier_mask):
+        changed_cols = [t_sum_cols[idx] for idx, flag in enumerate(np.any(outlier_mask, axis=0)) if flag]
+        snapshot_originals(df_input, changed_cols)
     values[outlier_mask] = 0.0
     df_input.loc[:, t_sum_cols] = values
     return df_input
 
-def zero_strip_component_blocks(df: pd.DataFrame, self_trigger_mode: bool = False) -> None:
+def regularize_raw_front_back_pairs(
+    df: pd.DataFrame,
+    *,
+    snapshot_originals=None,
+) -> dict[str, int]:
+    """Task 2 strip-scope regularization for raw front/back channel pairs."""
+    row_mask = np.zeros(len(df), dtype=bool)
+    q_row_mask = np.zeros(len(df), dtype=bool)
+    t_row_mask = np.zeros(len(df), dtype=bool)
+    values_zeroed = 0
+    tracked_columns: set[str] = set()
+
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            for var_prefix in ("Q", "T"):
+                col_f = f"{var_prefix}{plane}_F_{strip}"
+                col_b = f"{var_prefix}{plane}_B_{strip}"
+                if col_f not in df.columns or col_b not in df.columns:
+                    continue
+                tracked_columns.update((col_f, col_b))
+                f_values = pd.to_numeric(df[col_f], errors="coerce").fillna(0)
+                b_values = pd.to_numeric(df[col_b], errors="coerce").fillna(0)
+                partial_mask = (f_values == 0) ^ (b_values == 0)
+                if not partial_mask.any():
+                    continue
+                partial_mask_np = partial_mask.to_numpy(dtype=bool)
+                if snapshot_originals is not None:
+                    snapshot_originals(df, [col_f, col_b])
+                row_mask |= partial_mask_np
+                if var_prefix == "Q":
+                    q_row_mask |= partial_mask_np
+                else:
+                    t_row_mask |= partial_mask_np
+                values_zeroed += int((f_values[partial_mask] != 0).sum())
+                values_zeroed += int((b_values[partial_mask] != 0).sum())
+                df.loc[partial_mask, [col_f, col_b]] = 0
+
+    return {
+        "rows_affected": int(row_mask.sum()),
+        "values_zeroed": int(values_zeroed),
+        "q_rows_affected": int(q_row_mask.sum()),
+        "t_rows_affected": int(t_row_mask.sum()),
+        "column_count": len(tracked_columns),
+    }
+
+def zero_strip_component_blocks(
+    df: pd.DataFrame,
+    self_trigger_mode: bool = False,
+    snapshot_originals=None,
+) -> None:
     """Zero per-strip Q/T components together when any component in the block is zero."""
     strip_labels: list[tuple[int, int]] = []
     q_sum_cols: list[str] = []
@@ -1338,6 +1686,16 @@ def zero_strip_component_blocks(df: pd.DataFrame, self_trigger_mode: bool = Fals
     )
 
     total_events = len(df)
+    if snapshot_originals is not None:
+        changed_cols: list[str] = []
+        for idx, should_zero in enumerate(np.any(any_zero & ~all_zero, axis=0)):
+            if not should_zero:
+                continue
+            changed_cols.extend(
+                (q_sum_cols[idx], q_diff_cols[idx], t_sum_cols[idx], t_diff_cols[idx])
+            )
+        if changed_cols:
+            snapshot_originals(df, changed_cols)
     for idx, (plane, strip) in enumerate(strip_labels):
         num_affected_events = int(np.count_nonzero(any_zero[:, idx]))
         if self_trigger_mode:
@@ -1360,6 +1718,1085 @@ def zero_strip_component_blocks(df: pd.DataFrame, self_trigger_mode: bool = Fals
     df.loc[:, q_diff_cols] = q_diff_values
     df.loc[:, t_sum_cols] = t_sum_values
     df.loc[:, t_diff_cols] = t_diff_values
+
+
+def _task2_strip_component_columns_map(df: pd.DataFrame) -> dict[tuple[int, int], dict[str, str]]:
+    strip_map: dict[tuple[int, int], dict[str, str]] = {}
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            cols = {
+                "Q_sum": f"Q{plane}_Q_sum_{strip}",
+                "Q_dif": f"Q{plane}_Q_dif_{strip}",
+                "T_sum": f"T{plane}_T_sum_{strip}",
+                "T_dif": f"T{plane}_T_dif_{strip}",
+            }
+            if all(col in df.columns for col in cols.values()):
+                strip_map[(plane, strip)] = cols
+    return strip_map
+
+
+def apply_task2_strip_combination_filter(
+    df_input: pd.DataFrame,
+    *,
+    q_sum_sum_left: float,
+    q_sum_sum_right: float,
+    q_sum_dif_threshold: float,
+    q_dif_sum_threshold: float,
+    q_dif_dif_threshold: float,
+    t_sum_sum_left: float,
+    t_sum_sum_right: float,
+    t_sum_dif_threshold: float,
+    t_dif_sum_threshold: float,
+    t_dif_dif_threshold: float,
+    snapshot_originals=None,
+) -> dict[str, int]:
+    """
+    Apply a final strip-combination filter from already-built strip observables.
+
+    Distinct strip pairs are evaluated only when both strips carry non-zero
+    `Q_sum`, `Q_dif`, `T_sum`, and `T_dif`. If any derived strip-combination
+    observable fails, both participating strips are zeroed as full 4-variable
+    blocks so the strip-level representation remains regularized.
+    """
+    strip_map = _task2_strip_component_columns_map(df_input)
+    if len(strip_map) < 2:
+        return {
+            "tracked_strip_count": len(strip_map),
+            "valid_pair_observations": 0,
+            "failed_pair_any": 0,
+            "failed_pair_q_sum_sum": 0,
+            "failed_pair_q_sum_dif": 0,
+            "failed_pair_q_dif_sum": 0,
+            "failed_pair_q_dif_dif": 0,
+            "failed_pair_t_sum_sum": 0,
+            "failed_pair_t_sum_dif": 0,
+            "failed_pair_t_dif_sum": 0,
+            "failed_pair_t_dif_dif": 0,
+            "rows_affected": 0,
+            "values_zeroed": 0,
+        }
+
+    strip_fail_masks = {
+        strip_key: np.zeros(len(df_input), dtype=bool)
+        for strip_key in strip_map
+    }
+    summary = {
+        "tracked_strip_count": len(strip_map),
+        "valid_pair_observations": 0,
+        "failed_pair_any": 0,
+        "failed_pair_q_sum_sum": 0,
+        "failed_pair_q_sum_dif": 0,
+        "failed_pair_q_dif_sum": 0,
+        "failed_pair_q_dif_dif": 0,
+        "failed_pair_t_sum_sum": 0,
+        "failed_pair_t_sum_dif": 0,
+        "failed_pair_t_dif_sum": 0,
+        "failed_pair_t_dif_dif": 0,
+        "rows_affected": 0,
+        "values_zeroed": 0,
+    }
+
+    for strip_a, strip_b in combinations(sorted(strip_map), 2):
+        cols_a = strip_map[strip_a]
+        cols_b = strip_map[strip_b]
+        q_sum_a = pd.to_numeric(df_input[cols_a["Q_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        q_sum_b = pd.to_numeric(df_input[cols_b["Q_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        q_dif_a = pd.to_numeric(df_input[cols_a["Q_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        q_dif_b = pd.to_numeric(df_input[cols_b["Q_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_sum_a = pd.to_numeric(df_input[cols_a["T_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_sum_b = pd.to_numeric(df_input[cols_b["T_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_dif_a = pd.to_numeric(df_input[cols_a["T_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_dif_b = pd.to_numeric(df_input[cols_b["T_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+
+        valid_mask = (
+            np.isfinite(q_sum_a)
+            & np.isfinite(q_sum_b)
+            & np.isfinite(q_dif_a)
+            & np.isfinite(q_dif_b)
+            & np.isfinite(t_sum_a)
+            & np.isfinite(t_sum_b)
+            & np.isfinite(t_dif_a)
+            & np.isfinite(t_dif_b)
+            & (q_sum_a != 0)
+            & (q_sum_b != 0)
+            & (q_dif_a != 0)
+            & (q_dif_b != 0)
+            & (t_sum_a != 0)
+            & (t_sum_b != 0)
+            & (t_dif_a != 0)
+            & (t_dif_b != 0)
+        )
+        if not np.any(valid_mask):
+            continue
+
+        summary["valid_pair_observations"] += int(np.count_nonzero(valid_mask))
+        pair_q_sum_sum = 0.5 * (q_sum_a + q_sum_b)
+        pair_q_sum_dif = 0.5 * (q_sum_a - q_sum_b)
+        pair_q_dif_sum = 0.5 * (q_dif_a + q_dif_b)
+        pair_q_dif_dif = 0.5 * (q_dif_a - q_dif_b)
+        pair_t_sum_sum = 0.5 * (t_sum_a + t_sum_b)
+        pair_t_sum_dif = 0.5 * (t_sum_a - t_sum_b)
+        pair_t_dif_sum = 0.5 * (t_dif_a + t_dif_b)
+        pair_t_dif_dif = 0.5 * (t_dif_a - t_dif_b)
+
+        fail_q_sum_sum = valid_mask & (
+            (pair_q_sum_sum < float(q_sum_sum_left))
+            | (pair_q_sum_sum > float(q_sum_sum_right))
+        )
+        fail_q_sum_dif = valid_mask & (np.abs(pair_q_sum_dif) > abs(float(q_sum_dif_threshold)))
+        fail_q_dif_sum = valid_mask & (np.abs(pair_q_dif_sum) > abs(float(q_dif_sum_threshold)))
+        fail_q_dif_dif = valid_mask & (np.abs(pair_q_dif_dif) > abs(float(q_dif_dif_threshold)))
+        fail_t_sum_sum = valid_mask & (
+            (pair_t_sum_sum < float(t_sum_sum_left))
+            | (pair_t_sum_sum > float(t_sum_sum_right))
+        )
+        fail_t_sum_dif = valid_mask & (np.abs(pair_t_sum_dif) > abs(float(t_sum_dif_threshold)))
+        fail_t_dif_sum = valid_mask & (np.abs(pair_t_dif_sum) > abs(float(t_dif_sum_threshold)))
+        fail_t_dif_dif = valid_mask & (np.abs(pair_t_dif_dif) > abs(float(t_dif_dif_threshold)))
+        fail_any = (
+            fail_q_sum_sum
+            | fail_q_sum_dif
+            | fail_q_dif_sum
+            | fail_q_dif_dif
+            | fail_t_sum_sum
+            | fail_t_sum_dif
+            | fail_t_dif_sum
+            | fail_t_dif_dif
+        )
+
+        summary["failed_pair_q_sum_sum"] += int(np.count_nonzero(fail_q_sum_sum))
+        summary["failed_pair_q_sum_dif"] += int(np.count_nonzero(fail_q_sum_dif))
+        summary["failed_pair_q_dif_sum"] += int(np.count_nonzero(fail_q_dif_sum))
+        summary["failed_pair_q_dif_dif"] += int(np.count_nonzero(fail_q_dif_dif))
+        summary["failed_pair_t_sum_sum"] += int(np.count_nonzero(fail_t_sum_sum))
+        summary["failed_pair_t_sum_dif"] += int(np.count_nonzero(fail_t_sum_dif))
+        summary["failed_pair_t_dif_sum"] += int(np.count_nonzero(fail_t_dif_sum))
+        summary["failed_pair_t_dif_dif"] += int(np.count_nonzero(fail_t_dif_dif))
+        summary["failed_pair_any"] += int(np.count_nonzero(fail_any))
+
+        if np.any(fail_any):
+            strip_fail_masks[strip_a] |= fail_any
+            strip_fail_masks[strip_b] |= fail_any
+
+    changed_columns: list[str] = []
+    any_row_affected = np.zeros(len(df_input), dtype=bool)
+    for strip_key, fail_mask in strip_fail_masks.items():
+        if not np.any(fail_mask):
+            continue
+        cols = strip_map[strip_key]
+        for variable_name in TASK2_STRIP_VAR_ORDER:
+            values = pd.to_numeric(df_input[cols[variable_name]], errors="coerce").fillna(0)
+            summary["values_zeroed"] += int((values[fail_mask] != 0).sum())
+        any_row_affected |= fail_mask
+        changed_columns.extend(cols.values())
+
+    summary["rows_affected"] = int(np.count_nonzero(any_row_affected))
+    if changed_columns and snapshot_originals is not None:
+        snapshot_originals(df_input, list(dict.fromkeys(changed_columns)))
+
+    for strip_key, fail_mask in strip_fail_masks.items():
+        if not np.any(fail_mask):
+            continue
+        cols = strip_map[strip_key]
+        df_input.loc[fail_mask, list(cols.values())] = 0
+
+    return summary
+
+
+TASK2_STRIP_VAR_ORDER: tuple[str, ...] = ("Q_sum", "Q_dif", "T_sum", "T_dif")
+TASK2_STRIP_VAR_LABELS: dict[str, str] = {
+    "Q_sum": "Q_sum",
+    "Q_dif": "Q_dif",
+    "T_sum": "T_sum",
+    "T_dif": "T_dif",
+}
+TASK2_PLANE_PAIRS: tuple[tuple[int, int], ...] = (
+    (1, 1),
+    (2, 2),
+    (3, 3),
+    (4, 4),
+    (1, 2),
+    (1, 3),
+    (1, 4),
+    (2, 3),
+    (2, 4),
+    (3, 4),
+)
+
+
+def _task2_strip_column_name(plane: int, strip: int, variable_name: str) -> str:
+    prefix = "Q" if variable_name.startswith("Q") else "T"
+    return f"{prefix}{plane}_{variable_name}_{strip}"
+
+
+TASK2_STRIP_COMBINATION_OBSERVABLES: tuple[tuple[str, str], ...] = (
+    ("q_sum_sum", "Q_sum semisum"),
+    ("q_sum_dif", "Q_sum semidifference"),
+    ("q_dif_sum", "Q_dif semisum"),
+    ("q_dif_dif", "Q_dif semidifference"),
+    ("t_sum_sum", "T_sum semisum"),
+    ("t_sum_dif", "T_sum semidifference"),
+    ("t_dif_sum", "T_dif semisum"),
+    ("t_dif_dif", "T_dif semidifference"),
+)
+
+
+def _task2_filter_tt_series(df: pd.DataFrame) -> pd.Series:
+    for candidate in ("cal_tt", "clean_tt", "raw_tt"):
+        if candidate in df.columns:
+            return df[candidate].apply(normalize_tt_label).astype(str)
+    return pd.Series(["0"] * len(df), index=df.index, dtype=str)
+
+
+def _task2_tt_column_name(retained_df: pd.DataFrame, removed_df: pd.DataFrame) -> str | None:
+    for candidate in ("clean_tt", "raw_tt"):
+        if candidate in retained_df.columns or candidate in removed_df.columns:
+            return candidate
+    return None
+
+
+def _task2_tt_series(df: pd.DataFrame, tt_column: str | None) -> pd.Series:
+    if df.empty:
+        return pd.Series(dtype=str, index=df.index)
+    if tt_column is None or tt_column not in df.columns:
+        return pd.Series(["0"] * len(df), index=df.index, dtype=str)
+    return df[tt_column].apply(normalize_tt_label).astype(str)
+
+
+def _task2_plane_pair_mask(tt_series: pd.Series, plane_i: int, plane_j: int) -> pd.Series:
+    if tt_series.empty:
+        return pd.Series(dtype=bool, index=tt_series.index)
+    return tt_series.str.contains(str(plane_i)) & tt_series.str.contains(str(plane_j))
+
+
+def _task2_series_to_numpy(df: pd.DataFrame, column_name: str) -> np.ndarray:
+    if column_name not in df.columns:
+        return np.zeros(len(df), dtype=float)
+    return pd.to_numeric(df[column_name], errors="coerce").fillna(0).to_numpy(dtype=float)
+
+
+def _task2_original_series(df: pd.DataFrame, column_name: str) -> pd.Series:
+    if column_name not in df.columns:
+        return pd.Series(0.0, index=df.index, dtype=float)
+    if track_removed_rows_task2 and column_name in original_columns_store:
+        return pd.to_numeric(
+            original_columns_store[column_name].reindex(df.index),
+            errors="coerce",
+        ).fillna(0.0)
+    return pd.to_numeric(df[column_name], errors="coerce").fillna(0.0)
+
+
+def collect_task2_strip_combination_histogram_payload(
+    df_input: pd.DataFrame,
+    tt_series: pd.Series,
+) -> pd.DataFrame:
+    payload_rows: list[pd.DataFrame] = []
+    strip_map = _task2_strip_component_columns_map(df_input)
+    if len(strip_map) < 2:
+        return pd.DataFrame(columns=["tt", *[observable for observable, _ in TASK2_STRIP_COMBINATION_OBSERVABLES]])
+
+    tt_series = tt_series.reindex(df_input.index).fillna("0").astype(str)
+    for strip_a, strip_b in combinations(sorted(strip_map), 2):
+        combo_label = f"P{strip_a[0]}s{strip_a[1]}-P{strip_b[0]}s{strip_b[1]}"
+        cols_a = strip_map[strip_a]
+        cols_b = strip_map[strip_b]
+        q_sum_a = pd.to_numeric(df_input[cols_a["Q_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        q_sum_b = pd.to_numeric(df_input[cols_b["Q_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        q_dif_a = pd.to_numeric(df_input[cols_a["Q_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        q_dif_b = pd.to_numeric(df_input[cols_b["Q_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_sum_a = pd.to_numeric(df_input[cols_a["T_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_sum_b = pd.to_numeric(df_input[cols_b["T_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_dif_a = pd.to_numeric(df_input[cols_a["T_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_dif_b = pd.to_numeric(df_input[cols_b["T_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+
+        valid_mask = (
+            np.isfinite(q_sum_a)
+            & np.isfinite(q_sum_b)
+            & np.isfinite(q_dif_a)
+            & np.isfinite(q_dif_b)
+            & np.isfinite(t_sum_a)
+            & np.isfinite(t_sum_b)
+            & np.isfinite(t_dif_a)
+            & np.isfinite(t_dif_b)
+            & (q_sum_a != 0)
+            & (q_sum_b != 0)
+            & (q_dif_a != 0)
+            & (q_dif_b != 0)
+            & (t_sum_a != 0)
+            & (t_sum_b != 0)
+            & (t_dif_a != 0)
+            & (t_dif_b != 0)
+        )
+        if not np.any(valid_mask):
+            continue
+
+        valid_index = df_input.index[valid_mask]
+        tt_values = tt_series.loc[valid_index].to_numpy(dtype=str)
+        derived_values = {
+            "q_sum_sum": 0.5 * (q_sum_a + q_sum_b),
+            "q_sum_dif": 0.5 * (q_sum_a - q_sum_b),
+            "q_dif_sum": 0.5 * (q_dif_a + q_dif_b),
+            "q_dif_dif": 0.5 * (q_dif_a - q_dif_b),
+            "t_sum_sum": 0.5 * (t_sum_a + t_sum_b),
+            "t_sum_dif": 0.5 * (t_sum_a - t_sum_b),
+            "t_dif_sum": 0.5 * (t_dif_a + t_dif_b),
+            "t_dif_dif": 0.5 * (t_dif_a - t_dif_b),
+        }
+        payload_rows.append(
+            pd.DataFrame(
+                {
+                    "tt": tt_values,
+                    "combo": combo_label,
+                    **{
+                        observable: values[valid_mask]
+                        for observable, values in derived_values.items()
+                    },
+                }
+            )
+        )
+
+    if not payload_rows:
+        return pd.DataFrame(columns=["tt", *[observable for observable, _ in TASK2_STRIP_COMBINATION_OBSERVABLES]])
+    return pd.concat(payload_rows, ignore_index=True)
+
+
+def _task2_hist_range(
+    before_values: np.ndarray,
+    after_values: np.ndarray,
+    limits: tuple[float | None, float | None],
+) -> tuple[float, float]:
+    finite_values = np.concatenate(
+        [
+            before_values[np.isfinite(before_values)],
+            after_values[np.isfinite(after_values)],
+        ]
+    )
+    lower_limit, upper_limit = limits
+    if finite_values.size:
+        low = float(np.nanpercentile(finite_values, 1))
+        high = float(np.nanpercentile(finite_values, 99))
+        if not np.isfinite(low) or not np.isfinite(high):
+            low = float(np.nanmin(finite_values))
+            high = float(np.nanmax(finite_values))
+    else:
+        low, high = -1.0, 1.0
+    if lower_limit is not None:
+        low = min(low, float(lower_limit))
+    if upper_limit is not None:
+        high = max(high, float(upper_limit))
+    if not np.isfinite(low) or not np.isfinite(high) or low == high:
+        center = float(low if np.isfinite(low) else 0.0)
+        low, high = center - 1.0, center + 1.0
+    span = high - low
+    padding = 0.08 * span if span > 0 else 1.0
+    return low - padding, high + padding
+
+
+def _task2_population_color(label: str) -> tuple[float, float, float, float]:
+    digest = hashlib.md5(label.encode("utf-8")).digest()
+    color_pos = int.from_bytes(digest[:4], "big") / float(2**32 - 1)
+    return plt.get_cmap("turbo")(0.08 + 0.84 * color_pos)
+
+
+def plot_task2_strip_combination_filter_by_tt(
+    before_payload: pd.DataFrame,
+    after_payload: pd.DataFrame,
+    basename_no_ext_value: str,
+    fig_idx_value: int,
+    limits_by_observable: dict[str, tuple[float | None, float | None]],
+) -> int:
+    tt_labels = []
+    for payload in (before_payload, after_payload):
+        if "tt" in payload.columns:
+            tt_labels.extend(payload["tt"].astype(str).tolist())
+    ordered_tts = [
+        tt_label for tt_label in TT_COLOR_LABELS
+        if tt_label != "0" and tt_label in set(tt_labels)
+    ]
+    observable_names = [observable for observable, _ in TASK2_STRIP_COMBINATION_OBSERVABLES]
+    observable_labels = {observable: label for observable, label in TASK2_STRIP_COMBINATION_OBSERVABLES}
+    scatter_max_points = 5000
+    rng = np.random.default_rng(0)
+
+    for tt_label in ordered_tts:
+        before_tt = before_payload.loc[before_payload.get("tt", pd.Series(dtype=str)).astype(str) == tt_label].copy()
+        after_tt = after_payload.loc[after_payload.get("tt", pd.Series(dtype=str)).astype(str) == tt_label].copy()
+        if before_tt.empty and after_tt.empty:
+            continue
+
+        if len(before_tt) > scatter_max_points:
+            before_tt = before_tt.iloc[rng.choice(len(before_tt), size=scatter_max_points, replace=False)].copy()
+        if len(after_tt) > scatter_max_points:
+            after_tt = after_tt.iloc[rng.choice(len(after_tt), size=scatter_max_points, replace=False)].copy()
+
+        combo_labels = sorted(
+            set(before_tt.get("combo", pd.Series(dtype=str)).astype(str))
+            | set(after_tt.get("combo", pd.Series(dtype=str)).astype(str))
+        )
+        combo_labels = [label for label in combo_labels if label and label != "nan"]
+        combo_color_map = {label: _task2_population_color(label) for label in combo_labels}
+        before_combo_data = {
+            label: {
+                observable: pd.to_numeric(
+                    before_tt.loc[before_tt["combo"] == label, observable],
+                    errors="coerce",
+                ).to_numpy(dtype=float)
+                for observable in observable_names
+            }
+            for label in combo_labels
+        }
+        after_combo_data = {
+            label: {
+                observable: pd.to_numeric(
+                    after_tt.loc[after_tt["combo"] == label, observable],
+                    errors="coerce",
+                ).to_numpy(dtype=float)
+                for observable in observable_names
+            }
+            for label in combo_labels
+        }
+
+        n_obs = len(observable_names)
+        fig, axes = plt.subplots(n_obs, n_obs, figsize=(2.35 * n_obs, 2.35 * n_obs), constrained_layout=True)
+        any_panel_data = False
+
+        axis_ranges: dict[str, tuple[float, float]] = {}
+        for observable in observable_names:
+            before_values = pd.to_numeric(before_tt.get(observable, pd.Series(dtype=float)), errors="coerce").dropna().to_numpy(dtype=float)
+            after_values = pd.to_numeric(after_tt.get(observable, pd.Series(dtype=float)), errors="coerce").dropna().to_numpy(dtype=float)
+            axis_ranges[observable] = _task2_hist_range(
+                before_values,
+                after_values,
+                limits_by_observable.get(observable, (None, None)),
+            )
+
+        for row_idx, y_name in enumerate(observable_names):
+            for col_idx, x_name in enumerate(observable_names):
+                ax = axes[row_idx, col_idx]
+                if col_idx > row_idx:
+                    ax.set_axis_off()
+                    continue
+
+                before_x = pd.to_numeric(before_tt.get(x_name, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
+                before_y = pd.to_numeric(before_tt.get(y_name, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
+                after_x = pd.to_numeric(after_tt.get(x_name, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
+                after_y = pd.to_numeric(after_tt.get(y_name, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
+
+                if row_idx == col_idx:
+                    before_values = before_x[np.isfinite(before_x)]
+                    after_values = after_x[np.isfinite(after_x)]
+                    if before_values.size == 0 and after_values.size == 0:
+                        ax.set_axis_off()
+                        continue
+                    any_panel_data = True
+                    x_low, x_high = axis_ranges[x_name]
+                    bins = np.linspace(x_low, x_high, 60)
+                    for combo_label in combo_labels:
+                        combo_before = before_combo_data[combo_label][x_name]
+                        combo_after = after_combo_data[combo_label][x_name]
+                        combo_before = combo_before[np.isfinite(combo_before)]
+                        combo_after = combo_after[np.isfinite(combo_after)]
+                        if combo_before.size:
+                            ax.hist(
+                                combo_before,
+                                bins=bins,
+                                histtype="step",
+                                linestyle="--",
+                                linewidth=0.95,
+                                alpha=0.55,
+                                color=combo_color_map[combo_label],
+                            )
+                        if combo_after.size:
+                            ax.hist(
+                                combo_after,
+                                bins=bins,
+                                histtype="step",
+                                linestyle="-",
+                                linewidth=1.35,
+                                alpha=0.95,
+                                color=combo_color_map[combo_label],
+                            )
+                    lower_limit, upper_limit = limits_by_observable.get(x_name, (None, None))
+                    if lower_limit is not None:
+                        ax.axvline(float(lower_limit), color="lightgrey", linestyle="--", linewidth=1.1)
+                    if upper_limit is not None:
+                        ax.axvline(float(upper_limit), color="lightgrey", linestyle="--", linewidth=1.1)
+                    ax.set_xlim(x_low, x_high)
+                    ax.set_yscale("log", nonpositive="clip")
+                    ax.set_title(observable_labels[x_name], fontsize=9)
+                else:
+                    before_mask = np.isfinite(before_x) & np.isfinite(before_y)
+                    after_mask = np.isfinite(after_x) & np.isfinite(after_y)
+                    if not np.any(before_mask) and not np.any(after_mask):
+                        ax.set_axis_off()
+                        continue
+                    any_panel_data = True
+                    for combo_label in combo_labels:
+                        combo_before_x = before_combo_data[combo_label][x_name]
+                        combo_before_y = before_combo_data[combo_label][y_name]
+                        combo_after_x = after_combo_data[combo_label][x_name]
+                        combo_after_y = after_combo_data[combo_label][y_name]
+                        combo_before_mask = np.isfinite(combo_before_x) & np.isfinite(combo_before_y)
+                        combo_after_mask = np.isfinite(combo_after_x) & np.isfinite(combo_after_y)
+                        if np.any(combo_before_mask):
+                            ax.scatter(
+                                combo_before_x[combo_before_mask],
+                                combo_before_y[combo_before_mask],
+                                s=5,
+                                alpha=0.05,
+                                color=combo_color_map[combo_label],
+                                edgecolors="none",
+                                rasterized=True,
+                            )
+                        if np.any(combo_after_mask):
+                            ax.scatter(
+                                combo_after_x[combo_after_mask],
+                                combo_after_y[combo_after_mask],
+                                s=6,
+                                alpha=0.16,
+                                color=combo_color_map[combo_label],
+                                edgecolors="none",
+                                rasterized=True,
+                            )
+                    x_low, x_high = axis_ranges[x_name]
+                    y_low, y_high = axis_ranges[y_name]
+                    ax.set_xlim(x_low, x_high)
+                    ax.set_ylim(y_low, y_high)
+                    x_limits = limits_by_observable.get(x_name, (None, None))
+                    y_limits = limits_by_observable.get(y_name, (None, None))
+                    if x_limits[0] is not None:
+                        ax.axvline(float(x_limits[0]), color="lightgrey", linestyle="--", linewidth=0.9)
+                    if x_limits[1] is not None:
+                        ax.axvline(float(x_limits[1]), color="lightgrey", linestyle="--", linewidth=0.9)
+                    if y_limits[0] is not None:
+                        ax.axhline(float(y_limits[0]), color="lightgrey", linestyle="--", linewidth=0.9)
+                    if y_limits[1] is not None:
+                        ax.axhline(float(y_limits[1]), color="lightgrey", linestyle="--", linewidth=0.9)
+
+                if row_idx == n_obs - 1:
+                    ax.set_xlabel(observable_labels[x_name], fontsize=8)
+                else:
+                    ax.set_xticklabels([])
+                if col_idx == 0 and row_idx != col_idx:
+                    ax.set_ylabel(observable_labels[y_name], fontsize=8)
+                elif col_idx != 0:
+                    ax.set_yticklabels([])
+                if row_idx == col_idx:
+                    ax.set_ylabel("Counts", fontsize=8)
+                ax.tick_params(labelsize=6)
+
+        if not any_panel_data:
+            plt.close(fig)
+            continue
+
+        if combo_labels:
+            style_handles = [
+                mpl.lines.Line2D([0], [0], color="black", linestyle="--", linewidth=1.0, label="Before"),
+                mpl.lines.Line2D([0], [0], color="black", linestyle="-", linewidth=1.4, label="After"),
+            ]
+            combo_handles = [
+                mpl.lines.Line2D([0], [0], color=combo_color_map[label], linestyle="-", linewidth=1.6, label=label)
+                for label in combo_labels
+            ]
+            fig.legend(
+                handles=style_handles + combo_handles,
+                loc="upper center",
+                bbox_to_anchor=(0.5, 0.995),
+                ncol=min(6, max(2, len(combo_handles) + 2)),
+                fontsize=6,
+                frameon=False,
+                handlelength=1.8,
+                columnspacing=0.8,
+            )
+
+        fig.suptitle(
+            f"Task 2 strip-combination filter by TT {tt_label}\n{basename_no_ext_value}",
+            fontsize=11,
+            y=0.94,
+        )
+        final_filename = f"{fig_idx_value}_strip_combination_filter_by_tt_TT_{tt_label}.png"
+        fig_idx_value += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        save_plot_figure(save_fig_path, fig=fig, alias="strip_combination_filter_by_tt", format="png", dpi=150)
+        if show_plots:
+            plt.show()
+        plt.close(fig)
+
+    return fig_idx_value
+
+
+def _task2_original_numpy(df: pd.DataFrame, column_name: str) -> np.ndarray:
+    return _task2_original_series(df, column_name).to_numpy(dtype=float)
+
+
+def _task2_touched_mask(df: pd.DataFrame, column_name: str) -> np.ndarray:
+    if (
+        not track_removed_rows_task2
+        or column_name not in df.columns
+        or column_name not in original_columns_store
+    ):
+        return np.zeros(len(df), dtype=bool)
+    current = pd.to_numeric(df[column_name], errors="coerce")
+    original = pd.to_numeric(
+        original_columns_store[column_name].reindex(df.index),
+        errors="coerce",
+    )
+    current_arr = current.to_numpy(dtype=float)
+    original_arr = original.to_numpy(dtype=float)
+    current_nan = np.isnan(current_arr)
+    original_nan = np.isnan(original_arr)
+    return (~(current_nan & original_nan)) & ~np.isclose(
+        current_arr,
+        original_arr,
+        equal_nan=True,
+    )
+
+
+def _task2_strip_valid_mask(df: pd.DataFrame, plane: int, strip: int) -> np.ndarray:
+    q_col = _task2_strip_column_name(plane, strip, "Q_sum")
+    t_col = _task2_strip_column_name(plane, strip, "T_sum")
+    if q_col not in df.columns or t_col not in df.columns:
+        return np.zeros(len(df), dtype=bool)
+    q_values = _task2_series_to_numpy(df, q_col)
+    t_values = _task2_series_to_numpy(df, t_col)
+    return np.isfinite(q_values) & np.isfinite(t_values) & (q_values != 0) & (t_values != 0)
+
+
+def _task2_limit_range(variable_name: str) -> tuple[float, float]:
+    if variable_name == "Q_sum":
+        return float(Q_sum_left_cal), float(Q_sum_right_cal)
+    if variable_name == "Q_dif":
+        limit = abs(float(Q_dif_cal_threshold_FB))
+        return -limit, limit
+    if variable_name == "T_sum":
+        return float(T_sum_RPC_left), float(T_sum_RPC_right)
+    if variable_name == "T_dif":
+        limit = abs(float(T_dif_cal_threshold))
+        return -limit, limit
+    return 0.0, 1.0
+
+
+def _task2_compute_variable_range(
+    arrays: Iterable[np.ndarray],
+    default_limits: tuple[float, float],
+) -> tuple[float, float]:
+    finite_parts: list[np.ndarray] = []
+    for values in arrays:
+        if values.size == 0:
+            continue
+        finite_values = values[np.isfinite(values) & (values != 0)]
+        if finite_values.size:
+            finite_parts.append(finite_values)
+
+    if finite_parts:
+        merged = np.concatenate(finite_parts)
+        lo, hi = np.nanpercentile(merged, [1.0, 99.0])
+        if not np.isfinite(lo) or not np.isfinite(hi):
+            lo, hi = default_limits
+        elif lo == hi:
+            pad = abs(lo) * 0.05 + 1e-6
+            lo -= pad
+            hi += pad
+    else:
+        lo, hi = default_limits
+
+    lo = min(float(lo), float(default_limits[0]))
+    hi = max(float(hi), float(default_limits[1]))
+    if lo == hi:
+        hi = lo + 1.0
+    pad = max(1e-3, 0.03 * (hi - lo))
+    return lo - pad, hi + pad
+
+
+def plot_task2_strip_pair_matrix_by_planepair(
+    retained_df: pd.DataFrame,
+    removed_df: pd.DataFrame,
+    basename_label: str,
+    figure_index: int,
+) -> int:
+    """Build 4x4 strip-vs-strip diagnostics mirroring the Task 1 channel-pair style."""
+    if retained_df.empty and removed_df.empty:
+        return figure_index
+
+    tt_column = _task2_tt_column_name(retained_df, removed_df)
+    retained_tt_all = _task2_tt_series(retained_df, tt_column)
+    removed_tt_all = _task2_tt_series(removed_df, tt_column)
+
+    for plane_i, plane_j in TASK2_PLANE_PAIRS:
+        if tt_column is not None:
+            retained_pair_mask = _task2_plane_pair_mask(retained_tt_all, plane_i, plane_j)
+            removed_pair_mask = _task2_plane_pair_mask(removed_tt_all, plane_i, plane_j)
+            retained_pair_df = retained_df.loc[retained_pair_mask]
+            removed_pair_df = removed_df.loc[removed_pair_mask]
+            retained_pair_tt = retained_tt_all.loc[retained_pair_mask]
+            removed_pair_tt = removed_tt_all.loc[removed_pair_mask]
+        else:
+            retained_pair_df = retained_df
+            removed_pair_df = removed_df
+            retained_pair_tt = retained_tt_all
+            removed_pair_tt = removed_tt_all
+
+        if retained_pair_df.empty and removed_pair_df.empty:
+            continue
+
+        retained_pair_sample = (
+            retained_pair_df.sample(
+                n=min(len(retained_pair_df), strip_pair_plot_max_points),
+                random_state=42,
+            )
+            if len(retained_pair_df) > strip_pair_plot_max_points
+            else retained_pair_df.copy()
+        )
+        retained_pair_sample_tt = retained_pair_tt.reindex(retained_pair_sample.index)
+        unique_tts = sorted(set(retained_pair_sample_tt.unique()).union(set(removed_pair_tt.unique())))
+        if not unique_tts:
+            unique_tts = [f"{plane_i}{plane_j}"]
+        tt_color_map = {tt_label: get_tt_color(tt_label) for tt_label in unique_tts}
+        retained_row_colors = np.array(
+            [tt_color_map[str(tt_value)] for tt_value in retained_pair_sample_tt],
+            dtype=object,
+        )
+        removed_row_colors = np.array(
+            [tt_color_map.get(str(tt_value), TT_COLOR_DEFAULT) for tt_value in removed_pair_tt],
+            dtype=object,
+        )
+
+        for strip_i in range(1, 5):
+            for strip_j in range(1, 5):
+                same_strip_case = plane_i == plane_j and strip_i == strip_j
+                current_valid_mask = (
+                    _task2_strip_valid_mask(retained_pair_df, plane_i, strip_i)
+                    & _task2_strip_valid_mask(retained_pair_df, plane_j, strip_j)
+                )
+                touched_q_i = _task2_original_numpy(
+                    retained_pair_df,
+                    _task2_strip_column_name(plane_i, strip_i, "Q_sum"),
+                )
+                touched_t_i = _task2_original_numpy(
+                    retained_pair_df,
+                    _task2_strip_column_name(plane_i, strip_i, "T_sum"),
+                )
+                touched_q_j = _task2_original_numpy(
+                    retained_pair_df,
+                    _task2_strip_column_name(plane_j, strip_j, "Q_sum"),
+                )
+                touched_t_j = _task2_original_numpy(
+                    retained_pair_df,
+                    _task2_strip_column_name(plane_j, strip_j, "T_sum"),
+                )
+                original_valid_mask = (
+                    np.isfinite(touched_q_i)
+                    & np.isfinite(touched_t_i)
+                    & np.isfinite(touched_q_j)
+                    & np.isfinite(touched_t_j)
+                    & (touched_q_i != 0)
+                    & (touched_t_i != 0)
+                    & (touched_q_j != 0)
+                    & (touched_t_j != 0)
+                )
+                figure_effective_events = int((current_valid_mask | original_valid_mask).sum())
+                if figure_effective_events < strip_pair_min_events:
+                    continue
+
+                retained_arrays: dict[tuple[str, str], np.ndarray] = {}
+                touched_arrays: dict[tuple[str, str], np.ndarray] = {}
+                touched_masks: dict[tuple[str, str], np.ndarray] = {}
+                removed_arrays: dict[tuple[str, str], np.ndarray] = {}
+                variable_ranges: dict[str, tuple[float, float]] = {}
+
+                for variable_name in TASK2_STRIP_VAR_ORDER:
+                    column_col = _task2_strip_column_name(plane_i, strip_i, variable_name)
+                    row_col = _task2_strip_column_name(plane_j, strip_j, variable_name)
+                    retained_arrays[("col", variable_name)] = _task2_series_to_numpy(retained_pair_sample, column_col)
+                    retained_arrays[("row", variable_name)] = _task2_series_to_numpy(retained_pair_sample, row_col)
+                    touched_arrays[("col", variable_name)] = _task2_original_numpy(retained_pair_sample, column_col)
+                    touched_arrays[("row", variable_name)] = _task2_original_numpy(retained_pair_sample, row_col)
+                    touched_masks[("col", variable_name)] = _task2_touched_mask(retained_pair_sample, column_col)
+                    touched_masks[("row", variable_name)] = _task2_touched_mask(retained_pair_sample, row_col)
+                    removed_arrays[("col", variable_name)] = _task2_series_to_numpy(removed_pair_df, column_col)
+                    removed_arrays[("row", variable_name)] = _task2_series_to_numpy(removed_pair_df, row_col)
+                    variable_ranges[variable_name] = _task2_compute_variable_range(
+                        (
+                            retained_arrays[("col", variable_name)],
+                            retained_arrays[("row", variable_name)],
+                            touched_arrays[("col", variable_name)],
+                            touched_arrays[("row", variable_name)],
+                            removed_arrays[("col", variable_name)],
+                            removed_arrays[("row", variable_name)],
+                        ),
+                        _task2_limit_range(variable_name),
+                    )
+
+                fig, axes = plt.subplots(
+                    4,
+                    4,
+                    figsize=strip_pair_figsize,
+                    squeeze=False,
+                    sharex="col",
+                    sharey="row",
+                )
+
+                for row_idx, row_var in enumerate(TASK2_STRIP_VAR_ORDER):
+                    for col_idx, col_var in enumerate(TASK2_STRIP_VAR_ORDER):
+                        ax = axes[row_idx][col_idx]
+                        ax.tick_params(labelsize=6)
+                        for spine in ax.spines.values():
+                            spine.set_linewidth(0.4)
+
+                        x_values = retained_arrays[("col", col_var)]
+                        y_values = retained_arrays[("row", row_var)]
+                        touched_x = touched_arrays[("col", col_var)]
+                        touched_y = touched_arrays[("row", row_var)]
+                        touched_x_mask = touched_masks[("col", col_var)]
+                        touched_y_mask = touched_masks[("row", row_var)]
+                        removed_x = removed_arrays[("col", col_var)]
+                        removed_y = removed_arrays[("row", row_var)]
+                        x_limits = variable_ranges[col_var]
+                        y_limits = variable_ranges[row_var]
+
+                        if same_strip_case and col_idx > row_idx:
+                            ax.set_visible(False)
+                            continue
+
+                        if same_strip_case and row_var == col_var:
+                            ax.set_xlim(x_limits)
+                            ax.set_ylim(y_limits)
+                            limit_lo, limit_hi = _task2_limit_range(col_var)
+                            if col_var.startswith("Q"):
+                                hist_ax = ax.twinx()
+                                for tt_label in unique_tts:
+                                    tt_mask = retained_pair_sample_tt.to_numpy() == tt_label
+                                    hist_values = np.concatenate(
+                                        (
+                                            x_values[tt_mask],
+                                            y_values[tt_mask],
+                                        )
+                                    )
+                                    hist_values = hist_values[np.isfinite(hist_values) & (hist_values != 0)]
+                                    if hist_values.size > 0:
+                                        hist_ax.hist(
+                                            hist_values,
+                                            bins=30,
+                                            histtype="step",
+                                            color=tt_color_map[tt_label],
+                                            linewidth=1.2,
+                                            log=True,
+                                        )
+                                removed_hist_values = np.concatenate((removed_x, removed_y))
+                                removed_hist_values = removed_hist_values[
+                                    np.isfinite(removed_hist_values) & (removed_hist_values != 0)
+                                ]
+                                if removed_hist_values.size > 0:
+                                    hist_ax.hist(
+                                        removed_hist_values,
+                                        bins=30,
+                                        histtype="step",
+                                        color="lightgrey",
+                                        linewidth=1.6,
+                                        linestyle="--",
+                                        log=True,
+                                    )
+                                hist_ax.set_yticks([])
+                                hist_ax.set_ylabel("")
+                                hist_ax.tick_params(
+                                    axis="both",
+                                    which="both",
+                                    labelbottom=False,
+                                    labeltop=False,
+                                    labelleft=False,
+                                    labelright=False,
+                                    bottom=False,
+                                    top=False,
+                                    left=False,
+                                    right=False,
+                                )
+                                ax.axvline(limit_lo, color="lightgrey", linestyle="--", linewidth=0.8)
+                                ax.axvline(limit_hi, color="lightgrey", linestyle="--", linewidth=0.8)
+                            else:
+                                hist_ax = ax.twiny()
+                                for tt_label in unique_tts:
+                                    tt_mask = retained_pair_sample_tt.to_numpy() == tt_label
+                                    hist_values = np.concatenate(
+                                        (
+                                            x_values[tt_mask],
+                                            y_values[tt_mask],
+                                        )
+                                    )
+                                    hist_values = hist_values[np.isfinite(hist_values) & (hist_values != 0)]
+                                    if hist_values.size > 0:
+                                        hist_ax.hist(
+                                            hist_values,
+                                            bins=30,
+                                            histtype="step",
+                                            color=tt_color_map[tt_label],
+                                            linewidth=1.2,
+                                            log=True,
+                                            orientation="horizontal",
+                                        )
+                                removed_hist_values = np.concatenate((removed_x, removed_y))
+                                removed_hist_values = removed_hist_values[
+                                    np.isfinite(removed_hist_values) & (removed_hist_values != 0)
+                                ]
+                                if removed_hist_values.size > 0:
+                                    hist_ax.hist(
+                                        removed_hist_values,
+                                        bins=30,
+                                        histtype="step",
+                                        color="lightgrey",
+                                        linewidth=1.6,
+                                        linestyle="--",
+                                        log=True,
+                                        orientation="horizontal",
+                                    )
+                                hist_ax.set_xticks([])
+                                hist_ax.set_xlabel("")
+                                hist_ax.tick_params(
+                                    axis="both",
+                                    which="both",
+                                    labelbottom=False,
+                                    labeltop=False,
+                                    labelleft=False,
+                                    labelright=False,
+                                    bottom=False,
+                                    top=False,
+                                    left=False,
+                                    right=False,
+                                )
+                                ax.axhline(limit_lo, color="lightgrey", linestyle="--", linewidth=0.8)
+                                ax.axhline(limit_hi, color="lightgrey", linestyle="--", linewidth=0.8)
+
+                            if row_idx == 0 and col_idx == 0 and (len(unique_tts) > 1 or not removed_pair_df.empty):
+                                legend_handles = [
+                                    mpl.lines.Line2D(
+                                        [0],
+                                        [0],
+                                        color=tt_color_map[tt_label],
+                                        linewidth=1.5,
+                                        label=f"TT={tt_label}",
+                                    )
+                                    for tt_label in unique_tts
+                                ]
+                                if not removed_pair_df.empty:
+                                    legend_handles.append(
+                                        mpl.lines.Line2D(
+                                            [0],
+                                            [0],
+                                            color="lightgrey",
+                                            linewidth=1.5,
+                                            linestyle="--",
+                                            label="Removed",
+                                        )
+                                    )
+                                ax.legend(handles=legend_handles, fontsize=5, loc="upper right")
+                            ax.tick_params(
+                                axis="both",
+                                which="both",
+                                labelbottom=False,
+                                labelleft=False,
+                                bottom=False,
+                                left=False,
+                            )
+                        else:
+                            point_mask = np.isfinite(x_values) & np.isfinite(y_values) & (x_values != 0) & (y_values != 0)
+                            if np.any(point_mask):
+                                ax.scatter(
+                                    x_values[point_mask],
+                                    y_values[point_mask],
+                                    s=12,
+                                    alpha=0.75,
+                                    linewidths=0,
+                                    c=retained_row_colors[point_mask].tolist(),
+                                    edgecolors="none",
+                                    rasterized=True,
+                                )
+                            touched_panel_mask = (
+                                np.isfinite(touched_x)
+                                & np.isfinite(touched_y)
+                                & (touched_x != 0)
+                                & (touched_y != 0)
+                                & (touched_x_mask | touched_y_mask)
+                            )
+                            if np.any(touched_panel_mask):
+                                ax.scatter(
+                                    touched_x[touched_panel_mask],
+                                    touched_y[touched_panel_mask],
+                                    s=touched_marker_size,
+                                    marker=touched_marker,
+                                    alpha=touched_marker_alpha,
+                                    linewidths=1.0,
+                                    c=retained_row_colors[touched_panel_mask].tolist(),
+                                    rasterized=True,
+                                    zorder=2.5,
+                                )
+                            removed_mask = np.isfinite(removed_x) & np.isfinite(removed_y) & (removed_x != 0) & (removed_y != 0)
+                            if np.any(removed_mask):
+                                ax.scatter(
+                                    removed_x[removed_mask],
+                                    removed_y[removed_mask],
+                                    s=removed_marker_size,
+                                    marker=removed_marker,
+                                    alpha=removed_marker_alpha,
+                                    linewidths=1.0,
+                                    c=removed_row_colors[removed_mask].tolist(),
+                                    rasterized=True,
+                                    zorder=3,
+                                )
+                            ax.set_xlim(x_limits)
+                            ax.set_ylim(y_limits)
+                            x_limit_lo, x_limit_hi = _task2_limit_range(col_var)
+                            y_limit_lo, y_limit_hi = _task2_limit_range(row_var)
+                            ax.axvline(x_limit_lo, color="lightgrey", linestyle="--", linewidth=0.8)
+                            ax.axvline(x_limit_hi, color="lightgrey", linestyle="--", linewidth=0.8)
+                            ax.axhline(y_limit_lo, color="lightgrey", linestyle="--", linewidth=0.8)
+                            ax.axhline(y_limit_hi, color="lightgrey", linestyle="--", linewidth=0.8)
+
+                        if row_idx == len(TASK2_STRIP_VAR_ORDER) - 1:
+                            ax.set_xlabel(
+                                f"P{plane_i} s{strip_i} {TASK2_STRIP_VAR_LABELS[col_var]}",
+                                fontsize=7,
+                            )
+                        else:
+                            ax.tick_params(labelbottom=False)
+                        if col_idx == 0:
+                            ax.set_ylabel(
+                                f"P{plane_j} s{strip_j} {TASK2_STRIP_VAR_LABELS[row_var]}",
+                                fontsize=7,
+                            )
+                        else:
+                            ax.tick_params(labelleft=False)
+
+                fig.suptitle(
+                    (
+                        f"Task 2 strip-pair diagnostic: P{plane_i}s{strip_i} vs P{plane_j}s{strip_j} "
+                        f"(retained {figure_effective_events})\n"
+                        f"Station {station} · {basename_label}"
+                    ),
+                    fontsize=9,
+                )
+                plt.subplots_adjust(wspace=0.08, hspace=0.08, left=0.10, right=0.97, top=0.92, bottom=0.09)
+
+                if save_plots:
+                    file_name = (
+                        f"{figure_index:03d}_strip_pair_matrix_P{plane_i}P{plane_j}_"
+                        f"s{strip_i}_s{strip_j}.png"
+                    )
+                    figure_index += 1
+                    save_path = os.path.join(base_directories["figure_directory"], file_name)
+                    plot_list.append(save_path)
+                    save_plot_figure(
+                        save_path,
+                        fig=fig,
+                        alias="strip_pair_matrix_by_planepair",
+                        format="png",
+                        dpi=strip_pair_fig_dpi,
+                        bbox_inches="tight",
+                    )
+                if show_plots:
+                    plt.show()
+                plt.close(fig)
+
+    return figure_index
 
 def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:
     """Compute trigger type based on planes with non-zero charge."""
@@ -2078,10 +3515,85 @@ KEY = "df"
 # Load dataframe
 working_df = pd.read_parquet(file_path, engine="pyarrow")
 working_df = working_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
+if "event_id" not in working_df.columns:
+    print("Warning: 'event_id' missing in Task 2 input; reconstructing from current row order.")
+    working_df.insert(0, "event_id", np.arange(len(working_df), dtype=np.int64))
 print(f"Cleaned dataframe reloaded from: {file_path}")
 # print("Columns loaded from parquet:")
 # for col in working_df.columns:
 #     print(f" - {col}")
+
+# Track rows that later drop out of Task 2 so their original indexed values stay inspectable.
+removed_rows_df = working_df.iloc[0:0].copy()
+tracking_base_index = working_df.index.copy()
+original_columns_store: dict[str, pd.Series] = {}
+
+
+def snapshot_original_columns_once(
+    frame: pd.DataFrame,
+    column_names: Iterable[str],
+) -> None:
+    """Store a column once, before its first in-place mutation, to keep original values."""
+    if not track_removed_rows_task2 or frame is not working_df:
+        return
+    for col in column_names:
+        if col in frame.columns and col not in original_columns_store:
+            original_columns_store[col] = frame[col].copy()
+
+
+def _restore_original_values(rows: pd.DataFrame) -> pd.DataFrame:
+    if not track_removed_rows_task2 or rows.empty:
+        return rows
+    restored_rows = rows.copy()
+    for col, original_series in original_columns_store.items():
+        if col in restored_rows.columns:
+            restored_rows.loc[:, col] = original_series.reindex(restored_rows.index)
+    return restored_rows
+
+
+def append_removed_rows(rows: pd.DataFrame) -> None:
+    """Append fully removed rows with original index and pre-modification values preserved."""
+    global removed_rows_df
+    if not track_removed_rows_task2 or rows.empty:
+        return
+    rows_to_add = _restore_original_values(rows)
+    if not removed_rows_df.empty:
+        rows_to_add = rows_to_add.loc[~rows_to_add.index.isin(removed_rows_df.index)]
+        if rows_to_add.empty:
+            return
+    removed_rows_df = pd.concat([removed_rows_df, rows_to_add], ignore_index=False, sort=False)
+
+
+def append_removed_rows_from_mask(frame: pd.DataFrame, removed_mask: pd.Series) -> None:
+    if not track_removed_rows_task2 or frame.empty:
+        return
+    aligned_mask = removed_mask.reindex(frame.index, fill_value=False)
+    if aligned_mask.any():
+        append_removed_rows(frame.loc[aligned_mask].copy())
+
+
+def build_original_columns_frame() -> pd.DataFrame:
+    if not track_removed_rows_task2 or not original_columns_store:
+        return pd.DataFrame(index=tracking_base_index)
+    return pd.DataFrame(
+        {col: series.reindex(tracking_base_index) for col, series in original_columns_store.items()},
+        index=tracking_base_index,
+    )
+
+
+def snapshot_column_if_changed(
+    frame: pd.DataFrame,
+    column_name: str,
+    change_mask: pd.Series | np.ndarray | None = None,
+) -> None:
+    if not track_removed_rows_task2 or column_name not in frame.columns:
+        return
+    if change_mask is None:
+        snapshot_original_columns_once(frame, [column_name])
+        return
+    change_array = np.asarray(change_mask, dtype=bool)
+    if change_array.any():
+        snapshot_original_columns_once(frame, [column_name])
 
 # Ensure param_hash is persisted for downstream tasks.
 if "param_hash" not in working_df.columns:
@@ -2094,7 +3606,12 @@ elif simulated_param_hash:
     except Exception as exc:
         print(f"Warning: param_hash validation fallback used due to error: {exc}")
     if missing_hash.any():
+        snapshot_original_columns_once(working_df, ["param_hash"])
         working_df.loc[missing_hash, "param_hash"] = str(simulated_param_hash)
+
+# Unzeroed snapshot: preserved before any value-zeroing operations.
+# All diagnostic plots (rejected-event scatters, front-vs-back, channel matrix) use this.
+working_df_unzeroed = working_df.copy()
 
 if create_debug_plots:
     incoming_patterns = [
@@ -2134,7 +3651,16 @@ if status_execution_date is not None:
         param_hash=str(global_variables.get("param_hash", "")),
     )
 
-working_df = compute_tt(working_df, "clean_tt")
+# Keep clean_tt from Task 1 when present; compute only if missing.
+if "clean_tt" not in working_df.columns:
+    working_df = compute_tt(working_df, "clean_tt")
+else:
+    snapshot_original_columns_once(working_df, ["clean_tt"])
+    working_df.loc[:, "clean_tt"] = (
+        pd.to_numeric(working_df["clean_tt"], errors="coerce")
+        .fillna(0)
+        .astype(int)
+    )
 
 # Remove rows in which clean_tt is NaN (invalid TT)
 if create_debug_plots and "clean_tt" in working_df.columns:
@@ -2147,12 +3673,16 @@ if create_debug_plots and "clean_tt" in working_df.columns:
         fig_idx=debug_fig_idx,
     )
 n_before_clean_tt = len(working_df)
+append_removed_rows_from_mask(working_df, working_df["clean_tt"].isna())
 working_df = working_df.dropna(subset=["clean_tt"])
 record_filter_metric(
     "clean_tt_nan_rows_removed_pct",
     n_before_clean_tt - len(working_df),
     original_number_of_events if original_number_of_events else 0,
 )
+# Track which indices were removed by each row-dropping filter for diagnostic plots.
+_diag_rejected_clean_tt_idx = working_df_unzeroed.index.difference(working_df.index)
+_diag_idx_after_clean_tt = working_df.index.copy()
 
 clean_tt_counts_initial = working_df["clean_tt"].value_counts()
 for tt_value, count in clean_tt_counts_initial.items():
@@ -3579,19 +5109,16 @@ if apply_charge_side:
             mask = working_df[f'{key}_B_{j+1}'] != 0
             charge_test.loc[mask, f'{key}_B_{j+1}'] -= QB_pedestal[i][j]
 
-    # Plot histograms of all the pedestal substractions
-    validate_charge_pedestal_calibration = False
-    create_super_essential_plots = False
     
     if validate_charge_pedestal_calibration:
 
         print("Validating charge pedestal calibration.")
-        
-        if create_plots:
+
+        if task2_plot_enabled("grand_figure_q_pedestal"):
             # Create the grand figure for Q values
             fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
             axes_Q = axes_Q.flatten()
-            
+
             for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
                 for j in range(4):
                     col_F = f'{key}_F_{j+1}'
@@ -3626,7 +5153,7 @@ if apply_charge_side:
             plt.close(fig_Q)
             
             
-        if create_plots or create_super_essential_plots:
+        if task2_plot_enabled("grand_figure_q_pedestal_zoom"):
         
             # ZOOOOOOOOOOOOOOOOOOOM ------------------------------------------------
             # Create the grand figure for Q values
@@ -4161,6 +5688,39 @@ else:
 # -------------------------- Semisums and semidifferences --------------------------
 # ----------------------------------------------------------------------------------
 
+print("----------------------------------------------------------------------")
+print("-------- Task 2 raw front-back strip regularization (inactive) -------")
+print("----------------------------------------------------------------------")
+
+# Task 2 now follows the straightforward strip pipeline:
+# read channel values from Task 1, build strip semisums/semidifferences, then
+# filter/calibrate those strip observables. Raw front/back pair regularization
+# is kept out of the default path to minimize extra filtering.
+record_activity_metric(
+    "raw_fb_pair_regularization_rows_affected_pct",
+    0,
+    len(working_df) if len(working_df) else 0,
+    label="rows with raw front/back regularization",
+)
+record_activity_metric(
+    "raw_fb_pair_regularization_values_zeroed_pct",
+    0,
+    0,
+    label="raw front/back values zeroed",
+)
+record_activity_metric(
+    "raw_fb_pair_regularization_q_rows_pct",
+    0,
+    len(working_df) if len(working_df) else 0,
+    label="rows with Q-side front/back regularization",
+)
+record_activity_metric(
+    "raw_fb_pair_regularization_t_rows_pct",
+    0,
+    len(working_df) if len(working_df) else 0,
+    label="rows with T-side front/back regularization",
+)
+
 for key in ['T1', 'T2', 'T3', 'T4']:
     T_F_cols = [f'{key}_F_{i+1}' for i in range(4)]
     T_B_cols = [f'{key}_B_{i+1}' for i in range(4)]
@@ -4180,6 +5740,27 @@ for key in ['T1', 'T2', 'T3', 'T4']:
         new_cols[f'{key.replace("T", "Q")}_Q_dif_{i+1}'] = (Q_F[:, i] - Q_B[:, i]) / 2
 
     working_df = pd.concat([working_df, pd.DataFrame(new_cols, index=working_df.index)], axis=1)
+
+# Augment the unzeroed snapshot with sum/dif columns computed from its own F/B data.
+# The snapshot was taken before this loop ran, so it only has raw F/B columns.
+# We add sum/dif here (pre-zeroing) so diagnostic plots that need Q_sum/T_sum work.
+_unz_sd: dict[str, "pd.Series"] = {}
+for _uk in ['T1', 'T2', 'T3', 'T4']:
+    _ukq = _uk.replace('T', 'Q')
+    for _ui in range(4):
+        _utf = working_df_unzeroed.get(f'{_uk}_F_{_ui+1}',  pd.Series(0.0, index=working_df_unzeroed.index))
+        _utb = working_df_unzeroed.get(f'{_uk}_B_{_ui+1}',  pd.Series(0.0, index=working_df_unzeroed.index))
+        _uqf = working_df_unzeroed.get(f'{_ukq}_F_{_ui+1}', pd.Series(0.0, index=working_df_unzeroed.index))
+        _uqb = working_df_unzeroed.get(f'{_ukq}_B_{_ui+1}', pd.Series(0.0, index=working_df_unzeroed.index))
+        _unz_sd[f'{_uk}_T_sum_{_ui+1}']  = (_utb + _utf) / 2
+        _unz_sd[f'{_uk}_T_dif_{_ui+1}']  = (_utb - _utf) / 2
+        _unz_sd[f'{_ukq}_Q_sum_{_ui+1}'] = (_uqf + _uqb) / 2
+        _unz_sd[f'{_ukq}_Q_dif_{_ui+1}'] = (_uqf - _uqb) / 2
+working_df_unzeroed = pd.concat(
+    [working_df_unzeroed, pd.DataFrame(_unz_sd, index=working_df_unzeroed.index)],
+    axis=1,
+)
+del _unz_sd
 
 # Count non-zero entries in the new _T_sum, _T_diff, _Q_sum, _Q_diff columns
 def record_strip_entries(df: pd.DataFrame, suffix: str) -> None:
@@ -4297,8 +5878,8 @@ if time_window_filtering:
             "coincidence_window_precal_ns (T_sum_spread_OG, stage_1)",
             max_cols_per_fig=1,
         )
-    
-    if create_plots:
+
+    if task2_plot_enabled("tsum_spread_histograms_og"):
         clean_tts = sorted(spread_df["clean_tt"].unique())
         if clean_tts:
             ncols = min(3, len(clean_tts))
@@ -4336,6 +5917,7 @@ if time_window_filtering:
         working_df,
         t_sum_columns_all,
         coincidence_window_precal_ns,
+        snapshot_originals=snapshot_original_columns_once,
     )
 
     # Post removal of outliers
@@ -4420,12 +6002,20 @@ _debug_plot_filter_group(
 # FILTER 2: TSUM, TDIF, QSUM, QDIF PRECALIBRATED THRESHOLDS --> 0 if out ------------------------------
 for col in working_df.columns:
     if 'T_sum' in col:
+        _change_mask = (working_df[col] > T_sum_right_pre_cal) | (working_df[col] < T_sum_left_pre_cal)
+        snapshot_column_if_changed(working_df, col, _change_mask)
         working_df[col] = np.where((working_df[col] > T_sum_right_pre_cal) | (working_df[col] < T_sum_left_pre_cal), 0, working_df[col])
     if 'T_diff' in col:
+        _change_mask = (working_df[col] > T_dif_pre_cal_threshold) | (working_df[col] < -T_dif_pre_cal_threshold)
+        snapshot_column_if_changed(working_df, col, _change_mask)
         working_df[col] = np.where((working_df[col] > T_dif_pre_cal_threshold) | (working_df[col] < -T_dif_pre_cal_threshold), 0, working_df[col])
     if 'Q_sum' in col:
+        _change_mask = (working_df[col] > Q_right_pre_cal) | (working_df[col] < Q_left_pre_cal)
+        snapshot_column_if_changed(working_df, col, _change_mask)
         working_df[col] = np.where((working_df[col] > Q_right_pre_cal) | (working_df[col] < Q_left_pre_cal), 0, working_df[col])
     if 'Q_diff' in col:
+        _change_mask = (working_df[col] > Q_dif_pre_cal_threshold) | (working_df[col] < -Q_dif_pre_cal_threshold)
+        snapshot_column_if_changed(working_df, col, _change_mask)
         working_df[col] = np.where((working_df[col] > Q_dif_pre_cal_threshold) | (working_df[col] < -Q_dif_pre_cal_threshold), 0, working_df[col])
 
 if create_plots:
@@ -4484,9 +6074,11 @@ print("----------------------------------------------------------------------")
 
 for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
     for j in range(4):
-        mask = working_df[f'{key}_Q_sum_{j+1}'] != 0
+        column_name = f'{key}_Q_sum_{j+1}'
+        mask = working_df[column_name] != 0
         # working_df.loc[mask, f'{key}_Q_sum_{j+1}'] -= calibration_Q[i][j]
-        working_df.loc[mask, f'{key}_Q_sum_{j+1}'] -= ( QF_pedestal[i][j] + QB_pedestal[i][j] ) / 2
+        snapshot_column_if_changed(working_df, column_name, mask)
+        working_df.loc[mask, column_name] -= ( QF_pedestal[i][j] + QB_pedestal[i][j] ) / 2
 
 print("------------------ Filter 3: charge sum filtering --------------------")
 _debug_plot_filter_group(
@@ -4497,6 +6089,8 @@ _debug_plot_filter_group(
 )
 for col in working_df.columns:
     if 'Q_sum' in col:
+        _change_mask = (working_df[col] > Q_sum_right_cal) | (working_df[col] < Q_sum_left_cal)
+        snapshot_column_if_changed(working_df, col, _change_mask)
         working_df[col] = np.where((working_df[col] > Q_sum_right_cal) | (working_df[col] < Q_sum_left_cal), 0, working_df[col])
 
 if self_trigger: 
@@ -4515,8 +6109,10 @@ print("----------------------------------------------------------------------")
 if apply_T_dif_calibration:
     for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
         for j in range(4):
-            mask = working_df[f'{key}_T_dif_{j+1}'] != 0
-            working_df.loc[mask, f'{key}_T_dif_{j+1}'] -= Tdiff_cal[i][j]
+            column_name = f'{key}_T_dif_{j+1}'
+            mask = working_df[column_name] != 0
+            snapshot_column_if_changed(working_df, column_name, mask)
+            working_df.loc[mask, column_name] -= Tdiff_cal[i][j]
 
 print("--------------------- Filter 3.2: time diff filtering ----------------")
 _debug_plot_filter_group(
@@ -4527,6 +6123,8 @@ _debug_plot_filter_group(
 )
 for col in working_df.columns:
     if 'T_diff' in col:
+        _change_mask = (working_df[col] > T_dif_cal_threshold) | (working_df[col] < -T_dif_cal_threshold)
+        snapshot_column_if_changed(working_df, col, _change_mask)
         working_df[col] = np.where((working_df[col] > T_dif_cal_threshold) | (working_df[col] < -T_dif_cal_threshold), 0, working_df[col])
 
 if self_trigger and apply_T_dif_calibration:
@@ -4544,9 +6142,11 @@ print("----------------------------------------------------------------------")
 
 for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
     for j in range(4):
-        mask = working_df[f'{key}_Q_dif_{j+1}'] != 0
+        column_name = f'{key}_Q_dif_{j+1}'
+        mask = working_df[column_name] != 0
         # working_df.loc[mask, f'{key}_Q_dif_{j+1}'] -= calibration_Q_FB[i][j]
-        working_df.loc[mask, f'{key}_Q_dif_{j+1}'] -= ( QF_pedestal[i][j] - QB_pedestal[i][j] ) / 2
+        snapshot_column_if_changed(working_df, column_name, mask)
+        working_df.loc[mask, column_name] -= ( QF_pedestal[i][j] - QB_pedestal[i][j] ) / 2
 
 print("------------------ Filter 4: charge diff filtering -------------------")
 _debug_plot_filter_group(
@@ -4557,6 +6157,8 @@ _debug_plot_filter_group(
 )
 for col in working_df.columns:
     if 'Q_dif' in col:
+        _change_mask = (working_df[col] > Q_dif_cal_threshold) | (working_df[col] < -Q_dif_cal_threshold)
+        snapshot_column_if_changed(working_df, col, _change_mask)
         working_df[col] = np.where((working_df[col] > Q_dif_cal_threshold) | (working_df[col] < -Q_dif_cal_threshold), 0, working_df[col])
 
 if self_trigger:
@@ -4767,6 +6369,7 @@ if charge_front_back_mode is not None:
         column_name  = f'Q{key}_Q_dif_{i+1}'
         target_dtype = working_df[column_name].dtype
         corrected_diff = Q_dif_adj - polynomial(Q_sum_adj, *coeffs)
+        snapshot_column_if_changed(working_df, column_name, cond)
         working_df.loc[cond, column_name] = corrected_diff.astype(target_dtype, copy=False)
 
         if create_plots:
@@ -4833,6 +6436,8 @@ _debug_plot_filter_group(
 )
 for col in working_df.columns:
     if 'Q_diff' in col:
+        _change_mask = np.abs(working_df[col]) >= Q_dif_cal_threshold_FB
+        snapshot_column_if_changed(working_df, col, _change_mask)
         working_df[col] = np.where(np.abs(working_df[col]) < Q_dif_cal_threshold_FB, working_df[col], 0)
 
 if self_trigger:
@@ -4906,7 +6511,8 @@ strip_stage1_cols, strip_stage1_before = snapshot_nonzero_mask(
     working_df,
     collect_strip_component_columns(working_df.columns),
 )
-zero_strip_component_blocks(working_df)
+record_strip_zeroing_trigger_metrics("strip_zeroing_stage1", working_df)
+zero_strip_component_blocks(working_df, snapshot_originals=snapshot_original_columns_once)
 
 record_zeroing_step_metrics(
     "strip_zeroing_stage1",
@@ -6327,8 +7933,8 @@ if crosstalk_removal_and_recalibration:
             working_st_df = pd.concat([working_st_df, pd.DataFrame(new_columns)], axis=1)
     
     
-    if create_plots or create_essential_plots:
-    
+    if task2_plot_enabled("cross_talk_filtering_zoom_check_no_subs_pedestal"):
+
         fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
         axes_Q = axes_Q.flatten()
 
@@ -6374,8 +7980,10 @@ if crosstalk_removal_and_recalibration:
     # Apply the pedestal recalibration
     for i, key in enumerate(['1', '2', '3', '4']):
         for j in range(4):
-            mask = working_df[f'Q{key}_Q_sum_{j+1}'] != 0
-            working_df.loc[mask, f'Q{key}_Q_sum_{j+1}'] -= crosstalk_pedestal[f'crstlk_pedestal_P{key}s{j+1}']
+            column_name = f'Q{key}_Q_sum_{j+1}'
+            mask = working_df[column_name] != 0
+            snapshot_column_if_changed(working_df, column_name, mask)
+            working_df.loc[mask, column_name] -= crosstalk_pedestal[f'crstlk_pedestal_P{key}s{j+1}']
     
     
     if self_trigger:
@@ -6488,7 +8096,8 @@ strip_stage2_cols, strip_stage2_before = snapshot_nonzero_mask(
     working_df,
     collect_strip_component_columns(working_df.columns),
 )
-zero_strip_component_blocks(working_df)
+record_strip_zeroing_trigger_metrics("strip_zeroing_stage2", working_df)
+zero_strip_component_blocks(working_df, snapshot_originals=snapshot_original_columns_once)
 
 record_zeroing_step_metrics(
     "strip_zeroing_stage2",
@@ -6625,12 +8234,13 @@ if slewing_correction:
             if not np.any(update_mask):
                 continue
             corrected_values = mean_correction + mean_values
+            snapshot_column_if_changed(working_df, ps_to_t_col[ps], update_mask)
             working_df.loc[update_mask, ps_to_t_col[ps]] = corrected_values[update_mask]
 
 _prof["s_slewing_2_math_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
 
-if create_plots or create_essential_plots:
+if task2_plot_enabled("time_calibrated_filtered_removed_zeroes"):
 
     # Select only the columns that have 'Q_sum', 'Q_diff', 'T_sum', or 'T_diff' in their names
     plot_df = working_df.loc[:, [col for col in working_df.columns if any(x in col for x in ['Q_sum', 'Q_diff', 'T_sum', 'T_diff'])]]
@@ -7136,7 +8746,8 @@ strip_stage3_cols, strip_stage3_before = snapshot_nonzero_mask(
     working_df,
     collect_strip_component_columns(working_df.columns),
 )
-zero_strip_component_blocks(working_df)
+record_strip_zeroing_trigger_metrics("strip_zeroing_stage3", working_df)
+zero_strip_component_blocks(working_df, snapshot_originals=snapshot_original_columns_once)
 
 record_zeroing_step_metrics(
     "strip_zeroing_stage3",
@@ -7172,8 +8783,8 @@ if time_window_filtering:
             "coincidence_window_precal_ns (T_sum_spread_OG, stage_2)",
             max_cols_per_fig=1,
         )
-    
-    if create_plots:
+
+    if task2_plot_enabled("tsum_spread_histograms_og"):
         clean_tts = sorted(spread_df["clean_tt"].unique())
         if clean_tts:
             ncols = min(3, len(clean_tts))
@@ -7214,6 +8825,7 @@ if time_window_filtering:
         working_df,
         t_sum_zeroing_cols,
         coincidence_window_precal_ns,
+        snapshot_originals=snapshot_original_columns_once,
     )
     record_zeroing_step_metrics(
         "t_sum_outlier_zeroing",
@@ -7351,7 +8963,8 @@ strip_stage4_cols, strip_stage4_before = snapshot_nonzero_mask(
     working_df,
     collect_strip_component_columns(working_df.columns),
 )
-zero_strip_component_blocks(working_df)
+record_strip_zeroing_trigger_metrics("strip_zeroing_stage4", working_df)
+zero_strip_component_blocks(working_df, snapshot_originals=snapshot_original_columns_once)
 
 record_zeroing_step_metrics(
     "strip_zeroing_stage4",
@@ -7359,6 +8972,135 @@ record_zeroing_step_metrics(
     strip_stage4_cols,
     working_df,
 )
+
+print("----------------------------------------------------------------------")
+print("---------- Final strip-combination consistency filter -----------------")
+print("----------------------------------------------------------------------")
+
+# Final Task 2 filter: evaluate distinct strip pairs only when both strips keep
+# all four calibrated observables non-zero, and zero both strip blocks if the
+# derived strip-combination observables fall outside the configured limits.
+_plot_strip_combination_filter_by_tt = task2_plot_requested("strip_combination_filter_by_tt", essential=True)
+if _plot_strip_combination_filter_by_tt:
+    strip_combination_tt_before = _task2_filter_tt_series(working_df).copy()
+    strip_combination_hist_before = collect_task2_strip_combination_histogram_payload(
+        working_df,
+        strip_combination_tt_before,
+    )
+else:
+    strip_combination_tt_before = pd.Series(dtype=str)
+    strip_combination_hist_before = {}
+
+strip_combination_summary = apply_task2_strip_combination_filter(
+    working_df,
+    q_sum_sum_left=strip_combination_q_sum_sum_left,
+    q_sum_sum_right=strip_combination_q_sum_sum_right,
+    q_sum_dif_threshold=strip_combination_q_sum_dif_threshold,
+    q_dif_sum_threshold=strip_combination_q_dif_sum_threshold,
+    q_dif_dif_threshold=strip_combination_q_dif_dif_threshold,
+    t_sum_sum_left=strip_combination_t_sum_sum_left,
+    t_sum_sum_right=strip_combination_t_sum_sum_right,
+    t_sum_dif_threshold=strip_combination_t_sum_dif_threshold,
+    t_dif_sum_threshold=strip_combination_t_dif_sum_threshold,
+    t_dif_dif_threshold=strip_combination_t_dif_dif_threshold,
+    snapshot_originals=snapshot_original_columns_once,
+)
+record_activity_metric(
+    "strip_combination_filter_rows_affected_pct",
+    strip_combination_summary["rows_affected"],
+    len(working_df) if len(working_df) else 0,
+    label="rows with strip-combination failures",
+)
+record_activity_metric(
+    "strip_combination_filter_values_zeroed_pct",
+    strip_combination_summary["values_zeroed"],
+    len(working_df) * (4 * strip_combination_summary["tracked_strip_count"])
+    if (len(working_df) and strip_combination_summary["tracked_strip_count"])
+    else 0,
+    label="strip Q/T values zeroed by strip-combination filter",
+)
+record_activity_metric(
+    "strip_combination_filter_any_failed_pct",
+    strip_combination_summary["failed_pair_any"],
+    strip_combination_summary["valid_pair_observations"],
+    label="failed strip combinations",
+)
+record_activity_metric(
+    "strip_combination_filter_q_sum_sum_failed_pct",
+    strip_combination_summary["failed_pair_q_sum_sum"],
+    strip_combination_summary["valid_pair_observations"],
+    label="Q_sum semisum failed strip combinations",
+)
+record_activity_metric(
+    "strip_combination_filter_q_sum_dif_failed_pct",
+    strip_combination_summary["failed_pair_q_sum_dif"],
+    strip_combination_summary["valid_pair_observations"],
+    label="Q_sum semidifference failed strip combinations",
+)
+record_activity_metric(
+    "strip_combination_filter_q_dif_sum_failed_pct",
+    strip_combination_summary["failed_pair_q_dif_sum"],
+    strip_combination_summary["valid_pair_observations"],
+    label="Q_dif semisum failed strip combinations",
+)
+record_activity_metric(
+    "strip_combination_filter_q_dif_dif_failed_pct",
+    strip_combination_summary["failed_pair_q_dif_dif"],
+    strip_combination_summary["valid_pair_observations"],
+    label="Q_dif semidifference failed strip combinations",
+)
+record_activity_metric(
+    "strip_combination_filter_t_sum_sum_failed_pct",
+    strip_combination_summary["failed_pair_t_sum_sum"],
+    strip_combination_summary["valid_pair_observations"],
+    label="T_sum semisum failed strip combinations",
+)
+record_activity_metric(
+    "strip_combination_filter_t_sum_dif_failed_pct",
+    strip_combination_summary["failed_pair_t_sum_dif"],
+    strip_combination_summary["valid_pair_observations"],
+    label="T_sum semidifference failed strip combinations",
+)
+record_activity_metric(
+    "strip_combination_filter_t_dif_sum_failed_pct",
+    strip_combination_summary["failed_pair_t_dif_sum"],
+    strip_combination_summary["valid_pair_observations"],
+    label="T_dif semisum failed strip combinations",
+)
+record_activity_metric(
+    "strip_combination_filter_t_dif_dif_failed_pct",
+    strip_combination_summary["failed_pair_t_dif_dif"],
+    strip_combination_summary["valid_pair_observations"],
+    label="T_dif semidifference failed strip combinations",
+)
+print(
+    "[strip-combination-filter] "
+    f"valid_pair_obs={strip_combination_summary['valid_pair_observations']} "
+    f"failed_any={strip_combination_summary['failed_pair_any']} "
+    f"rows_affected={strip_combination_summary['rows_affected']}"
+)
+if _plot_strip_combination_filter_by_tt:
+    strip_combination_hist_after = collect_task2_strip_combination_histogram_payload(
+        working_df,
+        strip_combination_tt_before,
+    )
+    strip_combination_limits = {
+        "q_sum_sum": (strip_combination_q_sum_sum_left, strip_combination_q_sum_sum_right),
+        "q_sum_dif": (-abs(strip_combination_q_sum_dif_threshold), abs(strip_combination_q_sum_dif_threshold)),
+        "q_dif_sum": (-abs(strip_combination_q_dif_sum_threshold), abs(strip_combination_q_dif_sum_threshold)),
+        "q_dif_dif": (-abs(strip_combination_q_dif_dif_threshold), abs(strip_combination_q_dif_dif_threshold)),
+        "t_sum_sum": (strip_combination_t_sum_sum_left, strip_combination_t_sum_sum_right),
+        "t_sum_dif": (-abs(strip_combination_t_sum_dif_threshold), abs(strip_combination_t_sum_dif_threshold)),
+        "t_dif_sum": (-abs(strip_combination_t_dif_sum_threshold), abs(strip_combination_t_dif_sum_threshold)),
+        "t_dif_dif": (-abs(strip_combination_t_dif_dif_threshold), abs(strip_combination_t_dif_dif_threshold)),
+    }
+    fig_idx = plot_task2_strip_combination_filter_by_tt(
+        strip_combination_hist_before,
+        strip_combination_hist_after,
+        basename_no_ext,
+        fig_idx,
+        strip_combination_limits,
+    )
 
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -7428,14 +9170,10 @@ if create_pdf:
     existing_pngs = [png for png in plot_list if os.path.exists(png)]
 
     if _direct_pdf_pages is not None:
-        for png in existing_pngs:
-            img = Image.open(png)
-            fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
-            ax.imshow(img)
-            ax.axis('off')
-            pdf_save_rasterized_page(_direct_pdf_pages, fig, bbox_inches='tight')
-            plt.close(fig)
-        close_direct_pdf_writer()
+        # Direct PDF mode: pages were written incrementally via save_plot_figure.
+        # close_direct_pdf_writer() is registered with atexit and will finalize
+        # the PDF after all remaining plots (e.g. activation/streamer matrices) are added.
+        pass
     elif existing_pngs:
         temp_pdf_path = _build_temp_pdf_path(save_pdf_path)
         try:
@@ -7497,12 +9235,16 @@ if create_debug_plots and Q_cols:
     )
 qsum_total = len(working_df)
 qsum_mask = (working_df[Q_cols] != 0).any(axis=1)
+# Only rows that fully drop out are appended here; zeroed-but-retained rows stay in working_df.
+append_removed_rows_from_mask(working_df, ~qsum_mask)
 working_df = working_df.loc[qsum_mask].copy()
 record_filter_metric(
     "q_sum_all_zero_rows_removed_pct",
     qsum_total - int(qsum_mask.sum()),
     original_number_of_events if original_number_of_events else 0,
 )
+_diag_rejected_q_sum_idx = _diag_idx_after_clean_tt.difference(working_df.index)
+_diag_idx_after_q_sum = working_df.index.copy()
 
 component_cols = [
     col
@@ -7514,6 +9256,7 @@ if component_cols:
     all_zero_mask = (component_data == 0).all(axis=1)
     removed_all_zero = int(all_zero_mask.sum())
     if removed_all_zero > 0:
+        append_removed_rows_from_mask(working_df, all_zero_mask)
         working_df = working_df.loc[~all_zero_mask].copy()
     record_filter_metric(
         "all_components_zero_rows_removed_pct",
@@ -7540,7 +9283,12 @@ for plane in range(1, 5):
         if f"T{plane}_T_dif_{strip}" in working_df.columns
     ]
 
+snapshot_original_columns_once(working_df, ["cal_tt"] if "cal_tt" in working_df.columns else [])
 working_df = compute_tt(working_df, "cal_tt", cal_tt_columns)
+snapshot_original_columns_once(
+    working_df,
+    ["clean_to_cal_tt"] if "clean_to_cal_tt" in working_df.columns else [],
+)
 working_df.loc[:, "clean_to_cal_tt"] = (
     pd.to_numeric(working_df["clean_tt"], errors="coerce").fillna(0).astype(int).astype(str)
     + "_"
@@ -7558,12 +9306,14 @@ if create_debug_plots and "cal_tt" in working_df.columns:
         fig_idx=debug_fig_idx,
     )
 cal_tt_mask = working_df["cal_tt"].notna() & (working_df["cal_tt"] >= 10)
+append_removed_rows_from_mask(working_df, ~cal_tt_mask)
 working_df = working_df.loc[cal_tt_mask].copy()
 record_filter_metric(
     "cal_tt_lt_10_rows_removed_pct",
     cal_tt_total - int(cal_tt_mask.sum()),
     cal_tt_total if cal_tt_total else 0,
 )
+_diag_rejected_cal_tt_idx = _diag_idx_after_q_sum.difference(working_df.index)
 
 cal_tt_counts = working_df["cal_tt"].value_counts()
 for tt_value, count in cal_tt_counts.items():
@@ -7591,13 +9341,309 @@ task2_activation_filtered = store_task2_strip_activation_snapshot(
     tt_series=pd.to_numeric(working_df["cal_tt"], errors="coerce"),
     streamer_high_charge_factor_value=streamer_high_charge_factor,
 )
-if create_plots or create_essential_plots:
+if task2_plot_enabled("strip_activation_matrix_before_after"):
     fig_idx = plot_task2_strip_activation_before_after(
         task2_activation_initial,
         task2_activation_filtered,
         fig_idx,
     )
     fig_idx = plot_task2_filtered_streamer_matrix(task2_activation_filtered, fig_idx)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Diagnostic plots: event rejection, front-vs-back charge/time, channel matrix,
+# and strip-pair matrices with optional removed-row overlays.
+# All use working_df_unzeroed (snapshot taken before any value-zeroing).
+# ─────────────────────────────────────────────────────────────────────────────
+_DIAG_ALIASES = (
+    "rejected_scatter_clean_tt",
+    "rejected_scatter_q_sum_zero",
+    "rejected_scatter_cal_tt",
+    "charge_front_vs_back",
+    "time_front_vs_back",
+    "channel_matrix_tq",
+    "strip_pair_matrix_by_planepair",
+    "rejected_histograms_clean_tt",
+    "rejected_histograms_q_sum_zero",
+    "rejected_histograms_cal_tt",
+)
+if any(task2_plot_enabled(a) for a in _DIAG_ALIASES):
+    _DIAG_MAX_PTS = 5000
+    _diag_q_sum_cols = sorted(
+        c for c in working_df_unzeroed.columns if re.match(r"^Q\d+_Q_sum_\d+$", c)
+    )
+    _diag_t_sum_cols = sorted(
+        c for c in working_df_unzeroed.columns if re.match(r"^T\d+_T_sum_\d+$", c)
+    )
+
+    def _diag_total_charge(df: pd.DataFrame) -> pd.Series:
+        cols = [c for c in _diag_q_sum_cols if c in df.columns]
+        return df[cols].fillna(0).sum(axis=1) if cols else pd.Series(0.0, index=df.index)
+
+    def _diag_mean_tsum(df: pd.DataFrame) -> pd.Series:
+        cols = [c for c in _diag_t_sum_cols if c in df.columns]
+        if not cols:
+            return pd.Series(np.nan, index=df.index)
+        return df[cols].replace(0, np.nan).mean(axis=1)
+
+    def _diag_sample(df: pd.DataFrame) -> pd.DataFrame:
+        return df.sample(n=_DIAG_MAX_PTS, random_state=42) if len(df) > _DIAG_MAX_PTS else df
+
+    # ── Plot A: rejected-event scatter (mean T_sum vs total Q_sum) ────────────
+    _rej_groups = [
+        ("rejected_scatter_clean_tt",  _diag_rejected_clean_tt_idx, "clean_tt NaN"),
+        ("rejected_scatter_q_sum_zero", _diag_rejected_q_sum_idx,   "Q_sum all-zero"),
+        ("rejected_scatter_cal_tt",    _diag_rejected_cal_tt_idx,   "cal_tt < 10"),
+    ]
+    for _alias, _rej_idx, _reason in _rej_groups:
+        if not task2_plot_enabled(_alias):
+            continue
+        _rej_sub = _diag_sample(working_df_unzeroed.loc[_rej_idx]) if len(_rej_idx) else pd.DataFrame(columns=working_df_unzeroed.columns)
+        _acc_sub = _diag_sample(working_df_unzeroed.drop(index=_rej_idx, errors="ignore"))
+        _fig, _ax = plt.subplots(figsize=(8, 6))
+        _ax.scatter(
+            _diag_total_charge(_acc_sub), _diag_mean_tsum(_acc_sub),
+            s=3, alpha=0.15, color="steelblue", rasterized=True,
+            label=f"Accepted ({len(working_df_unzeroed) - len(_rej_idx)})",
+        )
+        if not _rej_sub.empty:
+            _ax.scatter(
+                _diag_total_charge(_rej_sub), _diag_mean_tsum(_rej_sub),
+                s=4, alpha=0.4, color="tomato", rasterized=True,
+                label=f"Rejected – {_reason} ({len(_rej_idx)})",
+            )
+        _ax.set_xlabel("Total Q_sum [ADC]")
+        _ax.set_ylabel("Mean T_sum [ADC]")
+        _ax.set_title(
+            f"Rejection diagnostic: {_reason}\n"
+            f"Station {station} · {basename_no_ext}"
+        )
+        _ax.legend(markerscale=3, fontsize=8)
+        plt.tight_layout()
+        _sp = os.path.join(base_directories["figure_directory"], f"{fig_idx:03d}_{_alias}.png")
+        plot_list.append(_sp)
+        save_plot_figure(_sp, fig=_fig, alias=_alias, format="png", dpi=150)
+        plt.close(_fig)
+        fig_idx += 1
+
+    # ── Plot B: front vs back (Q and T) ──────────────────────────────────────
+    _fb_pattern_q = re.compile(r"^Q(\d+)_F_(\d+)$")
+    _fb_raw_q_f = {
+        (int(m.group(1)), int(m.group(2))): c
+        for c in working_df_unzeroed.columns
+        if (m := _fb_pattern_q.match(c))
+    }
+    _fb_raw_q_b = {
+        (int(m.group(1)), int(m.group(2))): c
+        for c in working_df_unzeroed.columns
+        if (m := re.match(r"^Q(\d+)_B_(\d+)$", c))
+    }
+    _fb_pattern_t = re.compile(r"^T(\d+)_F_(\d+)$")
+    _fb_raw_t_f = {
+        (int(m.group(1)), int(m.group(2))): c
+        for c in working_df_unzeroed.columns
+        if (m := _fb_pattern_t.match(c))
+    }
+    _fb_raw_t_b = {
+        (int(m.group(1)), int(m.group(2))): c
+        for c in working_df_unzeroed.columns
+        if (m := re.match(r"^T(\d+)_B_(\d+)$", c))
+    }
+
+    for _fb_alias, _f_map, _b_map, _sum_cols, _dif_cols, _label, _unit in [
+        (
+            "charge_front_vs_back", _fb_raw_q_f, _fb_raw_q_b,
+            _diag_q_sum_cols,
+            sorted(c for c in working_df_unzeroed.columns if re.match(r"^Q\d+_Q_dif_\d+$", c)),
+            "Q", "ADC",
+        ),
+        (
+            "time_front_vs_back", _fb_raw_t_f, _fb_raw_t_b,
+            _diag_t_sum_cols,
+            sorted(c for c in working_df_unzeroed.columns if re.match(r"^T\d+_T_dif_\d+$", c)),
+            "T", "ADC",
+        ),
+    ]:
+        if not task2_plot_enabled(_fb_alias):
+            continue
+        _matched_keys = sorted(set(_f_map) & set(_b_map))
+        _use_raw = bool(_matched_keys)
+        if not _use_raw:
+            # Reconstruct F = (sum+dif)/2, B = (sum-dif)/2 from sum/dif pairs
+            _dif_set = set(_dif_cols)
+            _matched_keys = []
+            _sum_to_dif: dict[str, str] = {}
+            for _sc in _sum_cols:
+                _dc = _sc.replace("_Q_sum_", "_Q_dif_").replace("_T_sum_", "_T_dif_")
+                if _dc in _dif_set:
+                    _matched_keys.append(_sc)
+                    _sum_to_dif[_sc] = _dc
+        if not _matched_keys:
+            continue
+        _df_fb = _diag_sample(working_df_unzeroed)
+        n_pairs = len(_matched_keys)
+        n_cols_fb = min(4, n_pairs)
+        n_rows_fb = (n_pairs + n_cols_fb - 1) // n_cols_fb
+        _fig, _axes = plt.subplots(
+            n_rows_fb, n_cols_fb,
+            figsize=(4 * n_cols_fb, 3.5 * n_rows_fb),
+            squeeze=False,
+        )
+        for _pi, _key in enumerate(_matched_keys):
+            _r, _c = divmod(_pi, n_cols_fb)
+            _ax = _axes[_r][_c]
+            if _use_raw:
+                _xa = _df_fb[_f_map[_key]].fillna(0)
+                _xb = _df_fb[_b_map[_key]].fillna(0)
+                _xl = _f_map[_key].replace("_", " ")
+                _yl = _b_map[_key].replace("_", " ")
+            else:
+                _s = _df_fb[_key].fillna(0)
+                _d = _df_fb[_sum_to_dif[_key]].fillna(0)
+                _xa = (_s + _d) / 2.0
+                _xb = (_s - _d) / 2.0
+                _base = _key.replace("_Q_sum_", " ").replace("_T_sum_", " ").replace("_", " ")
+                _xl = f"{_base} F"
+                _yl = f"{_base} B"
+            _ax.scatter(_xa, _xb, s=2, alpha=0.15, rasterized=True)
+            _ax.set_xlabel(_xl, fontsize=7)
+            _ax.set_ylabel(_yl, fontsize=7)
+            _ax.tick_params(labelsize=6)
+        for _pi in range(n_pairs, n_rows_fb * n_cols_fb):
+            _r, _c = divmod(_pi, n_cols_fb)
+            _axes[_r][_c].set_visible(False)
+        _fig.suptitle(
+            f"{_label}: Front vs Back (unzeroed, N≤{_DIAG_MAX_PTS})\n"
+            f"Station {station} · {basename_no_ext}",
+            fontsize=9,
+        )
+        plt.tight_layout()
+        _sp = os.path.join(base_directories["figure_directory"], f"{fig_idx:03d}_{_fb_alias}.png")
+        plot_list.append(_sp)
+        save_plot_figure(_sp, fig=_fig, alias=_fb_alias, format="png", dpi=150)
+        plt.close(_fig)
+        fig_idx += 1
+
+    # ── Plot C: channel matrix (Q_sum per-strip, per plane pair) ─────────────
+    if task2_plot_enabled("channel_matrix_tq"):
+        _df_cm = _diag_sample(working_df_unzeroed)
+        for _pi_idx in range(1, 5):
+            for _pj_idx in range(_pi_idx + 1, 5):
+                _ci_cols = [
+                    f"Q{_pi_idx}_Q_sum_{s}" for s in range(1, 5)
+                    if f"Q{_pi_idx}_Q_sum_{s}" in _df_cm.columns
+                ]
+                _cj_cols = [
+                    f"Q{_pj_idx}_Q_sum_{s}" for s in range(1, 5)
+                    if f"Q{_pj_idx}_Q_sum_{s}" in _df_cm.columns
+                ]
+                if not _ci_cols or not _cj_cols:
+                    continue
+                _ni, _nj = len(_ci_cols), len(_cj_cols)
+                _fig, _axes = plt.subplots(
+                    _nj, _ni,
+                    figsize=(3 * _ni, 3 * _nj),
+                    squeeze=False,
+                )
+                for _si, _ci in enumerate(_ci_cols):
+                    for _sj, _cj in enumerate(_cj_cols):
+                        _ax = _axes[_sj][_si]
+                        _both = (_df_cm[_ci] != 0) & (_df_cm[_cj] != 0)
+                        _ax.scatter(
+                            _df_cm.loc[_both, _ci], _df_cm.loc[_both, _cj],
+                            s=2, alpha=0.2, rasterized=True,
+                        )
+                        _ax.set_xlabel(_ci.replace("_", " "), fontsize=6)
+                        _ax.set_ylabel(_cj.replace("_", " "), fontsize=6)
+                        _ax.tick_params(labelsize=5)
+                _combo = f"P{_pi_idx}_P{_pj_idx}"
+                _fig.suptitle(
+                    f"Channel matrix Q_sum: Plane {_pi_idx} vs Plane {_pj_idx}\n"
+                    f"(unzeroed, co-fired strips, N≤{_DIAG_MAX_PTS})\n"
+                    f"Station {station} · {basename_no_ext}",
+                    fontsize=8,
+                )
+                plt.tight_layout()
+                _sp = os.path.join(
+                    base_directories["figure_directory"],
+                    f"{fig_idx:03d}_channel_matrix_tq_{_combo}.png",
+                )
+                plot_list.append(_sp)
+                save_plot_figure(_sp, fig=_fig, alias="channel_matrix_tq", format="png", dpi=120)
+                plt.close(_fig)
+                fig_idx += 1
+
+    if task2_plot_enabled("strip_pair_matrix_by_planepair"):
+        if not track_removed_rows_task2:
+            print("Task 2 strip-pair removed-row overlay disabled (track_removed_rows_task2=False).")
+        removed_plot_df = removed_rows_df if track_removed_rows_task2 else removed_rows_df.iloc[0:0].copy()
+        fig_idx = plot_task2_strip_pair_matrix_by_planepair(
+            working_df,
+            removed_plot_df,
+            basename_no_ext,
+            fig_idx,
+        )
+
+    # ── Plot D: rejected-event per-plane histograms (Q_sum and T_sum) ────────
+    _hist_rej_groups = [
+        ("rejected_histograms_clean_tt",  _diag_rejected_clean_tt_idx,  "clean_tt NaN"),
+        ("rejected_histograms_q_sum_zero", _diag_rejected_q_sum_idx,    "Q_sum all-zero"),
+        ("rejected_histograms_cal_tt",    _diag_rejected_cal_tt_idx,    "cal_tt < 10"),
+    ]
+    for _halias, _rej_idx, _reason in _hist_rej_groups:
+        if not task2_plot_enabled(_halias):
+            continue
+        _rej_rows = working_df_unzeroed.loc[_rej_idx] if len(_rej_idx) else pd.DataFrame(columns=working_df_unzeroed.columns)
+        _acc_rows = working_df_unzeroed.drop(index=_rej_idx, errors="ignore")
+        _fig, _axes = plt.subplots(4, 2, figsize=(10, 12))
+        for _p in range(1, 5):
+            _q_cols = [f"Q{_p}_Q_sum_{s}" for s in range(1, 5) if f"Q{_p}_Q_sum_{s}" in working_df_unzeroed.columns]
+            _t_cols = [f"T{_p}_T_sum_{s}" for s in range(1, 5) if f"T{_p}_T_sum_{s}" in working_df_unzeroed.columns]
+            _ax_q = _axes[_p - 1][0]
+            _ax_t = _axes[_p - 1][1]
+            if _q_cols:
+                _acc_q = _acc_rows[_q_cols].fillna(0).sum(axis=1)
+                _rej_q = _rej_rows[_q_cols].fillna(0).sum(axis=1) if not _rej_rows.empty else pd.Series(dtype=float)
+                _q_all = pd.concat([_acc_q, _rej_q])
+                _qmin, _qmax = float(_q_all.min()), float(_q_all.max())
+                _bins_q = np.linspace(_qmin, _qmax, 50) if _qmin < _qmax else 10
+                _ax_q.hist(_acc_q, bins=_bins_q, alpha=0.6, color="steelblue",
+                           label=f"Accepted (N={len(_acc_q)})", histtype="stepfilled")
+                if len(_rej_q) > 0:
+                    _ax_q.hist(_rej_q, bins=_bins_q, alpha=0.85, color="tomato",
+                               label=f"Rejected (N={len(_rej_q)})", histtype="step", linewidth=1.5)
+            _ax_q.set_xlabel(f"P{_p} Q_sum total [ADC]", fontsize=8)
+            _ax_q.set_ylabel("Counts", fontsize=8)
+            _ax_q.set_yscale("log", nonpositive="clip")
+            _ax_q.legend(fontsize=6)
+            _ax_q.tick_params(labelsize=7)
+            if _t_cols:
+                _acc_t = _acc_rows[_t_cols].replace(0, np.nan).mean(axis=1).dropna()
+                _rej_t = _rej_rows[_t_cols].replace(0, np.nan).mean(axis=1).dropna() if not _rej_rows.empty else pd.Series(dtype=float)
+                _t_all = pd.concat([_acc_t, _rej_t])
+                _tmin, _tmax = float(_t_all.min()), float(_t_all.max())
+                _bins_t = np.linspace(_tmin, _tmax, 50) if _tmin < _tmax else 10
+                _ax_t.hist(_acc_t, bins=_bins_t, alpha=0.6, color="steelblue",
+                           label=f"Accepted (N={len(_acc_t)})", histtype="stepfilled")
+                if len(_rej_t) > 0:
+                    _ax_t.hist(_rej_t, bins=_bins_t, alpha=0.85, color="tomato",
+                               label=f"Rejected (N={len(_rej_t)})", histtype="step", linewidth=1.5)
+            _ax_t.set_xlabel(f"P{_p} T_sum mean [ADC]", fontsize=8)
+            _ax_t.set_ylabel("Counts", fontsize=8)
+            _ax_t.set_yscale("log", nonpositive="clip")
+            _ax_t.legend(fontsize=6)
+            _ax_t.tick_params(labelsize=7)
+        _fig.suptitle(
+            f"Rejected event shape – {_reason}\nStation {station} · {basename_no_ext}",
+            fontsize=10,
+        )
+        plt.tight_layout()
+        _sp = os.path.join(base_directories["figure_directory"], f"{fig_idx:03d}_{_halias}.png")
+        plot_list.append(_sp)
+        save_plot_figure(_sp, fig=_fig, alias=_halias, format="png", dpi=150)
+        plt.close(_fig)
+        fig_idx += 1
+
+    # Plot E (channel per-planepair matrix) removed: 64x64/sector plotting deprecated and deleted.
 
 # Data purity
 data_purity = final_number_of_events / original_number_of_events * 100
@@ -7779,6 +9825,41 @@ metadata_specific_csv_path = save_metadata(
     ),
 )
 print(f"Metadata (specific) CSV updated at: {metadata_specific_csv_path}")
+
+if track_removed_rows_task2:
+    tracking_output_directory = (
+        base_directories["figure_directory"]
+        if os.path.isdir(base_directories["figure_directory"])
+        else output_directory
+    )
+    os.makedirs(tracking_output_directory, exist_ok=True)
+
+    removed_rows_base = os.path.join(
+        tracking_output_directory,
+        f"removed_rows_{basename_no_ext}",
+    )
+    original_cols_base = os.path.join(
+        tracking_output_directory,
+        f"original_cols_{basename_no_ext}",
+    )
+    original_columns_df = build_original_columns_frame()
+
+    removed_rows_df.to_parquet(
+        f"{removed_rows_base}.parquet",
+        engine="pyarrow",
+        compression="zstd",
+        index=True,
+    )
+    removed_rows_df.to_csv(f"{removed_rows_base}.csv", index=True)
+    original_columns_df.to_parquet(
+        f"{original_cols_base}.parquet",
+        engine="pyarrow",
+        compression="zstd",
+        index=True,
+    )
+    print(f"Removed-row tracking parquet saved to: {removed_rows_base}.parquet")
+    print(f"Removed-row tracking CSV saved to: {removed_rows_base}.csv")
+    print(f"Original-column snapshot parquet saved to: {original_cols_base}.parquet")
 
 # Ensure no figure handles remain open before persistence/final move.
 plt.close("all")

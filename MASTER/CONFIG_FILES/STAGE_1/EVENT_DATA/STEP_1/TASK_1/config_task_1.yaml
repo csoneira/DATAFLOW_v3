@@ -12,4 +12,4 @@ article_format: false
 create_plots: null
 limit_number: null
 EXPECTED_COLUMNS_config: 71
-time_window_filtering: true
+time_window_filtering: false
