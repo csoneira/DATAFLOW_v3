@@ -62,32 +62,233 @@ def load_distance_definition(
         return {"available": False, "reason": f"file_not_found ({dd_path})"}
 
     dist_def = json.loads(dd_path.read_text(encoding="utf-8"))
-    dd_cols = dist_def.get("feature_columns", [])
-    dd_center = np.asarray(dist_def["center"], dtype=float)
-    dd_scale = np.asarray(dist_def["scale"], dtype=float)
+    dd_cols_raw = dist_def.get("feature_columns", [])
+    if isinstance(dd_cols_raw, Sequence) and not isinstance(dd_cols_raw, (str, bytes)):
+        dd_cols = [str(col) for col in dd_cols_raw]
+    else:
+        dd_cols = []
+    if not dd_cols:
+        return {"available": False, "reason": "missing_feature_columns"}
+
+    dd_center = np.asarray(dist_def.get("center", []), dtype=float)
+    dd_scale = np.asarray(dist_def.get("scale", []), dtype=float)
     dd_weights = np.asarray(
         dist_def.get("weights", [1.0] * len(dd_cols)), dtype=float
     )
-
-    if list(dd_cols) != list(feature_columns) or len(dd_center) != len(feature_columns):
+    if dd_center.size != len(dd_cols) or dd_scale.size != len(dd_cols):
         return {
             "available": False,
             "reason": (
-                f"feature_mismatch: artifact has {len(dd_cols)} columns "
-                f"vs requested {len(feature_columns)}"
+                f"vector_length_mismatch:center={dd_center.size},"
+                f"scale={dd_scale.size},features={len(dd_cols)}"
+            ),
+        }
+    if dd_weights.size != len(dd_cols):
+        return {
+            "available": False,
+            "reason": (
+                f"weight_length_mismatch:{dd_weights.size}!={len(dd_cols)}"
             ),
         }
 
+    requested_cols = [str(col) for col in feature_columns]
+    requested_index = {name: idx for idx, name in enumerate(requested_cols)}
+    missing_in_requested = [name for name in dd_cols if name not in requested_index]
+    if missing_in_requested:
+        return {
+            "available": False,
+            "reason": (
+                f"feature_mismatch: artifact columns missing from requested "
+                f"({len(missing_in_requested)})"
+            ),
+        }
+
+    dd_center_aligned = np.zeros(len(requested_cols), dtype=float)
+    dd_scale_aligned = np.ones(len(requested_cols), dtype=float)
+    dd_weights_aligned = np.zeros(len(requested_cols), dtype=float)
+    for dd_idx, col in enumerate(dd_cols):
+        req_idx = requested_index[col]
+        dd_center_aligned[req_idx] = float(dd_center[dd_idx])
+        dd_scale_aligned[req_idx] = float(dd_scale[dd_idx])
+        dd_weights_aligned[req_idx] = float(dd_weights[dd_idx])
+
+    dd_cols_set = set(dd_cols)
+    alignment_mode = (
+        "exact"
+        if (list(dd_cols) == list(requested_cols) and len(dd_cols) == len(requested_cols))
+        else "projected_subset"
+    )
+    dropped_requested_cols = [name for name in requested_cols if name not in dd_cols_set]
+    group_weights_raw = dist_def.get("group_weights", {})
+    if not isinstance(group_weights_raw, Mapping):
+        group_weights_raw = {}
+    group_weights = {
+        str(name): float(value)
+        for name, value in group_weights_raw.items()
+        if str(name).strip()
+    }
+    feature_groups_raw = dist_def.get("feature_groups", {})
+    if not isinstance(feature_groups_raw, Mapping):
+        feature_groups_raw = {}
+    feature_groups = {
+        str(name): value
+        for name, value in feature_groups_raw.items()
+        if str(name).strip()
+    }
+    scalar_feature_cols_raw = dist_def.get(
+        "one_feature_vector_columns",
+        dist_def.get("scalar_feature_columns", []),
+    )
+    if isinstance(scalar_feature_cols_raw, Sequence) and not isinstance(scalar_feature_cols_raw, (str, bytes)):
+        scalar_feature_cols = [str(col) for col in scalar_feature_cols_raw if str(col) in requested_index]
+    else:
+        scalar_feature_cols = [str(col) for col in dd_cols if str(col) in requested_index]
+
     return {
         "available": True,
-        "center": dd_center,
-        "scale": dd_scale,
-        "weights": dd_weights,
+        "center": dd_center_aligned,
+        "scale": dd_scale_aligned,
+        "weights": dd_weights_aligned,
+        "scalar_feature_columns": scalar_feature_cols,
+        "group_weights": group_weights,
+        "feature_groups": feature_groups,
         "p_norm": float(dist_def.get("p_norm", 2.0)),
+        "optimal_aggregation": str(dist_def.get("optimal_aggregation", "weighted_mean")),
         "optimal_k": int(dist_def.get("optimal_k", 5)),
         "optimal_lambda": float(dist_def.get("optimal_lambda", 1e6)),
         "selected_mode": dist_def.get("selected_mode", "unknown"),
+        "alignment_mode": alignment_mode,
+        "artifact_feature_columns_count": int(len(dd_cols)),
+        "requested_feature_columns_count": int(len(requested_cols)),
+        "projected_out_requested_feature_columns": dropped_requested_cols,
     }
+
+
+def active_feature_columns_from_distance_definition(
+    feature_columns: Sequence[str],
+    *,
+    distance_definition: Mapping[str, object] | None = None,
+    path: Path | str | None = None,
+    min_weight: float = 0.0,
+) -> tuple[list[str], dict[str, object]]:
+    """Resolve the STEP 1.5-active feature subset.
+
+    Downstream diagnostics should reflect the columns that actively contribute
+    to the tuned distance, not the broader pre-STEP-1.5 candidate list.
+    """
+    feature_cols = [str(c) for c in feature_columns]
+    if isinstance(distance_definition, Mapping):
+        dd = dict(distance_definition)
+    else:
+        dd = load_distance_definition(feature_cols, path=path)
+
+    info: dict[str, object] = {
+        "distance_definition_available": bool(dd.get("available")),
+        "distance_definition_reason": dd.get("reason"),
+        "n_requested_features": int(len(feature_cols)),
+        "n_active_features": int(len(feature_cols)),
+        "used_active_weights": False,
+        "n_active_feature_groups": 0,
+    }
+    if not dd.get("available"):
+        return feature_cols, info
+
+    weights = np.asarray(dd.get("weights", []), dtype=float)
+    if weights.size != len(feature_cols):
+        info["distance_definition_reason"] = (
+            f"weight_length_mismatch:{weights.size}!={len(feature_cols)}"
+        )
+        return feature_cols, info
+
+    threshold = max(float(min_weight), 0.0)
+    active = [
+        col
+        for col, weight in zip(feature_cols, weights)
+        if np.isfinite(weight) and float(weight) > threshold
+    ]
+    group_weights = dd.get("group_weights", {})
+    feature_groups = dd.get("feature_groups", {})
+    if isinstance(group_weights, Mapping) and isinstance(feature_groups, Mapping):
+        for group_name, weight in group_weights.items():
+            try:
+                numeric_weight = float(weight)
+            except (TypeError, ValueError):
+                continue
+            if not np.isfinite(numeric_weight) or numeric_weight <= threshold:
+                continue
+            group_info = feature_groups.get(str(group_name), {})
+            if not isinstance(group_info, Mapping):
+                continue
+            group_cols = group_info.get("feature_columns", [])
+            if not isinstance(group_cols, Sequence):
+                continue
+            for col in group_cols:
+                name = str(col)
+                if name in feature_cols and name not in active:
+                    active.append(name)
+            info["n_active_feature_groups"] = int(info.get("n_active_feature_groups", 0)) + 1
+    if not active:
+        info["distance_definition_reason"] = "no_positive_weights"
+        return feature_cols, info
+
+    info["n_active_features"] = int(len(active))
+    info["used_active_weights"] = True
+    return active, info
+
+
+def _log_unified_distance_term_list(
+    *,
+    feature_columns: Sequence[str],
+    one_feature_vector_columns: Sequence[str],
+    one_feature_weights: np.ndarray | None,
+    feature_groups: Mapping[str, object] | None,
+    group_weights: Mapping[str, float] | None,
+    header: str,
+) -> None:
+    log.info("%s", header)
+    feature_cols = [str(col) for col in feature_columns]
+    one_feature_set = {str(col) for col in one_feature_vector_columns}
+    weights = (
+        np.asarray(one_feature_weights, dtype=float)
+        if one_feature_weights is not None
+        else np.asarray([], dtype=float)
+    )
+    for idx, name in enumerate(feature_cols):
+        if name not in one_feature_set:
+            continue
+        w = float(weights[idx]) if idx < weights.size and np.isfinite(weights[idx]) else 0.0
+        log.info("    %s: 1 feature --> 1 distance (weight=%.3g)", name, w)
+    if not isinstance(feature_groups, Mapping):
+        return
+    group_w = dict(group_weights or {})
+    for raw_group_name, raw_cfg in feature_groups.items():
+        group_name = str(raw_group_name).strip()
+        if not group_name or not isinstance(raw_cfg, Mapping):
+            continue
+        cols = [str(col) for col in raw_cfg.get("feature_columns", []) if str(col).strip()]
+        n_features = int(len(cols))
+        raw_weight = group_w.get(group_name, 0.0)
+        try:
+            w = float(raw_weight)
+        except (TypeError, ValueError):
+            w = 0.0
+        if not np.isfinite(w):
+            w = 0.0
+        expands = _coerce_bool(raw_cfg.get("expand_components_as_scalar", False), default=False)
+        if expands:
+            log.info(
+                "    %s: %d features --> tied 1D vector distances (shared weight=%.3g)",
+                group_name,
+                n_features,
+                w,
+            )
+        else:
+            log.info(
+                "    %s: %d features --> 1 distance (weight=%.3g)",
+                group_name,
+                n_features,
+                w,
+            )
 
 
 # =====================================================================
@@ -237,6 +438,64 @@ def _weighted_lp_many(
 
 
 RATE_HISTOGRAM_BIN_RE = re.compile(r"^events_per_second_(?P<bin>\d+)_rate_hz")
+EFFICIENCY_VECTOR_COL_RE = re.compile(
+    r"^efficiency_vector_p(?P<plane>[1-4])_(?P<axis>x|y|theta)_bin_(?P<bin>\d+)_(?P<field>center_mm|center_deg|eff|unc)$"
+)
+_EFFICIENCY_VECTOR_AXIS_ORDER = ("x", "y", "theta")
+_EFFICIENCY_VECTOR_CENTER_FIELD_BY_AXIS = {
+    "x": "center_mm",
+    "y": "center_mm",
+    "theta": "center_deg",
+}
+
+
+def _coerce_bool(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return bool(default)
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return bool(default)
+
+
+def _resolve_feature_group_kind(
+    group_name: str,
+    group_cfg: Mapping[str, object] | None,
+) -> str:
+    cfg = group_cfg if isinstance(group_cfg, Mapping) else {}
+    raw = cfg.get("group_type", cfg.get("kind", cfg.get("type", None)))
+    if raw is not None:
+        text = str(raw).strip().lower()
+    else:
+        text = ""
+    aliases = {
+        "hist": "rate_histogram",
+        "histogram": "rate_histogram",
+        "rate_hist": "rate_histogram",
+        "rate_histogram": "rate_histogram",
+        "efficiency_vector": "efficiency_vectors",
+        "efficiency_vectors": "efficiency_vectors",
+        "effvec": "efficiency_vectors",
+        "ordered_vector": "ordered_vector",
+        "ordered_vector_lp": "ordered_vector",
+        "vector": "ordered_vector",
+        "vector_lp": "ordered_vector",
+        "grouped_vector": "ordered_vector",
+    }
+    if text in aliases:
+        return aliases[text]
+    name = str(group_name).strip()
+    if name == "rate_histogram":
+        return "rate_histogram"
+    if name == "efficiency_vectors":
+        return "efficiency_vectors"
+    return "ordered_vector"
 
 
 def _histogram_feature_indices(feature_cols: Sequence[str]) -> list[int]:
@@ -248,6 +507,250 @@ def _histogram_feature_indices(feature_cols: Sequence[str]) -> list[int]:
         indexed.append((int(match.group("bin")), idx))
     indexed.sort(key=lambda x: x[0])
     return [idx for _, idx in indexed]
+
+
+def _efficiency_vector_feature_indices(feature_cols: Sequence[str]) -> list[int]:
+    indexed: list[tuple[int, int, int, str]] = []
+    for idx, col in enumerate(feature_cols):
+        match = EFFICIENCY_VECTOR_COL_RE.match(str(col))
+        if match is None:
+            continue
+        indexed.append(
+            (
+                int(match.group("plane")),
+                int(match.group("bin")),
+                {"x": 0, "y": 1, "theta": 2}.get(str(match.group("axis")), 99),
+                str(match.group("field")),
+            )
+        )
+    indexed.sort()
+    return [idx for _, _, _, _ in indexed]
+
+
+def _normalize_efficiency_vector_fiducial(raw: object) -> dict[str, float | None]:
+    if not isinstance(raw, Mapping):
+        raw = {}
+    return {
+        "x_abs_max_mm": _safe_optional_float(raw.get("x_abs_max_mm")),
+        "y_abs_max_mm": _safe_optional_float(raw.get("y_abs_max_mm")),
+        "theta_max_deg": _safe_optional_float(raw.get("theta_max_deg")),
+    }
+
+
+def _efficiency_vector_bin_mask(
+    *,
+    centers: np.ndarray,
+    axis_name: str,
+    fiducial: Mapping[str, float | None],
+) -> np.ndarray:
+    center_vals = np.asarray(centers, dtype=float)
+    mask = np.isfinite(center_vals)
+    if axis_name == "x":
+        limit = fiducial.get("x_abs_max_mm")
+        if limit is not None and np.isfinite(float(limit)):
+            mask &= np.abs(center_vals) <= float(limit)
+    elif axis_name == "y":
+        limit = fiducial.get("y_abs_max_mm")
+        if limit is not None and np.isfinite(float(limit)):
+            mask &= np.abs(center_vals) <= float(limit)
+    elif axis_name == "theta":
+        limit = fiducial.get("theta_max_deg")
+        if limit is not None and np.isfinite(float(limit)):
+            mask &= center_vals <= float(limit)
+    return mask
+
+
+def _shared_efficiency_vector_groups(
+    dict_df: pd.DataFrame,
+    data_df: pd.DataFrame,
+) -> list[dict[str, object]]:
+    dict_cols = {str(c) for c in dict_df.columns}
+    data_cols = {str(c) for c in data_df.columns}
+    groups: dict[tuple[int, str], dict[int, dict[str, object]]] = {}
+
+    for name in sorted(dict_cols | data_cols):
+        match = EFFICIENCY_VECTOR_COL_RE.match(name)
+        if match is None:
+            continue
+        plane = int(match.group("plane"))
+        axis_name = str(match.group("axis"))
+        bin_idx = int(match.group("bin"))
+        field = str(match.group("field"))
+        info = groups.setdefault((plane, axis_name), {}).setdefault(bin_idx, {})
+        info[f"{field}_dict"] = name if name in dict_cols else None
+        info[f"{field}_data"] = name if name in data_cols else None
+
+    resolved: list[dict[str, object]] = []
+    for plane in range(1, 5):
+        for axis_name in _EFFICIENCY_VECTOR_AXIS_ORDER:
+            group_bins = groups.get((plane, axis_name), {})
+            if not group_bins:
+                continue
+            center_field = _EFFICIENCY_VECTOR_CENTER_FIELD_BY_AXIS[axis_name]
+            bin_specs: list[dict[str, object]] = []
+            for bin_idx in sorted(group_bins):
+                spec = group_bins[bin_idx]
+                eff_dict = spec.get("eff_dict")
+                eff_data = spec.get("eff_data")
+                if not eff_dict or not eff_data:
+                    continue
+                bin_specs.append(
+                    {
+                        "bin_idx": int(bin_idx),
+                        "eff_col": str(eff_dict),
+                        "unc_col": (
+                            str(spec[f"unc_dict"])
+                            if spec.get("unc_dict") and spec.get("unc_data")
+                            else None
+                        ),
+                        "center_col_dict": (
+                            str(spec[f"{center_field}_dict"])
+                            if spec.get(f"{center_field}_dict")
+                            else None
+                        ),
+                        "center_col_data": (
+                            str(spec[f"{center_field}_data"])
+                            if spec.get(f"{center_field}_data")
+                            else None
+                        ),
+                    }
+                )
+            if not bin_specs:
+                continue
+            resolved.append(
+                {
+                    "plane": int(plane),
+                    "axis": axis_name,
+                    "bin_specs": bin_specs,
+                }
+            )
+    return resolved
+
+
+def _prepare_efficiency_vector_group_payloads(
+    *,
+    dict_df: pd.DataFrame,
+    data_df: pd.DataFrame,
+) -> list[dict[str, object]]:
+    payloads: list[dict[str, object]] = []
+    for spec in _shared_efficiency_vector_groups(dict_df, data_df):
+        axis_name = str(spec["axis"])
+        bin_specs = list(spec["bin_specs"])
+        eff_cols = [str(item["eff_col"]) for item in bin_specs]
+        unc_cols = [item.get("unc_col") for item in bin_specs]
+        dict_eff = (
+            dict_df[eff_cols]
+            .apply(pd.to_numeric, errors="coerce")
+            .to_numpy(dtype=float)
+        )
+        data_eff = (
+            data_df[eff_cols]
+            .apply(pd.to_numeric, errors="coerce")
+            .to_numpy(dtype=float)
+        )
+        dict_unc = np.full(dict_eff.shape, np.nan, dtype=float)
+        data_unc = np.full(data_eff.shape, np.nan, dtype=float)
+        for col_idx, unc_col in enumerate(unc_cols):
+            if not unc_col:
+                continue
+            dict_unc[:, col_idx] = pd.to_numeric(
+                dict_df[str(unc_col)], errors="coerce"
+            ).to_numpy(dtype=float)
+            data_unc[:, col_idx] = pd.to_numeric(
+                data_df[str(unc_col)], errors="coerce"
+            ).to_numpy(dtype=float)
+
+        centers = np.full(len(bin_specs), np.nan, dtype=float)
+        for col_idx, item in enumerate(bin_specs):
+            center_series = None
+            center_col_dict = item.get("center_col_dict")
+            center_col_data = item.get("center_col_data")
+            if center_col_dict:
+                center_series = pd.to_numeric(
+                    dict_df[str(center_col_dict)], errors="coerce"
+                )
+            if (center_series is None or not center_series.notna().any()) and center_col_data:
+                center_series = pd.to_numeric(
+                    data_df[str(center_col_data)], errors="coerce"
+                )
+            if center_series is not None:
+                finite = center_series[np.isfinite(center_series.to_numpy(dtype=float))]
+                if not finite.empty:
+                    centers[col_idx] = float(finite.iloc[0])
+
+        payloads.append(
+            {
+                "plane": int(spec["plane"]),
+                "axis": axis_name,
+                "label": f"p{int(spec['plane'])}_{axis_name}",
+                "eff_cols": eff_cols,
+                "centers": centers,
+                "dict_eff": dict_eff,
+                "data_eff": data_eff,
+                "dict_unc": dict_unc,
+                "data_unc": data_unc,
+            }
+        )
+    return payloads
+
+
+def _filter_efficiency_vector_payloads(
+    payloads: Sequence[Mapping[str, object]],
+    *,
+    feature_groups_cfg: Mapping[str, object] | None = None,
+    selected_feature_columns: Sequence[str] | None = None,
+) -> list[dict[str, object]]:
+    if not payloads:
+        return []
+
+    allowed_by_label: dict[str, set[str]] = {}
+    if isinstance(feature_groups_cfg, Mapping):
+        raw_groups = feature_groups_cfg.get("groups", [])
+        if isinstance(raw_groups, Sequence):
+            for item in raw_groups:
+                if not isinstance(item, Mapping):
+                    continue
+                label = str(item.get("label", "")).strip()
+                if not label:
+                    continue
+                cols = item.get("feature_columns", [])
+                if isinstance(cols, Sequence):
+                    allowed_by_label[label] = {
+                        str(col).strip()
+                        for col in cols
+                        if str(col).strip()
+                    }
+
+    selected_eff_cols = {
+        str(col).strip()
+        for col in (selected_feature_columns or [])
+        if EFFICIENCY_VECTOR_COL_RE.match(str(col))
+        and str(col).endswith("_eff")
+    }
+
+    filtered: list[dict[str, object]] = []
+    for payload_raw in payloads:
+        payload = dict(payload_raw)
+        eff_cols = [str(col) for col in payload.get("eff_cols", [])]
+        label = str(payload.get("label", "")).strip()
+        keep_mask = np.ones(len(eff_cols), dtype=bool)
+
+        if selected_eff_cols:
+            keep_mask &= np.asarray([col in selected_eff_cols for col in eff_cols], dtype=bool)
+        if label and label in allowed_by_label and allowed_by_label[label]:
+            keep_mask &= np.asarray([col in allowed_by_label[label] for col in eff_cols], dtype=bool)
+
+        if keep_mask.size == 0 or not np.any(keep_mask):
+            continue
+
+        payload["eff_cols"] = [col for col, keep in zip(eff_cols, keep_mask) if keep]
+        payload["centers"] = np.asarray(payload.get("centers", []), dtype=float)[keep_mask]
+        payload["dict_eff"] = np.asarray(payload.get("dict_eff", []), dtype=float)[:, keep_mask]
+        payload["data_eff"] = np.asarray(payload.get("data_eff", []), dtype=float)[:, keep_mask]
+        payload["dict_unc"] = np.asarray(payload.get("dict_unc", []), dtype=float)[:, keep_mask]
+        payload["data_unc"] = np.asarray(payload.get("data_unc", []), dtype=float)[:, keep_mask]
+        filtered.append(payload)
+    return filtered
 
 
 def _shared_histogram_feature_columns(
@@ -267,42 +770,1256 @@ def _shared_histogram_feature_columns(
 
 
 def _histogram_emd_many(sample_hist: np.ndarray, candidates_hist: np.ndarray) -> np.ndarray:
-    """
-    Compute normalized Wasserstein-1 (EMD) distance from one histogram row to many.
+    return _histogram_distance_many(
+        sample_hist,
+        candidates_hist,
+        distance="ordered_vector_lp",
+        normalization="unit_sum",
+        p_norm=1.0,
+        amplitude_weight=0.0,
+        shape_weight=0.0,
+        slope_weight=0.0,
+        cdf_weight=1.0,
+        amplitude_stat="sum",
+    )
 
-    Inputs can contain NaN and non-positive entries. Distances are computed only on
-    bins finite in both sample and candidate, with row-wise normalization to unit sum.
-    Output is in [0, 1] when valid (NaN otherwise).
-    """
-    sample = np.asarray(sample_hist, dtype=float)
-    candidates = np.asarray(candidates_hist, dtype=float)
-    if sample.ndim != 1 or candidates.ndim != 2 or candidates.shape[1] != sample.size:
-        return np.full(candidates.shape[0] if candidates.ndim == 2 else 0, np.nan, dtype=float)
 
-    n_candidates = candidates.shape[0]
-    out = np.full(n_candidates, np.nan, dtype=float)
-    if sample.size < 2 or n_candidates == 0:
+def _coerce_nonnegative_float(value: object, default: float) -> float:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        out = float(default)
+    if not np.isfinite(out):
+        out = float(default)
+    return max(out, 0.0)
+
+
+def _resolve_vector_distance_common_cfg(
+    raw_cfg: Mapping[str, object] | None,
+    *,
+    defaults: Mapping[str, object],
+) -> dict[str, object]:
+    cfg = raw_cfg if isinstance(raw_cfg, Mapping) else {}
+    normalization = str(cfg.get("normalization", defaults.get("normalization", "none"))).strip().lower()
+    if normalization not in {"none", "center", "zscore", "minmax", "unit_sum", "l2norm"}:
+        normalization = str(defaults.get("normalization", "none"))
+
+    amplitude_stat = str(cfg.get("amplitude_stat", defaults.get("amplitude_stat", "mean"))).strip().lower()
+    if amplitude_stat not in {"mean", "sum"}:
+        amplitude_stat = str(defaults.get("amplitude_stat", "mean"))
+
+    p_norm = _coerce_nonnegative_float(cfg.get("p_norm", defaults.get("p_norm", 2.0)), float(defaults.get("p_norm", 2.0)))
+    if p_norm <= 0.0:
+        p_norm = float(defaults.get("p_norm", 2.0))
+
+    out = {
+        "distance": "ordered_vector_lp",
+        "normalization": normalization,
+        "p_norm": float(p_norm),
+        "amplitude_weight": float(_coerce_nonnegative_float(cfg.get("amplitude_weight", defaults.get("amplitude_weight", 0.0)), float(defaults.get("amplitude_weight", 0.0)))),
+        "shape_weight": float(_coerce_nonnegative_float(cfg.get("shape_weight", defaults.get("shape_weight", 1.0)), float(defaults.get("shape_weight", 1.0)))),
+        "slope_weight": float(_coerce_nonnegative_float(cfg.get("slope_weight", defaults.get("slope_weight", 0.0)), float(defaults.get("slope_weight", 0.0)))),
+        "cdf_weight": float(_coerce_nonnegative_float(cfg.get("cdf_weight", defaults.get("cdf_weight", 0.0)), float(defaults.get("cdf_weight", 0.0)))),
+        "amplitude_stat": amplitude_stat,
+    }
+    out["mass_weight"] = float(out["amplitude_weight"])
+    return out
+
+
+def _resolve_ordered_vector_group_distance_cfg(
+    raw_cfg: Mapping[str, object] | None,
+) -> dict[str, object]:
+    cfg = raw_cfg if isinstance(raw_cfg, Mapping) else {}
+    defaults = {
+        "normalization": "none",
+        "p_norm": 2.0,
+        "amplitude_weight": 0.0,
+        "shape_weight": 1.0,
+        "slope_weight": 0.0,
+        "cdf_weight": 0.0,
+        "amplitude_stat": "mean",
+    }
+    return _resolve_vector_distance_common_cfg(cfg, defaults=defaults)
+
+
+def _relative_vector_amplitude_many(
+    *,
+    sample: np.ndarray,
+    candidates: np.ndarray,
+    valid: np.ndarray,
+    weights: np.ndarray,
+    stat: str,
+) -> np.ndarray:
+    sample_arr = np.asarray(sample, dtype=float)
+    cand_arr = np.asarray(candidates, dtype=float)
+    valid_mask = np.asarray(valid, dtype=bool)
+    weight_arr = np.asarray(weights, dtype=float)
+    out = np.full(cand_arr.shape[0], np.nan, dtype=float)
+    if cand_arr.ndim != 2 or sample_arr.ndim != 1 or cand_arr.shape[1] != sample_arr.size:
+        return out
+    if stat == "sum":
+        sample_stat = np.sum(np.where(valid_mask, sample_arr[None, :], 0.0), axis=1)
+        cand_stat = np.sum(np.where(valid_mask, cand_arr, 0.0), axis=1)
+    else:
+        sum_w = np.sum(np.where(valid_mask, weight_arr, 0.0), axis=1)
+        ok = sum_w > 0.0
+        if not np.any(ok):
+            return out
+        sample_stat = np.full(cand_arr.shape[0], np.nan, dtype=float)
+        cand_stat = np.full(cand_arr.shape[0], np.nan, dtype=float)
+        sample_stat[ok] = np.sum(np.where(valid_mask[ok], weight_arr[ok] * sample_arr[None, :], 0.0), axis=1) / sum_w[ok]
+        cand_stat[ok] = np.sum(np.where(valid_mask[ok], weight_arr[ok] * cand_arr[ok], 0.0), axis=1) / sum_w[ok]
+    denom = np.maximum(np.maximum(np.abs(sample_stat), np.abs(cand_stat)), 1e-12)
+    finite = np.isfinite(sample_stat) & np.isfinite(cand_stat) & np.isfinite(denom)
+    out[finite] = np.abs(cand_stat[finite] - sample_stat[finite]) / denom[finite]
+    return out
+
+
+def _weighted_lp_from_arrays(
+    *,
+    sample: np.ndarray,
+    candidates: np.ndarray,
+    valid: np.ndarray,
+    weights: np.ndarray,
+    p_norm: float,
+) -> np.ndarray:
+    sample_arr = np.asarray(sample, dtype=float)
+    cand_arr = np.asarray(candidates, dtype=float)
+    valid_mask = np.asarray(valid, dtype=bool)
+    weight_arr = np.asarray(weights, dtype=float)
+    out = np.full(cand_arr.shape[0], np.nan, dtype=float)
+    if cand_arr.ndim != 2 or sample_arr.ndim != 2 or cand_arr.shape != sample_arr.shape:
+        return out
+    sum_w = np.sum(np.where(valid_mask, weight_arr, 0.0), axis=1)
+    ok = sum_w > 0.0
+    if not np.any(ok):
+        return out
+    diff = np.where(valid_mask, np.abs(cand_arr - sample_arr), 0.0)
+    power = max(float(p_norm), 1e-12)
+    acc = np.full(cand_arr.shape[0], np.nan, dtype=float)
+    acc_num = np.sum(np.where(valid_mask, weight_arr * np.power(diff, power), 0.0), axis=1)
+    acc[ok] = acc_num[ok] / sum_w[ok]
+    out[ok] = np.power(np.maximum(acc[ok], 0.0), 1.0 / power)
+    return out
+
+
+def _normalize_vectors_pairwise(
+    *,
+    sample: np.ndarray,
+    candidates: np.ndarray,
+    valid: np.ndarray,
+    weights: np.ndarray,
+    normalization: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    sample_arr = np.asarray(sample, dtype=float)
+    cand_arr = np.asarray(candidates, dtype=float)
+    valid_mask = np.asarray(valid, dtype=bool)
+    weight_arr = np.asarray(weights, dtype=float)
+    sample_out = np.where(valid_mask, sample_arr, np.nan)
+    cand_out = np.where(valid_mask, cand_arr, np.nan)
+    mode = str(normalization).strip().lower()
+    if mode == "none":
+        return sample_out, cand_out
+
+    if mode == "unit_sum":
+        sample_pos = np.where(valid_mask, np.clip(sample_arr, 0.0, None), 0.0)
+        cand_pos = np.where(valid_mask, np.clip(cand_arr, 0.0, None), 0.0)
+        sample_scale = np.sum(sample_pos, axis=1)
+        cand_scale = np.sum(cand_pos, axis=1)
+        sample_scale = np.where(sample_scale > 1e-12, sample_scale, 1.0)
+        cand_scale = np.where(cand_scale > 1e-12, cand_scale, 1.0)
+        return sample_pos / sample_scale[:, None], cand_pos / cand_scale[:, None]
+
+    sum_w = np.sum(np.where(valid_mask, weight_arr, 0.0), axis=1)
+    ok = sum_w > 0.0
+    if not np.any(ok):
+        return sample_out, cand_out
+
+    sample_mu = np.full(sample_arr.shape[0], 0.0, dtype=float)
+    cand_mu = np.full(cand_arr.shape[0], 0.0, dtype=float)
+    sample_mu[ok] = np.sum(np.where(valid_mask[ok], weight_arr[ok] * sample_arr[ok], 0.0), axis=1) / sum_w[ok]
+    cand_mu[ok] = np.sum(np.where(valid_mask[ok], weight_arr[ok] * cand_arr[ok], 0.0), axis=1) / sum_w[ok]
+
+    if mode == "center":
+        return sample_arr - sample_mu[:, None], cand_arr - cand_mu[:, None]
+
+    if mode == "zscore":
+        sample_centered = sample_arr - sample_mu[:, None]
+        cand_centered = cand_arr - cand_mu[:, None]
+        sample_var = np.full(sample_arr.shape[0], 1.0, dtype=float)
+        cand_var = np.full(cand_arr.shape[0], 1.0, dtype=float)
+        sample_var[ok] = np.sum(np.where(valid_mask[ok], weight_arr[ok] * sample_centered[ok] * sample_centered[ok], 0.0), axis=1) / sum_w[ok]
+        cand_var[ok] = np.sum(np.where(valid_mask[ok], weight_arr[ok] * cand_centered[ok] * cand_centered[ok], 0.0), axis=1) / sum_w[ok]
+        sample_scale = np.where(sample_var > 1e-12, np.sqrt(sample_var), 1.0)
+        cand_scale = np.where(cand_var > 1e-12, np.sqrt(cand_var), 1.0)
+        return sample_centered / sample_scale[:, None], cand_centered / cand_scale[:, None]
+
+    if mode == "minmax":
+        sample_masked = np.where(valid_mask, sample_arr, np.nan)
+        cand_masked = np.where(valid_mask, cand_arr, np.nan)
+        sample_min = np.nanmin(sample_masked, axis=1)
+        sample_max = np.nanmax(sample_masked, axis=1)
+        cand_min = np.nanmin(cand_masked, axis=1)
+        cand_max = np.nanmax(cand_masked, axis=1)
+        sample_scale = np.where((sample_max - sample_min) > 1e-12, sample_max - sample_min, 1.0)
+        cand_scale = np.where((cand_max - cand_min) > 1e-12, cand_max - cand_min, 1.0)
+        return (sample_arr - sample_min[:, None]) / sample_scale[:, None], (cand_arr - cand_min[:, None]) / cand_scale[:, None]
+
+    if mode == "l2norm":
+        sample_scale = np.sqrt(np.sum(np.where(valid_mask, weight_arr * sample_arr * sample_arr, 0.0), axis=1) / np.maximum(sum_w, 1e-12))
+        cand_scale = np.sqrt(np.sum(np.where(valid_mask, weight_arr * cand_arr * cand_arr, 0.0), axis=1) / np.maximum(sum_w, 1e-12))
+        sample_scale = np.where(sample_scale > 1e-12, sample_scale, 1.0)
+        cand_scale = np.where(cand_scale > 1e-12, cand_scale, 1.0)
+        return sample_arr / sample_scale[:, None], cand_arr / cand_scale[:, None]
+
+    return sample_out, cand_out
+
+
+def _normalize_vector_rows(
+    *,
+    values: np.ndarray,
+    valid: np.ndarray,
+    weights: np.ndarray,
+    normalization: str,
+) -> np.ndarray:
+    arr = np.asarray(values, dtype=float)
+    valid_mask = np.asarray(valid, dtype=bool)
+    weight_arr = np.asarray(weights, dtype=float)
+    out = np.where(valid_mask, arr, np.nan)
+    mode = str(normalization).strip().lower()
+    if mode == "none":
         return out
 
-    valid_mask = np.isfinite(sample)[None, :] & np.isfinite(candidates)
-    valid_counts = np.sum(valid_mask, axis=1)
+    if mode == "unit_sum":
+        arr_pos = np.where(valid_mask, np.clip(arr, 0.0, None), 0.0)
+        scale = np.sum(arr_pos, axis=1)
+        scale = np.where(scale > 1e-12, scale, 1.0)
+        return arr_pos / scale[:, None]
 
-    sample_clipped = np.clip(sample, 0.0, None)[None, :]
-    candidates_clipped = np.clip(candidates, 0.0, None)
-    p = np.where(valid_mask, sample_clipped, 0.0)
-    q = np.where(valid_mask, candidates_clipped, 0.0)
-
-    sum_p = np.sum(p, axis=1)
-    sum_q = np.sum(q, axis=1)
-    ok = (valid_counts >= 2) & (sum_p > 0.0) & (sum_q > 0.0)
+    sum_w = np.sum(np.where(valid_mask, weight_arr, 0.0), axis=1)
+    ok = sum_w > 0.0
     if not np.any(ok):
         return out
 
-    p_ok = p[ok] / sum_p[ok, None]
-    q_ok = q[ok] / sum_q[ok, None]
-    cdf_diff = np.abs(np.cumsum(p_ok, axis=1) - np.cumsum(q_ok, axis=1))
-    out[ok] = np.mean(cdf_diff, axis=1)
+    mu = np.full(arr.shape[0], 0.0, dtype=float)
+    mu[ok] = np.sum(np.where(valid_mask[ok], weight_arr[ok] * arr[ok], 0.0), axis=1) / sum_w[ok]
+
+    if mode == "center":
+        return np.where(valid_mask, arr - mu[:, None], np.nan)
+
+    if mode == "zscore":
+        centered = arr - mu[:, None]
+        var = np.full(arr.shape[0], 1.0, dtype=float)
+        var[ok] = np.sum(
+            np.where(valid_mask[ok], weight_arr[ok] * centered[ok] * centered[ok], 0.0),
+            axis=1,
+        ) / sum_w[ok]
+        scale = np.where(var > 1e-12, np.sqrt(var), 1.0)
+        return np.where(valid_mask, centered / scale[:, None], np.nan)
+
+    if mode == "minmax":
+        masked = np.where(valid_mask, arr, np.nan)
+        min_v = np.nanmin(masked, axis=1)
+        max_v = np.nanmax(masked, axis=1)
+        scale = np.where((max_v - min_v) > 1e-12, max_v - min_v, 1.0)
+        return np.where(valid_mask, (arr - min_v[:, None]) / scale[:, None], np.nan)
+
+    if mode == "l2norm":
+        scale = np.sqrt(
+            np.sum(np.where(valid_mask, weight_arr * arr * arr, 0.0), axis=1) / np.maximum(sum_w, 1e-12)
+        )
+        scale = np.where(scale > 1e-12, scale, 1.0)
+        return np.where(valid_mask, arr / scale[:, None], np.nan)
+
     return out
+
+
+def _fit_local_linear_embedding_standardization(
+    raw_matrix: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    arr = np.asarray(raw_matrix, dtype=float)
+    if arr.ndim != 2 or arr.shape[1] == 0:
+        return np.asarray([], dtype=float), np.asarray([], dtype=float)
+    center = np.nanmedian(arr, axis=0)
+    mad = np.nanmedian(np.abs(arr - center[None, :]), axis=0)
+    std = np.nanstd(arr, axis=0)
+    scale = np.where(np.isfinite(mad) & (mad > 1e-12), 1.4826 * mad, std)
+    scale = np.where(np.isfinite(scale) & (scale > 1e-12), scale, 1.0)
+    center = np.where(np.isfinite(center), center, 0.0)
+    return center.astype(float), scale.astype(float)
+
+
+def _apply_local_linear_embedding_standardization(
+    raw_matrix: np.ndarray,
+    *,
+    center: np.ndarray,
+    scale: np.ndarray,
+) -> np.ndarray:
+    arr = np.asarray(raw_matrix, dtype=float)
+    if arr.ndim != 2 or arr.shape[1] == 0:
+        return np.empty((arr.shape[0] if arr.ndim == 2 else 0, 0), dtype=float)
+    center_arr = np.asarray(center, dtype=float)
+    scale_arr = np.asarray(scale, dtype=float)
+    if center_arr.shape[0] != arr.shape[1] or scale_arr.shape[0] != arr.shape[1]:
+        return np.empty((arr.shape[0], 0), dtype=float)
+    out = (arr - center_arr[None, :]) / scale_arr[None, :]
+    return np.where(np.isfinite(out), out, 0.0)
+
+
+def _ordered_vector_local_linear_embedding_raw(
+    *,
+    values: np.ndarray,
+    feature_names: Sequence[str],
+    centers: np.ndarray | None = None,
+    axis_name: str | None = None,
+    fiducial: Mapping[str, float | None] | None = None,
+    uncertainties: np.ndarray | None = None,
+    uncertainty_floor: float = 0.0,
+    normalization: str = "none",
+    amplitude_weight: float = 0.0,
+    shape_weight: float = 1.0,
+    slope_weight: float = 0.0,
+    cdf_weight: float = 0.0,
+    amplitude_stat: str = "mean",
+    label_prefix: str = "",
+) -> tuple[np.ndarray, list[str]]:
+    arr = np.asarray(values, dtype=float)
+    if arr.ndim != 2 or arr.shape[1] == 0:
+        return np.empty((arr.shape[0] if arr.ndim == 2 else 0, 0), dtype=float), []
+    if centers is None:
+        center_vals = np.arange(arr.shape[1], dtype=float)
+        center_mask = np.ones(arr.shape[1], dtype=bool)
+    else:
+        center_vals = np.asarray(centers, dtype=float)
+        if center_vals.shape[0] != arr.shape[1]:
+            return np.empty((arr.shape[0], 0), dtype=float), []
+        center_mask = _efficiency_vector_bin_mask(
+            centers=center_vals,
+            axis_name=str(axis_name or ""),
+            fiducial=fiducial or {},
+        ) if fiducial is not None else np.isfinite(center_vals)
+    if not np.any(center_mask):
+        return np.empty((arr.shape[0], 0), dtype=float), []
+
+    valid = center_mask[None, :] & np.isfinite(arr)
+    if uncertainties is not None:
+        unc_arr = np.asarray(uncertainties, dtype=float)
+        if unc_arr.shape != arr.shape:
+            unc_arr = None
+    else:
+        unc_arr = None
+    floor_sq = max(float(uncertainty_floor), 0.0) ** 2
+    if unc_arr is not None:
+        var = np.where(np.isfinite(unc_arr), unc_arr * unc_arr, 0.0)
+        denom = np.maximum(var + floor_sq, floor_sq if floor_sq > 0.0 else 1e-12)
+        weights = np.where(valid, 1.0 / denom, 0.0)
+    else:
+        weights = np.where(valid, 1.0, 0.0)
+
+    arr_norm = _normalize_vector_rows(
+        values=arr,
+        valid=valid,
+        weights=weights,
+        normalization=normalization,
+    )
+
+    parts: list[np.ndarray] = []
+    labels: list[str] = []
+    names = [str(name) for name in feature_names]
+    prefix = f"{label_prefix}::" if label_prefix else ""
+
+    if float(amplitude_weight) > 0.0:
+        if str(amplitude_stat).strip().lower() == "sum":
+            amp_vals = np.sum(np.where(valid, arr, 0.0), axis=1)
+        else:
+            sum_w = np.sum(np.where(valid, weights, 0.0), axis=1)
+            amp_vals = np.zeros(arr.shape[0], dtype=float)
+            ok = sum_w > 0.0
+            amp_vals[ok] = np.sum(np.where(valid[ok], weights[ok] * arr[ok], 0.0), axis=1) / sum_w[ok]
+        parts.append((float(amplitude_weight) * amp_vals)[:, None])
+        labels.append(f"{prefix}amplitude")
+
+    if float(shape_weight) > 0.0:
+        shape_cols = np.where(valid, float(shape_weight) * arr_norm, np.nan)
+        parts.append(shape_cols)
+        labels.extend(f"{prefix}shape::{name}" for name in names)
+
+    if float(slope_weight) > 0.0 and arr.shape[1] >= 2:
+        delta = np.diff(center_vals)
+        delta = np.where(np.isfinite(delta) & (np.abs(delta) > 1e-12), delta, 1.0)
+        slope_valid = valid[:, 1:] & valid[:, :-1]
+        slopes = np.where(
+            slope_valid,
+            float(slope_weight) * (arr_norm[:, 1:] - arr_norm[:, :-1]) / delta[None, :],
+            np.nan,
+        )
+        parts.append(slopes)
+        labels.extend(f"{prefix}slope::{names[idx+1]}" for idx in range(arr.shape[1] - 1))
+
+    if float(cdf_weight) > 0.0:
+        pos = np.where(valid, np.clip(arr_norm, 0.0, None), 0.0)
+        sums = np.sum(pos, axis=1)
+        cdf = np.full(arr.shape, np.nan, dtype=float)
+        ok = sums > 1e-12
+        if np.any(ok):
+            cdf[ok] = np.cumsum(pos[ok] / sums[ok, None], axis=1)
+        parts.append(float(cdf_weight) * cdf)
+        labels.extend(f"{prefix}cdf::{name}" for name in names)
+
+    if not parts:
+        return np.empty((arr.shape[0], 0), dtype=float), []
+    raw = np.concatenate(parts, axis=1)
+    return raw.astype(float), labels
+
+
+def build_rate_histogram_local_linear_embedding(
+    *,
+    hist_matrix: np.ndarray,
+    feature_names: Sequence[str],
+    hist_cfg: Mapping[str, object] | None,
+    standardization: Mapping[str, object] | None = None,
+) -> tuple[np.ndarray, dict[str, object]]:
+    cfg = _resolve_histogram_distance_cfg(hist_cfg if isinstance(hist_cfg, Mapping) else {})
+    raw, labels = _ordered_vector_local_linear_embedding_raw(
+        values=np.asarray(hist_matrix, dtype=float),
+        feature_names=feature_names,
+        centers=np.arange(len(feature_names), dtype=float),
+        axis_name="rate_histogram",
+        normalization=str(cfg["normalization"]),
+        amplitude_weight=float(cfg["amplitude_weight"]),
+        shape_weight=float(cfg["shape_weight"]),
+        slope_weight=float(cfg["slope_weight"]),
+        cdf_weight=float(cfg["cdf_weight"]),
+        amplitude_stat=str(cfg["amplitude_stat"]),
+        label_prefix="rate_histogram",
+    )
+    if raw.shape[1] == 0:
+        return np.empty((raw.shape[0], 0), dtype=float), {"labels": [], "center": [], "scale": []}
+    if isinstance(standardization, Mapping):
+        center = np.asarray(standardization.get("center", []), dtype=float)
+        scale = np.asarray(standardization.get("scale", []), dtype=float)
+        meta_labels = [str(item) for item in standardization.get("labels", [])]
+        if center.shape[0] != raw.shape[1] or scale.shape[0] != raw.shape[1] or len(meta_labels) != raw.shape[1]:
+            center, scale = _fit_local_linear_embedding_standardization(raw)
+            meta_labels = list(labels)
+    else:
+        center, scale = _fit_local_linear_embedding_standardization(raw)
+        meta_labels = list(labels)
+    embedding = _apply_local_linear_embedding_standardization(raw, center=center, scale=scale)
+    meta = {
+        "labels": list(meta_labels),
+        "center": center.astype(float).tolist(),
+        "scale": scale.astype(float).tolist(),
+    }
+    return embedding, meta
+
+
+def build_ordered_vector_group_local_linear_embedding(
+    *,
+    values: np.ndarray,
+    feature_names: Sequence[str],
+    group_cfg: Mapping[str, object] | None,
+    label_prefix: str,
+    standardization: Mapping[str, object] | None = None,
+) -> tuple[np.ndarray, dict[str, object]]:
+    cfg = _resolve_ordered_vector_group_distance_cfg(group_cfg if isinstance(group_cfg, Mapping) else {})
+    raw, labels = _ordered_vector_local_linear_embedding_raw(
+        values=np.asarray(values, dtype=float),
+        feature_names=feature_names,
+        centers=np.arange(len(feature_names), dtype=float),
+        axis_name=str(label_prefix),
+        normalization=str(cfg["normalization"]),
+        amplitude_weight=float(cfg["amplitude_weight"]),
+        shape_weight=float(cfg["shape_weight"]),
+        slope_weight=float(cfg["slope_weight"]),
+        cdf_weight=float(cfg["cdf_weight"]),
+        amplitude_stat=str(cfg["amplitude_stat"]),
+        label_prefix=str(label_prefix),
+    )
+    if raw.shape[1] == 0:
+        return np.empty((raw.shape[0], 0), dtype=float), {"labels": [], "center": [], "scale": []}
+    if isinstance(standardization, Mapping):
+        center = np.asarray(standardization.get("center", []), dtype=float)
+        scale = np.asarray(standardization.get("scale", []), dtype=float)
+        meta_labels = [str(item) for item in standardization.get("labels", [])]
+        if center.shape[0] != raw.shape[1] or scale.shape[0] != raw.shape[1] or len(meta_labels) != raw.shape[1]:
+            center, scale = _fit_local_linear_embedding_standardization(raw)
+            meta_labels = list(labels)
+    else:
+        center, scale = _fit_local_linear_embedding_standardization(raw)
+        meta_labels = list(labels)
+    embedding = _apply_local_linear_embedding_standardization(raw, center=center, scale=scale)
+    meta = {
+        "labels": list(meta_labels),
+        "center": center.astype(float).tolist(),
+        "scale": scale.astype(float).tolist(),
+    }
+    return embedding, meta
+
+
+def build_efficiency_vector_local_linear_embedding(
+    *,
+    payloads: Sequence[Mapping[str, object]],
+    eff_cfg: Mapping[str, object] | None,
+    source: str,
+    standardization: Mapping[str, object] | None = None,
+) -> tuple[np.ndarray, dict[str, object]]:
+    cfg = _resolve_efficiency_vector_distance_cfg(eff_cfg if isinstance(eff_cfg, Mapping) else {})
+    raw_parts: list[np.ndarray] = []
+    labels: list[str] = []
+    for payload in payloads:
+        label = str(payload.get("label", "")).strip()
+        feature_names = [str(col) for col in payload.get("eff_cols", [])]
+        if not feature_names:
+            continue
+        values = np.asarray(payload.get(f"{source}_eff", []), dtype=float)
+        unc = np.asarray(payload.get(f"{source}_unc", []), dtype=float)
+        if values.ndim != 2 or values.shape[1] != len(feature_names):
+            continue
+        raw, raw_labels = _ordered_vector_local_linear_embedding_raw(
+            values=values,
+            feature_names=feature_names,
+            centers=np.asarray(payload.get("centers", []), dtype=float),
+            axis_name=str(payload.get("axis", "")),
+            fiducial=dict(cfg["fiducial"]),
+            uncertainties=unc if unc.ndim == 2 and unc.shape == values.shape else None,
+            uncertainty_floor=float(cfg["uncertainty_floor"]),
+            normalization=str(cfg["normalization"]),
+            amplitude_weight=float(cfg["amplitude_weight"]),
+            shape_weight=float(cfg["shape_weight"]),
+            slope_weight=float(cfg["slope_weight"]),
+            cdf_weight=float(cfg["cdf_weight"]),
+            amplitude_stat=str(cfg["amplitude_stat"]),
+            label_prefix=f"efficiency_vectors::{label}" if label else "efficiency_vectors",
+        )
+        if raw.shape[1] == 0:
+            continue
+        raw_parts.append(raw)
+        labels.extend(raw_labels)
+    if not raw_parts:
+        return np.empty((0, 0), dtype=float), {"labels": [], "center": [], "scale": []}
+    raw_matrix = np.concatenate(raw_parts, axis=1)
+    if isinstance(standardization, Mapping):
+        center = np.asarray(standardization.get("center", []), dtype=float)
+        scale = np.asarray(standardization.get("scale", []), dtype=float)
+        meta_labels = [str(item) for item in standardization.get("labels", [])]
+        if center.shape[0] != raw_matrix.shape[1] or scale.shape[0] != raw_matrix.shape[1] or len(meta_labels) != raw_matrix.shape[1]:
+            center, scale = _fit_local_linear_embedding_standardization(raw_matrix)
+            meta_labels = list(labels)
+    else:
+        center, scale = _fit_local_linear_embedding_standardization(raw_matrix)
+        meta_labels = list(labels)
+    embedding = _apply_local_linear_embedding_standardization(raw_matrix, center=center, scale=scale)
+    meta = {
+        "labels": list(meta_labels),
+        "center": center.astype(float).tolist(),
+        "scale": scale.astype(float).tolist(),
+    }
+    return embedding, meta
+
+
+def _build_group_local_linear_feature_matrices(
+    *,
+    dict_feature_source: pd.DataFrame,
+    data_feature_source: pd.DataFrame,
+    feature_groups: Mapping[str, object] | None,
+    selected_feature_columns: Sequence[str],
+) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+    if not isinstance(feature_groups, Mapping):
+        return {}, {}
+
+    dict_group_features: dict[str, np.ndarray] = {}
+    data_group_features: dict[str, np.ndarray] = {}
+
+    for raw_group_name, raw_cfg in feature_groups.items():
+        group_name = str(raw_group_name).strip()
+        if not group_name or not isinstance(raw_cfg, Mapping):
+            continue
+        embed_meta = raw_cfg.get("local_linear_embedding", {})
+        if not isinstance(embed_meta, Mapping):
+            continue
+
+        group_kind = _resolve_feature_group_kind(group_name, raw_cfg)
+        if group_kind == "efficiency_vectors":
+            payloads = _prepare_efficiency_vector_group_payloads(
+                dict_df=dict_feature_source,
+                data_df=data_feature_source,
+            )
+            payloads = _filter_efficiency_vector_payloads(
+                payloads,
+                feature_groups_cfg=raw_cfg,
+                selected_feature_columns=selected_feature_columns,
+            )
+            if not payloads:
+                continue
+            dict_embed, _ = build_efficiency_vector_local_linear_embedding(
+                payloads=payloads,
+                eff_cfg=raw_cfg,
+                source="dict",
+                standardization=embed_meta,
+            )
+            data_embed, _ = build_efficiency_vector_local_linear_embedding(
+                payloads=payloads,
+                eff_cfg=raw_cfg,
+                source="data",
+                standardization=embed_meta,
+            )
+        else:
+            group_cols = [
+                str(col)
+                for col in raw_cfg.get("feature_columns", [])
+                if str(col) in dict_feature_source.columns and str(col) in data_feature_source.columns
+            ]
+            if not group_cols:
+                continue
+            dict_matrix = (
+                dict_feature_source[group_cols]
+                .apply(pd.to_numeric, errors="coerce")
+                .to_numpy(dtype=float)
+            )
+            data_matrix = (
+                data_feature_source[group_cols]
+                .apply(pd.to_numeric, errors="coerce")
+                .to_numpy(dtype=float)
+            )
+            if group_kind == "rate_histogram":
+                dict_embed, _ = build_rate_histogram_local_linear_embedding(
+                    hist_matrix=dict_matrix,
+                    feature_names=group_cols,
+                    hist_cfg=raw_cfg,
+                    standardization=embed_meta,
+                )
+                data_embed, _ = build_rate_histogram_local_linear_embedding(
+                    hist_matrix=data_matrix,
+                    feature_names=group_cols,
+                    hist_cfg=raw_cfg,
+                    standardization=embed_meta,
+                )
+            else:
+                dict_embed, _ = build_ordered_vector_group_local_linear_embedding(
+                    values=dict_matrix,
+                    feature_names=group_cols,
+                    group_cfg=raw_cfg,
+                    label_prefix=f"group::{group_name}",
+                    standardization=embed_meta,
+                )
+                data_embed, _ = build_ordered_vector_group_local_linear_embedding(
+                    values=data_matrix,
+                    feature_names=group_cols,
+                    group_cfg=raw_cfg,
+                    label_prefix=f"group::{group_name}",
+                    standardization=embed_meta,
+                )
+        if dict_embed.ndim == 2 and data_embed.ndim == 2 and dict_embed.shape[1] == data_embed.shape[1]:
+            dict_group_features[group_name] = dict_embed
+            data_group_features[group_name] = data_embed
+
+    return dict_group_features, data_group_features
+
+
+def _ordered_vector_distance_many(
+    *,
+    sample_vec: np.ndarray,
+    candidates_vec: np.ndarray,
+    sample_unc: np.ndarray | None = None,
+    candidates_unc: np.ndarray | None = None,
+    centers: np.ndarray | None = None,
+    axis_name: str | None = None,
+    fiducial: Mapping[str, float | None] | None = None,
+    uncertainty_floor: float = 0.0,
+    min_valid_bins: int = 1,
+    normalization: str = "none",
+    p_norm: float = 2.0,
+    amplitude_weight: float = 0.0,
+    shape_weight: float = 1.0,
+    slope_weight: float = 0.0,
+    cdf_weight: float = 0.0,
+    amplitude_stat: str = "mean",
+) -> np.ndarray:
+    sample = np.asarray(sample_vec, dtype=float)
+    candidates = np.asarray(candidates_vec, dtype=float)
+    if sample.ndim != 1 or candidates.ndim != 2 or candidates.shape[1] != sample.size:
+        return np.full(candidates.shape[0] if candidates.ndim == 2 else 0, np.nan, dtype=float)
+    out = np.full(candidates.shape[0], np.nan, dtype=float)
+    if candidates.shape[0] == 0:
+        return out
+
+    if centers is None:
+        center_mask = np.ones(sample.shape[0], dtype=bool)
+        center_vals = np.arange(sample.shape[0], dtype=float)
+    else:
+        center_vals = np.asarray(centers, dtype=float)
+        if center_vals.shape[0] != sample.shape[0]:
+            return out
+        center_mask = _efficiency_vector_bin_mask(
+            centers=center_vals,
+            axis_name=str(axis_name or ""),
+            fiducial=fiducial or {},
+        ) if fiducial is not None else np.isfinite(center_vals)
+    if not np.any(center_mask):
+        return out
+
+    if sample_unc is None:
+        sample_unc_arr = np.zeros(sample.shape, dtype=float)
+    else:
+        sample_unc_arr = np.asarray(sample_unc, dtype=float)
+    if candidates_unc is None:
+        candidates_unc_arr = np.zeros(candidates.shape, dtype=float)
+    else:
+        candidates_unc_arr = np.asarray(candidates_unc, dtype=float)
+    if sample_unc_arr.shape != sample.shape or candidates_unc_arr.shape != candidates.shape:
+        return out
+
+    valid = center_mask[None, :] & np.isfinite(sample)[None, :] & np.isfinite(candidates)
+    valid_counts = np.sum(valid, axis=1)
+    ok = valid_counts >= max(int(min_valid_bins), 1)
+    if not np.any(ok):
+        return out
+
+    floor_sq = max(float(uncertainty_floor), 0.0) ** 2
+    if np.any(np.isfinite(sample_unc_arr)) or np.any(np.isfinite(candidates_unc_arr)):
+        sample_var = np.where(np.isfinite(sample_unc_arr), sample_unc_arr * sample_unc_arr, 0.0)
+        cand_var = np.where(np.isfinite(candidates_unc_arr), candidates_unc_arr * candidates_unc_arr, 0.0)
+        combined_var = floor_sq + sample_var[None, :] + cand_var
+        weights = np.where(valid, 1.0 / np.maximum(combined_var, floor_sq if floor_sq > 0.0 else 1e-12), 0.0)
+    else:
+        weights = np.where(valid, 1.0, 0.0)
+
+    sample_mat = np.broadcast_to(sample[None, :], candidates.shape)
+    sample_norm, cand_norm = _normalize_vectors_pairwise(
+        sample=sample_mat,
+        candidates=candidates,
+        valid=valid,
+        weights=weights,
+        normalization=normalization,
+    )
+    total = np.zeros(candidates.shape[0], dtype=float)
+
+    if amplitude_weight > 0.0:
+        amp = _relative_vector_amplitude_many(
+            sample=sample,
+            candidates=candidates,
+            valid=valid,
+            weights=weights,
+            stat=amplitude_stat,
+        )
+        total += max(float(amplitude_weight), 0.0) * np.where(np.isfinite(amp), amp, 0.0)
+
+    if shape_weight > 0.0:
+        shape = _weighted_lp_from_arrays(
+            sample=sample_norm,
+            candidates=cand_norm,
+            valid=valid,
+            weights=weights,
+            p_norm=float(p_norm),
+        )
+        total += max(float(shape_weight), 0.0) * np.where(np.isfinite(shape), shape, 0.0)
+
+    if slope_weight > 0.0 and sample.size >= 2:
+        delta = np.diff(center_vals)
+        delta = np.where(np.isfinite(delta) & (np.abs(delta) > 1e-12), delta, 1.0)
+        slope_valid = valid[:, 1:] & valid[:, :-1]
+        slope_weights = 0.5 * (weights[:, 1:] + weights[:, :-1])
+        sample_slope = (sample_norm[:, 1:] - sample_norm[:, :-1]) / delta[None, :]
+        cand_slope = (cand_norm[:, 1:] - cand_norm[:, :-1]) / delta[None, :]
+        slope = _weighted_lp_from_arrays(
+            sample=sample_slope,
+            candidates=cand_slope,
+            valid=slope_valid,
+            weights=slope_weights,
+            p_norm=float(p_norm),
+        )
+        total += max(float(slope_weight), 0.0) * np.where(np.isfinite(slope), slope, 0.0)
+
+    if cdf_weight > 0.0:
+        sample_pos = np.where(valid, np.clip(sample_norm, 0.0, None), 0.0)
+        cand_pos = np.where(valid, np.clip(cand_norm, 0.0, None), 0.0)
+        sample_sum = np.sum(sample_pos, axis=1)
+        cand_sum = np.sum(cand_pos, axis=1)
+        cdf_ok = sample_sum > 1e-12
+        cdf_valid = valid & cdf_ok[:, None] & (cand_sum > 1e-12)[:, None]
+        sample_cdf = np.cumsum(sample_pos / np.maximum(sample_sum[:, None], 1e-12), axis=1)
+        cand_cdf = np.cumsum(cand_pos / np.maximum(cand_sum[:, None], 1e-12), axis=1)
+        cdf = _weighted_lp_from_arrays(
+            sample=sample_cdf,
+            candidates=cand_cdf,
+            valid=cdf_valid,
+            weights=weights,
+            p_norm=float(p_norm),
+        )
+        total += max(float(cdf_weight), 0.0) * np.where(np.isfinite(cdf), cdf, 0.0)
+
+    out[ok] = total[ok]
+    return out
+
+
+def _resolve_histogram_distance_cfg(raw_cfg: Mapping[str, object] | None) -> dict[str, object]:
+    cfg = raw_cfg if isinstance(raw_cfg, Mapping) else {}
+    raw_mode = str(cfg.get("distance", "histogram_emd")).strip().lower()
+    defaults = {
+        "normalization": "unit_sum",
+        "p_norm": 1.0,
+        "amplitude_weight": 0.0,
+        "shape_weight": 0.0,
+        "slope_weight": 0.0,
+        "cdf_weight": 1.0,
+        "amplitude_stat": "sum",
+    }
+    if raw_mode in {"histogram_emd", "emd"}:
+        return _resolve_vector_distance_common_cfg(cfg, defaults=defaults)
+    if raw_mode in {"histogram_shape_plus_mass", "histogram_emd_shape_plus_mass", "shape_plus_mass", "emd_plus_mass"}:
+        hist_cfg = dict(cfg)
+        hist_cfg["distance"] = "ordered_vector_lp"
+        hist_cfg.setdefault("normalization", "unit_sum")
+        hist_cfg.setdefault("p_norm", 1.0)
+        hist_cfg.setdefault("shape_weight", 0.0)
+        hist_cfg.setdefault("slope_weight", 0.0)
+        hist_cfg.setdefault("cdf_weight", 1.0)
+        hist_cfg.setdefault("amplitude_stat", "sum")
+        hist_cfg.setdefault("amplitude_weight", cfg.get("mass_weight", 1.0))
+        return _resolve_vector_distance_common_cfg(hist_cfg, defaults=defaults)
+    if raw_mode in {"histogram_l1", "l1"}:
+        hist_cfg = dict(cfg)
+        hist_cfg.setdefault("distance", "ordered_vector_lp")
+        hist_cfg.setdefault("normalization", "unit_sum")
+        hist_cfg.setdefault("p_norm", 1.0)
+        hist_cfg.setdefault("shape_weight", cfg.get("shape_weight", 1.0))
+        hist_cfg.setdefault("amplitude_weight", cfg.get("mass_weight", 0.0))
+        hist_cfg.setdefault("slope_weight", 0.0)
+        hist_cfg.setdefault("cdf_weight", 0.0)
+        hist_cfg.setdefault("amplitude_stat", "sum")
+        return _resolve_vector_distance_common_cfg(hist_cfg, defaults=defaults)
+    if raw_mode in {"histogram_l2", "l2"}:
+        hist_cfg = dict(cfg)
+        hist_cfg.setdefault("distance", "ordered_vector_lp")
+        hist_cfg.setdefault("normalization", "unit_sum")
+        hist_cfg.setdefault("p_norm", 2.0)
+        hist_cfg.setdefault("shape_weight", cfg.get("shape_weight", 1.0))
+        hist_cfg.setdefault("amplitude_weight", cfg.get("mass_weight", 0.0))
+        hist_cfg.setdefault("slope_weight", 0.0)
+        hist_cfg.setdefault("cdf_weight", 0.0)
+        hist_cfg.setdefault("amplitude_stat", "sum")
+        return _resolve_vector_distance_common_cfg(hist_cfg, defaults=defaults)
+    if raw_mode in {"histogram_hellinger", "hellinger"}:
+        hist_cfg = dict(cfg)
+        hist_cfg.setdefault("distance", "ordered_vector_lp")
+        hist_cfg.setdefault("normalization", "unit_sum")
+        hist_cfg.setdefault("p_norm", 2.0)
+        hist_cfg.setdefault("shape_weight", cfg.get("shape_weight", 1.0))
+        hist_cfg.setdefault("amplitude_weight", cfg.get("mass_weight", 0.0))
+        hist_cfg.setdefault("slope_weight", 0.0)
+        hist_cfg.setdefault("cdf_weight", 0.0)
+        hist_cfg.setdefault("amplitude_stat", "sum")
+        return _resolve_vector_distance_common_cfg(hist_cfg, defaults=defaults)
+    if raw_mode in {"histogram_jsd", "jsd"}:
+        hist_cfg = dict(cfg)
+        hist_cfg.setdefault("distance", "ordered_vector_lp")
+        hist_cfg.setdefault("normalization", "unit_sum")
+        hist_cfg.setdefault("p_norm", 1.0)
+        hist_cfg.setdefault("shape_weight", cfg.get("shape_weight", 0.5))
+        hist_cfg.setdefault("amplitude_weight", cfg.get("mass_weight", 0.0))
+        hist_cfg.setdefault("slope_weight", 0.0)
+        hist_cfg.setdefault("cdf_weight", cfg.get("cdf_weight", 0.5))
+        hist_cfg.setdefault("amplitude_stat", "sum")
+        return _resolve_vector_distance_common_cfg(hist_cfg, defaults=defaults)
+    if raw_mode in {"ordered_vector_lp", "vector_curve_lp", "vector_lp", "lp"}:
+        return _resolve_vector_distance_common_cfg(cfg, defaults=defaults)
+    return _resolve_vector_distance_common_cfg(cfg, defaults=defaults)
+
+
+def _histogram_distance_many(
+    sample_hist: np.ndarray,
+    candidates_hist: np.ndarray,
+    *,
+    distance: str,
+    normalization: str = "unit_sum",
+    p_norm: float = 1.0,
+    amplitude_weight: float = 0.0,
+    shape_weight: float = 0.0,
+    slope_weight: float = 0.0,
+    cdf_weight: float = 1.0,
+    amplitude_stat: str = "sum",
+) -> np.ndarray:
+    hist_cfg = _resolve_histogram_distance_cfg(
+        {
+            "distance": distance,
+            "normalization": normalization,
+            "p_norm": p_norm,
+            "amplitude_weight": amplitude_weight,
+            "shape_weight": shape_weight,
+            "slope_weight": slope_weight,
+            "cdf_weight": cdf_weight,
+            "amplitude_stat": amplitude_stat,
+        }
+    )
+    return _ordered_vector_distance_many(
+        sample_vec=np.asarray(sample_hist, dtype=float),
+        candidates_vec=np.asarray(candidates_hist, dtype=float),
+        normalization=str(hist_cfg["normalization"]),
+        p_norm=float(hist_cfg["p_norm"]),
+        amplitude_weight=float(hist_cfg["amplitude_weight"]),
+        shape_weight=float(hist_cfg["shape_weight"]),
+        slope_weight=float(hist_cfg["slope_weight"]),
+        cdf_weight=float(hist_cfg["cdf_weight"]),
+        amplitude_stat=str(hist_cfg["amplitude_stat"]),
+    )
+
+
+def _histogram_component_share_breakdown(
+    *,
+    sample_hist: np.ndarray,
+    candidate_hist: np.ndarray,
+    feature_names: Sequence[str],
+    term_share_of_total: float,
+    distance: str = "ordered_vector_lp",
+    normalization: str = "unit_sum",
+    p_norm: float = 1.0,
+    amplitude_weight: float = 0.0,
+    shape_weight: float = 0.0,
+    slope_weight: float = 0.0,
+    cdf_weight: float = 1.0,
+    amplitude_stat: str = "sum",
+) -> tuple[dict[str, float], dict[str, float]]:
+    hist_cfg = _resolve_histogram_distance_cfg(
+        {
+            "distance": distance,
+            "normalization": normalization,
+            "p_norm": p_norm,
+            "amplitude_weight": amplitude_weight,
+            "shape_weight": shape_weight,
+            "slope_weight": slope_weight,
+            "cdf_weight": cdf_weight,
+            "amplitude_stat": amplitude_stat,
+        }
+    )
+    amp_scale = float(hist_cfg["amplitude_weight"])
+    shape_scale = float(hist_cfg["shape_weight"])
+    slope_scale = float(hist_cfg["slope_weight"])
+    cdf_scale = float(hist_cfg["cdf_weight"])
+    p_use = max(float(hist_cfg["p_norm"]), 1e-12)
+
+    sample = np.asarray(sample_hist, dtype=float)
+    candidate = np.asarray(candidate_hist, dtype=float)
+    names = [str(name) for name in feature_names]
+    if sample.ndim != 1 or candidate.ndim != 1 or sample.size != candidate.size or sample.size != len(names):
+        return {}, {}
+
+    valid_mask = np.isfinite(sample) & np.isfinite(candidate)
+    if int(np.sum(valid_mask)) < 1:
+        return {}, {}
+
+    valid = valid_mask[None, :]
+    weights = np.where(valid, 1.0, 0.0)
+    sample_mat = np.broadcast_to(sample[None, :], (1, sample.size))
+    candidate_mat = candidate[None, :]
+    sample_norm, candidate_norm = _normalize_vectors_pairwise(
+        sample=sample_mat,
+        candidates=candidate_mat,
+        valid=valid,
+        weights=weights,
+        normalization=str(hist_cfg["normalization"]),
+    )
+
+    bin_strengths = np.zeros(sample.size, dtype=float)
+    global_strengths: dict[str, float] = {}
+
+    if amp_scale > 0.0:
+        amp = _relative_vector_amplitude_many(
+            sample=sample,
+            candidates=candidate_mat,
+            valid=valid,
+            weights=weights,
+            stat=str(hist_cfg["amplitude_stat"]),
+        )
+        if amp.size and np.isfinite(amp[0]) and amp[0] > 0.0:
+            global_strengths["rate_histogram::total_amplitude"] = float(amp_scale * amp[0])
+
+    if shape_scale > 0.0:
+        diff = np.zeros(sample.size, dtype=float)
+        diff[valid_mask] = np.power(
+            np.abs(candidate_norm[0, valid_mask] - sample_norm[0, valid_mask]),
+            p_use,
+        )
+        bin_strengths += shape_scale * diff
+
+    if slope_scale > 0.0 and sample.size >= 2:
+        delta = np.ones(sample.size - 1, dtype=float)
+        slope_valid = valid_mask[1:] & valid_mask[:-1]
+        if np.any(slope_valid):
+            sample_slope = (sample_norm[0, 1:] - sample_norm[0, :-1]) / delta
+            cand_slope = (candidate_norm[0, 1:] - candidate_norm[0, :-1]) / delta
+            seg_strength = np.zeros(sample.size - 1, dtype=float)
+            seg_strength[slope_valid] = np.power(
+                np.abs(cand_slope[slope_valid] - sample_slope[slope_valid]),
+                p_use,
+            )
+            seg_strength *= slope_scale
+            bin_strengths[:-1] += 0.5 * seg_strength
+            bin_strengths[1:] += 0.5 * seg_strength
+
+    if cdf_scale > 0.0:
+        sample_pos = np.where(valid_mask, np.clip(sample_norm[0], 0.0, None), 0.0)
+        cand_pos = np.where(valid_mask, np.clip(candidate_norm[0], 0.0, None), 0.0)
+        sum_sample = float(np.sum(sample_pos))
+        sum_cand = float(np.sum(cand_pos))
+        if sum_sample > 1e-12 and sum_cand > 1e-12:
+            sample_cdf = np.cumsum(sample_pos / sum_sample)
+            cand_cdf = np.cumsum(cand_pos / sum_cand)
+            cdf_strength = np.zeros(sample.size, dtype=float)
+            cdf_strength[valid_mask] = np.power(
+                np.abs(cand_cdf[valid_mask] - sample_cdf[valid_mask]),
+                p_use,
+            )
+            bin_strengths += cdf_scale * cdf_strength
+
+    strength_sum = float(np.sum(bin_strengths[valid_mask]) + sum(global_strengths.values()))
+    if not np.isfinite(strength_sum) or strength_sum <= 0.0:
+        return {}, {}
+
+    within_term: dict[str, float] = {}
+    total_share: dict[str, float] = {}
+    scale = max(float(term_share_of_total), 0.0)
+    for idx, name in enumerate(names):
+        if not bool(valid_mask[idx]):
+            continue
+        value = float(bin_strengths[idx] / strength_sum)
+        if not np.isfinite(value) or value <= 0.0:
+            continue
+        key = f"rate_histogram::{name}"
+        within_term[key] = value
+        total_share[key] = float(scale * value)
+    for key, raw_value in global_strengths.items():
+        value = float(raw_value / strength_sum)
+        within_term[key] = value
+        total_share[key] = float(scale * value)
+    return total_share, within_term
+
+
+def _efficiency_vector_group_distance_many(
+    *,
+    sample_eff: np.ndarray,
+    candidates_eff: np.ndarray,
+    sample_unc: np.ndarray | None,
+    candidates_unc: np.ndarray | None,
+    centers: np.ndarray,
+    axis_name: str,
+    fiducial: Mapping[str, float | None],
+    uncertainty_floor: float,
+    min_valid_bins: int,
+    normalization: str = "none",
+    p_norm: float = 2.0,
+    amplitude_weight: float = 0.0,
+    shape_weight: float = 1.0,
+    slope_weight: float = 0.0,
+    cdf_weight: float = 0.0,
+    amplitude_stat: str = "mean",
+) -> np.ndarray:
+    return _ordered_vector_distance_many(
+        sample_vec=np.asarray(sample_eff, dtype=float),
+        candidates_vec=np.asarray(candidates_eff, dtype=float),
+        sample_unc=None if sample_unc is None else np.asarray(sample_unc, dtype=float),
+        candidates_unc=None if candidates_unc is None else np.asarray(candidates_unc, dtype=float),
+        centers=np.asarray(centers, dtype=float),
+        axis_name=str(axis_name),
+        fiducial=fiducial,
+        uncertainty_floor=float(uncertainty_floor),
+        min_valid_bins=int(min_valid_bins),
+        normalization=normalization,
+        p_norm=float(p_norm),
+        amplitude_weight=float(amplitude_weight),
+        shape_weight=float(shape_weight),
+        slope_weight=float(slope_weight),
+        cdf_weight=float(cdf_weight),
+        amplitude_stat=str(amplitude_stat),
+    )
+
+
+def _resolve_efficiency_vector_distance_cfg(raw_cfg: Mapping[str, object] | None) -> dict[str, object]:
+    cfg = raw_cfg if isinstance(raw_cfg, Mapping) else {}
+    raw_mode = str(cfg.get("distance", "uncertainty_weighted_vector_mean")).strip().lower()
+    defaults = {
+        "normalization": "none",
+        "p_norm": 2.0,
+        "amplitude_weight": 0.0,
+        "shape_weight": 1.0,
+        "slope_weight": 0.0,
+        "cdf_weight": 0.0,
+        "amplitude_stat": "mean",
+    }
+    group_reduction = "mean"
+    mapped_cfg = dict(cfg)
+    if raw_mode in {"uncertainty_weighted_vector_median", "uncertainty_weighted_rms_median"}:
+        mapped_cfg.setdefault("p_norm", 2.0)
+        group_reduction = "median"
+    elif raw_mode in {"uncertainty_weighted_vector_rms"}:
+        mapped_cfg.setdefault("p_norm", 2.0)
+        group_reduction = "rms"
+    elif raw_mode in {"uncertainty_weighted_vector_p75"}:
+        mapped_cfg.setdefault("p_norm", 2.0)
+        group_reduction = "p75"
+    elif raw_mode in {"uncertainty_weighted_vector_l1_mean", "uncertainty_weighted_abs_mean"}:
+        mapped_cfg.setdefault("p_norm", 1.0)
+        group_reduction = "mean"
+    elif raw_mode in {"uncertainty_weighted_vector_l1_median", "uncertainty_weighted_abs_median"}:
+        mapped_cfg.setdefault("p_norm", 1.0)
+        group_reduction = "median"
+    elif raw_mode in {"uncertainty_weighted_vector_l1_rms"}:
+        mapped_cfg.setdefault("p_norm", 1.0)
+        group_reduction = "rms"
+    elif raw_mode in {"uncertainty_weighted_vector_l1_p75"}:
+        mapped_cfg.setdefault("p_norm", 1.0)
+        group_reduction = "p75"
+    elif raw_mode in {"uncertainty_weighted_vector_max", "uncertainty_weighted_rms_max"}:
+        mapped_cfg.setdefault("p_norm", 2.0)
+        group_reduction = "max"
+    elif raw_mode in {"uncertainty_weighted_vector_l1_max"}:
+        mapped_cfg.setdefault("p_norm", 1.0)
+        group_reduction = "max"
+    elif raw_mode in {"ordered_vector_lp", "vector_curve_lp", "vector_lp", "lp"}:
+        group_reduction = str(cfg.get("group_reduction", "mean")).strip().lower()
+    else:
+        mapped_cfg.setdefault("p_norm", 2.0)
+        group_reduction = str(cfg.get("group_reduction", "mean")).strip().lower()
+
+    if group_reduction not in {"mean", "median", "max", "rms", "p75"}:
+        group_reduction = "mean"
+
+    vector_cfg = _resolve_vector_distance_common_cfg(mapped_cfg, defaults=defaults)
+    uncertainty_floor = max(_safe_float(cfg.get("uncertainty_floor"), 0.02), 0.0)
+    min_valid_bins = max(
+        1,
+        _safe_int(cfg.get("min_valid_bins_per_vector"), 3, minimum=1),
+    )
+    fiducial = _normalize_efficiency_vector_fiducial(cfg.get("fiducial", {}))
+    vector_cfg.update(
+        {
+            "group_reduction": group_reduction,
+            "uncertainty_floor": float(uncertainty_floor),
+            "min_valid_bins_per_vector": int(min_valid_bins),
+            "fiducial": fiducial,
+        }
+    )
+    p_norm = float(vector_cfg.get("p_norm", 2.0))
+    if np.isclose(p_norm, 1.0):
+        vector_cfg["pointwise_loss"] = "l1"
+    elif np.isclose(p_norm, 2.0):
+        vector_cfg["pointwise_loss"] = "l2"
+    else:
+        vector_cfg["pointwise_loss"] = f"lp{p_norm:g}"
+    return vector_cfg
+
+
+def _reduce_efficiency_vector_group_stack(
+    stacked: np.ndarray,
+    *,
+    group_reduction: str,
+) -> np.ndarray:
+    arr = np.asarray(stacked, dtype=float)
+    if arr.ndim != 2:
+        return np.asarray([], dtype=float)
+    out = np.full(arr.shape[1], np.nan, dtype=float)
+    finite = np.isfinite(arr)
+    ok = np.sum(finite, axis=0) > 0
+    if not np.any(ok):
+        return out
+    with np.errstate(invalid="ignore"):
+        if str(group_reduction).strip().lower() == "median":
+            out[ok] = np.nanmedian(arr[:, ok], axis=0)
+        elif str(group_reduction).strip().lower() == "max":
+            out[ok] = np.nanmax(arr[:, ok], axis=0)
+        elif str(group_reduction).strip().lower() == "rms":
+            out[ok] = np.sqrt(np.nanmean(arr[:, ok] * arr[:, ok], axis=0))
+        elif str(group_reduction).strip().lower() == "p75":
+            out[ok] = np.nanpercentile(arr[:, ok], 75.0, axis=0)
+        else:
+            out[ok] = np.nanmean(arr[:, ok], axis=0)
+    return out
+
+
+def _efficiency_vector_component_share_breakdown(
+    *,
+    payloads: Sequence[Mapping[str, object]],
+    row_idx: int,
+    candidate_idx: int,
+    fiducial: Mapping[str, float | None],
+    uncertainty_floor: float,
+    min_valid_bins: int,
+    term_share_of_total: float,
+    normalization: str = "none",
+    p_norm: float = 2.0,
+    amplitude_weight: float = 0.0,
+    shape_weight: float = 1.0,
+    slope_weight: float = 0.0,
+    cdf_weight: float = 0.0,
+    amplitude_stat: str = "mean",
+    group_reduction: str = "mean",
+) -> tuple[dict[str, float], dict[str, float]]:
+    if not payloads:
+        return {}, {}
+
+    group_values: dict[str, float] = {}
+    for payload in payloads:
+        label = str(payload.get("label", "")).strip()
+        if not label:
+            continue
+        sample_eff = np.asarray(payload.get("data_eff", []), dtype=float)
+        dict_eff = np.asarray(payload.get("dict_eff", []), dtype=float)
+        if sample_eff.ndim != 2 or dict_eff.ndim != 2:
+            continue
+        if row_idx < 0 or row_idx >= sample_eff.shape[0] or candidate_idx < 0 or candidate_idx >= dict_eff.shape[0]:
+            continue
+        sample_unc = np.asarray(payload.get("data_unc", []), dtype=float)
+        dict_unc = np.asarray(payload.get("dict_unc", []), dtype=float)
+        group_dist = _efficiency_vector_group_distance_many(
+            sample_eff=sample_eff[row_idx],
+            candidates_eff=dict_eff[candidate_idx : candidate_idx + 1],
+            sample_unc=sample_unc[row_idx] if sample_unc.ndim == 2 else None,
+            candidates_unc=dict_unc[candidate_idx : candidate_idx + 1] if dict_unc.ndim == 2 else None,
+            centers=np.asarray(payload.get("centers", []), dtype=float),
+            axis_name=str(payload.get("axis", "")),
+            fiducial=fiducial,
+            uncertainty_floor=uncertainty_floor,
+            min_valid_bins=min_valid_bins,
+            normalization=normalization,
+            p_norm=p_norm,
+            amplitude_weight=amplitude_weight,
+            shape_weight=shape_weight,
+            slope_weight=slope_weight,
+            cdf_weight=cdf_weight,
+            amplitude_stat=amplitude_stat,
+        )
+        if group_dist is None or group_dist.size == 0:
+            continue
+        value = float(group_dist[0])
+        if np.isfinite(value) and value > 0.0:
+            group_values[f"efficiency_vectors::{label}"] = value
+
+    if not group_values:
+        return {}, {}
+
+    reduction = str(group_reduction).strip().lower()
+    if reduction == "max":
+        max_key = max(group_values.items(), key=lambda item: float(item[1]))[0]
+        strengths = {key: (1.0 if key == max_key else 0.0) for key in group_values}
+    elif reduction == "rms":
+        strengths = {key: float(value * value) for key, value in group_values.items()}
+    else:
+        strengths = {key: float(value) for key, value in group_values.items()}
+
+    value_sum = float(sum(strengths.values()))
+    if not np.isfinite(value_sum) or value_sum <= 0.0:
+        return {}, {}
+
+    within_term = {
+        key: float(value / value_sum)
+        for key, value in strengths.items()
+    }
+    scale = max(float(term_share_of_total), 0.0)
+    total_share = {
+        key: float(scale * share)
+        for key, share in within_term.items()
+    }
+    return total_share, within_term
 
 
 def _distance_many(
@@ -349,42 +2066,156 @@ def _effective_atol(base_atol: float, value: float) -> float:
     return max(base_atol, base_atol * max(1.0, abs(value)))
 
 
-def _combine_base_and_hist_distances(
+def _combine_distance_terms(
     *,
     base_distances: np.ndarray | None,
-    hist_distances: np.ndarray | None,
-    hist_weight: float,
-    blend_mode: str,
+    aux_terms: Sequence[tuple[np.ndarray | None, float, str]],
 ) -> np.ndarray:
+    named_aux_terms = [
+        (f"aux_{idx}", distances, weight, blend_mode)
+        for idx, (distances, weight, blend_mode) in enumerate(aux_terms)
+    ]
+    total, _ = _combine_distance_terms_with_breakdown(
+        base_distances=base_distances,
+        aux_terms=named_aux_terms,
+    )
+    return total
+
+
+def _combine_distance_terms_with_breakdown(
+    *,
+    base_distances: np.ndarray | None,
+    aux_terms: Sequence[tuple[str, np.ndarray | None, float, str]],
+) -> tuple[np.ndarray, dict[str, np.ndarray]]:
     base = None if base_distances is None else np.asarray(base_distances, dtype=float)
-    hist = None if hist_distances is None else np.asarray(hist_distances, dtype=float)
+    present_aux: list[tuple[str, np.ndarray, float, str]] = []
+    for name, distances, weight, blend_mode in aux_terms:
+        if distances is None or float(weight) <= 0.0:
+            continue
+        label = str(name).strip() or f"aux_{len(present_aux)}"
+        present_aux.append(
+            (
+                label,
+                np.asarray(distances, dtype=float),
+                float(weight),
+                _normalize_hist_blend_mode(blend_mode),
+            )
+        )
 
-    if base is None and hist is None:
-        return np.asarray([], dtype=float)
-    if base is None:
-        if blend_mode == "normalized":
-            return float(hist_weight) * (hist / _robust_scale(hist))
-        return float(hist_weight) * hist
-    if hist is None:
-        return base
-
-    if base.shape != hist.shape:
-        return np.full(base.shape[0], np.nan, dtype=float)
-
-    if blend_mode == "normalized":
-        base_term = base / _robust_scale(base)
-        hist_term = hist / _robust_scale(hist)
+    if base is None and not present_aux:
+        return np.asarray([], dtype=float), {}
+    if base is not None:
+        ref_shape = base.shape
     else:
-        base_term = base
-        hist_term = hist
+        ref_shape = present_aux[0][1].shape
+    for _, distances, _, _ in present_aux:
+        if distances.shape != ref_shape:
+            return np.full(ref_shape[0], np.nan, dtype=float), {}
 
-    out = np.asarray(base_term, dtype=float).copy()
-    base_finite = np.isfinite(out)
-    hist_finite = np.isfinite(hist_term)
-    both_finite = base_finite & hist_finite
-    hist_only = (~base_finite) & hist_finite
-    out[both_finite] = out[both_finite] + float(hist_weight) * hist_term[both_finite]
-    out[hist_only] = float(hist_weight) * hist_term[hist_only]
+    term_arrays: dict[str, np.ndarray] = {}
+    use_normalized_base = base is not None and any(mode == "normalized" for _, _, _, mode in present_aux)
+    if base is None:
+        out = np.full(ref_shape[0], np.nan, dtype=float)
+    else:
+        base_term = base / _robust_scale(base) if use_normalized_base else base
+        out = np.asarray(base_term, dtype=float).copy()
+        term_arrays["scalar_base"] = out.copy()
+
+    for name, distances, weight, blend_mode in present_aux:
+        term = distances / _robust_scale(distances) if blend_mode == "normalized" else distances
+        term = float(weight) * np.asarray(term, dtype=float)
+        term_arrays[name] = term.copy()
+        term_finite = np.isfinite(term)
+        if out.shape != term.shape:
+            return np.full(ref_shape[0], np.nan, dtype=float), {}
+        out_finite = np.isfinite(out)
+        both_finite = out_finite & term_finite
+        term_only = (~out_finite) & term_finite
+        out[both_finite] = out[both_finite] + term[both_finite]
+        out[term_only] = term[term_only]
+    return out, term_arrays
+
+
+def _compute_non_hist_base_distances(
+    *,
+    distance_metric: str,
+    sample_scaled_non_hist: np.ndarray | None,
+    candidates_scaled_non_hist: np.ndarray | None,
+    min_valid_non_hist_dims: int = 2,
+    dd_weights: np.ndarray | None = None,
+    dd_p_norm: float | None = None,
+) -> np.ndarray | None:
+    if sample_scaled_non_hist is None or candidates_scaled_non_hist is None:
+        return None
+    if dd_weights is not None and dd_p_norm is not None:
+        return _weighted_lp_many(
+            sample_scaled_non_hist,
+            candidates_scaled_non_hist,
+            weights=dd_weights,
+            p_norm=dd_p_norm,
+            min_valid_dims=max(int(min_valid_non_hist_dims), 1),
+        )
+    return _distance_many(
+        sample_scaled_non_hist,
+        candidates_scaled_non_hist,
+        distance_metric=distance_metric,
+        min_valid_dims=max(int(min_valid_non_hist_dims), 1),
+    )
+
+
+def _scalar_feature_total_share_breakdown(
+    *,
+    feature_names: Sequence[str],
+    sample_values: np.ndarray | None,
+    candidate_values: np.ndarray | None,
+    scalar_term_value: float,
+    total_distance_value: float,
+    distance_metric: str,
+    dd_weights: np.ndarray | None = None,
+    dd_p_norm: float | None = None,
+) -> dict[str, float]:
+    if sample_values is None or candidate_values is None:
+        return {}
+    scalar_term = float(scalar_term_value)
+    total_distance = float(total_distance_value)
+    if not np.isfinite(scalar_term) or scalar_term <= 0.0:
+        return {}
+    if not np.isfinite(total_distance) or total_distance <= 0.0:
+        return {}
+
+    sample = np.asarray(sample_values, dtype=float)
+    candidate = np.asarray(candidate_values, dtype=float)
+    if sample.shape != candidate.shape or sample.size != len(feature_names):
+        return {}
+
+    finite = np.isfinite(sample) & np.isfinite(candidate)
+    strengths = np.zeros(sample.shape[0], dtype=float)
+    if dd_weights is not None and dd_p_norm is not None:
+        weights = np.asarray(dd_weights, dtype=float)
+        if weights.shape != sample.shape:
+            return {}
+        finite &= weights > 0.0
+        strengths[finite] = weights[finite] * np.power(np.abs(candidate[finite] - sample[finite]), float(dd_p_norm))
+    else:
+        delta = np.abs(candidate[finite] - sample[finite])
+        metric = str(distance_metric).strip().lower()
+        if metric in {"l2", "l2_zscore", "l2_raw"}:
+            strengths[finite] = delta * delta
+        else:
+            strengths[finite] = delta
+
+    strength_sum = float(np.sum(strengths[finite]))
+    if not np.isfinite(strength_sum) or strength_sum <= 0.0:
+        return {}
+
+    scalar_share_of_total = scalar_term / total_distance
+    out: dict[str, float] = {}
+    for idx, name in enumerate(feature_names):
+        if not finite[idx]:
+            continue
+        value = scalar_share_of_total * float(strengths[idx] / strength_sum)
+        if np.isfinite(value) and value > 0.0:
+            out[str(name)] = value
     return out
 
 
@@ -397,6 +2228,14 @@ def compute_candidate_distances(
     candidates_hist_raw: np.ndarray | None,
     histogram_distance_weight: float,
     histogram_distance_blend_mode: str,
+    histogram_distance_mode: str = "ordered_vector_lp",
+    histogram_normalization: str = "unit_sum",
+    histogram_p_norm: float = 1.0,
+    histogram_amplitude_weight: float = 0.0,
+    histogram_shape_weight: float = 0.0,
+    histogram_slope_weight: float = 0.0,
+    histogram_cdf_weight: float = 1.0,
+    histogram_amplitude_stat: str = "sum",
     min_valid_non_hist_dims: int = 2,
     dd_weights: np.ndarray | None = None,
     dd_p_norm: float | None = None,
@@ -409,37 +2248,37 @@ def compute_candidate_distances(
     distance-definition artifact), the weighted Lp metric is used for the
     non-histogram features instead of the default ``distance_metric`` function.
     """
-    if (
-        dd_weights is not None
-        and dd_p_norm is not None
-        and sample_scaled_non_hist is not None
-        and candidates_scaled_non_hist is not None
-    ):
-        base = _weighted_lp_many(
-            sample_scaled_non_hist,
-            candidates_scaled_non_hist,
-            weights=dd_weights,
-            p_norm=dd_p_norm,
-            min_valid_dims=max(int(min_valid_non_hist_dims), 1),
-        )
-    else:
-        base = _distance_many(
-            sample_scaled_non_hist,
-            candidates_scaled_non_hist,
-            distance_metric=distance_metric,
-            min_valid_dims=max(int(min_valid_non_hist_dims), 1),
-        )
+    base = _compute_non_hist_base_distances(
+        distance_metric=distance_metric,
+        sample_scaled_non_hist=sample_scaled_non_hist,
+        candidates_scaled_non_hist=candidates_scaled_non_hist,
+        min_valid_non_hist_dims=min_valid_non_hist_dims,
+        dd_weights=dd_weights,
+        dd_p_norm=dd_p_norm,
+    )
     hist = None
     if sample_hist_raw is not None and candidates_hist_raw is not None:
-        hist = _histogram_emd_many(
+        hist = _histogram_distance_many(
             np.asarray(sample_hist_raw, dtype=float),
             np.asarray(candidates_hist_raw, dtype=float),
+            distance=histogram_distance_mode,
+            normalization=histogram_normalization,
+            p_norm=histogram_p_norm,
+            amplitude_weight=histogram_amplitude_weight,
+            shape_weight=histogram_shape_weight,
+            slope_weight=histogram_slope_weight,
+            cdf_weight=histogram_cdf_weight,
+            amplitude_stat=histogram_amplitude_stat,
         )
-    return _combine_base_and_hist_distances(
+    return _combine_distance_terms(
         base_distances=base,
-        hist_distances=hist,
-        hist_weight=max(float(histogram_distance_weight), 0.0),
-        blend_mode=_normalize_hist_blend_mode(histogram_distance_blend_mode),
+        aux_terms=[
+            (
+                hist,
+                max(float(histogram_distance_weight), 0.0),
+                _normalize_hist_blend_mode(histogram_distance_blend_mode),
+            )
+        ],
     )
 
 
@@ -617,6 +2456,19 @@ AUTO_TT_PREFIX_PRIORITY = [
     "fit_to_corr",
     "definitive",
 ]
+PHYSICAL_TT_RATE_LABELS = (
+    "1234",
+    "123",
+    "124",
+    "134",
+    "234",
+    "12",
+    "13",
+    "14",
+    "23",
+    "24",
+    "34",
+)
 
 
 def _normalize_tt_label(label: object) -> str:
@@ -656,7 +2508,8 @@ def _auto_feature_columns(
     global_rate_col: str = "events_per_second_global_rate",
 ) -> list[str]:
     """Select TT-rate features from the most advanced available task prefix."""
-    by_prefix: dict[str, list[str]] = {}
+    by_prefix_physical: dict[str, list[str]] = {}
+    by_prefix_transition: dict[str, list[str]] = {}
     fallback_non_tt_rate_cols: list[str] = []
 
     for col in df.columns:
@@ -671,9 +2524,11 @@ def _auto_feature_columns(
         label = match.group("label")
         if not _is_multi_plane_tt_label(label):
             continue
-        by_prefix.setdefault(prefix, []).append(text)
+        target = by_prefix_transition if "_to_" in prefix else by_prefix_physical
+        target.setdefault(prefix, []).append(text)
 
     cols: list[str] = []
+    by_prefix = by_prefix_physical or by_prefix_transition
     if by_prefix:
         selected_prefix = min(
             by_prefix.keys(),
@@ -684,6 +2539,54 @@ def _auto_feature_columns(
         cols = sorted(set(fallback_non_tt_rate_cols))
 
     return cols
+
+
+def resolve_physical_tt_rate_columns(
+    df: pd.DataFrame,
+    *,
+    tt_labels: Sequence[str] = PHYSICAL_TT_RATE_LABELS,
+    prefix_selector: str = "last",
+    include_to_tt_rate_hz: bool = False,
+    require_numeric: bool = True,
+) -> tuple[str | None, dict[str, str]]:
+    """Resolve one consistent physical TT prefix and its rate columns by label."""
+    labels: list[str] = []
+    seen: set[str] = set()
+    for raw in tt_labels:
+        label = _normalize_tt_label(raw)
+        if not _is_multi_plane_tt_label(label) or label in seen:
+            continue
+        labels.append(label)
+        seen.add(label)
+
+    selected_cols = _select_tt_rate_columns_for_prefix(
+        df,
+        prefix_selector=prefix_selector,
+        trigger_type_allowlist=labels,
+        include_to_tt_rate_hz=include_to_tt_rate_hz,
+    )
+    if not selected_cols:
+        return None, {}
+
+    selected_prefix: str | None = None
+    by_label: dict[str, str] = {}
+    for col in selected_cols:
+        match = TT_RATE_COLUMN_RE.match(str(col).strip())
+        if match is None:
+            continue
+        prefix = str(match.group("prefix")).strip()
+        label = _normalize_tt_label(match.group("label"))
+        if selected_prefix is None:
+            selected_prefix = prefix
+        if require_numeric:
+            vals = pd.to_numeric(df[col], errors="coerce")
+            if not vals.notna().any():
+                continue
+        if label in seen and label not in by_label:
+            by_label[label] = str(col)
+
+    ordered = {label: by_label[label] for label in labels if label in by_label}
+    return selected_prefix, ordered
 
 
 # ── Derived feature mode ─────────────────────────────────────────────
@@ -1136,6 +3039,7 @@ _INVERSE_MAPPING_DEFAULTS = {
     "softmax_temperature": 1.0,
     "distance_floor": 1e-12,
     "aggregation": "weighted_mean",
+    "local_linear_ridge_lambda": 1e-2,
     "stage2_efficiency_conditioning_weight": 1.0,
     "stage2_efficiency_gate_max": 0.20,
     "stage2_efficiency_gate_min_candidates": 24,
@@ -1146,6 +3050,20 @@ _INVERSE_MAPPING_DEFAULTS = {
     # When real-data empirical efficiencies lie outside dictionary support,
     # distance in those dimensions is not meaningful. Mask them per-row.
     "mask_out_of_support_eff_features": False,
+    "efficiency_vector_distance": {
+        "enabled": False,
+        "weight": 1.0,
+        "blend_mode": "normalized",
+        "stage2_enabled": True,
+        "stage2_weight": 1.0,
+        "uncertainty_floor": 0.02,
+        "min_valid_bins_per_vector": 3,
+        "fiducial": {
+            "x_abs_max_mm": None,
+            "y_abs_max_mm": None,
+            "theta_max_deg": None,
+        },
+    },
 }
 
 
@@ -1157,6 +3075,18 @@ def _safe_float(value: object, default: float) -> float:
     if np.isfinite(out):
         return out
     return float(default)
+
+
+def _safe_optional_float(value: object) -> float | None:
+    if value in (None, "", "null", "None"):
+        return None
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    if np.isfinite(out):
+        return float(out)
+    return None
 
 
 def _safe_int(value: object, default: int, minimum: int | None = None) -> int:
@@ -1293,6 +3223,10 @@ def resolve_inverse_mapping_cfg(
     cfg["neighbor_count"] = legacy_neighbor_count
     cfg["histogram_distance_weight"] = max(float(histogram_distance_weight), 0.0)
     cfg["histogram_distance_blend_mode"] = _normalize_hist_blend_mode(histogram_distance_blend_mode)
+    cfg["efficiency_vector_distance"] = dict(_INVERSE_MAPPING_DEFAULTS["efficiency_vector_distance"])
+    cfg["efficiency_vector_distance"]["fiducial"] = dict(
+        _INVERSE_MAPPING_DEFAULTS["efficiency_vector_distance"]["fiducial"]
+    )
 
     if isinstance(inverse_mapping_cfg, Mapping):
         for key in (
@@ -1304,6 +3238,7 @@ def resolve_inverse_mapping_cfg(
             "softmax_temperature",
             "distance_floor",
             "aggregation",
+            "local_linear_ridge_lambda",
             "stage2_efficiency_conditioning_weight",
             "stage2_efficiency_gate_max",
             "stage2_efficiency_gate_min_candidates",
@@ -1315,6 +3250,18 @@ def resolve_inverse_mapping_cfg(
         ):
             if key in inverse_mapping_cfg and inverse_mapping_cfg.get(key) is not None:
                 cfg[key] = inverse_mapping_cfg.get(key)
+        effvec_cfg_raw = inverse_mapping_cfg.get("efficiency_vector_distance")
+        if isinstance(effvec_cfg_raw, Mapping):
+            merged_effvec = dict(_INVERSE_MAPPING_DEFAULTS["efficiency_vector_distance"])
+            merged_effvec["fiducial"] = dict(
+                _INVERSE_MAPPING_DEFAULTS["efficiency_vector_distance"]["fiducial"]
+            )
+            for key, value in effvec_cfg_raw.items():
+                if key == "fiducial" and isinstance(value, Mapping):
+                    merged_effvec["fiducial"].update(dict(value))
+                else:
+                    merged_effvec[key] = value
+            cfg["efficiency_vector_distance"] = merged_effvec
 
     cfg["estimation_mode"] = _normalize_estimation_mode(cfg.get("estimation_mode"))
     cfg["neighbor_selection"] = _normalize_neighbor_selection(cfg.get("neighbor_selection"))
@@ -1344,6 +3291,13 @@ def resolve_inverse_mapping_cfg(
         1e-15,
     )
     cfg["aggregation"] = _normalize_aggregation_mode(cfg.get("aggregation"))
+    cfg["local_linear_ridge_lambda"] = max(
+        _safe_float(
+            cfg.get("local_linear_ridge_lambda"),
+            float(_INVERSE_MAPPING_DEFAULTS["local_linear_ridge_lambda"]),
+        ),
+        0.0,
+    )
     cfg["stage2_efficiency_conditioning_weight"] = max(
         _safe_float(
             cfg.get("stage2_efficiency_conditioning_weight"),
@@ -1388,6 +3342,52 @@ def resolve_inverse_mapping_cfg(
         cfg.get("mask_out_of_support_eff_features"),
         bool(_INVERSE_MAPPING_DEFAULTS["mask_out_of_support_eff_features"]),
     )
+    effvec_cfg = cfg.get("efficiency_vector_distance", {})
+    if not isinstance(effvec_cfg, Mapping):
+        effvec_cfg = {}
+    effvec_defaults = _INVERSE_MAPPING_DEFAULTS["efficiency_vector_distance"]
+    cfg["efficiency_vector_distance"] = {
+        "enabled": _safe_bool(
+            effvec_cfg.get("enabled"),
+            bool(effvec_defaults["enabled"]),
+        ),
+        "weight": max(
+            _safe_float(effvec_cfg.get("weight"), float(effvec_defaults["weight"])),
+            0.0,
+        ),
+        "blend_mode": _normalize_hist_blend_mode(
+            effvec_cfg.get("blend_mode", effvec_defaults["blend_mode"])
+        ),
+        "stage2_enabled": _safe_bool(
+            effvec_cfg.get("stage2_enabled"),
+            bool(effvec_defaults["stage2_enabled"]),
+        ),
+        "stage2_weight": max(
+            _safe_float(
+                effvec_cfg.get("stage2_weight"),
+                float(effvec_defaults["stage2_weight"]),
+            ),
+            0.0,
+        ),
+        "uncertainty_floor": max(
+            _safe_float(
+                effvec_cfg.get("uncertainty_floor"),
+                float(effvec_defaults["uncertainty_floor"]),
+            ),
+            0.0,
+        ),
+        "min_valid_bins_per_vector": max(
+            1,
+            _safe_int(
+                effvec_cfg.get("min_valid_bins_per_vector"),
+                int(effvec_defaults["min_valid_bins_per_vector"]),
+                minimum=1,
+            ),
+        ),
+        "fiducial": _normalize_efficiency_vector_fiducial(
+            effvec_cfg.get("fiducial", effvec_defaults["fiducial"])
+        ),
+    }
     return cfg
 
 
@@ -1404,6 +3404,11 @@ def build_step15_runtime_inverse_mapping_cfg(
     and local-linear ridge scale. Downstream runtime estimation should therefore
     stay on the simple STEP 2.1 path: single-stage kNN with inverse-distance
     weighting and local-linear aggregation when the tuned lambda indicates it.
+
+    Rate histograms and efficiency-vector profiles are consumed downstream as
+    first-class grouped feature-space terms via the STEP 1.5 distance artifact.
+    The legacy stage-2-only knobs are therefore disabled in the runtime config
+    returned here to avoid reintroducing a different hierarchy after tuning.
     """
     requested = resolve_inverse_mapping_cfg(
         inverse_mapping_cfg=inverse_mapping_cfg,
@@ -1424,21 +3429,52 @@ def build_step15_runtime_inverse_mapping_cfg(
         else:
             neighbor_count = int(_INVERSE_MAPPING_DEFAULTS["neighbor_count"])
 
-    aggregation = "local_linear" if optimal_lambda < 1e5 else "weighted_mean"
-    return {
-        "estimation_mode": "single_stage",
-        "neighbor_selection": "knn",
-        "neighbor_count": int(neighbor_count),
-        "weighting": "inverse_distance",
-        "inverse_distance_power": max(
-            _safe_float(
-                requested.get("inverse_distance_power"),
-                float(_INVERSE_MAPPING_DEFAULTS["inverse_distance_power"]),
+    selected_aggregation = None
+    if isinstance(distance_definition, Mapping) and distance_definition.get("optimal_aggregation") is not None:
+        selected_aggregation = _normalize_aggregation_mode(distance_definition.get("optimal_aggregation"))
+    aggregation = (
+        selected_aggregation
+        if selected_aggregation is not None
+        else ("local_linear" if optimal_lambda < 1e5 else "weighted_mean")
+    )
+    runtime_cfg = dict(requested)
+    runtime_cfg.update(
+        {
+            "estimation_mode": "single_stage",
+            "neighbor_selection": "knn",
+            "neighbor_count": int(neighbor_count),
+            "weighting": "inverse_distance",
+            "inverse_distance_power": max(
+                _safe_float(
+                    requested.get("inverse_distance_power"),
+                    float(_INVERSE_MAPPING_DEFAULTS["inverse_distance_power"]),
+                ),
+                0.0,
             ),
-            0.0,
-        ),
-        "aggregation": aggregation,
-    }
+            "aggregation": aggregation,
+            "local_linear_ridge_lambda": (
+                max(float(optimal_lambda), 0.0)
+                if aggregation == "local_linear"
+                else max(
+                    _safe_float(
+                        requested.get("local_linear_ridge_lambda"),
+                        float(_INVERSE_MAPPING_DEFAULTS["local_linear_ridge_lambda"]),
+                    ),
+                    0.0,
+                )
+            ),
+        }
+    )
+    runtime_cfg["stage2_use_rate_histogram"] = False
+    runtime_cfg["stage2_histogram_distance_weight"] = 0.0
+    effvec_runtime_cfg = runtime_cfg.get("efficiency_vector_distance", {})
+    if not isinstance(effvec_runtime_cfg, Mapping):
+        effvec_runtime_cfg = {}
+    effvec_runtime = dict(effvec_runtime_cfg)
+    effvec_runtime["stage2_enabled"] = False
+    effvec_runtime["stage2_weight"] = 0.0
+    runtime_cfg["efficiency_vector_distance"] = effvec_runtime
+    return runtime_cfg
 
 
 def _resolve_shared_parameter_exclusion_mode(
@@ -2060,12 +4096,18 @@ def estimate_from_dataframes(
             include_to_tt_rate_hz=_safe_bool(derived_include_to_tt_rate_hz, False),
             output_column=DERIVED_TT_GLOBAL_RATE_COL,
         )
-        if derived_rate_col_used is None and global_rate_col in dict_df.columns and global_rate_col in data_df.columns:
+        if (
+            derived_rate_col_used is None
+            and _safe_bool(include_global_rate, True)
+            and global_rate_col in dict_df.columns
+            and global_rate_col in data_df.columns
+        ):
             derived_rate_col_used = str(global_rate_col)
         if derived_rate_col_used is None:
             raise ValueError(
                 "No derived global-rate feature available for derived mode. "
-                "Could not build TT-trigger sum and fallback global-rate column is missing."
+                "Could not build TT-trigger sum and fallback literal global-rate "
+                "use is disabled or unavailable."
             )
         (
             dict_feature_source,
@@ -2185,37 +4227,6 @@ def estimate_from_dataframes(
     else:
         log.info("Feature columns (%d): %s", len(feature_cols), feature_cols)
 
-    hist_feature_idx = _histogram_feature_indices(feature_cols)
-    hist_feature_set = set(hist_feature_idx)
-    non_hist_feature_idx = [idx for idx in range(len(feature_cols)) if idx not in hist_feature_set]
-    non_hist_feature_cols = [str(feature_cols[idx]) for idx in non_hist_feature_idx]
-
-    def _is_raw_tt_rate_feature(name: str) -> bool:
-        text = str(name).strip()
-        if text.startswith(DERIVED_TT_GLOBAL_RATE_COL):
-            return False
-        return TT_RATE_COLUMN_RE.match(text) is not None
-
-    base_eff_feature_idx = np.asarray(
-        [
-            j
-            for j, name in enumerate(non_hist_feature_cols)
-            if str(name).startswith("eff_empirical_")
-        ],
-        dtype=int,
-    )
-    base_tt_feature_idx = np.asarray(
-        [j for j, name in enumerate(non_hist_feature_cols) if _is_raw_tt_rate_feature(name)],
-        dtype=int,
-    )
-    base_other_feature_idx = np.asarray(
-        [
-            j
-            for j in range(len(non_hist_feature_cols))
-            if j not in set(base_eff_feature_idx.tolist() + base_tt_feature_idx.tolist())
-        ],
-        dtype=int,
-    )
     inverse_cfg = resolve_inverse_mapping_cfg(
         inverse_mapping_cfg=inverse_mapping_cfg,
         interpolation_k=interpolation_k,
@@ -2230,6 +4241,12 @@ def estimate_from_dataframes(
     softmax_temperature = float(inverse_cfg["softmax_temperature"])
     distance_floor = float(inverse_cfg["distance_floor"])
     aggregation_mode = str(inverse_cfg["aggregation"])
+    local_linear_ridge_lambda = float(
+        inverse_cfg.get(
+            "local_linear_ridge_lambda",
+            _INVERSE_MAPPING_DEFAULTS["local_linear_ridge_lambda"],
+        )
+    )
     stage2_eff_conditioning_weight = float(
         inverse_cfg.get("stage2_efficiency_conditioning_weight", 1.0)
     )
@@ -2259,24 +4276,102 @@ def estimate_from_dataframes(
     )
     hist_distance_weight = float(inverse_cfg["histogram_distance_weight"])
     hist_distance_blend_mode = str(inverse_cfg["histogram_distance_blend_mode"])
+    hist_distance_cfg = _resolve_histogram_distance_cfg(
+        inverse_cfg.get("histogram_distance")
+    )
+    hist_distance_mode = str(hist_distance_cfg["distance"])
+    hist_normalization = str(hist_distance_cfg["normalization"])
+    hist_p_norm = float(hist_distance_cfg["p_norm"])
+    hist_amplitude_weight = float(hist_distance_cfg["amplitude_weight"])
+    hist_shape_weight = float(hist_distance_cfg["shape_weight"])
+    hist_slope_weight = float(hist_distance_cfg["slope_weight"])
+    hist_cdf_weight = float(hist_distance_cfg["cdf_weight"])
+    hist_amplitude_stat = str(hist_distance_cfg["amplitude_stat"])
     mask_out_of_support_eff_features = bool(
         inverse_cfg.get("mask_out_of_support_eff_features", True)
     )
-    if hist_feature_idx and not non_hist_feature_idx and hist_distance_weight <= 0.0:
-        # Histogram-only feature sets need non-zero distance contribution.
-        hist_distance_weight = 1.0
-    if hist_feature_idx:
-        first_hist = feature_cols[hist_feature_idx[0]]
-        last_hist = feature_cols[hist_feature_idx[-1]]
-        log.info(
-            "Histogram feature group detected: %d bins (%s .. %s), weight=%.3g blend=%s.",
-            len(hist_feature_idx),
-            first_hist,
-            last_hist,
-            hist_distance_weight,
-            hist_distance_blend_mode,
-        )
+    effvec_cfg = inverse_cfg.get("efficiency_vector_distance", {})
+    if not isinstance(effvec_cfg, Mapping):
+        effvec_cfg = {}
+    effvec_distance_cfg = _resolve_efficiency_vector_distance_cfg(effvec_cfg)
+    effvec_distance_enabled = bool(effvec_cfg.get("enabled", False))
+    effvec_distance_weight = float(effvec_cfg.get("weight", 0.0))
+    effvec_distance_blend_mode = str(
+        effvec_cfg.get("blend_mode", _INVERSE_MAPPING_DEFAULTS["efficiency_vector_distance"]["blend_mode"])
+    )
+    effvec_stage2_enabled = bool(effvec_cfg.get("stage2_enabled", False))
+    effvec_stage2_weight = float(effvec_cfg.get("stage2_weight", 0.0))
+    effvec_uncertainty_floor = float(effvec_distance_cfg["uncertainty_floor"])
+    effvec_min_valid_bins = int(effvec_distance_cfg["min_valid_bins_per_vector"])
+    effvec_fiducial = dict(effvec_distance_cfg["fiducial"])
+    effvec_normalization = str(effvec_distance_cfg["normalization"])
+    effvec_p_norm = float(effvec_distance_cfg["p_norm"])
+    effvec_amplitude_weight = float(effvec_distance_cfg["amplitude_weight"])
+    effvec_shape_weight = float(effvec_distance_cfg["shape_weight"])
+    effvec_slope_weight = float(effvec_distance_cfg["slope_weight"])
+    effvec_cdf_weight = float(effvec_distance_cfg["cdf_weight"])
+    effvec_amplitude_stat = str(effvec_distance_cfg["amplitude_stat"])
+    effvec_group_reduction = str(effvec_distance_cfg["group_reduction"])
 
+    hist_feature_idx = _histogram_feature_indices(feature_cols)
+    hist_feature_set = set(hist_feature_idx)
+    hist_feature_cols = [str(feature_cols[idx]) for idx in hist_feature_idx]
+    effvec_feature_idx_candidate = _efficiency_vector_feature_indices(feature_cols)
+    effvec_group_payloads = _prepare_efficiency_vector_group_payloads(
+        dict_df=dict_feature_source,
+        data_df=data_feature_source,
+    )
+    effvec_group_payloads = _filter_efficiency_vector_payloads(
+        effvec_group_payloads,
+        selected_feature_columns=feature_cols,
+    )
+    use_effvec_group_distance = bool(effvec_group_payloads) and (
+        effvec_distance_enabled or effvec_stage2_enabled
+    )
+    if use_effvec_group_distance:
+        effvec_feature_idx = effvec_feature_idx_candidate
+    else:
+        effvec_feature_idx = []
+        if effvec_feature_idx_candidate and (effvec_distance_enabled or effvec_stage2_enabled):
+            log.warning(
+                "Efficiency-vector multi-feature distance requested, but no shared vector payloads were resolved. "
+                "Selected efficiency-vector columns will remain one-feature vector terms."
+            )
+    effvec_feature_set = set(effvec_feature_idx)
+    non_hist_feature_idx = [
+        idx
+        for idx in range(len(feature_cols))
+        if idx not in hist_feature_set and idx not in effvec_feature_set
+    ]
+    non_hist_feature_cols = [str(feature_cols[idx]) for idx in non_hist_feature_idx]
+    hist_feature_cols_for_distance = list(hist_feature_cols)
+
+    def _is_raw_tt_rate_feature(name: str) -> bool:
+        text = str(name).strip()
+        if text.startswith(DERIVED_TT_GLOBAL_RATE_COL):
+            return False
+        return TT_RATE_COLUMN_RE.match(text) is not None
+
+    base_eff_feature_idx = np.asarray(
+        [
+            j
+            for j, name in enumerate(non_hist_feature_cols)
+            if str(name).startswith("eff_empirical_")
+        ],
+        dtype=int,
+    )
+    base_tt_feature_idx = np.asarray(
+        [j for j, name in enumerate(non_hist_feature_cols) if _is_raw_tt_rate_feature(name)],
+        dtype=int,
+    )
+    base_other_feature_idx = np.asarray(
+        [
+            j
+            for j in range(len(non_hist_feature_cols))
+            if j not in set(base_eff_feature_idx.tolist() + base_tt_feature_idx.tolist())
+        ],
+        dtype=int,
+    )
     log.info(
         "Inverse mapping: mode=%s selection=%s k=%s weighting=%s aggregation=%s",
         estimation_mode,
@@ -2285,13 +4380,17 @@ def estimate_from_dataframes(
         neighbor_weighting,
         aggregation_mode,
     )
+    if aggregation_mode == "local_linear":
+        log.info("Inverse mapping local-linear ridge lambda: %.3g", local_linear_ridge_lambda)
     if estimation_mode == "two_stage_eff_address_then_flux":
         log.info(
-            "Two-stage address mode: gate_max=%.3g gate_min_candidates=%d use_rate_histogram=%s stage2_hist_weight=%.3g",
+            "Two-stage address mode: gate_max=%.3g gate_min_candidates=%d use_rate_histogram=%s stage2_hist_weight=%.3g use_efficiency_vectors=%s stage2_effvec_weight=%.3g",
             stage2_eff_gate_max,
             stage2_eff_gate_min_candidates,
             str(stage2_use_rate_histogram).lower(),
             stage2_hist_distance_weight,
+            str(bool(effvec_stage2_enabled and use_effvec_group_distance)).lower(),
+            effvec_stage2_weight,
         )
 
     data_features, out_of_support_eff_mask_non_hist, out_of_support_eff_info = (
@@ -2355,17 +4454,243 @@ def estimate_from_dataframes(
     dd_weights: np.ndarray | None = None
     dd_p_norm: float | None = None
     _dd_non_hist_weights: np.ndarray | None = None  # weights restricted to non-hist features
+    dd_group_weights: dict[str, float] = {}
+    dd_feature_groups: dict[str, object] = {}
+    extra_group_terms: list[dict[str, object]] = []
 
     if distance_definition is not None and distance_definition.get("available"):
         dd_center = np.asarray(distance_definition["center"], dtype=float)
         dd_scale = np.asarray(distance_definition["scale"], dtype=float)
         dd_weights = np.asarray(distance_definition["weights"], dtype=float)
         dd_p_norm = float(distance_definition["p_norm"])
+        raw_one_feature_vector_cols = distance_definition.get(
+            "one_feature_vector_columns",
+            distance_definition.get("scalar_feature_columns", feature_cols),
+        )
+        if isinstance(raw_one_feature_vector_cols, Sequence) and not isinstance(raw_one_feature_vector_cols, (str, bytes)):
+            dd_one_feature_vector_cols = [
+                str(col) for col in raw_one_feature_vector_cols if str(col) in feature_cols
+            ]
+        else:
+            dd_one_feature_vector_cols = []
+        if not dd_one_feature_vector_cols:
+            dd_one_feature_vector_cols = [
+                str(col)
+                for col, w in zip(feature_cols, dd_weights)
+                if np.isfinite(w) and float(w) > 0.0
+            ]
+        if isinstance(distance_definition.get("group_weights"), Mapping):
+            dd_group_weights = {
+                str(name): float(value)
+                for name, value in distance_definition["group_weights"].items()
+                if str(name).strip()
+            }
+        if isinstance(distance_definition.get("feature_groups"), Mapping):
+            dd_feature_groups = {
+                str(name): value
+                for name, value in distance_definition["feature_groups"].items()
+                if str(name).strip()
+            }
         n_active = int(np.sum(dd_weights > 0))
+        n_active_groups = int(sum(float(v) > 0.0 for v in dd_group_weights.values()))
         mode_name = distance_definition.get("selected_mode", "unknown")
         log.info(
-            "Using STEP 1.5 distance definition: %s (p=%.1f, %d/%d active features)",
-            mode_name, dd_p_norm, n_active, len(feature_cols),
+            "Using STEP 1.5 distance definition: %s (p=%.1f, one_feature_vectors_active=%d/%d, multi_feature_vectors_active=%d)",
+            mode_name, dd_p_norm, n_active, len(feature_cols), n_active_groups,
+        )
+        _log_unified_distance_term_list(
+            feature_columns=feature_cols,
+            one_feature_vector_columns=dd_one_feature_vector_cols,
+            one_feature_weights=dd_weights,
+            feature_groups=dd_feature_groups,
+            group_weights=dd_group_weights,
+            header="STEP 1.5 unified distance terms (X features --> 1 distance):",
+        )
+        if "rate_histogram" in dd_group_weights:
+            hist_distance_weight = max(float(dd_group_weights["rate_histogram"]), 0.0)
+            hist_group_cfg = dd_feature_groups.get("rate_histogram", {})
+            if isinstance(hist_group_cfg, Mapping):
+                hist_distance_blend_mode = _normalize_hist_blend_mode(
+                    hist_group_cfg.get("blend_mode", hist_distance_blend_mode)
+                )
+                hist_distance_cfg = _resolve_histogram_distance_cfg(hist_group_cfg)
+                hist_distance_mode = str(hist_distance_cfg["distance"])
+                hist_normalization = str(hist_distance_cfg["normalization"])
+                hist_p_norm = float(hist_distance_cfg["p_norm"])
+                hist_amplitude_weight = float(hist_distance_cfg["amplitude_weight"])
+                hist_shape_weight = float(hist_distance_cfg["shape_weight"])
+                hist_slope_weight = float(hist_distance_cfg["slope_weight"])
+                hist_cdf_weight = float(hist_distance_cfg["cdf_weight"])
+                hist_amplitude_stat = str(hist_distance_cfg["amplitude_stat"])
+        if "efficiency_vectors" in dd_group_weights:
+            effvec_distance_enabled = True
+            effvec_distance_weight = max(float(dd_group_weights["efficiency_vectors"]), 0.0)
+            effvec_group_cfg = dd_feature_groups.get("efficiency_vectors", {})
+            if isinstance(effvec_group_cfg, Mapping):
+                effvec_distance_blend_mode = _normalize_hist_blend_mode(
+                    effvec_group_cfg.get("blend_mode", effvec_distance_blend_mode)
+                )
+                effvec_distance_cfg = _resolve_efficiency_vector_distance_cfg(effvec_group_cfg)
+                effvec_uncertainty_floor = float(effvec_distance_cfg["uncertainty_floor"])
+                effvec_min_valid_bins = int(effvec_distance_cfg["min_valid_bins_per_vector"])
+                effvec_fiducial = dict(effvec_distance_cfg["fiducial"])
+                effvec_normalization = str(effvec_distance_cfg["normalization"])
+                effvec_p_norm = float(effvec_distance_cfg["p_norm"])
+                effvec_amplitude_weight = float(effvec_distance_cfg["amplitude_weight"])
+                effvec_shape_weight = float(effvec_distance_cfg["shape_weight"])
+                effvec_slope_weight = float(effvec_distance_cfg["slope_weight"])
+                effvec_cdf_weight = float(effvec_distance_cfg["cdf_weight"])
+                effvec_amplitude_stat = str(effvec_distance_cfg["amplitude_stat"])
+                effvec_group_reduction = str(effvec_distance_cfg["group_reduction"])
+                effvec_group_payloads = _filter_efficiency_vector_payloads(
+                    effvec_group_payloads,
+                    feature_groups_cfg=effvec_group_cfg,
+                    selected_feature_columns=feature_cols,
+                )
+                use_effvec_group_distance = bool(effvec_group_payloads) and (
+                    effvec_distance_enabled or effvec_stage2_enabled
+                )
+        if dd_group_weights:
+            log.info(
+                "Using STEP 1.5 multi-feature vector-term weights: %s",
+                {k: round(float(v), 6) for k, v in dd_group_weights.items()},
+            )
+
+    dd_hist_group_cfg = dd_feature_groups.get("rate_histogram", {})
+    if not isinstance(dd_hist_group_cfg, Mapping):
+        dd_hist_group_cfg = {}
+    dd_hist_feature_cols = [
+        str(col)
+        for col in dd_hist_group_cfg.get("feature_columns", [])
+        if str(col) in dict_feature_source.columns and str(col) in data_feature_source.columns
+    ]
+    hist_feature_cols_for_distance = dd_hist_feature_cols or hist_feature_cols
+    if hist_feature_cols_for_distance and not non_hist_feature_idx and hist_distance_weight <= 0.0:
+        # Histogram-only feature sets need non-zero distance contribution.
+        hist_distance_weight = 1.0
+    if (
+        use_effvec_group_distance
+        and not non_hist_feature_idx
+        and not hist_feature_cols_for_distance
+        and effvec_distance_enabled
+        and effvec_distance_weight <= 0.0
+    ):
+        effvec_distance_weight = 1.0
+    if hist_feature_cols_for_distance:
+        first_hist = hist_feature_cols_for_distance[0]
+        last_hist = hist_feature_cols_for_distance[-1]
+        log.info(
+            "Histogram feature group detected: %d bins (%s .. %s), weight=%.3g blend=%s metric=%s norm=%s p=%.3g amp=%.3g shape=%.3g slope=%.3g cdf=%.3g stat=%s.",
+            len(hist_feature_cols_for_distance),
+            first_hist,
+            last_hist,
+            hist_distance_weight,
+            hist_distance_blend_mode,
+            hist_distance_mode,
+            hist_normalization,
+            hist_p_norm,
+            hist_amplitude_weight,
+            hist_shape_weight,
+            hist_slope_weight,
+            hist_cdf_weight,
+            hist_amplitude_stat,
+        )
+    if use_effvec_group_distance and effvec_group_payloads:
+        log.info(
+            "Efficiency-vector groups detected: %d group(s), weight=%.3g blend=%s metric=%s norm=%s p=%.3g amp=%.3g shape=%.3g slope=%.3g cdf=%.3g reduction=%s stage2_enabled=%s stage2_weight=%.3g fiducial=%s.",
+            len(effvec_group_payloads),
+            effvec_distance_weight,
+            effvec_distance_blend_mode,
+            str(effvec_distance_cfg["distance"]),
+            effvec_normalization,
+            effvec_p_norm,
+            effvec_amplitude_weight,
+            effvec_shape_weight,
+            effvec_slope_weight,
+            effvec_cdf_weight,
+            effvec_group_reduction,
+            str(bool(effvec_stage2_enabled)).lower(),
+            effvec_stage2_weight,
+            dict(effvec_fiducial),
+        )
+
+    for group_name, raw_weight in dd_group_weights.items():
+        name = str(group_name).strip()
+        if not name or name in {"rate_histogram", "efficiency_vectors"}:
+            continue
+        try:
+            weight = max(float(raw_weight), 0.0)
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(weight) or weight <= 0.0:
+            continue
+        raw_cfg = dd_feature_groups.get(name, {})
+        if not isinstance(raw_cfg, Mapping):
+            raw_cfg = {}
+        group_kind = _resolve_feature_group_kind(name, raw_cfg)
+        if group_kind == "efficiency_vectors":
+            log.warning(
+                "Vector term '%s' resolved as efficiency_vectors but only canonical 'efficiency_vectors' is supported for payload distance; skipping term.",
+                name,
+            )
+            continue
+        group_cols = [
+            str(col)
+            for col in raw_cfg.get("feature_columns", [])
+            if str(col) in dict_feature_source.columns and str(col) in data_feature_source.columns
+        ]
+        if not group_cols:
+            log.warning(
+                "Vector term '%s' has no shared feature columns in dictionary/data; skipping term.",
+                name,
+            )
+            continue
+        blend_mode = _normalize_hist_blend_mode(raw_cfg.get("blend_mode", "normalized"))
+        if group_kind == "rate_histogram":
+            distance_cfg = _resolve_histogram_distance_cfg(raw_cfg)
+        else:
+            distance_cfg = _resolve_ordered_vector_group_distance_cfg(raw_cfg)
+        try:
+            min_valid_bins = max(int(float(raw_cfg.get("min_valid_bins", 1))), 1)
+        except (TypeError, ValueError):
+            min_valid_bins = 1
+        dict_matrix = (
+            dict_feature_source[group_cols]
+            .apply(pd.to_numeric, errors="coerce")
+            .to_numpy(dtype=float)
+        )
+        data_matrix = (
+            data_feature_source[group_cols]
+            .apply(pd.to_numeric, errors="coerce")
+            .to_numpy(dtype=float)
+        )
+        extra_group_terms.append(
+            {
+                "name": name,
+                "kind": group_kind,
+                "weight": float(weight),
+                "blend_mode": str(blend_mode),
+                "feature_columns": list(group_cols),
+                "distance_cfg": dict(distance_cfg),
+                "min_valid_bins": int(min_valid_bins),
+                "dict_matrix": dict_matrix,
+                "data_matrix": data_matrix,
+            }
+        )
+        log.info(
+            "Feature group detected: %s kind=%s dims=%d weight=%.3g blend=%s metric=%s norm=%s p=%.3g amp=%.3g shape=%.3g slope=%.3g cdf=%.3g.",
+            name,
+            group_kind,
+            len(group_cols),
+            float(weight),
+            str(blend_mode),
+            str(distance_cfg.get("distance", "ordered_vector_lp")),
+            str(distance_cfg.get("normalization", "none")),
+            float(distance_cfg.get("p_norm", 2.0)),
+            float(distance_cfg.get("amplitude_weight", 0.0)),
+            float(distance_cfg.get("shape_weight", 1.0)),
+            float(distance_cfg.get("slope_weight", 0.0)),
+            float(distance_cfg.get("cdf_weight", 0.0)),
         )
 
     # ── Scaling ──────────────────────────────────────────────────────
@@ -2401,9 +4726,17 @@ def estimate_from_dataframes(
         dict_scaled_base = np.empty((len(dict_df), 0), dtype=float)
         data_scaled_base = np.empty((len(data_df), 0), dtype=float)
 
-    if hist_feature_idx:
-        dict_hist_matrix = dict_feature_raw_np[:, hist_feature_idx]
-        data_hist_matrix = data_feature_raw_np[:, hist_feature_idx]
+    if hist_feature_cols_for_distance:
+        dict_hist_matrix = (
+            dict_feature_source[hist_feature_cols_for_distance]
+            .apply(pd.to_numeric, errors="coerce")
+            .to_numpy(dtype=float)
+        )
+        data_hist_matrix = (
+            data_feature_source[hist_feature_cols_for_distance]
+            .apply(pd.to_numeric, errors="coerce")
+            .to_numpy(dtype=float)
+        )
     else:
         dict_hist_matrix = None
         data_hist_matrix = None
@@ -2424,7 +4757,7 @@ def estimate_from_dataframes(
                 .apply(pd.to_numeric, errors="coerce")
                 .to_numpy(dtype=float)
             )
-        elif hist_feature_idx and dict_hist_matrix is not None and data_hist_matrix is not None:
+        elif hist_feature_cols_for_distance and dict_hist_matrix is not None and data_hist_matrix is not None:
             # Fallback to selected histogram features when explicit bins are not available.
             stage2_hist_matrix_dict = dict_hist_matrix
             stage2_hist_matrix_data = data_hist_matrix
@@ -2439,6 +4772,105 @@ def estimate_from_dataframes(
             log.warning(
                 "Two-stage address mode: no rate-histogram bins resolved; stage 2 will use non-hist rate features only."
             )
+
+    local_linear_group_features_dict: dict[str, np.ndarray] = {}
+    local_linear_group_features_data: dict[str, np.ndarray] = {}
+    if aggregation_mode == "local_linear" and isinstance(dd_feature_groups, Mapping) and dd_feature_groups:
+        (
+            local_linear_group_features_dict,
+            local_linear_group_features_data,
+        ) = _build_group_local_linear_feature_matrices(
+            dict_feature_source=dict_feature_source,
+            data_feature_source=data_feature_source,
+            feature_groups=dd_feature_groups,
+            selected_feature_columns=feature_cols,
+        )
+
+    def _concat_local_linear_feature_space(
+        base_matrix: np.ndarray,
+        group_features: Mapping[str, np.ndarray],
+    ) -> np.ndarray | None:
+        parts: list[np.ndarray] = []
+        base_arr = np.asarray(base_matrix, dtype=float)
+        if base_arr.ndim == 2 and base_arr.shape[1] > 0:
+            parts.append(base_arr)
+        for group_name in sorted(group_features.keys()):
+            coords = np.asarray(group_features[group_name], dtype=float)
+            if coords.ndim != 2 or coords.shape[0] != base_arr.shape[0] or coords.shape[1] == 0:
+                continue
+            parts.append(coords)
+        if not parts:
+            return None
+        return np.concatenate(parts, axis=1)
+
+    dict_local_linear_features = _concat_local_linear_feature_space(
+        dict_scaled_base,
+        local_linear_group_features_dict,
+    )
+    data_local_linear_features = _concat_local_linear_feature_space(
+        data_scaled_base,
+        local_linear_group_features_data,
+    )
+    if aggregation_mode == "local_linear":
+        base_dim = int(dict_scaled_base.shape[1]) if dict_scaled_base.ndim == 2 else 0
+        total_dim = (
+            int(dict_local_linear_features.shape[1])
+            if isinstance(dict_local_linear_features, np.ndarray) and dict_local_linear_features.ndim == 2
+            else 0
+        )
+        grouped_dim = max(total_dim - base_dim, 0)
+        if grouped_dim > 0:
+            log.info(
+                "Local-linear feature dimensions: one-feature vectors=%d, vector-term local coords=%d, total=%d.",
+                base_dim,
+                grouped_dim,
+                total_dim,
+            )
+        else:
+            log.info(
+                "Local-linear feature dimensions: one-feature vectors=%d, vector-term local coords=0 (multi-feature vector terms kept as direct distance terms).",
+                base_dim,
+            )
+
+    def _compute_efficiency_vector_candidate_distances(
+        *,
+        row_idx: int,
+        cand_indices_local: np.ndarray,
+    ) -> np.ndarray | None:
+        if (not use_effvec_group_distance) or len(cand_indices_local) == 0 or (not effvec_group_payloads):
+            return None
+        group_distances: list[np.ndarray] = []
+        for payload in effvec_group_payloads:
+            sample_eff = np.asarray(payload["data_eff"], dtype=float)[row_idx]
+            candidates_eff = np.asarray(payload["dict_eff"], dtype=float)[cand_indices_local]
+            sample_unc = np.asarray(payload["data_unc"], dtype=float)[row_idx]
+            candidates_unc = np.asarray(payload["dict_unc"], dtype=float)[cand_indices_local]
+            group_dist = _efficiency_vector_group_distance_many(
+                sample_eff=sample_eff,
+                candidates_eff=candidates_eff,
+                sample_unc=sample_unc,
+                candidates_unc=candidates_unc,
+                centers=np.asarray(payload["centers"], dtype=float),
+                axis_name=str(payload["axis"]),
+                fiducial=effvec_fiducial,
+                uncertainty_floor=effvec_uncertainty_floor,
+                min_valid_bins=effvec_min_valid_bins,
+                normalization=effvec_normalization,
+                p_norm=effvec_p_norm,
+                amplitude_weight=effvec_amplitude_weight,
+                shape_weight=effvec_shape_weight,
+                slope_weight=effvec_slope_weight,
+                cdf_weight=effvec_cdf_weight,
+                amplitude_stat=effvec_amplitude_stat,
+            )
+            group_distances.append(group_dist)
+        if not group_distances:
+            return None
+        stacked = np.vstack(group_distances)
+        return _reduce_efficiency_vector_group_stack(
+            stacked,
+            group_reduction=effvec_group_reduction,
+        )
 
     # ── z-position arrays for fast matching ──────────────────────────
     dict_z = dict_df[z_cols].to_numpy(dtype=float) if z_cols else None
@@ -2673,6 +5105,7 @@ def estimate_from_dataframes(
                     sample_features=sample_features_local,
                     neighbor_features=neighbor_features_local,
                     parameter_name=param_name,
+                    ridge_lambda=local_linear_ridge_lambda,
                 )
             )
         return float(np.sum(w_local * np.nan_to_num(vals_local)))
@@ -2700,7 +5133,7 @@ def estimate_from_dataframes(
             data_hist_matrix[row_idx]
             if (
                 include_hist
-                and hist_feature_idx
+                and hist_feature_cols_for_distance
                 and data_hist_matrix is not None
             )
             else None
@@ -2709,7 +5142,7 @@ def estimate_from_dataframes(
             dict_hist_matrix[cand_indices_local]
             if (
                 include_hist
-                and hist_feature_idx
+                and hist_feature_cols_for_distance
                 and dict_hist_matrix is not None
             )
             else None
@@ -2727,6 +5160,14 @@ def estimate_from_dataframes(
             candidates_hist_raw=candidates_hist_local,
             histogram_distance_weight=hist_distance_weight,
             histogram_distance_blend_mode=hist_distance_blend_mode,
+            histogram_distance_mode=hist_distance_mode,
+            histogram_normalization=hist_normalization,
+            histogram_p_norm=hist_p_norm,
+            histogram_amplitude_weight=hist_amplitude_weight,
+            histogram_shape_weight=hist_shape_weight,
+            histogram_slope_weight=hist_slope_weight,
+            histogram_cdf_weight=hist_cdf_weight,
+            histogram_amplitude_stat=hist_amplitude_stat,
             min_valid_non_hist_dims=1,
             dd_weights=local_dd_weights,
             dd_p_norm=local_dd_p_norm,
@@ -2772,7 +5213,7 @@ def estimate_from_dataframes(
         local_dd_p_norm_s2 = dd_p_norm
         if _dd_non_hist_weights is not None and stage2_rate_feature_idx.size > 0:
             local_dd_weights_s2 = _dd_non_hist_weights[stage2_rate_feature_idx]
-        return compute_candidate_distances(
+        base_stage2 = compute_candidate_distances(
             distance_metric=distance_metric,
             sample_scaled_non_hist=sample_scaled_non_hist_local,
             candidates_scaled_non_hist=candidates_scaled_non_hist_local,
@@ -2780,9 +5221,33 @@ def estimate_from_dataframes(
             candidates_hist_raw=candidates_hist_local,
             histogram_distance_weight=max(hist_weight_local, 0.0),
             histogram_distance_blend_mode=hist_distance_blend_mode,
+            histogram_distance_mode=hist_distance_mode,
+            histogram_normalization=hist_normalization,
+            histogram_p_norm=hist_p_norm,
+            histogram_amplitude_weight=hist_amplitude_weight,
+            histogram_shape_weight=hist_shape_weight,
+            histogram_slope_weight=hist_slope_weight,
+            histogram_cdf_weight=hist_cdf_weight,
+            histogram_amplitude_stat=hist_amplitude_stat,
             min_valid_non_hist_dims=1,
             dd_weights=local_dd_weights_s2,
             dd_p_norm=local_dd_p_norm_s2,
+        )
+        effvec_stage2 = None
+        if effvec_stage2_enabled and use_effvec_group_distance:
+            effvec_stage2 = _compute_efficiency_vector_candidate_distances(
+                row_idx=row_idx,
+                cand_indices_local=cand_indices_local,
+            )
+        return _combine_distance_terms(
+            base_distances=base_stage2,
+            aux_terms=[
+                (
+                    effvec_stage2,
+                    max(effvec_stage2_weight, 0.0),
+                    effvec_distance_blend_mode,
+                )
+            ],
         )
 
     # ── Estimate for each dataset entry ──────────────────────────────
@@ -2807,11 +5272,25 @@ def estimate_from_dataframes(
         row_result["stage2_candidates_after_gate"] = 0
         row_result["stage2_efficiency_gate_threshold"] = np.nan
         row_result["stage2_efficiency_gate_fallback"] = False
+        row_result["efficiency_vector_groups_used"] = int(
+            len(effvec_group_payloads) if use_effvec_group_distance else 0
+        )
+        row_result["stage2_efficiency_vector_groups_used"] = int(
+            len(effvec_group_payloads) if (use_effvec_group_distance and effvec_stage2_enabled) else 0
+        )
         row_result["stage2_histogram_bins_used"] = int(
             stage2_hist_matrix_dict.shape[1]
             if stage2_hist_matrix_dict is not None
             else (dict_hist_matrix.shape[1] if dict_hist_matrix is not None else 0)
         )
+        row_result["best_distance_term_values_json"] = None
+        row_result["best_distance_term_shares_json"] = None
+        row_result["best_distance_scalar_feature_shares_json"] = None
+        row_result["best_distance_group_component_shares_json"] = None
+        row_result["best_distance_group_component_within_term_shares_json"] = None
+        row_result["best_distance_dominant_term"] = None
+        row_result["best_distance_dominant_term_share"] = np.nan
+        row_result["best_distance_active_term_count"] = 0
         n_eff_masked = 0
         if out_of_support_eff_mask_non_hist is not None and i < out_of_support_eff_mask_non_hist.shape[0]:
             n_eff_masked = int(np.sum(out_of_support_eff_mask_non_hist[i]))
@@ -2901,22 +5380,116 @@ def estimate_from_dataframes(
         # Compute feature-space distances (base features + optional histogram shape).
         sample_scaled_non_hist = data_scaled_base[i] if non_hist_feature_idx else None
         cand_scaled_non_hist = dict_scaled_base[cand_indices] if non_hist_feature_idx else None
-        sample_hist_raw = (
-            data_hist_matrix[i] if (hist_feature_idx and data_hist_matrix is not None) else None
-        )
-        cand_hist_raw = (
-            dict_hist_matrix[cand_indices] if (hist_feature_idx and dict_hist_matrix is not None) else None
-        )
-        distances = compute_candidate_distances(
+        base_distances = _compute_non_hist_base_distances(
             distance_metric=distance_metric,
             sample_scaled_non_hist=sample_scaled_non_hist,
             candidates_scaled_non_hist=cand_scaled_non_hist,
-            sample_hist_raw=sample_hist_raw,
-            candidates_hist_raw=cand_hist_raw,
-            histogram_distance_weight=hist_distance_weight,
-            histogram_distance_blend_mode=hist_distance_blend_mode,
+            min_valid_non_hist_dims=1,
             dd_weights=_dd_non_hist_weights,
             dd_p_norm=dd_p_norm,
+        )
+        sample_hist_raw = (
+            data_hist_matrix[i] if (hist_feature_cols_for_distance and data_hist_matrix is not None) else None
+        )
+        cand_hist_raw = (
+            dict_hist_matrix[cand_indices] if (hist_feature_cols_for_distance and dict_hist_matrix is not None) else None
+        )
+        hist_distances = None
+        if sample_hist_raw is not None and cand_hist_raw is not None:
+            hist_distances = _histogram_distance_many(
+                np.asarray(sample_hist_raw, dtype=float),
+                np.asarray(cand_hist_raw, dtype=float),
+                distance=hist_distance_mode,
+                normalization=hist_normalization,
+                p_norm=hist_p_norm,
+                amplitude_weight=hist_amplitude_weight,
+                shape_weight=hist_shape_weight,
+                slope_weight=hist_slope_weight,
+                cdf_weight=hist_cdf_weight,
+                amplitude_stat=hist_amplitude_stat,
+            )
+        effvec_distances = None
+        if effvec_distance_enabled and use_effvec_group_distance:
+            effvec_distances = _compute_efficiency_vector_candidate_distances(
+                row_idx=i,
+                cand_indices_local=cand_indices,
+            )
+        extra_group_aux_terms: list[tuple[str, np.ndarray | None, float, str]] = []
+        if extra_group_terms:
+            for term in extra_group_terms:
+                group_name = str(term.get("name", "")).strip()
+                if not group_name:
+                    continue
+                group_kind = str(term.get("kind", "ordered_vector")).strip().lower()
+                group_cfg = term.get("distance_cfg", {})
+                if not isinstance(group_cfg, Mapping):
+                    group_cfg = {}
+                group_dict_matrix = np.asarray(term.get("dict_matrix", []), dtype=float)
+                group_data_matrix = np.asarray(term.get("data_matrix", []), dtype=float)
+                if (
+                    group_dict_matrix.ndim != 2
+                    or group_data_matrix.ndim != 2
+                    or i >= group_data_matrix.shape[0]
+                    or len(cand_indices) == 0
+                    or np.max(cand_indices) >= group_dict_matrix.shape[0]
+                ):
+                    continue
+                sample_vec = np.asarray(group_data_matrix[i], dtype=float)
+                cand_vec = np.asarray(group_dict_matrix[cand_indices], dtype=float)
+                if sample_vec.ndim != 1 or cand_vec.ndim != 2 or cand_vec.shape[1] != sample_vec.size:
+                    continue
+                if group_kind == "rate_histogram":
+                    group_dist = _histogram_distance_many(
+                        sample_vec,
+                        cand_vec,
+                        distance=str(group_cfg.get("distance", "ordered_vector_lp")),
+                        normalization=str(group_cfg.get("normalization", "unit_sum")),
+                        p_norm=float(group_cfg.get("p_norm", 1.0)),
+                        amplitude_weight=float(group_cfg.get("amplitude_weight", 0.0)),
+                        shape_weight=float(group_cfg.get("shape_weight", 0.0)),
+                        slope_weight=float(group_cfg.get("slope_weight", 0.0)),
+                        cdf_weight=float(group_cfg.get("cdf_weight", 1.0)),
+                        amplitude_stat=str(group_cfg.get("amplitude_stat", "sum")),
+                    )
+                else:
+                    group_dist = _ordered_vector_distance_many(
+                        sample_vec=sample_vec,
+                        candidates_vec=cand_vec,
+                        normalization=str(group_cfg.get("normalization", "none")),
+                        p_norm=float(group_cfg.get("p_norm", 2.0)),
+                        amplitude_weight=float(group_cfg.get("amplitude_weight", 0.0)),
+                        shape_weight=float(group_cfg.get("shape_weight", 1.0)),
+                        slope_weight=float(group_cfg.get("slope_weight", 0.0)),
+                        cdf_weight=float(group_cfg.get("cdf_weight", 0.0)),
+                        amplitude_stat=str(group_cfg.get("amplitude_stat", "mean")),
+                        min_valid_bins=max(int(term.get("min_valid_bins", 1)), 1),
+                    )
+                extra_group_aux_terms.append(
+                    (
+                        group_name,
+                        np.asarray(group_dist, dtype=float),
+                        float(term.get("weight", 0.0)),
+                        str(term.get("blend_mode", "normalized")),
+                    )
+                )
+        aux_terms_for_distance: list[tuple[str, np.ndarray | None, float, str]] = [
+            (
+                "rate_histogram",
+                hist_distances,
+                max(float(hist_distance_weight), 0.0),
+                hist_distance_blend_mode,
+            ),
+            (
+                "efficiency_vectors",
+                effvec_distances,
+                max(float(effvec_distance_weight), 0.0),
+                effvec_distance_blend_mode,
+            ),
+        ]
+        aux_terms_for_distance.extend(extra_group_aux_terms)
+        distances, distance_term_arrays = _combine_distance_terms_with_breakdown(
+            base_distances=base_distances,
+            aux_terms=aux_terms_for_distance,
         )
 
         # Handle NaN distances
@@ -2949,6 +5522,8 @@ def estimate_from_dataframes(
         row_result["best_distance_base_share_other"] = np.nan
         row_result["best_distance_non_hist_finite_dims"] = 0
         row_result["best_distance_hist_emd"] = np.nan
+        row_result["best_distance_rate_histogram"] = np.nan
+        row_result["best_distance_efficiency_vector"] = np.nan
 
         if non_hist_feature_idx:
             sample_base_vec = np.asarray(data_scaled_base[i], dtype=float)
@@ -2990,15 +5565,142 @@ def estimate_from_dataframes(
                         float(other_l2 * other_l2 / denom) if np.isfinite(other_l2) else np.nan
                     )
 
-        if hist_feature_idx and data_hist_matrix is not None and dict_hist_matrix is not None:
-            hist_pair = _histogram_emd_many(
+        if hist_feature_cols_for_distance and data_hist_matrix is not None and dict_hist_matrix is not None:
+            hist_pair = _histogram_distance_many(
                 np.asarray(data_hist_matrix[i], dtype=float),
                 np.asarray(dict_hist_matrix[best_j : best_j + 1], dtype=float),
+                distance=hist_distance_mode,
+                normalization=hist_normalization,
+                p_norm=hist_p_norm,
+                amplitude_weight=hist_amplitude_weight,
+                shape_weight=hist_shape_weight,
+                slope_weight=hist_slope_weight,
+                cdf_weight=hist_cdf_weight,
+                amplitude_stat=hist_amplitude_stat,
             )
             if hist_pair.size:
-                row_result["best_distance_hist_emd"] = (
-                    float(hist_pair[0]) if np.isfinite(hist_pair[0]) else np.nan
+                hist_value = float(hist_pair[0]) if np.isfinite(hist_pair[0]) else np.nan
+                row_result["best_distance_hist_emd"] = hist_value
+                row_result["best_distance_rate_histogram"] = hist_value
+        if effvec_distance_enabled and use_effvec_group_distance:
+            effvec_pair = _compute_efficiency_vector_candidate_distances(
+                row_idx=i,
+                cand_indices_local=np.asarray([best_j], dtype=int),
+            )
+            if effvec_pair is not None and effvec_pair.size:
+                row_result["best_distance_efficiency_vector"] = (
+                    float(effvec_pair[0]) if np.isfinite(effvec_pair[0]) else np.nan
                 )
+
+        best_term_values: dict[str, float] = {}
+        for term_name, term_array in distance_term_arrays.items():
+            values = np.asarray(term_array, dtype=float)
+            if values.shape[0] != len(cand_indices):
+                continue
+            best_term = values[valid][order][0]
+            if np.isfinite(best_term) and best_term >= 0.0:
+                best_term_values[str(term_name)] = float(best_term)
+        if best_term_values:
+            total_term_value = float(sum(best_term_values.values()))
+            if np.isfinite(total_term_value) and total_term_value > 0.0:
+                best_term_shares = {
+                    name: float(value / total_term_value)
+                    for name, value in best_term_values.items()
+                    if np.isfinite(value) and value >= 0.0
+                }
+                row_result["best_distance_term_values_json"] = json.dumps(
+                    best_term_values,
+                    sort_keys=True,
+                )
+                row_result["best_distance_term_shares_json"] = json.dumps(
+                    best_term_shares,
+                    sort_keys=True,
+                )
+                row_result["best_distance_active_term_count"] = int(len(best_term_shares))
+
+                group_component_total_shares: dict[str, float] = {}
+                group_component_within_term_shares: dict[str, float] = {}
+                hist_term_share = float(best_term_shares.get("rate_histogram", 0.0))
+                if (
+                    hist_term_share > 0.0
+                    and hist_feature_cols_for_distance
+                    and data_hist_matrix is not None
+                    and dict_hist_matrix is not None
+                ):
+                    hist_total, hist_within = _histogram_component_share_breakdown(
+                        sample_hist=np.asarray(data_hist_matrix[i], dtype=float),
+                        candidate_hist=np.asarray(dict_hist_matrix[best_j], dtype=float),
+                        feature_names=hist_feature_cols_for_distance,
+                        term_share_of_total=hist_term_share,
+                        distance=hist_distance_mode,
+                        normalization=hist_normalization,
+                        p_norm=hist_p_norm,
+                        amplitude_weight=hist_amplitude_weight,
+                        shape_weight=hist_shape_weight,
+                        slope_weight=hist_slope_weight,
+                        cdf_weight=hist_cdf_weight,
+                        amplitude_stat=hist_amplitude_stat,
+                    )
+                    group_component_total_shares.update(hist_total)
+                    group_component_within_term_shares.update(hist_within)
+
+                effvec_term_share = float(best_term_shares.get("efficiency_vectors", 0.0))
+                if effvec_term_share > 0.0 and effvec_distance_enabled and use_effvec_group_distance:
+                    eff_total, eff_within = _efficiency_vector_component_share_breakdown(
+                        payloads=effvec_group_payloads,
+                        row_idx=i,
+                        candidate_idx=best_j,
+                        fiducial=effvec_fiducial,
+                        uncertainty_floor=effvec_uncertainty_floor,
+                        min_valid_bins=effvec_min_valid_bins,
+                        term_share_of_total=effvec_term_share,
+                        normalization=effvec_normalization,
+                        p_norm=effvec_p_norm,
+                        amplitude_weight=effvec_amplitude_weight,
+                        shape_weight=effvec_shape_weight,
+                        slope_weight=effvec_slope_weight,
+                        cdf_weight=effvec_cdf_weight,
+                        amplitude_stat=effvec_amplitude_stat,
+                        group_reduction=effvec_group_reduction,
+                    )
+                    group_component_total_shares.update(eff_total)
+                    group_component_within_term_shares.update(eff_within)
+
+                if group_component_total_shares:
+                    row_result["best_distance_group_component_shares_json"] = json.dumps(
+                        group_component_total_shares,
+                        sort_keys=True,
+                    )
+                if group_component_within_term_shares:
+                    row_result["best_distance_group_component_within_term_shares_json"] = json.dumps(
+                        group_component_within_term_shares,
+                        sort_keys=True,
+                    )
+
+                dominant_term, dominant_share = max(
+                    best_term_shares.items(),
+                    key=lambda item: (float(item[1]), str(item[0])),
+                )
+                row_result["best_distance_dominant_term"] = str(dominant_term)
+                row_result["best_distance_dominant_term_share"] = float(dominant_share)
+
+                scalar_term_value = float(best_term_values.get("scalar_base", np.nan))
+                if np.isfinite(scalar_term_value) and scalar_term_value > 0.0 and non_hist_feature_idx:
+                    scalar_feature_shares = _scalar_feature_total_share_breakdown(
+                        feature_names=non_hist_feature_cols,
+                        sample_values=sample_scaled_non_hist,
+                        candidate_values=np.asarray(dict_scaled_base[best_j], dtype=float),
+                        scalar_term_value=scalar_term_value,
+                        total_distance_value=total_term_value,
+                        distance_metric=distance_metric,
+                        dd_weights=_dd_non_hist_weights,
+                        dd_p_norm=dd_p_norm,
+                    )
+                    if scalar_feature_shares:
+                        row_result["best_distance_scalar_feature_shares_json"] = json.dumps(
+                            scalar_feature_shares,
+                            sort_keys=True,
+                        )
 
         # Select neighborhood according to inverse-mapping strategy.
         top_indices, top_distances = _select_top_neighbors(valid_indices, valid_distances)
@@ -3023,9 +5725,15 @@ def estimate_from_dataframes(
                 if (i + 1) % 200 == 0 or i == n_data - 1:
                     log.info("  Estimated %d / %d", i + 1, n_data)
                 continue
-            sample_base_for_local = data_scaled_base[i] if non_hist_feature_idx else None
+            sample_base_for_local = (
+                data_local_linear_features[i]
+                if data_local_linear_features is not None
+                else (data_scaled_base[i] if non_hist_feature_idx else None)
+            )
             top_base_for_local = (
-                dict_scaled_base[top_indices] if non_hist_feature_idx else None
+                dict_local_linear_features[top_indices]
+                if dict_local_linear_features is not None
+                else (dict_scaled_base[top_indices] if non_hist_feature_idx else None)
             )
 
             for pc in param_columns:

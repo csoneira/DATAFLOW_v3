@@ -33,8 +33,8 @@ STEP_DIR = Path(__file__).resolve().parent
 SYNTHETIC_DIR = STEP_DIR.parent
 PIPELINE_DIR = SYNTHETIC_DIR.parent
 PROJECT_DIR = PIPELINE_DIR.parent
-DEFAULT_CONFIG = PROJECT_DIR / "config_method.json"
-CONFIG_COLUMNS_PATH = PROJECT_DIR / "config_columns.json"
+DEFAULT_CONFIG = PROJECT_DIR / "config_step_1.1_method.json"
+CONFIG_COLUMNS_PATH = PROJECT_DIR / "config_step_2.1_columns.json"
 
 DEFAULT_SYNTHETIC_DATASET = (
     SYNTHETIC_DIR / "STEP_3_2_SYNTHETIC_TIME_SERIES" / "OUTPUTS" / "FILES" / "synthetic_dataset.csv"
@@ -56,6 +56,14 @@ DEFAULT_DATASET_TEMPLATE = (
 )
 DEFAULT_STEP12_SELECTED_FEATURE_COLUMNS = (
     PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_4_ENSURE_CONTINUITY_DICTIONARY" / "OUTPUTS" / "FILES" / "selected_feature_columns.json"
+)
+DEFAULT_PARAMETER_SPACE_SPEC = (
+    PIPELINE_DIR
+    / "STEP_1_SETUP"
+    / "STEP_1_1_COLLECT_DATA"
+    / "OUTPUTS"
+    / "FILES"
+    / "parameter_space_columns.json"
 )
 DEFAULT_LUT = (
     PIPELINE_DIR / "STEP_2_INFERENCE" / "STEP_2_3_UNCERTAINTY" / "OUTPUTS" / "FILES" / "uncertainty_lut.csv"
@@ -125,7 +133,6 @@ if str(MODULES_DIR) not in sys.path:
     sys.path.insert(0, str(MODULES_DIR))
 try:
     from efficiency_fit_utils import (  # noqa: E402
-        POLY_CORRECTED_EFFPROD_COL_TEMPLATE,
         append_polynomial_corrected_efficiency_columns,
         load_efficiency_fit_models,
     )
@@ -139,11 +146,13 @@ if str(INFERENCE_DIR) not in sys.path:
     sys.path.insert(0, str(INFERENCE_DIR))
 try:
     from estimate_parameters import (  # noqa: E402
+        PHYSICAL_TT_RATE_LABELS,
         _append_derived_physics_feature_columns,
         _append_derived_tt_global_rate_column,
         _auto_feature_columns as _shared_auto_feature_columns,
         _derived_feature_columns as _shared_derived_feature_columns,
         _normalize_derived_physics_features,
+        resolve_physical_tt_rate_columns,
         build_step15_runtime_inverse_mapping_cfg,
         estimate_from_dataframes,
         load_distance_definition,
@@ -174,13 +183,13 @@ def _load_config(path: Path) -> dict:
     else:
         log.warning("Config file not found: %s", path)
 
-    plots_path = path.with_name("config_plots.json")
+    plots_path = path.with_name("config_step_1.1_plots.json")
     if plots_path != path and plots_path.exists():
         plots_cfg = json.loads(plots_path.read_text(encoding="utf-8"))
         cfg = _merge_dicts(cfg, plots_cfg)
         log.info("Loaded plot config: %s", plots_path)
 
-    runtime_path = path.with_name("config_runtime.json")
+    runtime_path = path.with_name("config_step_1.1_runtime.json")
     if runtime_path.exists():
         runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
         cfg = _merge_dicts(cfg, runtime_cfg)
@@ -341,6 +350,89 @@ def _choose_eff_column(df: pd.DataFrame, preferred: str) -> str:
     raise KeyError("No efficiency column found in dataframe.")
 
 
+def _choose_flux_column(df: pd.DataFrame, preferred: str = CANONICAL_FLUX_COLUMN) -> str | None:
+    """Select a flux-like parameter column when available."""
+    candidates: list[str] = []
+    if str(preferred).strip():
+        candidates.append(str(preferred).strip())
+    candidates.extend([c for c in DEFAULT_PARAMETER_SPACE_PRIORITY if "flux" in str(c).lower()])
+    candidates.extend(sorted(c for c in df.columns if "flux" in str(c).lower()))
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate in seen or candidate not in df.columns:
+            continue
+        seen.add(candidate)
+        values = pd.to_numeric(df[candidate], errors="coerce")
+        if values.notna().any():
+            return candidate
+    return None
+
+
+def _load_parameter_space_spec(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        log.warning("Could not load parameter-space spec %s: %s", path, exc)
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _load_parameter_space_columns(path: Path) -> list[str]:
+    payload = _load_parameter_space_spec(path)
+    if not payload:
+        return []
+    candidates: list[object] = [
+        payload.get("parameter_space_columns_downstream_preferred"),
+        payload.get("selected_parameter_space_columns_downstream_preferred"),
+        payload.get("selected_parameter_space_columns"),
+        payload.get("parameter_space_columns"),
+    ]
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in candidates:
+        if not isinstance(raw, list):
+            continue
+        for col in raw:
+            if not isinstance(col, str):
+                continue
+            text = col.strip()
+            if not text or text in seen:
+                continue
+            out.append(text)
+            seen.add(text)
+        if out:
+            break
+    return out
+
+
+def _apply_parameter_space_aliases(df: pd.DataFrame, spec: dict) -> tuple[pd.DataFrame, list[str]]:
+    if df.empty or not isinstance(spec, dict):
+        return df, []
+
+    raw_aliases = spec.get("parameter_space_column_aliases", {})
+    aliases = raw_aliases if isinstance(raw_aliases, dict) else {}
+    to_add: dict[str, pd.Series] = {}
+
+    for source_col_raw, target_col_raw in aliases.items():
+        source_col = str(source_col_raw).strip()
+        target_col = str(target_col_raw).strip()
+        if not source_col or not target_col or source_col == target_col:
+            continue
+        if target_col in df.columns or source_col not in df.columns or target_col in to_add:
+            continue
+        to_add[target_col] = df[source_col].copy()
+
+    if not to_add:
+        return df, []
+
+    alias_df = pd.DataFrame(to_add, index=df.index)
+    out = pd.concat([df, alias_df], axis=1)
+    return out, sorted(alias_df.columns.tolist())
+
+
 DEFAULT_PARAMETER_SPACE_PRIORITY = [
     "flux_cm2_min",
     "cos_n",
@@ -395,6 +487,7 @@ def _resolve_parameter_space_columns_from_cfg(
     merged_df: pd.DataFrame,
     dictionary_df: pd.DataFrame,
     configured_columns: object = None,
+    default_columns: list[str] | None = None,
 ) -> list[str]:
     """Resolve parameter-space columns with available weighted/corrected pairs."""
 
@@ -405,6 +498,8 @@ def _resolve_parameter_space_columns_from_cfg(
 
     common_dict = set(dictionary_df.columns)
     requested = _parse_column_spec(configured_columns)
+    if not requested and isinstance(default_columns, list):
+        requested = [str(c).strip() for c in default_columns if str(c).strip()]
 
     if requested:
         resolved: list[str] = []
@@ -449,6 +544,143 @@ def _resolve_parameter_space_columns_from_cfg(
         return sorted(set(resolved_auto))
 
     raise KeyError("Could not resolve STEP 3.3 parameter-space columns.")
+
+
+def _resolve_estimation_parameter_columns(
+    *,
+    dictionary_df: pd.DataFrame,
+    configured_columns: object = None,
+    default_columns: list[str] | None = None,
+) -> list[str]:
+    requested = _parse_column_spec(configured_columns)
+    if not requested and isinstance(default_columns, list):
+        requested = [str(c).strip() for c in default_columns if str(c).strip()]
+    if not requested:
+        requested = list(DEFAULT_PARAMETER_SPACE_PRIORITY)
+
+    resolved: list[str] = []
+    missing: list[str] = []
+    for col in requested:
+        if col in dictionary_df.columns and col not in resolved:
+            resolved.append(col)
+        elif col not in missing:
+            missing.append(col)
+    if missing:
+        log.warning(
+            "Ignoring estimated-parameter columns not present in the dictionary: %s",
+            missing,
+        )
+    if resolved:
+        return resolved
+
+    fallback: list[str] = []
+    for col in sorted(dictionary_df.columns):
+        if _is_parameter_space_column(col) and col not in fallback:
+            fallback.append(col)
+    return fallback
+
+
+def _find_true_parameter_column(df: pd.DataFrame, pname: str) -> str | None:
+    true_col = f"true_{pname}"
+    if true_col in df.columns:
+        return true_col
+    if pname in df.columns:
+        return pname
+    return None
+
+
+def _find_estimated_parameter_column(df: pd.DataFrame, pname: str) -> str | None:
+    for candidate in (f"corrected_{pname}", f"est_{pname}"):
+        if candidate in df.columns:
+            return candidate
+    return None
+
+
+def _is_efficiency_parameter_column(name: str) -> bool:
+    text = str(name).strip().lower()
+    return text.startswith("eff_") or "_eff_" in text or text.endswith("_eff") or text.startswith("eff")
+
+
+def _series_median_or_none(values: object) -> float | None:
+    if values is None:
+        return None
+    series = pd.to_numeric(values, errors="coerce")
+    if isinstance(series, pd.Series):
+        if not series.notna().any():
+            return None
+        return float(series.median())
+    arr = np.asarray(series, dtype=float)
+    if not np.isfinite(arr).any():
+        return None
+    return float(np.nanmedian(arr))
+
+
+def _append_parameter_error_metrics(
+    df: pd.DataFrame,
+    *,
+    parameter_space_cols: list[str],
+) -> dict[str, dict[str, object]]:
+    """Append per-parameter error columns and return compact diagnostics."""
+    diagnostics: dict[str, dict[str, object]] = {}
+    for pname in parameter_space_cols:
+        true_col = _find_true_parameter_column(df, pname)
+        est_col = _find_estimated_parameter_column(df, pname)
+        if true_col is None or est_col is None:
+            continue
+
+        true_vals = pd.to_numeric(df.get(true_col), errors="coerce")
+        est_vals = pd.to_numeric(df.get(est_col), errors="coerce")
+        err_vals = est_vals - true_vals
+        rel_vals = err_vals / true_vals.replace({0.0: np.nan}) * 100.0
+        abs_rel_vals = rel_vals.abs()
+
+        df[f"error_{pname}"] = err_vals
+        df[f"relerr_{pname}_pct"] = rel_vals
+        df[f"abs_relerr_{pname}_pct"] = abs_rel_vals
+
+        unc_pct_col = f"unc_{pname}_pct" if f"unc_{pname}_pct" in df.columns else None
+        unc_abs_col = f"unc_{pname}_abs" if f"unc_{pname}_abs" in df.columns else None
+        diagnostics[pname] = {
+            "true_column": true_col,
+            "estimated_column": est_col,
+            "uncertainty_pct_column": unc_pct_col,
+            "uncertainty_abs_column": unc_abs_col,
+            "n_finite_estimates": int(est_vals.notna().sum()),
+            "median_abs_relerr_pct": _series_median_or_none(abs_rel_vals),
+            "median_unc_pct": _series_median_or_none(df.get(unc_pct_col) if unc_pct_col else None),
+        }
+    return diagnostics
+
+
+def _build_parameter_diagnostic_panels(
+    df: pd.DataFrame,
+    *,
+    parameter_space_cols: list[str],
+) -> list[tuple[str, np.ndarray, np.ndarray, np.ndarray | None]]:
+    panels: list[tuple[str, np.ndarray, np.ndarray, np.ndarray | None]] = []
+    for pname in parameter_space_cols:
+        true_col = f"true_{pname}" if f"true_{pname}" in df.columns else (pname if pname in df.columns else None)
+        est_col = (
+            f"corrected_{pname}"
+            if f"corrected_{pname}" in df.columns
+            else f"est_{pname}"
+            if f"est_{pname}" in df.columns
+            else None
+        )
+        if true_col is None or est_col is None:
+            continue
+        true_vals = pd.to_numeric(df.get(true_col), errors="coerce").to_numpy(dtype=float)
+        est_vals = pd.to_numeric(df.get(est_col), errors="coerce").to_numpy(dtype=float)
+        if not (np.isfinite(true_vals).any() and np.isfinite(est_vals).any()):
+            continue
+        unc_col = f"unc_{pname}_abs"
+        unc_vals = (
+            pd.to_numeric(df.get(unc_col), errors="coerce").to_numpy(dtype=float)
+            if unc_col in df.columns
+            else None
+        )
+        panels.append((pname, true_vals, est_vals, unc_vals))
+    return panels
 
 
 def _resolve_inference_feature_columns(
@@ -535,6 +767,7 @@ def _resolve_inference_feature_columns(
         )
         if (
             derived_rate_col is None
+            and include_global_rate
             and global_rate_col in dict_in.columns
             and global_rate_col in data_in.columns
         ):
@@ -2074,65 +2307,44 @@ def _plot_corrected_parameter_space_lower_triangle(
     plt.close(fig)
 
 
-_EFFPROD_SUFFIX_TO_TT_LABEL = {
-    "4planes": "1234",
-    "123": "123",
-    "234": "234",
-    "12": "12",
-    "23": "23",
-    "34": "34",
-}
+_TT_BREAKDOWN_LABELS = (
+    "1234",
+    "123",
+    "124",
+    "134",
+    "234",
+    "12",
+    "13",
+    "14",
+    "23",
+    "24",
+    "34",
+)
 
 
 def _resolve_tt_rate_breakdown_entries(
     df: pd.DataFrame,
-) -> list[tuple[str, str | None, str, str, str]]:
-    """Resolve TT panels for the breakdown plot.
+) -> list[tuple[str, str, str]]:
+    """Resolve TT-specific physical rate columns for the breakdown plot."""
+    _selected_prefix, rate_cols_by_label = resolve_physical_tt_rate_columns(
+        df,
+        tt_labels=PHYSICAL_TT_RATE_LABELS,
+        prefix_selector="last",
+        include_to_tt_rate_hz=False,
+        require_numeric=True,
+    )
 
-    Returns tuples:
-    (tt_label, rate_col, effprod_col, effprod_source, rate_source)
-    where rate_source is one of {"tt_specific", "shared_global", "missing"}.
-    """
-    global_rate_col = None
-    for candidate in ("events_per_second_global_rate", "global_rate_hz_mean", "global_rate_hz_mid"):
-        if candidate in df.columns and pd.to_numeric(df[candidate], errors="coerce").notna().any():
-            global_rate_col = candidate
-            break
-
-    tt_entries: list[tuple[str, str | None, str, str, str]] = []
-    for suffix, tt_label in _EFFPROD_SUFFIX_TO_TT_LABEL.items():
-        corrected_col = POLY_CORRECTED_EFFPROD_COL_TEMPLATE.format(suffix=suffix)
-        raw_col = f"efficiency_product_{suffix}"
-        effprod_col = None
-        effprod_source = "feature_space"
-        if corrected_col in df.columns and pd.to_numeric(df[corrected_col], errors="coerce").notna().any():
-            effprod_col = corrected_col
-            effprod_source = "poly_corrected"
-        elif raw_col in df.columns and pd.to_numeric(df[raw_col], errors="coerce").notna().any():
-            effprod_col = raw_col
-        if effprod_col is None:
+    tt_entries: list[tuple[str, str, str]] = []
+    for tt_label in _TT_BREAKDOWN_LABELS:
+        tt_rate_col = rate_cols_by_label.get(tt_label)
+        if tt_rate_col is None:
             continue
-
-        pattern = re.compile(rf"^.+_tt_{re.escape(tt_label)}_rate_hz$")
-        candidates = [
-            c
-            for c in df.columns
-            if pattern.match(str(c)) and pd.to_numeric(df[c], errors="coerce").notna().any()
-        ]
-        if candidates:
-            tt_rate_col = sorted(candidates, key=lambda c: (len(str(c)), str(c)))[0]
-            tt_entries.append((tt_label, tt_rate_col, effprod_col, effprod_source, "tt_specific"))
-        else:
-            tt_entries.append((tt_label, global_rate_col, effprod_col, effprod_source, ("shared_global" if global_rate_col else "missing")))
+        tt_entries.append((tt_label, tt_rate_col, "tt_specific"))
     return tt_entries
 
 
 def _plot_tt_rate_breakdown(df: pd.DataFrame) -> int:
-    """Plot per-TT rate diagnostics.
-
-    When TT-specific rate columns are unavailable in the synthetic/corrected table,
-    the shared-global-rate row is omitted to avoid repeating the same series in every panel.
-    """
+    """Plot TT-specific physical rate time series only."""
     x, x_label = _time_axis(df)
 
     tt_entries = _resolve_tt_rate_breakdown_entries(df)
@@ -2140,112 +2352,36 @@ def _plot_tt_rate_breakdown(df: pd.DataFrame) -> int:
     if not tt_entries:
         return 0
 
-    has_tt_specific_rate = any(rate_source == "tt_specific" for _, _, _, _, rate_source in tt_entries)
     n_tt = len(tt_entries)
-    n_rows = 3 if has_tt_specific_rate else 2
     fig, axes = plt.subplots(
-        n_rows, n_tt,
-        figsize=(4.0 * n_tt, 3.0 * n_rows),
+        1, n_tt,
+        figsize=(4.0 * n_tt, 3.3),
         squeeze=False,
     )
 
-    # Share y-axis within each row and x-axis within each column
-    for row in range(n_rows):
-        for col in range(1, n_tt):
-            axes[row, col].sharey(axes[row, 0])
-    for col in range(n_tt):
-        for row in range(n_rows - 1):
-            axes[row, col].sharex(axes[n_rows - 1, col])
+    for col in range(1, n_tt):
+        axes[0, col].sharey(axes[0, 0])
 
     colors = ["#4C72B0", "#DD8452", "#55A868", "#C44E52", "#8172B3"]
-    use_poly_corrected = any(source == "poly_corrected" for _, _, _, source, _ in tt_entries)
-    if has_tt_specific_rate:
-        row_labels = [
-            "TT rate [Hz]",
-            ("Poly-corrected eff. product" if use_poly_corrected else "Eff. product"),
-            ("Rate / poly-corrected eff. prod." if use_poly_corrected else "Rate / eff. prod."),
-        ]
-    else:
-        row_labels = [
-            ("Poly-corrected eff. product" if use_poly_corrected else "Eff. product"),
-            ("Global rate / poly-corrected eff. prod." if use_poly_corrected else "Global rate / eff. prod."),
-        ]
-        log.info(
-            "STEP 3.3 TT breakdown: no TT-specific rate columns found; omitting repeated shared-global-rate top row."
-        )
-
-    for j, (tt_label, rate_col, effprod_col, effprod_source, rate_source) in enumerate(tt_entries):
-        rate = (
-            pd.to_numeric(df[rate_col], errors="coerce").to_numpy(dtype=float)
-            if rate_col is not None
-            else np.full(len(df), np.nan, dtype=float)
-        )
-        effprod = pd.to_numeric(df[effprod_col], errors="coerce").to_numpy(dtype=float)
+    for j, (tt_label, rate_col, _rate_source) in enumerate(tt_entries):
+        rate = pd.to_numeric(df[rate_col], errors="coerce").to_numpy(dtype=float)
         color = colors[j % len(colors)]
 
-        title = f"TT {tt_label}"
-        if effprod_source == "poly_corrected":
-            title += " (poly)"
-        if has_tt_specific_rate and rate_source != "tt_specific":
-            title += " / global"
-
-        eff_row = 1 if has_tt_specific_rate else 0
-        ratio_row = 2 if has_tt_specific_rate else 1
-
-        if has_tt_specific_rate:
-            ax = axes[0, j]
-            ok = np.isfinite(rate)
-            if rate_source == "tt_specific" and ok.any():
-                ax.scatter(x[ok], rate[ok], s=8, color=color, alpha=0.6, edgecolors="none")
-            elif rate_source == "shared_global" and ok.any():
-                ax.text(
-                    0.5,
-                    0.5,
-                    "No TT-specific rate\n(shared global rate only)",
-                    ha="center",
-                    va="center",
-                    transform=ax.transAxes,
-                    fontsize=7.5,
-                )
-            else:
-                ax.text(0.5, 0.5, "No rate values", ha="center", va="center", transform=ax.transAxes, fontsize=7.5)
-            ax.set_title(title, fontsize=9, fontweight="bold")
-            ax.grid(True, alpha=0.2, linewidth=0.5)
-
-        # Efficiency product
-        ax = axes[eff_row, j]
-        ok = np.isfinite(effprod)
+        ax = axes[0, j]
+        ok = np.isfinite(rate)
         if ok.any():
-            ax.scatter(x[ok], effprod[ok], s=8, color=color, alpha=0.6, edgecolors="none")
-        if not has_tt_specific_rate:
-            ax.set_title(title, fontsize=9, fontweight="bold")
+            ax.scatter(x[ok], rate[ok], s=8, color=color, alpha=0.6, edgecolors="none")
+        else:
+            ax.text(0.5, 0.5, "No rate values", ha="center", va="center", transform=ax.transAxes, fontsize=7.5)
+        ax.set_title(f"TT {tt_label}", fontsize=9, fontweight="bold")
         ax.grid(True, alpha=0.2, linewidth=0.5)
 
-        # Rate / efficiency product
-        ax = axes[ratio_row, j]
-        both_ok = np.isfinite(rate) & np.isfinite(effprod) & (effprod > 0)
-        if both_ok.any():
-            ratio = rate[both_ok] / effprod[both_ok]
-            ax.scatter(x[both_ok], ratio, s=8, color=color, alpha=0.6, edgecolors="none")
-        ax.grid(True, alpha=0.2, linewidth=0.5)
-
-    # Y-axis labels only on leftmost column
-    for row in range(n_rows):
-        axes[row, 0].set_ylabel(row_labels[row], fontsize=8)
-        for col in range(1, n_tt):
-            plt.setp(axes[row, col].get_yticklabels(), visible=False)
-
-    # X-axis labels only on bottom row
+    axes[0, 0].set_ylabel("TT rate [Hz]", fontsize=8)
     for col in range(n_tt):
-        axes[n_rows - 1, col].set_xlabel(x_label, fontsize=7)
-        for row in range(n_rows - 1):
-            plt.setp(axes[row, col].get_xticklabels(), visible=False)
-
-    if not has_tt_specific_rate:
-        fig.suptitle("TT breakdown: TT-specific rates unavailable in STEP 3.3 outputs", fontsize=10)
-        fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.97])
-    else:
-        fig.tight_layout()
+        axes[0, col].set_xlabel(x_label, fontsize=7)
+        if col > 0:
+            plt.setp(axes[0, col].get_yticklabels(), visible=False)
+    fig.tight_layout()
     _save_figure(fig, PLOTS_DIR / "tt_rate_breakdown.png", dpi=170)
     plt.close(fig)
     return n_tt
@@ -2254,94 +2390,40 @@ def _plot_tt_rate_breakdown(df: pd.DataFrame) -> int:
 def _make_plots(
     df: pd.DataFrame,
     *,
-    flux_true_col: str,
-    flux_est_col: str,
-    flux_unc_abs_col: str | None,
-    eff_true_col: str,
-    eff_est_col: str,
-    eff_unc_abs_col: str | None,
+    parameter_space_cols: list[str],
 ) -> None:
-    """Generate correction overview with flux row + one row per efficiency."""
+    """Generate correction overview for the resolved parameter-space dimensions."""
     x, x_label = _time_axis(df)
-    true_flux = pd.to_numeric(df.get(flux_true_col), errors="coerce").to_numpy(dtype=float)
-    est_flux = pd.to_numeric(df.get(flux_est_col), errors="coerce").to_numpy(dtype=float)
-    unc_flux_abs = (
-        pd.to_numeric(df.get(flux_unc_abs_col), errors="coerce").to_numpy(dtype=float)
-        if flux_unc_abs_col and flux_unc_abs_col in df.columns
-        else None
-    )
+    panels = _build_parameter_diagnostic_panels(df, parameter_space_cols=parameter_space_cols)
+    if not panels:
+        fig, ax = plt.subplots(figsize=(10.4, 4.8))
+        ax.axis("off")
+        ax.text(0.5, 0.58, "STEP 3.3 correction diagnostics", ha="center", va="center", fontsize=12, fontweight="bold")
+        ax.text(0.5, 0.40, "No parameter-space dimensions with both true and estimated values were available.", ha="center", va="center", fontsize=10)
+        fig.tight_layout()
+        _save_figure(fig, PLOTS_DIR / "correction_overview.png", dpi=160)
+        plt.close(fig)
+        return
 
-    eff_panels: list[tuple[str, np.ndarray, np.ndarray, np.ndarray | None]] = []
-    for idx in range(1, 5):
-        base = f"eff_sim_{idx}"
-        true_col = f"true_{base}"
-        if true_col not in df.columns:
-            continue
-        corrected_col = f"corrected_{base}"
-        estimated_col = f"est_{base}"
-        est_col = corrected_col if corrected_col in df.columns else estimated_col
-        if est_col not in df.columns:
-            continue
-        unc_col = f"unc_{base}_abs"
-        true_vals = pd.to_numeric(df.get(true_col), errors="coerce").to_numpy(dtype=float)
-        est_vals = pd.to_numeric(df.get(est_col), errors="coerce").to_numpy(dtype=float)
-        unc_vals = (
-            pd.to_numeric(df.get(unc_col), errors="coerce").to_numpy(dtype=float)
-            if unc_col in df.columns
-            else None
-        )
-        eff_panels.append((base, true_vals, est_vals, unc_vals))
-
-    if not eff_panels:
-        # Backward-compatible fallback for old merged tables with only one efficiency.
-        fallback_true = pd.to_numeric(df.get(eff_true_col), errors="coerce").to_numpy(dtype=float)
-        fallback_est = pd.to_numeric(df.get(eff_est_col), errors="coerce").to_numpy(dtype=float)
-        fallback_unc = (
-            pd.to_numeric(df.get(eff_unc_abs_col), errors="coerce").to_numpy(dtype=float)
-            if eff_unc_abs_col and eff_unc_abs_col in df.columns
-            else None
-        )
-        eff_panels = [("eff", fallback_true, fallback_est, fallback_unc)]
-
-    n_rows = 1 + len(eff_panels)
+    n_rows = len(panels)
     fig_h = max(8.5, 3.1 * n_rows)
     fig, axes = plt.subplots(n_rows, 2, figsize=(13.2, fig_h), squeeze=False, sharey="row")
-    _plot_series_panel(
-        axes[0, 0],
-        x=x,
-        true_vals=true_flux,
-        est_vals=est_flux,
-        unc_abs=unc_flux_abs,
-        ylabel="flux_cm2_min",
-        title="Flux time series",
-    )
-    _plot_diag_panel(
-        axes[0, 1],
-        true_vals=true_flux,
-        est_vals=est_flux,
-        unc_abs=unc_flux_abs,
-        xlabel="Simulated flux",
-        ylabel="Estimated flux",
-        title="Flux diagonal (y = x)",
-    )
-
-    for row, (base, true_eff, est_eff, unc_eff_abs) in enumerate(eff_panels, start=1):
-        eff_label = base.replace("eff_sim_", "eff")
+    for row, (base, true_vals, est_vals, unc_abs) in enumerate(panels):
         _plot_series_panel(
             axes[row, 0],
             x=x,
-            true_vals=true_eff,
-            est_vals=est_eff,
-            unc_abs=unc_eff_abs,
-            ylabel=eff_label,
+            true_vals=true_vals,
+            est_vals=est_vals,
+            unc_abs=unc_abs,
+            ylabel=base,
             title=f"{base} time series",
         )
         _plot_diag_panel(
             axes[row, 1],
-            true_vals=true_eff,
-            est_vals=est_eff,
-            unc_abs=unc_eff_abs,
-            xlabel=f"Simulated {base}",
+            true_vals=true_vals,
+            est_vals=est_vals,
+            unc_abs=unc_abs,
+            xlabel=f"True {base}",
             ylabel=f"Estimated {base}",
             title=f"{base} diagonal (y = x)",
         )
@@ -2396,6 +2478,8 @@ def main() -> int:
     lut_meta_path = _resolve_input_path(args.lut_meta_json or lut_meta_cfg or DEFAULT_LUT_META)
     build_summary_path = _resolve_input_path(build_summary_cfg or DEFAULT_BUILD_SUMMARY)
     step32_center_path = _resolve_input_path(step32_center_csv_cfg or DEFAULT_STEP32_DIAGNOSTIC_CENTER)
+    parameter_space_spec_cfg = cfg_33.get("parameter_space_columns_json", None)
+    parameter_space_spec_path = _resolve_input_path(parameter_space_spec_cfg or DEFAULT_PARAMETER_SPACE_SPEC)
 
     for label, p in (
         ("Synthetic dataset", synthetic_path),
@@ -2434,11 +2518,8 @@ def main() -> int:
     ):
         log.warning(
             "Deprecated keys step_3_2/step_3_1 flux_column/eff_column detected; ignored. "
-            "Using fixed columns %s/%s.",
-            CANONICAL_FLUX_COLUMN,
-            CANONICAL_EFF_COLUMN,
+            "STEP 3.3 now resolves parameter-space dimensions from STEP 1 artifacts instead.",
         )
-    flux_col = CANONICAL_FLUX_COLUMN
     eff_pref = CANONICAL_EFF_COLUMN
 
     log.info("Synthetic dataset: %s", synthetic_path)
@@ -2457,6 +2538,16 @@ def main() -> int:
     if dictionary_df.empty:
         log.error("Dictionary table is empty: %s", dictionary_path)
         return 1
+    parameter_space_spec = _load_parameter_space_spec(parameter_space_spec_path)
+    default_parameter_space_columns = _load_parameter_space_columns(parameter_space_spec_path)
+    synthetic_df, synthetic_alias_cols = _apply_parameter_space_aliases(synthetic_df, parameter_space_spec)
+    dictionary_df, dictionary_alias_cols = _apply_parameter_space_aliases(dictionary_df, parameter_space_spec)
+    if synthetic_alias_cols or dictionary_alias_cols:
+        log.info(
+            "Applied STEP 1 parameter-space aliases: synthetic=%s dictionary=%s",
+            synthetic_alias_cols,
+            dictionary_alias_cols,
+        )
 
     try:
         dict_work, synthetic_work, resolved_feature_columns, feature_strategy = _resolve_inference_feature_columns(
@@ -2494,36 +2585,49 @@ def main() -> int:
         # Fallback to synthetic table for discretized trajectory.
         fallback_cols = [c for c in ("file_index", "elapsed_hours", "n_events") if c in synthetic_df.columns]
         time_df = synthetic_df[fallback_cols].copy()
+    time_df, time_alias_cols = _apply_parameter_space_aliases(time_df, parameter_space_spec)
 
     complete_df = None
     if complete_curve_path.exists():
         tmp_complete = pd.read_csv(complete_curve_path, low_memory=False)
         complete_df = tmp_complete if not tmp_complete.empty else None
+    complete_alias_cols: list[str] = []
+    if complete_df is not None:
+        complete_df, complete_alias_cols = _apply_parameter_space_aliases(complete_df, parameter_space_spec)
+    if time_alias_cols or complete_alias_cols:
+        log.info(
+            "Applied STEP 1 parameter-space aliases: time=%s complete=%s",
+            time_alias_cols,
+            complete_alias_cols,
+        )
 
+    flux_col = _choose_flux_column(synthetic_df, CANONICAL_FLUX_COLUMN)
     try:
         eff_col = _choose_eff_column(synthetic_df, eff_pref)
-    except KeyError as exc:
-        log.error("%s", exc)
-        return 1
-    if flux_col not in synthetic_df.columns:
-        log.error("Flux column '%s' not found in synthetic dataset.", flux_col)
-        return 1
-    if flux_col not in time_df.columns:
-        time_df[flux_col] = pd.to_numeric(synthetic_df.get(flux_col), errors="coerce")
-    try:
-        eff_col_time = _choose_eff_column(time_df, eff_pref)
     except KeyError:
-        eff_col_time = eff_col
-        time_df[eff_col_time] = pd.to_numeric(synthetic_df.get(eff_col), errors="coerce")
+        eff_col = None
+    if flux_col is not None and flux_col not in time_df.columns:
+        time_df[flux_col] = pd.to_numeric(synthetic_df.get(flux_col), errors="coerce")
+    eff_col_time = None
+    if eff_col is not None:
+        try:
+            eff_col_time = _choose_eff_column(time_df, eff_pref)
+        except KeyError:
+            eff_col_time = eff_col
+            if eff_col in synthetic_df.columns:
+                time_df[eff_col_time] = pd.to_numeric(synthetic_df.get(eff_col), errors="coerce")
 
     # ── Load STEP 1.5 distance definition ───────────────────────────
     dd = load_distance_definition(resolved_feature_columns)
     if dd.get("available"):
+        n_active_groups = int(
+            sum(float(v) > 0.0 for v in (dd.get("group_weights", {}) or {}).values())
+        )
         log.info(
-            "Distance definition loaded: %s (p=%.1f, k=%d, λ=%.2g, %d/%d active)",
+            "Distance definition loaded: %s (p=%.1f, k=%d, λ=%.2g, scalar_active=%d/%d, grouped_active=%d)",
             dd.get("selected_mode"), dd["p_norm"], dd["optimal_k"],
             dd["optimal_lambda"],
-            int(np.sum(dd["weights"] > 0)), len(resolved_feature_columns),
+            int(np.sum(dd["weights"] > 0)), len(resolved_feature_columns), n_active_groups,
         )
         if interpolation_k is None or interpolation_k != dd["optimal_k"]:
             log.info("Overriding interpolation_k %s → %d from distance definition.", interpolation_k, dd["optimal_k"])
@@ -2552,18 +2656,19 @@ def main() -> int:
     )
 
     # ── 1) Inference over synthetic dataset ─────────────────────────
-    param_columns = [
-        col
-        for col in (
-            "flux_cm2_min",
-            "cos_n",
-            "eff_sim_1",
-            "eff_sim_2",
-            "eff_sim_3",
-            "eff_sim_4",
+    parameter_space_cfg = cfg_33.get("parameter_space_columns", None)
+    param_columns = _resolve_estimation_parameter_columns(
+        dictionary_df=dict_work,
+        configured_columns=parameter_space_cfg,
+        default_columns=default_parameter_space_columns,
+    )
+    if not param_columns:
+        log.error(
+            "No parameter-space columns available for STEP 3.3 estimation (spec=%s).",
+            parameter_space_spec_path,
         )
-        if col in dict_work.columns
-    ]
+        return 1
+    log.info("Parameter-space columns used for STEP 3.3 estimation: %s", param_columns)
     est_df = estimate_from_dataframes(
         dict_df=dict_work,
         data_df=synthetic_work,
@@ -2605,8 +2710,10 @@ def main() -> int:
         merged[f"corrected_{pname}"] = pd.to_numeric(merged.get(est_name), errors="coerce")
 
     # Preserve canonical true columns for downstream compatibility.
-    merged[f"true_{flux_col}"] = pd.to_numeric(merged.get(flux_col), errors="coerce")
-    merged[f"true_{eff_col}"] = pd.to_numeric(merged.get(eff_col), errors="coerce")
+    if flux_col is not None and flux_col in merged.columns:
+        merged[f"true_{flux_col}"] = pd.to_numeric(merged.get(flux_col), errors="coerce")
+    if eff_col is not None and eff_col in merged.columns:
+        merged[f"true_{eff_col}"] = pd.to_numeric(merged.get(eff_col), errors="coerce")
     if "n_events" in merged.columns:
         merged["n_events"] = pd.to_numeric(merged["n_events"], errors="coerce")
     elif "true_n_events" in merged.columns:
@@ -2659,25 +2766,20 @@ def main() -> int:
         else:
             merged[unc_abs_col] = np.nan
 
-    center_flux, center_eff, center_eff_col = _compute_density_center_series(
-        config=config,
-        time_df=time_df,
-        flux_col=flux_col,
-        eff_pref=eff_pref,
-        dictionary_path=dictionary_path,
-        dataset_template_path=dataset_template_path,
-    )
-    if center_eff_col is not None:
-        eff_col_time = center_eff_col
-
-    # Primary diagnostic parameter columns.
-    est_flux_col = f"est_{flux_col}" if f"est_{flux_col}" in merged.columns else "est_flux_cm2_min"
-    est_eff_col = f"est_{eff_col}" if f"est_{eff_col}" in merged.columns else f"est_{eff_pref}"
-    if est_eff_col not in merged.columns:
-        for c in ("est_eff_sim_1", "est_eff_sim_2", "est_eff_sim_3", "est_eff_sim_4"):
-            if c in merged.columns:
-                est_eff_col = c
-                break
+    center_flux = None
+    center_eff = None
+    center_eff_col = None
+    if flux_col is not None and eff_col_time is not None:
+        center_flux, center_eff, center_eff_col = _compute_density_center_series(
+            config=config,
+            time_df=time_df,
+            flux_col=flux_col,
+            eff_pref=eff_pref,
+            dictionary_path=dictionary_path,
+            dataset_template_path=dataset_template_path,
+        )
+        if center_eff_col is not None:
+            eff_col_time = center_eff_col
 
     correction_summary = {
         "enabled": True,
@@ -2690,34 +2792,36 @@ def main() -> int:
         "corrected_column_prefix": "corrected_",
     }
 
-    true_flux_col = f"true_{flux_col}"
-    true_eff_col = f"true_{eff_col}"
-    flux_param = est_flux_col.replace("est_", "", 1) if est_flux_col.startswith("est_") else flux_col
-    eff_param = est_eff_col.replace("est_", "", 1) if est_eff_col.startswith("est_") else eff_col
-    flux_unc_abs_col = f"unc_{flux_param}_abs" if f"unc_{flux_param}_abs" in merged.columns else None
-    eff_unc_abs_col = f"unc_{eff_param}_abs" if f"unc_{eff_param}_abs" in merged.columns else None
-
-    parameter_space_cfg = cfg_33.get("parameter_space_columns", None)
     try:
         parameter_space_cols = _resolve_parameter_space_columns_from_cfg(
             merged_df=merged,
             dictionary_df=dictionary_df,
             configured_columns=parameter_space_cfg,
+            default_columns=default_parameter_space_columns,
         )
     except KeyError as exc:
-        log.warning("%s Falling back to canonical flux/eff dimensions.", exc)
+        log.warning("%s Falling back to estimated-parameter set.", exc)
         parameter_space_cols = [
-            c
-            for c in ("flux_cm2_min", "eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4")
-            if c in merged.columns and ((f"corrected_{c}" in merged.columns) or (f"est_{c}" in merged.columns))
+            c for c in estimated_param_names
+            if _find_estimated_parameter_column(merged, c) is not None
         ]
 
-    eff_cols_for_plot = [c for c in parameter_space_cols if c.startswith("eff_sim_")]
-    if not eff_cols_for_plot:
-        for c in ("eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4"):
-            if c in merged.columns and c not in eff_cols_for_plot:
-                eff_cols_for_plot.append(c)
-    if not eff_cols_for_plot and eff_col in merged.columns:
+    parameter_metric_summary = _append_parameter_error_metrics(
+        merged,
+        parameter_space_cols=parameter_space_cols,
+    )
+
+    flux_param = next((c for c in parameter_space_cols if "flux" in str(c).lower()), None)
+    eff_param = next((c for c in parameter_space_cols if _is_efficiency_parameter_column(c)), None)
+    true_flux_col = _find_true_parameter_column(merged, flux_param) if flux_param else None
+    true_eff_col = _find_true_parameter_column(merged, eff_param) if eff_param else None
+    est_flux_col = _find_estimated_parameter_column(merged, flux_param) if flux_param else None
+    est_eff_col = _find_estimated_parameter_column(merged, eff_param) if eff_param else None
+    flux_unc_abs_col = f"unc_{flux_param}_abs" if flux_param and f"unc_{flux_param}_abs" in merged.columns else None
+    eff_unc_abs_col = f"unc_{eff_param}_abs" if eff_param and f"unc_{eff_param}_abs" in merged.columns else None
+
+    eff_cols_for_plot = [c for c in parameter_space_cols if _is_efficiency_parameter_column(c)]
+    if not eff_cols_for_plot and eff_col is not None and eff_col in merged.columns:
         eff_cols_for_plot = [eff_col]
 
     global_rate_plot_col = None
@@ -2733,17 +2837,14 @@ def main() -> int:
             global_rate_plot_col = c
             break
 
-    # Error columns for primary diagnostics.
-    t_flux = pd.to_numeric(merged.get(true_flux_col), errors="coerce")
-    e_flux = pd.to_numeric(merged.get(est_flux_col), errors="coerce")
-    t_eff = pd.to_numeric(merged.get(true_eff_col), errors="coerce")
-    e_eff = pd.to_numeric(merged.get(est_eff_col), errors="coerce")
-    merged["error_flux"] = e_flux - t_flux
-    merged["error_eff"] = e_eff - t_eff
-    merged["relerr_flux_pct"] = (e_flux - t_flux) / t_flux.replace({0.0: np.nan}) * 100.0
-    merged["relerr_eff_pct"] = (e_eff - t_eff) / t_eff.replace({0.0: np.nan}) * 100.0
-    merged["abs_relerr_flux_pct"] = merged["relerr_flux_pct"].abs()
-    merged["abs_relerr_eff_pct"] = merged["relerr_eff_pct"].abs()
+    if flux_param and f"error_{flux_param}" in merged.columns:
+        merged["error_flux"] = merged[f"error_{flux_param}"]
+        merged["relerr_flux_pct"] = merged.get(f"relerr_{flux_param}_pct")
+        merged["abs_relerr_flux_pct"] = merged.get(f"abs_relerr_{flux_param}_pct")
+    if eff_param and f"error_{eff_param}" in merged.columns:
+        merged["error_eff"] = merged[f"error_{eff_param}"]
+        merged["relerr_eff_pct"] = merged.get(f"relerr_{eff_param}_pct")
+        merged["abs_relerr_eff_pct"] = merged.get(f"abs_relerr_{eff_param}_pct")
     step13_poly_correction_info = _append_step13_polynomial_efficiency_products(
         merged,
         build_summary_path=build_summary_path,
@@ -2806,6 +2907,8 @@ def main() -> int:
         "distance_definition_mode": dd.get("selected_mode") if dd.get("available") else None,
         "interpolation_k": interpolation_k,
         "inverse_mapping": inverse_mapping_cfg,
+        "parameter_space_spec_json": str(parameter_space_spec_path),
+        "parameter_space_spec_columns_default": default_parameter_space_columns,
         "feature_columns_config": feature_columns_cfg,
         "feature_columns_strategy": feature_strategy,
         "feature_columns_resolved_count": int(len(resolved_feature_columns)),
@@ -2813,30 +2916,45 @@ def main() -> int:
         "feature_columns_catalog": str(CONFIG_COLUMNS_PATH),
         "uncertainty_quantile": uncertainty_quantile,
         "n_rows": int(len(merged)),
-        "n_successful_flux_estimates": int(pd.to_numeric(merged.get(est_flux_col), errors="coerce").notna().sum()),
-        "n_successful_eff_estimates": int(pd.to_numeric(merged.get(est_eff_col), errors="coerce").notna().sum()),
+        "n_successful_parameter_estimates": {
+            pname: int(pd.to_numeric(merged.get(_find_estimated_parameter_column(merged, pname)), errors="coerce").notna().sum())
+            for pname in parameter_space_cols
+            if _find_estimated_parameter_column(merged, pname) is not None
+        },
+        "n_successful_flux_estimates": (
+            int(pd.to_numeric(merged.get(est_flux_col), errors="coerce").notna().sum())
+            if est_flux_col is not None
+            else None
+        ),
+        "n_successful_eff_estimates": (
+            int(pd.to_numeric(merged.get(est_eff_col), errors="coerce").notna().sum())
+            if est_eff_col is not None
+            else None
+        ),
         "flux_true_col": true_flux_col,
         "flux_est_col": est_flux_col,
         "eff_true_col": true_eff_col,
         "eff_est_col": est_eff_col,
         "flux_unc_abs_col": flux_unc_abs_col,
         "eff_unc_abs_col": eff_unc_abs_col,
-        "median_abs_relerr_flux_pct": float(pd.to_numeric(merged["abs_relerr_flux_pct"], errors="coerce").median()),
-        "median_abs_relerr_eff_pct": float(pd.to_numeric(merged["abs_relerr_eff_pct"], errors="coerce").median()),
+        "median_abs_relerr_flux_pct": _series_median_or_none(merged.get("abs_relerr_flux_pct")),
+        "median_abs_relerr_eff_pct": _series_median_or_none(merged.get("abs_relerr_eff_pct")),
         "median_unc_flux_pct": (
-            float(pd.to_numeric(merged.get(f"unc_{flux_param}_pct"), errors="coerce").median())
-            if f"unc_{flux_param}_pct" in merged.columns else None
+            _series_median_or_none(merged.get(f"unc_{flux_param}_pct"))
+            if flux_param and f"unc_{flux_param}_pct" in merged.columns else None
         ),
         "median_unc_eff_pct": (
-            float(pd.to_numeric(merged.get(f"unc_{eff_param}_pct"), errors="coerce").median())
-            if f"unc_{eff_param}_pct" in merged.columns else None
+            _series_median_or_none(merged.get(f"unc_{eff_param}_pct"))
+            if eff_param and f"unc_{eff_param}_pct" in merged.columns else None
         ),
         "lut_param_names_used": lut_params,
         "density_center_available": bool(center_flux is not None and center_eff is not None),
         "correction_method": correction_summary,
         "step13_polynomial_efficiency_correction": step13_poly_correction_info,
         "parameter_space_columns_config": parameter_space_cfg,
+        "parameter_space_columns_estimation": param_columns,
         "parameter_space_columns_used": parameter_space_cols,
+        "parameter_space_metrics": parameter_metric_summary,
         "efficiency_columns_in_overview_plot": eff_cols_for_plot,
         "global_rate_column_used": global_rate_plot_col,
         "corrected_curve_columns": corrected_curve_cols,
@@ -2861,15 +2979,14 @@ def main() -> int:
 
     _make_plots(
         merged,
-        flux_true_col=true_flux_col,
-        flux_est_col=est_flux_col,
-        flux_unc_abs_col=flux_unc_abs_col,
-        eff_true_col=true_eff_col,
-        eff_est_col=est_eff_col,
-        eff_unc_abs_col=eff_unc_abs_col,
+        parameter_space_cols=parameter_space_cols,
     )
     _plot_tt_rate_breakdown(merged)
-    corrected_flux_col = f"corrected_{flux_col}" if f"corrected_{flux_col}" in merged.columns else est_flux_col
+    corrected_flux_col = (
+        f"corrected_{flux_col}"
+        if flux_col is not None and f"corrected_{flux_col}" in merged.columns
+        else est_flux_col
+    )
 
     out_param_space = PLOTS_DIR / "parameter_space_lower_triangle_corrected.png"
     _plot_corrected_parameter_space_lower_triangle(
@@ -2884,6 +3001,22 @@ def main() -> int:
         log.warning(
             "Could not produce flux/global-rate plot: no global-rate column found (preferred: %s).",
             global_rate_col,
+        )
+    elif flux_col is None or est_flux_col is None or true_flux_col is None or eff_col_time is None or true_eff_col is None:
+        missing = []
+        if flux_col is None:
+            missing.append("flux parameter")
+        if est_flux_col is None:
+            missing.append("estimated flux column")
+        if true_flux_col is None:
+            missing.append("true flux column")
+        if eff_col_time is None:
+            missing.append("time-series efficiency column")
+        if true_eff_col is None:
+            missing.append("true efficiency column")
+        log.warning(
+            "Skipping STEP 3.3 flux/global-rate plot because %s are unavailable.",
+            ", ".join(missing),
         )
     else:
         out_flux_rate = PLOTS_DIR / "flux_recovery_vs_global_rate.png"

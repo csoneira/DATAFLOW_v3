@@ -20,6 +20,7 @@ import json
 import logging
 import sys
 from pathlib import Path
+from typing import Mapping
 
 import matplotlib
 matplotlib.use("Agg")
@@ -33,7 +34,7 @@ STEP_DIR = Path(__file__).resolve().parent
 INFERENCE_DIR = STEP_DIR.parent
 PIPELINE_DIR = INFERENCE_DIR.parent
 PROJECT_DIR = PIPELINE_DIR.parent
-DEFAULT_CONFIG = PROJECT_DIR / "config_method.json"
+DEFAULT_CONFIG = PROJECT_DIR / "config_step_1.1_method.json"
 
 DEFAULT_DICTIONARY = (
     PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_4_ENSURE_CONTINUITY_DICTIONARY"
@@ -68,6 +69,15 @@ log = logging.getLogger("STEP_2.1")
 sys.path.insert(0, str(INFERENCE_DIR))
 try:
     from estimate_parameters import (
+        _combine_distance_terms_with_breakdown,
+        _efficiency_vector_group_distance_many,
+        _filter_efficiency_vector_payloads,
+        _histogram_distance_many,
+        _prepare_efficiency_vector_group_payloads,
+        _reduce_efficiency_vector_group_stack,
+        _resolve_efficiency_vector_distance_cfg,
+        _resolve_histogram_distance_cfg,
+        _weighted_lp_many,
         build_step15_runtime_inverse_mapping_cfg,
         estimate_from_dataframes,
         load_distance_definition,
@@ -119,7 +129,7 @@ def _load_config(path: Path) -> dict:
     cfg: dict = {}
     if path.exists():
         cfg = json.loads(path.read_text(encoding="utf-8"))
-    for extra_name in ("config_plots.json", "config_runtime.json"):
+    for extra_name in ("config_step_1.1_plots.json", "config_step_1.1_runtime.json"):
         extra = path.with_name(extra_name)
         if extra.exists() and extra != path:
             extra_cfg = json.loads(extra.read_text(encoding="utf-8"))
@@ -353,6 +363,383 @@ def _plot_error_vs_distance(result_df: pd.DataFrame, param_cols: list[str]) -> N
     plt.close(fig)
 
 
+def _relative_error_pct(true_values: np.ndarray, est_values: np.ndarray) -> np.ndarray:
+    true_arr = np.asarray(true_values, dtype=float)
+    est_arr = np.asarray(est_values, dtype=float)
+    denom = np.where(np.abs(true_arr) > 1e-12, np.abs(true_arr), np.nan)
+    finite_true = true_arr[np.isfinite(true_arr)]
+    fallback = max(float(np.ptp(finite_true)) if finite_true.size > 1 else 1.0, 1e-12)
+    denom = np.where(np.isfinite(denom), denom, fallback)
+    return np.abs(est_arr - true_arr) / denom * 100.0
+
+
+def _select_grouped_diagnostic_case(
+    result_df: pd.DataFrame,
+    param_cols: list[str],
+    *,
+    selector: str = "worst_flux_relerr",
+) -> int | None:
+    if result_df.empty:
+        return None
+
+    mode = str(selector).strip().lower()
+    if mode == "worst_flux_relerr" and "true_flux_cm2_min" in result_df.columns and "est_flux_cm2_min" in result_df.columns:
+        rel = _relative_error_pct(
+            pd.to_numeric(result_df["true_flux_cm2_min"], errors="coerce").to_numpy(dtype=float),
+            pd.to_numeric(result_df["est_flux_cm2_min"], errors="coerce").to_numpy(dtype=float),
+        )
+        finite = np.isfinite(rel)
+        if np.any(finite):
+            return int(np.nanargmax(np.where(finite, rel, np.nan)))
+
+    if mode == "worst_primary_param_relerr" and param_cols:
+        primary = str(param_cols[0])
+        true_col = f"true_{primary}"
+        est_col = f"est_{primary}"
+        if true_col in result_df.columns and est_col in result_df.columns:
+            rel = _relative_error_pct(
+                pd.to_numeric(result_df[true_col], errors="coerce").to_numpy(dtype=float),
+                pd.to_numeric(result_df[est_col], errors="coerce").to_numpy(dtype=float),
+            )
+            finite = np.isfinite(rel)
+            if np.any(finite):
+                return int(np.nanargmax(np.where(finite, rel, np.nan)))
+
+    best_distance = pd.to_numeric(result_df.get("best_distance"), errors="coerce").to_numpy(dtype=float)
+    finite = np.isfinite(best_distance)
+    if np.any(finite):
+        return int(np.nanargmax(np.where(finite, best_distance, np.nan)))
+    return None
+
+
+def _apply_fiducial_overlay(ax: plt.Axes, axis_name: str, fiducial: Mapping[str, object] | None) -> None:
+    cfg = fiducial if isinstance(fiducial, Mapping) else {}
+    if axis_name == "theta":
+        limit = cfg.get("theta_max_deg")
+    elif axis_name == "x":
+        limit = cfg.get("x_abs_max_mm")
+    elif axis_name == "y":
+        limit = cfg.get("y_abs_max_mm")
+    else:
+        limit = None
+    try:
+        limit_val = float(limit) if limit is not None else np.nan
+    except (TypeError, ValueError):
+        limit_val = np.nan
+    if not np.isfinite(limit_val) or limit_val <= 0.0:
+        return
+    ax.axvspan(-limit_val, limit_val, color="#59A14F", alpha=0.08, zorder=0)
+    ax.axvline(-limit_val, color="#59A14F", ls="--", lw=0.8, alpha=0.7)
+    ax.axvline(limit_val, color="#59A14F", ls="--", lw=0.8, alpha=0.7)
+
+
+def _build_grouped_case_payload(
+    *,
+    dict_df: pd.DataFrame,
+    data_df: pd.DataFrame,
+    feature_cols: list[str],
+    distance_definition: dict | None,
+    row_idx: int,
+    top_k: int,
+) -> dict | None:
+    if distance_definition is None or not distance_definition.get("available"):
+        return None
+
+    dd = distance_definition
+    feature_groups = dd.get("feature_groups", {}) if isinstance(dd.get("feature_groups"), Mapping) else {}
+    group_weights = dd.get("group_weights", {}) if isinstance(dd.get("group_weights"), Mapping) else {}
+
+    center = np.asarray(dd.get("center", []), dtype=float)
+    scale = np.asarray(dd.get("scale", []), dtype=float)
+    weights = np.asarray(dd.get("weights", []), dtype=float)
+    p_norm = float(dd.get("p_norm", 2.0))
+
+    scalar_feature_cols = [
+        str(col)
+        for col in dd.get("scalar_feature_columns", [])
+        if str(col) in dict_df.columns and str(col) in data_df.columns
+    ]
+    scalar_idx = [feature_cols.index(col) for col in scalar_feature_cols if col in feature_cols]
+
+    base_distances = None
+    if scalar_feature_cols and scalar_idx:
+        dict_scalar = dict_df[scalar_feature_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+        sample_scalar = (
+            data_df.iloc[[row_idx]][scalar_feature_cols]
+            .apply(pd.to_numeric, errors="coerce")
+            .to_numpy(dtype=float)
+            .reshape(-1)
+        )
+        safe_scale = np.where(np.abs(scale[scalar_idx]) > 1e-15, scale[scalar_idx], np.nan)
+        dict_scalar = (dict_scalar - center[scalar_idx]) / safe_scale
+        sample_scalar = (sample_scalar - center[scalar_idx]) / safe_scale
+        base_distances = _weighted_lp_many(
+            sample_scalar,
+            dict_scalar,
+            weights=weights[scalar_idx],
+            p_norm=p_norm,
+            min_valid_dims=1,
+        )
+
+    aux_terms: list[tuple[str, np.ndarray | None, float, str]] = []
+    plot_payload: dict[str, object] = {
+        "row_idx": int(row_idx),
+        "top_k": int(max(top_k, 1)),
+        "feature_groups": feature_groups,
+    }
+
+    hist_cfg = feature_groups.get("rate_histogram", {})
+    hist_cols = [
+        str(col)
+        for col in (hist_cfg.get("feature_columns", []) if isinstance(hist_cfg, Mapping) else [])
+        if str(col) in dict_df.columns and str(col) in data_df.columns
+    ]
+    if hist_cols and float(group_weights.get("rate_histogram", 0.0)) > 0.0:
+        hist_dist_cfg = _resolve_histogram_distance_cfg(hist_cfg if isinstance(hist_cfg, Mapping) else {})
+        dict_hist = dict_df[hist_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+        sample_hist = (
+            data_df.iloc[[row_idx]][hist_cols]
+            .apply(pd.to_numeric, errors="coerce")
+            .to_numpy(dtype=float)
+            .reshape(-1)
+        )
+        hist_dist = _histogram_distance_many(
+            sample_hist,
+            dict_hist,
+            distance=str(hist_dist_cfg["distance"]),
+            normalization=str(hist_dist_cfg["normalization"]),
+            p_norm=float(hist_dist_cfg["p_norm"]),
+            amplitude_weight=float(hist_dist_cfg["amplitude_weight"]),
+            shape_weight=float(hist_dist_cfg["shape_weight"]),
+            slope_weight=float(hist_dist_cfg["slope_weight"]),
+            cdf_weight=float(hist_dist_cfg["cdf_weight"]),
+            amplitude_stat=str(hist_dist_cfg["amplitude_stat"]),
+        )
+        aux_terms.append(
+            (
+                "rate_histogram",
+                hist_dist,
+                float(group_weights.get("rate_histogram", 0.0)),
+                str(hist_cfg.get("blend_mode", "normalized")) if isinstance(hist_cfg, Mapping) else "normalized",
+            )
+        )
+        plot_payload["histogram"] = {
+            "columns": hist_cols,
+            "sample": sample_hist,
+            "dict_matrix": dict_hist,
+        }
+
+    eff_cfg = feature_groups.get("efficiency_vectors", {})
+    eff_payloads = _prepare_efficiency_vector_group_payloads(
+        dict_df=dict_df,
+        data_df=data_df.iloc[[row_idx]].copy(),
+    )
+    eff_payloads = _filter_efficiency_vector_payloads(
+        eff_payloads,
+        feature_groups_cfg=eff_cfg if isinstance(eff_cfg, Mapping) else None,
+        selected_feature_columns=feature_cols,
+    )
+    if eff_payloads and float(group_weights.get("efficiency_vectors", 0.0)) > 0.0:
+        eff_dist_cfg = _resolve_efficiency_vector_distance_cfg(eff_cfg if isinstance(eff_cfg, Mapping) else {})
+        group_distances: list[np.ndarray] = []
+        for payload in eff_payloads:
+            group_dist = _efficiency_vector_group_distance_many(
+                sample_eff=np.asarray(payload["data_eff"], dtype=float)[0],
+                candidates_eff=np.asarray(payload["dict_eff"], dtype=float),
+                sample_unc=np.asarray(payload["data_unc"], dtype=float)[0],
+                candidates_unc=np.asarray(payload["dict_unc"], dtype=float),
+                centers=np.asarray(payload["centers"], dtype=float),
+                axis_name=str(payload["axis"]),
+                fiducial=dict(eff_dist_cfg["fiducial"]),
+                uncertainty_floor=float(eff_dist_cfg["uncertainty_floor"]),
+                min_valid_bins=int(eff_dist_cfg["min_valid_bins_per_vector"]),
+                normalization=str(eff_dist_cfg["normalization"]),
+                p_norm=float(eff_dist_cfg["p_norm"]),
+                amplitude_weight=float(eff_dist_cfg["amplitude_weight"]),
+                shape_weight=float(eff_dist_cfg["shape_weight"]),
+                slope_weight=float(eff_dist_cfg["slope_weight"]),
+                cdf_weight=float(eff_dist_cfg["cdf_weight"]),
+                amplitude_stat=str(eff_dist_cfg["amplitude_stat"]),
+            )
+            group_distances.append(group_dist)
+        if group_distances:
+            aux_terms.append(
+                (
+                    "efficiency_vectors",
+                    _reduce_efficiency_vector_group_stack(
+                        np.vstack(group_distances),
+                        group_reduction=str(eff_dist_cfg["group_reduction"]),
+                    ),
+                    float(group_weights.get("efficiency_vectors", 0.0)),
+                    str(eff_cfg.get("blend_mode", "normalized")) if isinstance(eff_cfg, Mapping) else "normalized",
+                )
+            )
+            plot_payload["efficiency_vectors"] = {
+                "payloads": eff_payloads,
+                "cfg": eff_dist_cfg,
+            }
+
+    total_distances, _ = _combine_distance_terms_with_breakdown(
+        base_distances=base_distances,
+        aux_terms=aux_terms,
+    )
+    if total_distances.size == 0:
+        return None
+
+    valid = np.isfinite(total_distances)
+    if not np.any(valid):
+        return None
+    order = np.argsort(total_distances[valid])
+    valid_indices = np.flatnonzero(valid)[order]
+    top_indices = valid_indices[: max(int(top_k), 1)]
+    plot_payload["top_indices"] = top_indices
+    plot_payload["top_distances"] = np.asarray(total_distances[top_indices], dtype=float)
+    plot_payload["best_index"] = int(top_indices[0])
+    return plot_payload
+
+
+def _plot_grouped_case_diagnostic(
+    *,
+    dict_df: pd.DataFrame,
+    data_df: pd.DataFrame,
+    result_df: pd.DataFrame,
+    param_cols: list[str],
+    feature_cols: list[str],
+    distance_definition: dict | None,
+    case_selector: str,
+    top_k: int,
+) -> None:
+    row_idx = _select_grouped_diagnostic_case(result_df, param_cols, selector=case_selector)
+    if row_idx is None:
+        return
+    payload = _build_grouped_case_payload(
+        dict_df=dict_df,
+        data_df=data_df,
+        feature_cols=feature_cols,
+        distance_definition=distance_definition,
+        row_idx=row_idx,
+        top_k=top_k,
+    )
+    if not payload:
+        return
+
+    top_indices = np.asarray(payload["top_indices"], dtype=int)
+    best_index = int(payload["best_index"])
+    top_distances = np.asarray(payload["top_distances"], dtype=float)
+
+    fig = plt.figure(figsize=(16, 18), constrained_layout=True)
+    gs = fig.add_gridspec(5, 3, height_ratios=[1.2, 1.0, 1.0, 1.0, 1.0], hspace=0.35, wspace=0.25)
+
+    hist_payload = payload.get("histogram")
+    if isinstance(hist_payload, Mapping):
+        ax_hist = fig.add_subplot(gs[0, :])
+        hist_cols = [str(col) for col in hist_payload["columns"]]
+        bins = np.asarray([int(col.split("_")[3]) for col in hist_cols], dtype=float)
+        sample_hist = np.asarray(hist_payload["sample"], dtype=float)
+        dict_hist = np.asarray(hist_payload["dict_matrix"], dtype=float)
+        top_hist = dict_hist[top_indices]
+        if top_hist.size:
+            for curve in top_hist:
+                ax_hist.plot(bins, curve, color="0.75", alpha=0.35, lw=0.8, zorder=1)
+            if np.isfinite(top_hist).any():
+                q10 = np.nanpercentile(top_hist, 10.0, axis=0)
+                q90 = np.nanpercentile(top_hist, 90.0, axis=0)
+                ax_hist.fill_between(bins, q10, q90, color="0.85", alpha=0.4, zorder=0)
+        ax_hist.plot(bins, dict_hist[best_index], color="#E15759", lw=2.0, label="Best dictionary", zorder=3)
+        ax_hist.plot(bins, sample_hist, color="black", lw=2.2, label="Sample row", zorder=4)
+        ax_hist.set_title("Rate histogram: sample vs best dictionary vs top-10 neighbors", fontsize=11)
+        ax_hist.set_xlabel("Histogram bin", fontsize=9)
+        ax_hist.set_ylabel("Rate [Hz]", fontsize=9)
+        ax_hist.grid(True, alpha=0.15)
+        ax_hist.legend(fontsize=8, loc="upper right")
+
+    eff_payload = payload.get("efficiency_vectors")
+    if isinstance(eff_payload, Mapping):
+        fiducial = eff_payload["cfg"].get("fiducial", {})
+        by_label = {
+            str(item.get("label", "")): item
+            for item in eff_payload["payloads"]
+        }
+        for plane in range(1, 5):
+            for col_idx, axis_name in enumerate(("x", "y", "theta")):
+                label = f"p{plane}_{axis_name}"
+                ax = fig.add_subplot(gs[plane, col_idx])
+                item = by_label.get(label)
+                if not item:
+                    ax.set_axis_off()
+                    continue
+                centers = np.asarray(item["centers"], dtype=float)
+                sample_eff = np.asarray(item["data_eff"], dtype=float)[0]
+                sample_unc = np.asarray(item["data_unc"], dtype=float)[0]
+                dict_eff = np.asarray(item["dict_eff"], dtype=float)[top_indices]
+                dict_unc = np.asarray(item["dict_unc"], dtype=float)[top_indices]
+                _apply_fiducial_overlay(ax, axis_name, fiducial)
+                if dict_eff.size:
+                    for curve in dict_eff:
+                        ax.plot(centers, curve, color="0.75", alpha=0.35, lw=0.8, zorder=1)
+                    if np.isfinite(dict_eff).any():
+                        q10 = np.nanpercentile(dict_eff, 10.0, axis=0)
+                        q90 = np.nanpercentile(dict_eff, 90.0, axis=0)
+                        ax.fill_between(centers, q10, q90, color="0.85", alpha=0.4, zorder=0)
+                    best_eff = dict_eff[0]
+                    best_unc = dict_unc[0] if dict_unc.ndim == 2 else None
+                    ax.plot(centers, best_eff, color="#E15759", lw=1.8, zorder=3)
+                    if best_unc is not None:
+                        ax.fill_between(
+                            centers,
+                            np.clip(best_eff - best_unc, 0.0, 1.0),
+                            np.clip(best_eff + best_unc, 0.0, 1.0),
+                            color="#E15759",
+                            alpha=0.12,
+                            zorder=2,
+                        )
+                ax.plot(centers, sample_eff, color="black", lw=2.0, zorder=4)
+                ax.fill_between(
+                    centers,
+                    np.clip(sample_eff - sample_unc, 0.0, 1.0),
+                    np.clip(sample_eff + sample_unc, 0.0, 1.0),
+                    color="black",
+                    alpha=0.10,
+                    zorder=3,
+                )
+                ax.set_title(f"Plane {plane} vs {axis_name}", fontsize=9)
+                ax.set_ylim(0.0, 1.05)
+                ax.grid(True, alpha=0.15)
+                if plane == 4:
+                    ax.set_xlabel("mm" if axis_name in {"x", "y"} else "deg", fontsize=8)
+                if col_idx == 0:
+                    ax.set_ylabel("Efficiency", fontsize=8)
+                ax.tick_params(labelsize=7)
+
+    filename = str(result_df.iloc[row_idx].get("filename_base", f"row_{row_idx}"))
+    true_flux = result_df.iloc[row_idx].get("true_flux_cm2_min")
+    est_flux = result_df.iloc[row_idx].get("est_flux_cm2_min")
+    flux_text = ""
+    if pd.notna(true_flux) and pd.notna(est_flux):
+        flux_text = f" | flux true={float(true_flux):.4g} est={float(est_flux):.4g} relerr={float(_relative_error_pct(np.asarray([true_flux]), np.asarray([est_flux]))[0]):.2f}%"
+    fig.suptitle(
+        f"Grouped feature diagnostic case: selector={case_selector} row={row_idx} file={filename}{flux_text}\n"
+        f"Top {len(top_indices)} dictionary neighbors: best idx={best_index}, best distance={float(top_distances[0]):.4g}",
+        fontsize=12,
+        y=0.995,
+    )
+    _save_figure(fig, PLOTS_DIR / "grouped_case_top_matches.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    neighbor_rows = dict_df.iloc[top_indices].copy()
+    neighbor_rows.insert(0, "rank", np.arange(1, len(top_indices) + 1, dtype=int))
+    neighbor_rows.insert(1, "dictionary_index", top_indices.astype(int))
+    neighbor_rows.insert(2, "distance", top_distances)
+    keep_cols = ["rank", "dictionary_index", "distance"]
+    if "filename_base" in neighbor_rows.columns:
+        keep_cols.append("filename_base")
+    keep_cols.extend([col for col in param_cols if col in neighbor_rows.columns])
+    neighbor_rows[keep_cols].to_csv(
+        FILES_DIR / "grouped_case_top_neighbors.csv",
+        index=False,
+    )
+
+
 # =====================================================================
 # Main
 # =====================================================================
@@ -385,6 +772,18 @@ def main() -> int:
     # Load data
     dict_df = pd.read_csv(dict_path, low_memory=False)
     data_df = pd.read_csv(data_path, low_memory=False)
+
+    # Backwards-compatibility: some upstream artifacts use `eff_p1..4` naming.
+    # Ensure the estimator's expected `eff_sim_1..4` columns exist by copying
+    # legacy columns when the `eff_sim_*` names are missing. This keeps the
+    # rest of the estimation pipeline unchanged.
+    for i in range(1, 5):
+        legacy = f"eff_p{i}"
+        target = f"eff_sim_{i}"
+        if target not in dict_df.columns and legacy in dict_df.columns:
+            dict_df[target] = dict_df[legacy]
+        if target not in data_df.columns and legacy in data_df.columns:
+            data_df[target] = data_df[legacy]
 
     if dict_df.empty:
         log.error("Dictionary is empty: %s", dict_path)
@@ -423,19 +822,45 @@ def main() -> int:
     else:
         interpolation_k_requested = int(interpolation_k_requested)
     # Load distance definition from step 1.5 artifact (shared function)
-    dd = load_distance_definition(feature_cols, path=DEFAULT_DISTANCE_DEFINITION)
+    # Allow overriding the distance definition from config (useful for
+    # quick experiments that want to test a particular group combination,
+    # e.g. rate_histogram + efficiency_vectors:x only).
+    dd = None
+    cfg_dd = cfg_21.get("distance_definition") or cfg_21.get("distance_definition_path")
+    if isinstance(cfg_dd, str) and cfg_dd:
+        try:
+            dd = load_distance_definition(feature_cols, path=Path(cfg_dd))
+        except Exception:
+            log.warning("Failed to load distance_definition from path: %s", cfg_dd)
+            dd = None
+
+    if isinstance(cfg_dd, dict) and cfg_dd:
+        # The config-provided distance definition should include feature_columns
+        # that exactly match the resolved `feature_cols`. Validate and use it.
+        if list(cfg_dd.get("feature_columns", [])) == list(feature_cols):
+            dd = dict(cfg_dd)
+            dd["available"] = True
+        else:
+            log.warning(
+                "Config distance_definition.feature_columns does not match selected feature columns; ignoring override."
+            )
+    if dd is None:
+        dd = load_distance_definition(feature_cols, path=DEFAULT_DISTANCE_DEFINITION)
     dist_mode_name: str = "l2_standard_zscore_fallback"
 
     if dd["available"]:
         dist_mode_name = dd.get("selected_mode", "unknown")
         n_active = int(np.sum(dd["weights"] > 0))
+        n_active_groups = int(
+            sum(float(v) > 0.0 for v in (dd.get("group_weights", {}) or {}).values())
+        )
         regression_mode = (
             "local-linear ridge"
             if float(dd.get("optimal_lambda", 1e6)) < 1e5
             else "IDW^2"
         )
         log.info(
-            "Loaded distance definition from step 1.5: %s (p=%.1f, k=%d, λ=%.0e [%s], %d/%d active features)",
+            "Loaded distance definition from step 1.5: %s (p=%.1f, k=%d, λ=%.0e [%s], one_feature_vectors_active=%d/%d, multi_feature_vectors_active=%d)",
             dist_mode_name,
             dd["p_norm"],
             int(dd.get("optimal_k", 5)),
@@ -443,7 +868,14 @@ def main() -> int:
             regression_mode,
             n_active,
             len(feature_cols),
+            n_active_groups,
         )
+        if str(dd.get("alignment_mode", "exact")) == "projected_subset":
+            log.info(
+                "Distance-definition feature alignment: projected %d tuned feature column(s) onto %d requested feature column(s); unmatched requested one-feature vectors are treated as zero-weight.",
+                int(dd.get("artifact_feature_columns_count", 0)),
+                int(dd.get("requested_feature_columns_count", len(feature_cols))),
+            )
     else:
         log.warning("Distance definition not available: %s; falling back to standard z-score.", dd.get("reason"))
         dd = None
@@ -551,6 +983,21 @@ def main() -> int:
     _plot_distance_distribution(result_df)
     _plot_error_vs_distance(result_df, param_cols)
     _plot_hull_coverage(dict_df, data_df, result_df, param_cols)
+    grouped_diag_cfg = cfg_21.get("grouped_feature_diagnostic", {}) or {}
+    grouped_diag_enabled = bool(grouped_diag_cfg.get("enabled", True))
+    grouped_diag_selector = str(grouped_diag_cfg.get("selector", "worst_flux_relerr"))
+    grouped_diag_top_k = int(grouped_diag_cfg.get("top_k", 10) or 10)
+    if grouped_diag_enabled and dd is not None and dd.get("feature_groups"):
+        _plot_grouped_case_diagnostic(
+            dict_df=dict_df,
+            data_df=data_df,
+            result_df=result_df,
+            param_cols=param_cols,
+            feature_cols=feature_cols,
+            distance_definition=dd,
+            case_selector=grouped_diag_selector,
+            top_k=max(grouped_diag_top_k, 1),
+        )
 
     log.info("Done. %d OK, %d failed.", n_ok, n_fail)
     return 0

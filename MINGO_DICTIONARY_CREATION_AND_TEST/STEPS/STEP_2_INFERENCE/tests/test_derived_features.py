@@ -14,6 +14,7 @@ features (eff_empirical_i, global_rate) separate these two signals.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -38,7 +39,10 @@ from estimate_parameters import (
     _auto_feature_columns,
     _derived_feature_columns,
     _normalize_derived_physics_features,
+    active_feature_columns_from_distance_definition,
     estimate_from_dataframes,
+    load_distance_definition,
+    resolve_physical_tt_rate_columns,
 )
 
 # ── Data paths ──────────────────────────────────────────────────────────
@@ -184,6 +188,103 @@ class TestDerivedFeatureColumns:
         assert DERIVED_LOG_RATE_OVER_EFF_PRODUCT_COL in cols_d
         assert DERIVED_LOG_RATE_OVER_EFF_PRODUCT_COL in cols_x
 
+    def test_auto_feature_columns_prefer_physical_prefixes_over_transition_prefixes(self):
+        df = pd.DataFrame(
+            {
+                "fit_to_post_tt_123_rate_hz": [9.0],
+                "fit_to_post_tt_124_rate_hz": [8.0],
+                "fit_tt_123_rate_hz": [1.0],
+                "fit_tt_124_rate_hz": [2.0],
+                "post_tt_123_rate_hz": [3.0],
+                "post_tt_124_rate_hz": [4.0],
+            }
+        )
+        cols = _auto_feature_columns(df, include_global_rate=False)
+        assert cols == ["post_tt_123_rate_hz", "post_tt_124_rate_hz"]
+
+    def test_resolve_physical_tt_rate_columns_ignores_transition_columns(self):
+        df = pd.DataFrame(
+            {
+                "fit_to_post_tt_123_rate_hz": [9.0],
+                "fit_tt_123_rate_hz": [1.0],
+                "post_tt_123_rate_hz": [3.0],
+                "post_tt_124_rate_hz": [4.0],
+            }
+        )
+        prefix, cols = resolve_physical_tt_rate_columns(df, tt_labels=["123", "124"])
+        assert prefix == "post"
+        assert cols == {
+            "123": "post_tt_123_rate_hz",
+            "124": "post_tt_124_rate_hz",
+        }
+
+    def test_active_feature_columns_from_distance_definition_uses_positive_weights(self):
+        feature_cols = ["a", "b", "c"]
+        active, info = active_feature_columns_from_distance_definition(
+            feature_cols,
+            distance_definition={
+                "available": True,
+                "weights": np.asarray([1.0, 0.0, 0.5], dtype=float),
+            },
+        )
+        assert active == ["a", "c"]
+        assert info["used_active_weights"] is True
+        assert info["n_active_features"] == 2
+
+    def test_active_feature_columns_from_distance_definition_includes_group_weighted_columns(self):
+        feature_cols = [
+            "events_per_second_0_rate_hz",
+            "events_per_second_1_rate_hz",
+            "a",
+        ]
+        active, info = active_feature_columns_from_distance_definition(
+            feature_cols,
+            distance_definition={
+                "available": True,
+                "weights": np.asarray([0.0, 0.0, 1.0], dtype=float),
+                "group_weights": {"rate_histogram": 1.0},
+                "feature_groups": {
+                    "rate_histogram": {
+                        "feature_columns": [
+                            "events_per_second_0_rate_hz",
+                            "events_per_second_1_rate_hz",
+                        ]
+                    }
+                },
+            },
+        )
+        assert active == [
+            "a",
+            "events_per_second_0_rate_hz",
+            "events_per_second_1_rate_hz",
+        ]
+        assert info["n_active_feature_groups"] == 1
+
+    def test_load_distance_definition_projects_artifact_subset_to_requested_columns(self, tmp_path: Path):
+        artifact = {
+            "feature_columns": ["a", "b"],
+            "center": [1.0, 2.0],
+            "scale": [10.0, 20.0],
+            "weights": [0.3, 0.7],
+            "scalar_feature_columns": ["a", "b"],
+            "group_weights": {},
+            "feature_groups": {},
+            "p_norm": 2.0,
+            "optimal_k": 5,
+            "optimal_lambda": 1.0,
+            "selected_mode": "test",
+        }
+        artifact_path = tmp_path / "distance_definition.json"
+        artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+
+        dd = load_distance_definition(["x", "a", "b"], path=artifact_path)
+        assert dd["available"] is True
+        assert dd["alignment_mode"] == "projected_subset"
+        assert np.allclose(dd["center"], np.asarray([0.0, 1.0, 2.0], dtype=float))
+        assert np.allclose(dd["scale"], np.asarray([1.0, 10.0, 20.0], dtype=float))
+        assert np.allclose(dd["weights"], np.asarray([0.0, 0.3, 0.7], dtype=float))
+        assert dd["scalar_feature_columns"] == ["a", "b"]
+
 
 class TestDerivedModeEstimation:
     """Integration tests: derived mode produces valid estimates."""
@@ -258,6 +359,28 @@ class TestDerivedModeEstimation:
         )
         assert "est_flux_cm2_min" in res.columns
         assert np.isfinite(pd.to_numeric(res["best_distance"], errors="coerce")).sum() > 0
+
+    def test_derived_mode_without_tt_sum_and_without_global_rate_fallback_raises(self):
+        dict_df = pd.DataFrame(
+            {
+                "eff_empirical_1": [0.8, 0.7],
+                "eff_empirical_2": [0.9, 0.8],
+                "eff_empirical_3": [0.85, 0.75],
+                "eff_empirical_4": [0.95, 0.85],
+                "events_per_second_global_rate": [10.0, 11.0],
+                "flux_cm2_min": [1.0, 2.0],
+            }
+        )
+        data_df = dict_df.copy()
+        with pytest.raises(ValueError, match="No derived global-rate feature available"):
+            estimate_from_dataframes(
+                dict_df=dict_df,
+                data_df=data_df,
+                feature_columns="derived",
+                distance_metric="l2_zscore",
+                include_global_rate=False,
+                exclude_same_file=False,
+            )
 
 
 class TestRawFeaturesRegression:

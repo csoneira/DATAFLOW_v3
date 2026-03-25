@@ -113,7 +113,11 @@ from MASTER.common.path_config import (
     resolve_home_path_from_config,
     resolve_master_config_root_from_config,
 )
-from MASTER.common.plot_utils import pdf_save_rasterized_page
+from MASTER.common.plot_utils import (
+    collect_saved_plot_paths,
+    ensure_plot_state,
+    pdf_save_rasterized_page,
+)
 from MASTER.common.selection_config import load_selection_for_paths, station_is_selected
 from MASTER.common.status_csv import initialize_status_row, update_status_progress
 from MASTER.common.reprocessing_utils import get_reprocessing_value
@@ -1348,8 +1352,7 @@ if create_debug_plots:
         [t0_left_filter, t0_right_filter],
     )
 
-fig_idx = 1
-plot_list = []
+fig_idx, plot_list = ensure_plot_state(globals())
 
 if False:
     print('Working in fast mode.')
@@ -1553,8 +1556,7 @@ theta_right_filter = det_theta_right_filter
 phi_left_filter = det_phi_left_filter
 phi_right_filter = det_phi_right_filter
 
-fig_idx = 1
-plot_list = []
+fig_idx, plot_list = ensure_plot_state(globals())
 
 if False:
     print('Working in fast mode.')
@@ -2759,7 +2761,7 @@ working_df = df.copy()
 
 if create_pdf:
     print(f"Creating PDF with all plots in {save_pdf_path}")
-    existing_pngs = [png for png in plot_list if os.path.exists(png)]
+    existing_pngs = collect_saved_plot_paths(plot_list, base_directories["figure_directory"])
 
     if _direct_pdf_pages is not None:
         for png in existing_pngs:

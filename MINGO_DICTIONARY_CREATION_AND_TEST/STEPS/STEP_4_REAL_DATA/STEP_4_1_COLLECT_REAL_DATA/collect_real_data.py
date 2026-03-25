@@ -41,7 +41,7 @@ if STEP_DIR.parents[2].name == "STEPS":
 else:
     PIPELINE_DIR = STEP_DIR.parents[2]
 REPO_ROOT = PIPELINE_DIR.parent
-DEFAULT_CONFIG = PIPELINE_DIR / "config_method.json"
+DEFAULT_CONFIG = PIPELINE_DIR / "config_step_1.1_method.json"
 if (PIPELINE_DIR / "STEP_1_SETUP").exists():
     STEP_ROOT = PIPELINE_DIR
 else:
@@ -105,6 +105,39 @@ _PLOT_EXTENSIONS = {
 _FILE_TS_RE = re.compile(r"(\d{11})$")
 RATE_HIST_BIN_RE = re.compile(r"^events_per_second_(?P<bin>\d+)_rate_hz")
 
+
+def _feature_placeholder_label(col: str) -> str | None:
+    if col == STEP12_RATE_HIST_PLACEHOLDER_COL:
+        return STEP12_RATE_HIST_PLACEHOLDER_LABEL
+    if col == STEP12_EFF_PLACEHOLDER_COL:
+        return STEP12_EFF_PLACEHOLDER_LABEL
+    return None
+
+
+def _feature_placeholder_message(
+    *,
+    x_col: str,
+    y_col: str,
+    rate_hist_count: int,
+    efficiency_vector_count: int,
+) -> str:
+    has_rate = x_col == STEP12_RATE_HIST_PLACEHOLDER_COL or y_col == STEP12_RATE_HIST_PLACEHOLDER_COL
+    has_eff = x_col == STEP12_EFF_PLACEHOLDER_COL or y_col == STEP12_EFF_PLACEHOLDER_COL
+    if has_rate and has_eff:
+        return (
+            "Suppressed grouped blocks\n"
+            f"(rate histogram: {rate_hist_count}, efficiency vectors: {efficiency_vector_count})"
+        )
+    if has_rate:
+        if rate_hist_count > 0:
+            return f"Rate-histogram block suppressed\n({rate_hist_count} columns)"
+        return "Rate-histogram block\nsuppressed for display"
+    if has_eff:
+        if efficiency_vector_count > 0:
+            return f"Efficiency-vector block suppressed\n({efficiency_vector_count} columns)"
+        return "Efficiency-vector block\nsuppressed for display"
+    return "Suppressed grouped block"
+
 logging.basicConfig(format="[%(levelname)s] STEP_4.1 - %(message)s", level=logging.INFO)
 log = logging.getLogger("STEP_4.1")
 
@@ -113,9 +146,14 @@ if str(MODULES_DIR) not in sys.path:
     sys.path.insert(0, str(MODULES_DIR))
 try:
     from efficiency_fit_utils import (  # noqa: E402
-        POLY_CORRECTED_EFFPROD_COL_TEMPLATE,
         append_polynomial_corrected_efficiency_columns,
         load_efficiency_fit_models,
+    )
+    from feature_space_config import (  # noqa: E402
+        load_feature_space_config,
+        resolve_feature_space_config_path,
+        resolve_feature_space_transform_options,
+        resolve_materialized_feature_space_columns,
     )
 except Exception as exc:
     log.error("Could not import efficiency_fit_utils from %s: %s", MODULES_DIR, exc)
@@ -127,16 +165,20 @@ if str(STEP12_TRANSFORM_DIR) not in sys.path:
 try:
     from transform_feature_space import (  # noqa: E402
         CANONICAL_PREFIX_PRIORITY as STEP12_CANONICAL_PREFIX_PRIORITY,
+        EFF_PLACEHOLDER_COL as STEP12_EFF_PLACEHOLDER_COL,
+        EFF_PLACEHOLDER_LABEL as STEP12_EFF_PLACEHOLDER_LABEL,
         RATE_HIST_PLACEHOLDER_COL as STEP12_RATE_HIST_PLACEHOLDER_COL,
         RATE_HIST_PLACEHOLDER_LABEL as STEP12_RATE_HIST_PLACEHOLDER_LABEL,
         _add_derived_physics_helper_columns as _step12_add_derived_physics_helper_columns,
+        _apply_column_transformations as _step12_apply_column_transformations,
         _build_prefix_global_rate_columns as _step12_build_prefix_global_rate_columns,
         _compute_empirical_efficiencies as _step12_compute_empirical_efficiencies,
         _drop_non_best_tt_columns as _step12_drop_non_best_tt_columns,
         _ensure_standard_task_prefix_rate_columns as _step12_ensure_standard_task_prefix_rate_columns,
         _normalize_requested_columns as _step12_normalize_requested_columns,
         _resolve_feature_matrix_plot_columns as _step12_resolve_feature_matrix_plot_columns,
-        _resolve_configured_keep_columns as _step12_resolve_configured_keep_columns,
+        _resolve_feature_space_plot_suppression_patterns as _step12_resolve_feature_space_plot_suppression_patterns,
+        _resolve_column_transformations as _step12_resolve_column_transformations,
         _select_best_tt_prefix as _step12_select_best_tt_prefix,
         _select_canonical_global_rate as _step12_select_canonical_global_rate,
     )
@@ -144,6 +186,25 @@ except Exception as exc:
     log.error(
         "Could not import STEP 1.2 transform helpers from %s: %s",
         STEP12_TRANSFORM_DIR,
+        exc,
+    )
+    raise
+
+STEP2_INFERENCE_DIR = STEP_ROOT / "STEP_2_INFERENCE"
+if str(STEP2_INFERENCE_DIR) not in sys.path:
+    sys.path.insert(0, str(STEP2_INFERENCE_DIR))
+try:
+    from estimate_parameters import (  # noqa: E402
+        _filter_efficiency_vector_payloads,
+        _prepare_efficiency_vector_group_payloads,
+        active_feature_columns_from_distance_definition,
+        load_distance_definition,
+        resolve_physical_tt_rate_columns,
+    )
+except Exception as exc:
+    log.error(
+        "Could not import STEP 2 inference helpers from %s: %s",
+        STEP2_INFERENCE_DIR,
         exc,
     )
     raise
@@ -178,13 +239,13 @@ def _load_config(path: Path) -> dict:
     else:
         log.warning("Config file not found: %s", path)
 
-    plots_path = path.with_name("config_plots.json")
+    plots_path = path.with_name("config_step_1.1_plots.json")
     if plots_path != path and plots_path.exists():
         plots_cfg = json.loads(plots_path.read_text(encoding="utf-8"))
         cfg = _merge_dicts(cfg, plots_cfg)
         log.info("Loaded plot config: %s", plots_path)
 
-    runtime_path = path.with_name("config_runtime.json")
+    runtime_path = path.with_name("config_step_1.1_runtime.json")
     if runtime_path.exists():
         runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
         cfg = _merge_dicts(cfg, runtime_cfg)
@@ -213,6 +274,20 @@ def _safe_task_ids(raw: object) -> list[int]:
             except (TypeError, ValueError):
                 continue
     return sorted(set(out)) or [1]
+
+
+def _resolve_efficiency_metadata_source_task_id(raw: object, *, default_task_id: int) -> int:
+    if raw in (None, "", "null", "None", "same"):
+        return int(default_task_id)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        log.warning(
+            "Invalid step_4_1.efficiency_metadata_source_task_id=%r; using task %d.",
+            raw,
+            int(default_task_id),
+        )
+        return int(default_task_id)
 
 
 def _preferred_feature_prefixes_for_task_ids(task_ids: list[int]) -> list[str]:
@@ -292,6 +367,10 @@ def _task_trigger_type_metadata_path(station_id: int, task_id: int) -> Path:
 
 def _task_rate_histogram_metadata_path(station_id: int, task_id: int) -> Path:
     return _task_metadata_dir(station_id, task_id) / f"task_{task_id}_metadata_rate_histogram.csv"
+
+
+def _task_efficiency_metadata_path(station_id: int, task_id: int) -> Path:
+    return _task_metadata_dir(station_id, task_id) / f"task_{task_id}_metadata_efficiency.csv"
 
 
 def _normalize_basename_for_time(value: object) -> str:
@@ -622,15 +701,17 @@ def _tt_rate_columns(df: pd.DataFrame) -> list[str]:
 
 def _prefix_rank(prefix: str) -> int:
     order = [
-        "raw",
-        "clean",
-        "cal",
-        "list",
+        "post",
         "fit",
+        "list",
+        "cal",
+        "clean",
+        "raw",
         "corr",
         "definitive",
-        "raw_to_clean",
+        "fit_to_post",
         "list_to_fit",
+        "raw_to_clean",
         "fit_to_corr",
         "task5_to_corr",
     ]
@@ -641,11 +722,15 @@ def _prefix_rank(prefix: str) -> int:
 
 
 def _choose_best_col(columns: list[str]) -> str:
-    scored: list[tuple[int, str]] = []
-    for col in columns:
+    scored_physical: list[tuple[int, str]] = []
+    scored_transition: list[tuple[int, str]] = []
+    for col in sorted(set(columns)):
         parts = _extract_tt_parts(col)
         rank = _prefix_rank(parts[0]) if parts is not None else 999
-        scored.append((rank, col))
+        prefix = parts[0] if parts is not None else ""
+        target = scored_transition if "_to_" in prefix else scored_physical
+        target.append((rank, col))
+    scored = scored_physical or scored_transition
     scored.sort(key=lambda x: (x[0], x[1]))
     return scored[0][1]
 
@@ -894,6 +979,27 @@ def _merge_metadata_sources_equal_level(
     return merged, info
 
 
+def _merge_optional_metadata_sources_left(
+    *,
+    merged: pd.DataFrame,
+    info: dict,
+    optional_sources: list[tuple[str, pd.DataFrame]],
+) -> tuple[pd.DataFrame, dict]:
+    out = merged.copy()
+    for source_name, source_df in optional_sources:
+        overlap = sorted(
+            set(out.columns).intersection(set(source_df.columns)) - {"filename_base"}
+        )
+        renamed: dict[str, str] = {}
+        if overlap:
+            renamed = {col: f"{source_name}__{col}" for col in overlap}
+            source_df = source_df.rename(columns=renamed)
+        out = out.merge(source_df, on="filename_base", how="left")
+        info["renamed_overlap_columns"][source_name] = renamed
+        info[f"rows_after_left_merge_with_{source_name}"] = int(len(out))
+    return out, info
+
+
 def _load_rate_histogram_bins(
     *,
     station_id: int,
@@ -1096,10 +1202,43 @@ def _backfill_efficiency_columns_from_empirical(df: pd.DataFrame) -> tuple[pd.Da
     return out, created
 
 
+def _sorted_matching_columns(
+    columns: list[str] | pd.Index,
+    pattern: str,
+) -> list[str]:
+    regex = re.compile(pattern)
+
+    def _sort_key(col: str) -> tuple[int, str]:
+        match = regex.match(str(col))
+        if match is None:
+            return (10**9, str(col))
+        groups = match.groups()
+        if groups:
+            try:
+                return (int(groups[0]), str(col))
+            except (TypeError, ValueError):
+                pass
+        return (10**9, str(col))
+
+    matched = [str(col) for col in columns if regex.match(str(col))]
+    return sorted(matched, key=_sort_key)
+
+
+def _sim_efficiency_columns(df: pd.DataFrame) -> list[str]:
+    return _sorted_matching_columns(df.columns, r"^eff_sim_(\d+)$")
+
+
+def _nonobservable_efficiency_columns(df: pd.DataFrame) -> list[str]:
+    out = _sorted_matching_columns(df.columns, r"^eff_p(\d+)$")
+    out.extend(_sim_efficiency_columns(df))
+    return out
+
+
 def _apply_step12_feature_space_transform(
     df: pd.DataFrame,
     *,
     cfg_12: dict,
+    feature_space_cfg: dict | None = None,
     identity_column: str | None = None,
 ) -> tuple[pd.DataFrame, dict]:
     """Apply STEP 1.2 feature-space transformation using STEP 1.2 definitions."""
@@ -1107,6 +1246,10 @@ def _apply_step12_feature_space_transform(
         cfg_12.get("transform_keep_columns")
     )
     requested_keep_patterns_cfg = list(requested_keep_patterns)
+    column_transform_cfg = _step12_resolve_column_transformations(
+        feature_space_cfg=feature_space_cfg or {},
+    )
+    column_transform_enabled = bool(column_transform_cfg.get("enabled", False))
     if (
         identity_column
         and isinstance(identity_column, str)
@@ -1114,28 +1257,44 @@ def _apply_step12_feature_space_transform(
         and identity_column not in requested_keep_patterns
     ):
         requested_keep_patterns = [*requested_keep_patterns, identity_column]
-    if not requested_keep_patterns:
+    if (
+        not requested_keep_patterns
+        and not (feature_space_cfg or {}).get("materialized_columns")
+        and not column_transform_enabled
+    ):
         raise ValueError(
             "STEP 4.1 cannot apply STEP 1.2 transform: "
-            "step_1_2.transform_keep_columns is missing/empty."
+            "no keep_dimensions in config_step_1.2_feature_space.json (or step_1_2.kept), "
+            "no step_1_2.materialized_columns, and no step_1_2.transform_keep_columns."
         )
 
-    preferred_prefixes_t = tuple(STEP12_CANONICAL_PREFIX_PRIORITY)
+    transform_options = resolve_feature_space_transform_options(
+        feature_space_cfg=feature_space_cfg or {},
+        default_tt_prefix_priority=STEP12_CANONICAL_PREFIX_PRIORITY,
+    )
+    preferred_prefixes_t = tuple(transform_options["tt_prefix_priority"])
     out, rate_col_by_prefix, tt_cols_by_prefix = _step12_build_prefix_global_rate_columns(df)
     out, added_standard_rate_cols = _step12_ensure_standard_task_prefix_rate_columns(
         out,
         rate_col_by_prefix=rate_col_by_prefix,
     )
-    out, canonical_source_counts = _step12_select_canonical_global_rate(
-        out,
-        rate_col_by_prefix=rate_col_by_prefix,
-        preferred_prefixes=preferred_prefixes_t,
-    )
-    out, empirical_selected_prefix, empirical_used_prefixes = _step12_compute_empirical_efficiencies(
-        out,
-        preferred_prefixes=preferred_prefixes_t,
-    )
-    out, helper_count = _step12_add_derived_physics_helper_columns(out)
+    canonical_source_counts: dict[str, int] = {}
+    if transform_options["derive_canonical_global_rate"]:
+        out, canonical_source_counts = _step12_select_canonical_global_rate(
+            out,
+            rate_col_by_prefix=rate_col_by_prefix,
+            preferred_prefixes=preferred_prefixes_t,
+        )
+    empirical_selected_prefix = None
+    empirical_used_prefixes: list[str] = []
+    if transform_options["derive_empirical_efficiencies"]:
+        out, empirical_selected_prefix, empirical_used_prefixes = _step12_compute_empirical_efficiencies(
+            out,
+            preferred_prefixes=preferred_prefixes_t,
+        )
+    helper_count = 0
+    if transform_options["derive_physics_helpers"]:
+        out, helper_count = _step12_add_derived_physics_helper_columns(out)
 
     try:
         min_eff_sim = float(cfg_12.get("min_simulated_efficiency", 0.5))
@@ -1146,7 +1305,7 @@ def _apply_step12_feature_space_transform(
     except (TypeError, ValueError):
         max_eff_spread = 0.15
 
-    eff_sim_cols = [c for c in ("eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4") if c in out.columns]
+    eff_sim_cols = _sim_efficiency_columns(out)
     rows_before_min_eff_filter = int(len(out))
     rows_removed_min_eff_filter = 0
     if eff_sim_cols and min_eff_sim > 0.0:
@@ -1169,30 +1328,83 @@ def _apply_step12_feature_space_transform(
     out, backfilled_eff_cols = _backfill_efficiency_columns_from_empirical(out)
     out, helper_count_post = _step12_add_derived_physics_helper_columns(out)
     helper_count += int(helper_count_post)
-    # Real data must not expose unknown simulation-efficiency coordinates.
-    nonobservable_eff_cols = [
-        c for c in (
-            "eff_p1", "eff_p2", "eff_p3", "eff_p4",
-            "eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4",
+
+    column_transform_info: dict[str, object] = {"enabled": False}
+    if column_transform_enabled:
+        out, column_transform_info, missing_keep = _step12_apply_column_transformations(
+            out,
+            transform_cfg=column_transform_cfg,
         )
-        if c in out.columns
-    ]
+        if missing_keep:
+            log.warning(
+                "STEP 4.1: STEP 1.2 keep_dimensions missing on real data: %s",
+                missing_keep,
+            )
+        log.info(
+            "STEP 4.1: applied column transformations (new=%d, keep_dimensions=%d).",
+            len(column_transform_info.get("new_dimensions", {})),
+            len(column_transform_info.get("final_keep_dimensions", [])),
+        )
+
+    # Real data must not expose unknown simulation-efficiency coordinates.
+    nonobservable_eff_cols = _nonobservable_efficiency_columns(out)
     if nonobservable_eff_cols:
         out = out.drop(columns=nonobservable_eff_cols, errors="ignore")
 
-    curated_cols, unmatched_keep_patterns = _step12_resolve_configured_keep_columns(
-        out,
-        requested_patterns=requested_keep_patterns,
-    )
-    if unmatched_keep_patterns:
-        log.warning(
-            "STEP 4.1: STEP 1.2 keep patterns without matches on real data: %s",
-            unmatched_keep_patterns,
+    if column_transform_enabled:
+        curated_cols = [
+            c
+            for c in column_transform_info.get("final_keep_dimensions", [])
+            if c in out.columns
+        ]
+        materialized_cols_info = {
+            "source": "step_1_2.keep_dimensions",
+            "include_patterns": list(column_transform_info.get("final_keep_dimensions", [])),
+            "exclude_patterns": [],
+            "unmatched_include_patterns": [
+                c
+                for c in column_transform_info.get("final_keep_dimensions", [])
+                if c not in out.columns
+            ],
+            "unmatched_exclude_patterns": [],
+        }
+        unmatched_keep_patterns = list(materialized_cols_info.get("unmatched_include_patterns", []))
+        unmatched_keep_exclude_patterns = []
+        if unmatched_keep_patterns:
+            log.warning(
+                "STEP 4.1: STEP 1.2 keep_dimensions without matches on real data: %s",
+                unmatched_keep_patterns,
+            )
+    else:
+        curated_cols, materialized_cols_info = resolve_materialized_feature_space_columns(
+            available_columns=list(out.columns),
+            feature_space_cfg=feature_space_cfg or {},
+            fallback_patterns=requested_keep_patterns,
         )
+        unmatched_keep_patterns = list(materialized_cols_info.get("unmatched_include_patterns", []))
+        unmatched_keep_exclude_patterns = list(materialized_cols_info.get("unmatched_exclude_patterns", []))
+        if unmatched_keep_patterns:
+            log.warning(
+                "STEP 4.1: STEP 1.2 keep patterns without matches on real data: %s",
+                unmatched_keep_patterns,
+            )
+        if unmatched_keep_exclude_patterns:
+            log.warning(
+                "STEP 4.1: STEP 1.2 exclude patterns without matches on real data: %s",
+                unmatched_keep_exclude_patterns,
+            )
+
+    if (
+        identity_column
+        and isinstance(identity_column, str)
+        and identity_column in out.columns
+        and identity_column not in curated_cols
+    ):
+        curated_cols = [identity_column, *curated_cols]
     if not curated_cols:
         raise ValueError(
             "STEP 4.1 cannot apply STEP 1.2 transform: "
-            "no columns matched step_1_2.transform_keep_columns."
+            "no columns matched the configured materialized feature-space columns."
         )
     out = out[curated_cols].copy()
     curated_cols_summary = [
@@ -1200,32 +1412,48 @@ def _apply_step12_feature_space_transform(
         if not (identity_column and isinstance(identity_column, str) and c == identity_column)
     ]
 
-    available_tt_prefixes: set[str] = {
-        p for p, cols in tt_cols_by_prefix.items()
-        if any(c in out.columns for c in cols)
-    }
-    for prefix, rate_col in rate_col_by_prefix.items():
-        if rate_col in out.columns:
-            vals = pd.to_numeric(out[rate_col], errors="coerce")
-            if vals.notna().any():
-                available_tt_prefixes.add(prefix)
+    best_tt_prefix = None
+    dropped_tt_cols: list[str] = []
+    if transform_options["keep_only_best_tt_prefix"]:
+        available_tt_prefixes: set[str] = {
+            p for p, cols in tt_cols_by_prefix.items()
+            if any(c in out.columns for c in cols)
+        }
+        for prefix, rate_col in rate_col_by_prefix.items():
+            if rate_col in out.columns:
+                vals = pd.to_numeric(out[rate_col], errors="coerce")
+                if vals.notna().any():
+                    available_tt_prefixes.add(prefix)
 
-    best_tt_prefix = _step12_select_best_tt_prefix(
-        available_tt_prefixes,
-        priority=preferred_prefixes_t,
-    )
-    out, dropped_tt_cols = _step12_drop_non_best_tt_columns(
-        out,
-        best_prefix=best_tt_prefix,
-        tt_cols_by_prefix=tt_cols_by_prefix,
-        rate_col_by_prefix=rate_col_by_prefix,
-    )
+        best_tt_prefix = _step12_select_best_tt_prefix(
+            available_tt_prefixes,
+            priority=preferred_prefixes_t,
+        )
+        out, dropped_tt_cols = _step12_drop_non_best_tt_columns(
+            out,
+            best_prefix=best_tt_prefix,
+            tt_cols_by_prefix=tt_cols_by_prefix,
+            rate_col_by_prefix=rate_col_by_prefix,
+        )
 
     info = {
         "step12_transform_keep_columns_requested": requested_keep_patterns_cfg,
         "step12_transform_keep_columns_unmatched": unmatched_keep_patterns,
+        "step12_transform_keep_columns_unmatched_exclude": unmatched_keep_exclude_patterns,
         "step12_curated_columns": curated_cols_summary,
         "step12_curated_column_count": int(len(curated_cols_summary)),
+        "step12_feature_space_materialized_columns_source": materialized_cols_info.get("source"),
+        "step12_feature_space_include_patterns": materialized_cols_info.get("include_patterns", []),
+        "step12_feature_space_exclude_patterns": materialized_cols_info.get("exclude_patterns", []),
+        "step12_column_transformations_enabled": bool(column_transform_enabled),
+        "step12_column_transformations": column_transform_info,
+        "step12_transform_options": {
+            "derive_canonical_global_rate": bool(transform_options["derive_canonical_global_rate"]),
+            "derive_empirical_efficiencies": bool(transform_options["derive_empirical_efficiencies"]),
+            "derive_physics_helpers": bool(transform_options["derive_physics_helpers"]),
+            "keep_only_best_tt_prefix": bool(transform_options["keep_only_best_tt_prefix"]),
+            "tt_prefix_priority": list(preferred_prefixes_t),
+        },
         "step12_min_simulated_efficiency": float(min_eff_sim),
         "step12_max_simulated_efficiency_spread": float(max_eff_spread),
         "step12_eff_sim_columns_seen": eff_sim_cols,
@@ -1345,7 +1573,9 @@ def _resolve_feature_matrix_columns(
     *,
     preferred_cols: list[str],
     include_rate_histogram: bool,
-) -> tuple[list[str], list[str], bool]:
+    include_global_rate: bool,
+    suppressed_patterns: list[str] | None = None,
+) -> tuple[list[str], list[str], list[str], bool, bool]:
     common_cols = set(real_df.columns) & set(dict_df.columns)
     admin_exact = {
         "filename_base",
@@ -1364,13 +1594,12 @@ def _resolve_feature_matrix_columns(
         if (
             c not in admin_exact
             and not any(token in str(c).lower() for token in admin_contains)
+            and (include_global_rate or str(c) != "events_per_second_global_rate")
+            and re.search(r"_to_.*_tt_.*_rate_hz$", str(c)) is None
         )
     )
     if preferred_cols:
-        preferred = [c for c in preferred_cols if c in feature_common]
-        preferred_set = set(preferred)
-        extras = [c for c in feature_common if c not in preferred_set]
-        candidates = preferred + extras
+        candidates = [c for c in preferred_cols if c in feature_common]
     else:
         candidates = feature_common
 
@@ -1383,11 +1612,223 @@ def _resolve_feature_matrix_columns(
         if not dict_vals.notna().any():
             continue
         out.append(col)
-    resolved_cols, hist_cols, suppressed = _step12_resolve_feature_matrix_plot_columns(
+    plot_cols, hist_cols, eff_cols, hist_placeholder_added, eff_placeholder_added = _step12_resolve_feature_matrix_plot_columns(
         out,
         include_rate_histogram=include_rate_histogram,
+        suppressed_patterns=suppressed_patterns,
     )
-    return resolved_cols, hist_cols, suppressed
+    return plot_cols, hist_cols, eff_cols, hist_placeholder_added, eff_placeholder_added
+
+
+def _preferred_plot_feature_columns(
+    *,
+    selected_feature_cols: list[str],
+    include_global_rate: bool,
+) -> tuple[list[str], str, dict[str, object]]:
+    dd = load_distance_definition(selected_feature_cols)
+    _, active_info = active_feature_columns_from_distance_definition(
+        selected_feature_cols,
+        distance_definition=dd,
+    )
+    filtered_selected = [
+        c
+        for c in selected_feature_cols
+        if (
+            (include_global_rate or c != "events_per_second_global_rate")
+            and re.search(r"_to_.*_tt_.*_rate_hz$", str(c)) is None
+        )
+    ]
+    return (
+        filtered_selected,
+        "selected_feature_columns_json",
+        active_info,
+    )
+
+
+def _make_grouped_feature_space_comparison_plot(
+    real_df: pd.DataFrame,
+    dict_df: pd.DataFrame,
+    *,
+    selected_feature_cols: list[str],
+) -> dict[str, object]:
+    dd = load_distance_definition(selected_feature_cols) if selected_feature_cols else {"available": False}
+    dd_group_weights = dd.get("group_weights", {}) if isinstance(dd, dict) else {}
+    if not isinstance(dd_group_weights, dict):
+        dd_group_weights = {}
+    dd_feature_groups = dd.get("feature_groups", {}) if isinstance(dd, dict) else {}
+    if not isinstance(dd_feature_groups, dict):
+        dd_feature_groups = {}
+
+    hist_cfg = dd_feature_groups.get("rate_histogram", {})
+    if not isinstance(hist_cfg, dict):
+        hist_cfg = {}
+    hist_active = (not dd_group_weights) or float(dd_group_weights.get("rate_histogram", 0.0)) > 0.0
+    hist_cols = [
+        str(col)
+        for col in hist_cfg.get("feature_columns", [])
+        if str(col) in real_df.columns and str(col) in dict_df.columns
+    ]
+    if not hist_cols and hist_active:
+        common_cols = set(real_df.columns) & set(dict_df.columns)
+        hist_cols = sorted(
+            [c for c in common_cols if RATE_HIST_BIN_RE.match(str(c))],
+            key=lambda c: int(RATE_HIST_BIN_RE.match(str(c)).group("bin")) if RATE_HIST_BIN_RE.match(str(c)) else 0,
+        )
+
+    eff_cfg = dd_feature_groups.get("efficiency_vectors", {})
+    if not isinstance(eff_cfg, dict):
+        eff_cfg = {}
+    eff_active = (not dd_group_weights) or float(dd_group_weights.get("efficiency_vectors", 0.0)) > 0.0
+    eff_payloads = []
+    if eff_active:
+        eff_payloads = _prepare_efficiency_vector_group_payloads(
+            dict_df=dict_df,
+            data_df=real_df,
+        )
+        eff_payloads = _filter_efficiency_vector_payloads(
+            eff_payloads,
+            feature_groups_cfg=eff_cfg if eff_cfg else None,
+            selected_feature_columns=selected_feature_cols,
+        )
+
+    axis_payloads: dict[str, list[dict[str, object]]] = {"x": [], "y": [], "theta": []}
+    for payload in eff_payloads:
+        axis_name = str(payload.get("axis", "")).strip().lower()
+        if axis_name in axis_payloads:
+            axis_payloads[axis_name].append(payload)
+
+    axes_to_plot = [axis for axis in ("x", "y", "theta") if axis_payloads[axis]]
+    n_panels = (1 if hist_cols else 0) + len(axes_to_plot)
+    summary: dict[str, object] = {
+        "status": "unavailable",
+        "distance_definition_available": bool(dd.get("available")) if isinstance(dd, dict) else False,
+        "rate_histogram_bins_used": int(len(hist_cols)),
+        "efficiency_vector_groups_used": int(len(eff_payloads)),
+        "efficiency_vector_axes_used": axes_to_plot,
+    }
+    if n_panels == 0:
+        _plot_placeholder(
+            PLOT_FEATURE_MATRIX,
+            "Feature-space comparison: real vs dictionary",
+            "No grouped feature-space blocks are available for comparison.",
+        )
+        summary["status"] = "no_grouped_blocks"
+        return summary
+
+    fig, axes = plt.subplots(
+        n_panels,
+        1,
+        figsize=(11.5, max(3.2 * n_panels, 4.8)),
+        squeeze=False,
+    )
+    axes_flat = axes[:, 0]
+    panel_idx = 0
+
+    if hist_cols:
+        ax = axes_flat[panel_idx]
+        panel_idx += 1
+        hist_bins = np.asarray(
+            [int(RATE_HIST_BIN_RE.match(col).group("bin")) for col in hist_cols],
+            dtype=float,
+        )
+        dict_hist = dict_df[hist_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+        real_hist = real_df[hist_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+        dict_med = np.nanmedian(dict_hist, axis=0)
+        dict_lo = np.nanpercentile(dict_hist, 25, axis=0)
+        dict_hi = np.nanpercentile(dict_hist, 75, axis=0)
+        real_med = np.nanmedian(real_hist, axis=0)
+        real_lo = np.nanpercentile(real_hist, 25, axis=0)
+        real_hi = np.nanpercentile(real_hist, 75, axis=0)
+
+        ax.fill_between(hist_bins, dict_lo, dict_hi, color="#7A7A7A", alpha=0.18, linewidth=0.0)
+        ax.plot(hist_bins, dict_med, color="#7A7A7A", linewidth=1.6, linestyle="--", label="Dictionary median")
+        ax.fill_between(hist_bins, real_lo, real_hi, color="#1F77B4", alpha=0.16, linewidth=0.0)
+        ax.plot(hist_bins, real_med, color="#1F77B4", linewidth=1.8, label="Real median")
+        ax.set_title("Rate-histogram feature block")
+        ax.set_ylabel("Rate [Hz]")
+        ax.set_xlabel("Histogram bin")
+        ax.grid(True, alpha=0.18)
+        ax.legend(loc="best", fontsize=8, framealpha=0.92)
+
+    plane_colors = {
+        1: "#1F77B4",
+        2: "#FF7F0E",
+        3: "#2CA02C",
+        4: "#D62728",
+    }
+    axis_titles = {
+        "x": ("Efficiency vs projected X", "Projected X [mm]"),
+        "y": ("Efficiency vs projected Y", "Projected Y [mm]"),
+        "theta": ("Efficiency vs theta", "Theta [deg]"),
+    }
+    for axis_name in axes_to_plot:
+        ax = axes_flat[panel_idx]
+        panel_idx += 1
+        payloads = sorted(
+            axis_payloads[axis_name],
+            key=lambda item: int(item.get("plane", 0)),
+        )
+        for payload in payloads:
+            plane = int(payload.get("plane", 0))
+            centers = np.asarray(payload.get("centers", []), dtype=float)
+            dict_eff = np.asarray(payload.get("dict_eff", []), dtype=float)
+            real_eff = np.asarray(payload.get("data_eff", []), dtype=float)
+            if centers.size == 0 or dict_eff.size == 0 or real_eff.size == 0:
+                continue
+            dict_has_finite = bool(np.isfinite(dict_eff).any())
+            real_has_finite = bool(np.isfinite(real_eff).any())
+            if not dict_has_finite and not real_has_finite:
+                continue
+            dict_med = (
+                pd.DataFrame(dict_eff).median(axis=0, skipna=True).to_numpy(dtype=float)
+                if dict_has_finite
+                else np.full(centers.shape, np.nan, dtype=float)
+            )
+            real_med = (
+                pd.DataFrame(real_eff).median(axis=0, skipna=True).to_numpy(dtype=float)
+                if real_has_finite
+                else np.full(centers.shape, np.nan, dtype=float)
+            )
+            if not np.isfinite(dict_med).any() and not np.isfinite(real_med).any():
+                continue
+            color = plane_colors.get(plane, "#444444")
+            ax.plot(
+                centers,
+                dict_med,
+                color=color,
+                linewidth=1.3,
+                linestyle="--",
+                alpha=0.8,
+                label=f"P{plane} dict",
+            )
+            ax.plot(
+                centers,
+                real_med,
+                color=color,
+                linewidth=1.8,
+                alpha=0.95,
+                label=f"P{plane} real",
+            )
+
+        title, xlabel = axis_titles.get(axis_name, (f"Efficiency vs {axis_name}", axis_name))
+        ax.set_title(title)
+        ax.set_ylabel("Efficiency")
+        ax.set_xlabel(xlabel)
+        ax.set_ylim(0.0, 1.02)
+        ax.grid(True, alpha=0.18)
+        ax.legend(loc="best", fontsize=7, ncol=2, framealpha=0.92)
+
+    fig.suptitle(
+        "STEP 4.1 grouped feature-space comparison: real vs dictionary",
+        fontsize=12,
+    )
+    fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.98])
+    fig.savefig(PLOT_FEATURE_MATRIX, dpi=150)
+    plt.close(fig)
+
+    summary["status"] = "ok"
+    summary["n_panels"] = int(n_panels)
+    return summary
 
 
 def _make_feature_scatter_matrix_real_vs_dictionary(
@@ -1398,30 +1839,57 @@ def _make_feature_scatter_matrix_real_vs_dictionary(
     sample_max_rows: int,
     random_seed: int,
     include_rate_histogram: bool,
+    include_global_rate: bool,
+    suppressed_patterns: list[str] | None = None,
 ) -> dict:
     selected_feature_cols = _load_selected_feature_columns(selected_features_path)
-    matrix_cols, rate_hist_cols, rate_hist_suppressed = _resolve_feature_matrix_columns(
-        real_df,
-        dict_df,
-        preferred_cols=selected_feature_cols,
-        include_rate_histogram=include_rate_histogram,
-    )
+    preferred_cols = selected_feature_cols
     source_label = (
         f"selected_feature_columns.json ({selected_features_path})"
         if selected_feature_cols
         else "numeric intersection fallback"
+    )
+    step15_active_info: dict[str, object] = {
+        "distance_definition_available": False,
+        "used_active_weights": False,
+    }
+    if selected_feature_cols:
+        preferred_cols, preferred_source, step15_active_info = _preferred_plot_feature_columns(
+            selected_feature_cols=selected_feature_cols,
+            include_global_rate=include_global_rate,
+        )
+    (
+        matrix_cols,
+        rate_hist_cols,
+        efficiency_vector_cols,
+        rate_hist_placeholder_added,
+        efficiency_vector_placeholder_added,
+    ) = _resolve_feature_matrix_columns(
+        real_df,
+        dict_df,
+        preferred_cols=preferred_cols,
+        include_rate_histogram=include_rate_histogram,
+        include_global_rate=include_global_rate,
+        suppressed_patterns=suppressed_patterns,
     )
 
     summary = {
         "path": str(PLOT_FEATURE_MATRIX),
         "selected_features_source": source_label,
         "selected_features_requested_count": int(len(selected_feature_cols)),
+        "selected_features_after_step15_filter_count": int(len(preferred_cols)),
         "columns_used_count": int(len(matrix_cols)),
         "columns_used": matrix_cols[:200],
         "feature_matrix_plot_include_rate_histogram": bool(include_rate_histogram),
+        "feature_matrix_plot_include_global_rate": bool(include_global_rate),
+        "feature_space_lower_triangle_suppressed_patterns": list(suppressed_patterns or []),
         "rate_hist_columns_detected_count": int(len(rate_hist_cols)),
         "rate_hist_columns_detected": rate_hist_cols[:200],
-        "rate_hist_block_suppressed": bool(rate_hist_suppressed),
+        "rate_hist_block_suppressed": bool(rate_hist_placeholder_added),
+        "efficiency_vector_columns_detected_count": int(len(efficiency_vector_cols)),
+        "efficiency_vector_columns_detected": efficiency_vector_cols[:200],
+        "efficiency_vector_block_suppressed": bool(efficiency_vector_placeholder_added),
+        "step15_active_feature_info": step15_active_info,
         "rows_real_total": int(len(real_df)),
         "rows_dictionary_total": int(len(dict_df)),
         "sample_max_rows": int(sample_max_rows),
@@ -1430,17 +1898,22 @@ def _make_feature_scatter_matrix_real_vs_dictionary(
     }
 
     if len(matrix_cols) < 2:
-        _plot_placeholder(
-            PLOT_FEATURE_MATRIX,
-            "Feature-space matrix: real vs dictionary",
-            "Not enough common numeric feature columns to draw the matrix.",
+        grouped_summary = _make_grouped_feature_space_comparison_plot(
+            real_df,
+            dict_df,
+            selected_feature_cols=selected_feature_cols,
         )
-        summary["status"] = "insufficient_columns"
-        summary["rows_real_plotted"] = 0
-        summary["rows_dictionary_plotted"] = 0
+        summary["status"] = "grouped_feature_fallback"
+        summary["grouped_feature_fallback"] = grouped_summary
+        summary["rows_real_plotted"] = int(len(real_df))
+        summary["rows_dictionary_plotted"] = int(len(dict_df))
         return summary
 
-    plot_data_cols = [c for c in matrix_cols if c != STEP12_RATE_HIST_PLACEHOLDER_COL]
+    plot_data_cols = [
+        c
+        for c in matrix_cols
+        if c not in (STEP12_RATE_HIST_PLACEHOLDER_COL, STEP12_EFF_PLACEHOLDER_COL)
+    ]
     real_plot = real_df[plot_data_cols].copy()
     dict_plot = dict_df[plot_data_cols].copy()
     if sample_max_rows > 0:
@@ -1510,25 +1983,29 @@ def _make_feature_scatter_matrix_real_vs_dictionary(
     for i, cy in enumerate(matrix_cols):
         for j, cx in enumerate(matrix_cols):
             ax = axes[i, j]
-            x_is_placeholder = (cx == STEP12_RATE_HIST_PLACEHOLDER_COL)
-            y_is_placeholder = (cy == STEP12_RATE_HIST_PLACEHOLDER_COL)
+            x_label = _feature_placeholder_label(cx)
+            y_label = _feature_placeholder_label(cy)
+            x_is_placeholder = x_label is not None
+            y_is_placeholder = y_label is not None
             if i == j:
                 if x_is_placeholder:
                     ax.set_facecolor("#F2F2F2")
-                    msg = "Rate-histogram block\nsuppressed for display"
-                    if len(rate_hist_cols) > 0:
-                        msg = f"Rate-histogram block suppressed\n({len(rate_hist_cols)} columns)"
                     ax.text(
                         0.5,
                         0.5,
-                        msg,
+                        _feature_placeholder_message(
+                            x_col=cx,
+                            y_col=cy,
+                            rate_hist_count=len(rate_hist_cols),
+                            efficiency_vector_count=len(efficiency_vector_cols),
+                        ),
                         ha="center",
                         va="center",
                         fontsize=5.8,
                         transform=ax.transAxes,
                     )
                     if i == n - 1:
-                        ax.set_xlabel(STEP12_RATE_HIST_PLACEHOLDER_LABEL, fontsize=5.3)
+                        ax.set_xlabel(x_label, fontsize=5.3)
                     else:
                         ax.set_xticklabels([])
                     if j == 0:
@@ -1560,8 +2037,8 @@ def _make_feature_scatter_matrix_real_vs_dictionary(
             elif i > j:
                 if x_is_placeholder or y_is_placeholder:
                     ax.set_facecolor("#F7F7F7")
-                    # Keep per-feature axis consistency even in the suppressed
-                    # rate-histogram placeholder row/column panels.
+                    # Keep per-feature axis consistency even in placeholder
+                    # row/column panels for grouped suppressed blocks.
                     if not x_is_placeholder:
                         x_limits = feature_axis_limits.get(cx)
                         if x_limits is not None:
@@ -1572,14 +2049,14 @@ def _make_feature_scatter_matrix_real_vs_dictionary(
                             ax.set_ylim(y_limits)
                     if i == n - 1:
                         ax.set_xlabel(
-                            STEP12_RATE_HIST_PLACEHOLDER_LABEL if x_is_placeholder else cx,
+                            x_label or cx,
                             fontsize=5.3,
                         )
                     else:
                         ax.set_xticklabels([])
                     if j == 0:
                         ax.set_ylabel(
-                            STEP12_RATE_HIST_PLACEHOLDER_LABEL if y_is_placeholder else cy,
+                            y_label or cy,
                             fontsize=5.3,
                         )
                     else:
@@ -1628,14 +2105,14 @@ def _make_feature_scatter_matrix_real_vs_dictionary(
 
             if i == n - 1:
                 ax.set_xlabel(
-                    STEP12_RATE_HIST_PLACEHOLDER_LABEL if x_is_placeholder else cx,
+                    x_label or cx,
                     fontsize=5.3,
                 )
             else:
                 ax.set_xticklabels([])
             if j == 0:
                 ax.set_ylabel(
-                    (STEP12_RATE_HIST_PLACEHOLDER_LABEL if y_is_placeholder else (cy if i > 0 else "Rows")),
+                    ((y_label or cy) if i > 0 else "Rows"),
                     fontsize=5.3,
                 )
             else:
@@ -1909,20 +2386,43 @@ def _make_comparison_columns_plot(
     return len(eff_cols)
 
 
-_EFFPROD_SUFFIX_TO_TT_LABEL = {
-    "4planes": "1234",
-    "123": "123",
-    "234": "234",
-    "12": "12",
-    "23": "23",
-    "34": "34",
-}
+_TT_BREAKDOWN_LABELS = (
+    "1234",
+    "123",
+    "124",
+    "134",
+    "234",
+    "12",
+    "13",
+    "14",
+    "23",
+    "24",
+    "34",
+)
+
+
+def _resolve_tt_rate_breakdown_entries(
+    df: pd.DataFrame,
+) -> list[tuple[str, str]]:
+    """Resolve TT-specific physical rate columns for the TT-only breakdown plot."""
+    _selected_prefix, rate_cols_by_label = resolve_physical_tt_rate_columns(
+        df,
+        tt_labels=list(_TT_BREAKDOWN_LABELS),
+        prefix_selector="last",
+        include_to_tt_rate_hz=False,
+        require_numeric=True,
+    )
+    return [
+        (tt_label, rate_cols_by_label[tt_label])
+        for tt_label in _TT_BREAKDOWN_LABELS
+        if tt_label in rate_cols_by_label
+    ]
 
 
 def _make_tt_rate_breakdown_plot(
     df: pd.DataFrame,
 ) -> int:
-    """Plot per-TT rate, efficiency product, and rate/eff_product in a 3×N grid."""
+    """Plot TT-specific physical rate time series only."""
     tcol = _choose_timeline_column(df)
     if tcol is None:
         x = pd.Series(np.arange(len(df), dtype=float), index=df.index)
@@ -1943,64 +2443,31 @@ def _make_tt_rate_breakdown_plot(
             x_label = "Row index"
             x_is_time = False
 
-    # Find efficiency_product columns and matching TT rate columns
-    tt_entries: list[tuple[str, str, str, str]] = []  # (label, tt_rate_col, effprod_col, source)
-    for suffix, tt_label in _EFFPROD_SUFFIX_TO_TT_LABEL.items():
-        corrected_col = POLY_CORRECTED_EFFPROD_COL_TEMPLATE.format(suffix=suffix)
-        raw_col = f"efficiency_product_{suffix}"
-        effprod_col = None
-        effprod_source = "feature_space"
-        if corrected_col in df.columns and pd.to_numeric(df[corrected_col], errors="coerce").notna().any():
-            effprod_col = corrected_col
-            effprod_source = "poly_corrected"
-        elif raw_col in df.columns:
-            effprod_col = raw_col
-        if effprod_col is None:
-            continue
-        pattern = re.compile(rf"^.+_tt_{re.escape(tt_label)}_rate_hz$")
-        candidates = [c for c in df.columns if pattern.match(c)]
-        if not candidates:
-            continue
-        tt_rate_col = _choose_best_col(candidates)
-        tt_entries.append((tt_label, tt_rate_col, effprod_col, effprod_source))
+    tt_entries = _resolve_tt_rate_breakdown_entries(df)
 
     if not tt_entries:
         _plot_placeholder(
             PLOT_TT_BREAKDOWN,
             "TT rate breakdown",
-            "No matching TT rate + efficiency product columns found.",
+            "No TT-specific physical rate columns found.",
         )
         return 0
 
     n_tt = len(tt_entries)
     fig, axes = plt.subplots(
-        3, n_tt,
-        figsize=(4.0 * n_tt, 9.0),
+        1, n_tt,
+        figsize=(4.0 * n_tt, 3.3),
         squeeze=False,
     )
 
-    # Share y-axis within each row and x-axis within each column
-    for row in range(3):
-        for col in range(1, n_tt):
-            axes[row, col].sharey(axes[row, 0])
-    for col in range(n_tt):
-        for row in range(2):
-            axes[row, col].sharex(axes[2, col])
+    for col in range(1, n_tt):
+        axes[0, col].sharey(axes[0, 0])
 
     colors = ["#4C72B0", "#DD8452", "#55A868", "#C44E52", "#8172B3"]
-    use_poly_corrected = any(source == "poly_corrected" for _, _, _, source in tt_entries)
-    row_labels = [
-        "TT rate [Hz]",
-        ("Poly-corrected eff. product" if use_poly_corrected else "Eff. product"),
-        ("Rate / poly-corrected eff. prod." if use_poly_corrected else "Rate / eff. prod."),
-    ]
-
-    for j, (tt_label, tt_rate_col, effprod_col, effprod_source) in enumerate(tt_entries):
+    for j, (tt_label, tt_rate_col) in enumerate(tt_entries):
         rate = pd.to_numeric(df[tt_rate_col], errors="coerce")
-        effprod = pd.to_numeric(df[effprod_col], errors="coerce")
         color = colors[j % len(colors)]
 
-        # Row 0: TT rate
         ax = axes[0, j]
         ok = rate.notna()
         if ok.any():
@@ -2008,44 +2475,16 @@ def _make_tt_rate_breakdown_plot(
                 x[ok].to_numpy(), rate[ok].to_numpy(dtype=float),
                 s=8, color=color, alpha=0.6, edgecolors="none",
             )
-        title = f"TT {tt_label}"
-        if effprod_source == "poly_corrected":
-            title += " (poly)"
-        ax.set_title(title, fontsize=9, fontweight="bold")
+        else:
+            ax.text(0.5, 0.5, "No rate values", ha="center", va="center", transform=ax.transAxes, fontsize=7.5)
+        ax.set_title(f"TT {tt_label}", fontsize=9, fontweight="bold")
         ax.grid(True, alpha=0.2, linewidth=0.5)
 
-        # Row 1: efficiency product
-        ax = axes[1, j]
-        ok = effprod.notna()
-        if ok.any():
-            ax.scatter(
-                x[ok].to_numpy(), effprod[ok].to_numpy(dtype=float),
-                s=8, color=color, alpha=0.6, edgecolors="none",
-            )
-        ax.grid(True, alpha=0.2, linewidth=0.5)
-
-        # Row 2: rate / eff_product
-        ax = axes[2, j]
-        both_ok = rate.notna() & effprod.notna() & (effprod > 0)
-        if both_ok.any():
-            ratio = rate[both_ok].to_numpy(dtype=float) / effprod[both_ok].to_numpy(dtype=float)
-            ax.scatter(
-                x[both_ok].to_numpy(), ratio,
-                s=8, color=color, alpha=0.6, edgecolors="none",
-            )
-        ax.grid(True, alpha=0.2, linewidth=0.5)
-
-    # Y-axis labels only on leftmost column
-    for row in range(3):
-        axes[row, 0].set_ylabel(row_labels[row], fontsize=8)
-        for col in range(1, n_tt):
-            plt.setp(axes[row, col].get_yticklabels(), visible=False)
-
-    # X-axis labels only on bottom row
+    axes[0, 0].set_ylabel("TT rate [Hz]", fontsize=8)
     for col in range(n_tt):
-        axes[2, col].set_xlabel(x_label, fontsize=7)
-        for row in range(2):
-            plt.setp(axes[row, col].get_xticklabels(), visible=False)
+        axes[0, col].set_xlabel(x_label, fontsize=7)
+        if col > 0:
+            plt.setp(axes[0, col].get_yticklabels(), visible=False)
 
     if x_is_time:
         fig.autofmt_xdate(rotation=25, ha="right")
@@ -2067,9 +2506,23 @@ def main() -> int:
     args = parser.parse_args()
 
     config = _load_config(Path(args.config))
+    common_feature_space_cfg = config.get("common_feature_space", {})
+    if not isinstance(common_feature_space_cfg, dict):
+        common_feature_space_cfg = {}
     cfg_12 = config.get("step_1_2", {})
     if not isinstance(cfg_12, dict):
         cfg_12 = {}
+    feature_space_config_path = resolve_feature_space_config_path(
+        PIPELINE_DIR,
+        config=config,
+        step_cfg=cfg_12,
+    )
+    feature_space_all = load_feature_space_config(feature_space_config_path)
+    feature_space_cfg = (
+        feature_space_all.get("step_1_2", {})
+        if isinstance(feature_space_all.get("step_1_2", {}), dict)
+        else {}
+    )
     cfg_41 = config.get("step_4_1", {})
     _clear_plots_dir()
 
@@ -2085,6 +2538,7 @@ def main() -> int:
     )
     task_ids = _safe_task_ids(task_ids_cfg)
     preferred_feature_prefixes = _preferred_feature_prefixes_for_task_ids(task_ids)
+    efficiency_metadata_source_task_raw = cfg_41.get("efficiency_metadata_source_task_id", None)
 
     timestamp_col = str(cfg_41.get("timestamp_column", "execution_timestamp"))
     metadata_agg = str(config.get("metadata_agg", "latest")).strip().lower()
@@ -2122,6 +2576,17 @@ def main() -> int:
         matrix_include_rate_hist_raw,
         default=True,
     )
+    feature_space_plot_suppressed_patterns = _step12_resolve_feature_space_plot_suppression_patterns(
+        config,
+        step_cfg=cfg_41 if isinstance(cfg_41, dict) else {},
+    )
+    matrix_include_global_rate = _safe_bool(
+        _coalesce(
+            cfg_41.get("feature_matrix_plot_include_global_rate", None),
+            common_feature_space_cfg.get("include_global_rate", False),
+        ),
+        default=False,
+    )
     min_n_events_raw = cfg_41.get("min_n_events", 30000)
     if min_n_events_raw in (None, "", "null", "None"):
         min_n_events: float | None = None
@@ -2157,6 +2622,8 @@ def main() -> int:
     log.info("Station: %s", station_name)
     log.info("Task IDs: %s", task_ids)
     log.info("Preferred TT prefix order for auto comparison features: %s", preferred_feature_prefixes)
+    if feature_space_cfg:
+        log.info("Feature-space config: %s", feature_space_config_path)
     log.info(
         "Date range (applied to filename_base data-time): %s .. %s",
         date_from if date_from is not None else "None",
@@ -2244,18 +2711,26 @@ def main() -> int:
         specific_path = _task_specific_metadata_path(station_id, task_id)
         trigger_path = _task_trigger_type_metadata_path(station_id, task_id)
         rate_hist_path = _task_rate_histogram_metadata_path(station_id, task_id)
+        efficiency_source_task_id = _resolve_efficiency_metadata_source_task_id(
+            efficiency_metadata_source_task_raw,
+            default_task_id=task_id,
+        )
+        efficiency_path = _task_efficiency_metadata_path(station_id, efficiency_source_task_id)
         key = str(task_id)
         task_stats[key] = {
             "rows_read": 0,
             "rows_read_specific": 0,
             "rows_read_trigger_type": 0,
             "rows_read_rate_histogram": 0,
+            "rows_read_efficiency": 0,
             "rows_after_latest_agg": 0,
             "rows_after_latest_agg_specific": 0,
             "rows_after_latest_agg_trigger_type": 0,
             "rows_after_latest_agg_rate_histogram": 0,
+            "rows_after_latest_agg_efficiency": 0,
             "rows_after_metadata_merge": 0,
             "rows_with_rate_histogram_after_merge": 0,
+            "rows_with_efficiency_after_merge": 0,
             "rows_after_date_filter": 0,
             "rows_with_online_z_mapped": 0,
             "rows_after_z_filter": 0,
@@ -2289,6 +2764,38 @@ def main() -> int:
             log.error("%s", exc)
             return 1
 
+        optional_sources: list[tuple[str, pd.DataFrame]] = []
+        if efficiency_path.exists():
+            try:
+                efficiency_df = _load_task_metadata_source_csv(
+                    task_id=efficiency_source_task_id,
+                    source_name="efficiency",
+                    path=efficiency_path,
+                    metadata_agg=metadata_agg,
+                    timestamp_col=timestamp_col,
+                )
+            except (FileNotFoundError, KeyError) as exc:
+                log.error("%s", exc)
+                return 1
+            task_stats[key]["rows_read_efficiency"] = int(len(efficiency_df))
+            task_stats[key]["rows_after_latest_agg_efficiency"] = int(len(efficiency_df))
+            if not efficiency_df.empty:
+                optional_sources.append(("efficiency", efficiency_df))
+            else:
+                log.warning(
+                    "Optional efficiency metadata is empty for task %d (source task %d): %s",
+                    task_id,
+                    efficiency_source_task_id,
+                    efficiency_path,
+                )
+        else:
+            log.warning(
+                "Optional efficiency metadata missing for task %d (source task %d): %s",
+                task_id,
+                efficiency_source_task_id,
+                efficiency_path,
+            )
+
         task_stats[key]["rows_read_trigger_type"] = int(len(trigger_df))
         task_stats[key]["rows_read_rate_histogram"] = int(len(rate_hist_df))
         task_stats[key]["rows_read_specific"] = int(len(specific_df))
@@ -2299,6 +2806,7 @@ def main() -> int:
             task_stats[key]["rows_read_trigger_type"]
             + task_stats[key]["rows_read_rate_histogram"]
             + task_stats[key]["rows_read_specific"]
+            + task_stats[key]["rows_read_efficiency"]
         )
 
         meta_df, merge_info = _merge_metadata_sources_equal_level(
@@ -2309,6 +2817,12 @@ def main() -> int:
                 ("specific", specific_df),
             ],
         )
+        if optional_sources:
+            meta_df, merge_info = _merge_optional_metadata_sources_left(
+                merged=meta_df,
+                info=merge_info,
+                optional_sources=optional_sources,
+            )
         log.info(
             "  Metadata merged at equal level for task %d: rows=%d, columns=%d.",
             task_id,
@@ -2337,6 +2851,18 @@ def main() -> int:
             )
         else:
             task_stats[key]["rows_with_rate_histogram_after_merge"] = 0
+
+        eff_cols_merged = [
+            c
+            for c in meta_df.columns
+            if str(c).startswith("efficiency_vector_p")
+        ]
+        if eff_cols_merged:
+            task_stats[key]["rows_with_efficiency_after_merge"] = int(
+                meta_df[eff_cols_merged].notna().any(axis=1).sum()
+            )
+        else:
+            task_stats[key]["rows_with_efficiency_after_merge"] = 0
 
         task_stats[key]["rows_after_latest_agg"] = int(len(meta_df))
         task_stats[key]["rows_after_metadata_merge"] = int(len(meta_df))
@@ -2460,6 +2986,7 @@ def main() -> int:
         collected, step12_transform_info = _apply_step12_feature_space_transform(
             collected,
             cfg_12=cfg_12,
+            feature_space_cfg=feature_space_cfg,
             identity_column=step41_row_id_col,
         )
     except ValueError as exc:
@@ -2497,10 +3024,29 @@ def main() -> int:
         build_summary_path=build_summary_path,
     )
 
+    tt_output_prefix, tt_output_cols_by_label = resolve_physical_tt_rate_columns(
+        collected,
+        tt_labels=list(_TT_BREAKDOWN_LABELS),
+        prefix_selector="last",
+        include_to_tt_rate_hz=False,
+        require_numeric=True,
+    )
+    tt_output_cols = [
+        tt_output_cols_by_label[label]
+        for label in _TT_BREAKDOWN_LABELS
+        if label in tt_output_cols_by_label
+    ]
     out_csv = FILES_DIR / "real_collected_data.csv"
     csv_cols = [c for c in collected.columns if not re.search(r"_tt_.+_rate_hz$", str(c))]
+    csv_cols.extend([c for c in tt_output_cols if c not in csv_cols])
     collected[csv_cols].to_csv(out_csv, index=False)
-    log.info("Wrote collected real data (STEP 1.2 transformed): %s (%d rows)", out_csv, len(collected))
+    log.info(
+        "Wrote collected real data (STEP 1.2 transformed): %s (%d rows, tt_prefix=%s, tt_cols=%d)",
+        out_csv,
+        len(collected),
+        str(tt_output_prefix),
+        int(len(tt_output_cols)),
+    )
 
     event_col = _make_event_histogram(
         collected_before_event_cut,
@@ -2514,6 +3060,8 @@ def main() -> int:
         sample_max_rows=matrix_sample_max_rows,
         random_seed=matrix_random_seed,
         include_rate_histogram=matrix_include_rate_histogram,
+        include_global_rate=matrix_include_global_rate,
+        suppressed_patterns=feature_space_plot_suppressed_patterns,
     )
     timeline_col = _choose_timeline_column(collected)
 
@@ -2544,9 +3092,21 @@ def main() -> int:
             "task_<id>_metadata_trigger_type.csv",
             "task_<id>_metadata_rate_histogram.csv",
         ],
+        "source_metadata_files_optional": [
+            "task_<id>_metadata_efficiency.csv",
+        ],
+        "efficiency_metadata_source_task_id": (
+            None if efficiency_metadata_source_task_raw in (None, "", "null", "None", "same")
+            else int(_resolve_efficiency_metadata_source_task_id(
+                efficiency_metadata_source_task_raw,
+                default_task_id=task_ids[0] if task_ids else 1,
+            ))
+        ),
         "task_stats": task_stats,
         "metadata_aggregation": metadata_agg,
         "timestamp_column": timestamp_col,
+        "feature_space_config_path": str(feature_space_config_path),
+        "feature_space_config_loaded": bool(feature_space_cfg),
         "date_from": str(date_from) if date_from is not None else None,
         "date_to": str(date_to) if date_to is not None else None,
         "date_filter_source": "file_timestamp_utc_from_filename_base",
@@ -2570,6 +3130,7 @@ def main() -> int:
         "selected_feature_columns_json": str(selected_features_path),
         "feature_matrix_plot": feature_matrix_info,
         "step13_polynomial_efficiency_correction": step13_poly_correction_info,
+        "tt_breakdown_panels": int(n_tt_breakdown),
         "rows_total": int(len(collected)),
         "rows_before_event_cut": rows_before_event_cut,
         "rows_after_event_cut": rows_after_event_cut,
@@ -2594,6 +3155,15 @@ def main() -> int:
         else 0,
         "event_count_column": event_col,
         "output_csv": str(out_csv),
+        "tt_rate_output": {
+            "selected_prefix": tt_output_prefix,
+            "columns": tt_output_cols,
+            "tt_labels": [
+                label
+                for label in _TT_BREAKDOWN_LABELS
+                if label in tt_output_cols_by_label
+            ],
+        },
     }
     out_summary = FILES_DIR / "real_collection_summary.json"
     out_summary.write_text(json.dumps(summary, indent=2), encoding="utf-8")

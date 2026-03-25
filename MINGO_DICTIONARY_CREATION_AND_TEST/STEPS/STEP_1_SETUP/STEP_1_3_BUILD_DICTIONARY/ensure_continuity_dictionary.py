@@ -37,7 +37,7 @@ if STEP_DIR.parents[1].name == "STEPS":
 else:
     PIPELINE_DIR = STEP_DIR.parents[1]
 
-DEFAULT_CONFIG = PIPELINE_DIR / "config_method.json"
+DEFAULT_CONFIG = PIPELINE_DIR / "config_step_1.1_method.json"
 DEFAULT_DICTIONARY = STEP_DIR.parent / "STEP_1_3_BUILD_DICTIONARY" / "OUTPUTS" / "FILES" / "dictionary.csv"
 DEFAULT_DATASET = STEP_DIR.parent / "STEP_1_3_BUILD_DICTIONARY" / "OUTPUTS" / "FILES" / "dataset.csv"
 DEFAULT_SELECTED_FEATURES = (
@@ -123,12 +123,12 @@ def _load_config(path: Path) -> dict:
     else:
         log.warning("Config file not found: %s", path)
 
-    plots_path = path.with_name("config_plots.json")
+    plots_path = path.with_name("config_step_1.1_plots.json")
     if plots_path != path and plots_path.exists():
         cfg = _merge_dicts(cfg, json.loads(plots_path.read_text(encoding="utf-8")))
         log.info("Loaded plot config: %s", plots_path)
 
-    runtime_path = path.with_name("config_runtime.json")
+    runtime_path = path.with_name("config_step_1.1_runtime.json")
     if runtime_path.exists():
         cfg = _merge_dicts(cfg, json.loads(runtime_path.read_text(encoding="utf-8")))
         log.info("Loaded runtime overrides: %s", runtime_path)

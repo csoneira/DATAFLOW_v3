@@ -109,7 +109,11 @@ from MASTER.common.path_config import (
     get_repo_root,
     resolve_home_path_from_config,
 )
-from MASTER.common.plot_utils import pdf_save_rasterized_page
+from MASTER.common.plot_utils import (
+    collect_saved_plot_paths,
+    ensure_plot_state,
+    pdf_save_rasterized_page,
+)
 from MASTER.common.selection_config import load_selection_for_paths, station_is_selected
 from MASTER.common.status_csv import initialize_status_row, update_status_progress
 from MASTER.common.reprocessing_utils import get_reprocessing_value
@@ -440,21 +444,8 @@ def _build_temp_pdf_path(target_path: str) -> str:
     return candidate
 
 def save_plot_figure(save_path: str, fig: mpl.figure.Figure | None = None, **savefig_kwargs) -> None:
-    """Save a figure to PNG or directly append it to the task PDF."""
-    global _direct_pdf_pages, _direct_pdf_page_count, _direct_pdf_target_path, _direct_pdf_temp_path
+    """Save a figure to disk; the task PDF is assembled later from saved plots."""
     target_fig = fig if fig is not None else plt.gcf()
-    direct_pdf_path = globals().get("save_pdf_path")
-    if globals().get("create_pdf", False) and direct_pdf_path:
-        if _direct_pdf_pages is None:
-            _direct_pdf_target_path = str(direct_pdf_path)
-            _direct_pdf_temp_path = _build_temp_pdf_path(_direct_pdf_target_path)
-            _direct_pdf_pages = PdfPages(_direct_pdf_temp_path)
-        pdf_kwargs = dict(savefig_kwargs)
-        dpi = int(pdf_kwargs.pop("dpi", 150))
-        pdf_kwargs.pop("format", None)
-        pdf_save_rasterized_page(_direct_pdf_pages, target_fig, dpi=dpi, **pdf_kwargs)
-        _direct_pdf_page_count += 1
-        return
     target_fig.savefig(save_path, **savefig_kwargs)
 
 def close_direct_pdf_writer() -> None:
@@ -481,15 +472,13 @@ def finalize_saved_plots_to_pdf() -> None:
     if not create_pdf:
         return
 
-    existing_pngs = [png for png in plot_list if os.path.exists(png)]
-    direct_pdf_page_count = int(_direct_pdf_page_count)
-
-    if direct_pdf_page_count == 0 and not existing_pngs:
+    close_direct_pdf_writer()
+    existing_pngs = collect_saved_plot_paths(plot_list, base_directories["figure_directory"])
+    if not existing_pngs:
         print(
             "Warning: Plotting is enabled for Task 3 but no plot pages were generated "
             f"for {basename_no_ext}; skipping PDF creation: {save_pdf_path}"
         )
-        close_direct_pdf_writer()
         figure_directory = base_directories["figure_directory"]
         if os.path.exists(figure_directory) and not os.listdir(figure_directory):
             os.rmdir(figure_directory)
@@ -497,30 +486,20 @@ def finalize_saved_plots_to_pdf() -> None:
 
     print(f"Creating PDF with all plots in {save_pdf_path}")
 
-    if _direct_pdf_pages is not None:
-        for png in existing_pngs:
-            img = Image.open(png)
-            fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
-            ax.imshow(img)
-            ax.axis('off')
-            pdf_save_rasterized_page(_direct_pdf_pages, fig, bbox_inches='tight')
-            plt.close(fig)
-        close_direct_pdf_writer()
-    elif existing_pngs:
-        temp_pdf_path = _build_temp_pdf_path(save_pdf_path)
-        try:
-            with PdfPages(temp_pdf_path) as pdf:
-                for png in existing_pngs:
-                    img = Image.open(png)
-                    fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
-                    ax.imshow(img)
-                    ax.axis('off')
-                    pdf_save_rasterized_page(pdf, fig, bbox_inches='tight')
-                    plt.close(fig)
-            os.replace(temp_pdf_path, save_pdf_path)
-        finally:
-            if os.path.exists(temp_pdf_path):
-                os.remove(temp_pdf_path)
+    temp_pdf_path = _build_temp_pdf_path(save_pdf_path)
+    try:
+        with PdfPages(temp_pdf_path) as pdf:
+            for png in existing_pngs:
+                img = Image.open(png)
+                fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
+                ax.imshow(img)
+                ax.axis('off')
+                pdf_save_rasterized_page(pdf, fig, bbox_inches='tight')
+                plt.close(fig)
+        os.replace(temp_pdf_path, save_pdf_path)
+    finally:
+        if os.path.exists(temp_pdf_path):
+            os.remove(temp_pdf_path)
 
     for png in existing_pngs:
         try:
@@ -534,6 +513,79 @@ def finalize_saved_plots_to_pdf() -> None:
             os.rmdir(figure_directory)
         else:
             print(f"Figure directory not empty, skipping removal: {figure_directory}")
+
+
+def _task3_quantile_axis_limits(values: pd.Series | np.ndarray, low_q: float = 1.0, high_q: float = 99.0) -> tuple[float, float] | None:
+    numeric = pd.to_numeric(pd.Series(values), errors="coerce").to_numpy(dtype=float)
+    numeric = numeric[np.isfinite(numeric)]
+    if numeric.size == 0:
+        return None
+
+    low = float(np.nanpercentile(numeric, low_q))
+    high = float(np.nanpercentile(numeric, high_q))
+    if not np.isfinite(low) or not np.isfinite(high) or low >= high:
+        low = float(np.nanmin(numeric))
+        high = float(np.nanmax(numeric))
+    if not np.isfinite(low) or not np.isfinite(high):
+        return None
+    if low >= high:
+        center = low
+        pad = max(abs(center) * 0.05, 1.0)
+        low = center - pad
+        high = center + pad
+    return low, high
+
+
+def _task3_plot_quantile_hexbin(
+    ax: mpl.axes.Axes,
+    x: pd.Series | np.ndarray,
+    y: pd.Series | np.ndarray,
+    title: str,
+    *,
+    gridsize: int = 50,
+    cmap: str = "turbo",
+    low_q: float = 1.0,
+    high_q: float = 99.0,
+) -> None:
+    x_vals = pd.to_numeric(pd.Series(x), errors="coerce").to_numpy(dtype=float)
+    y_vals = pd.to_numeric(pd.Series(y), errors="coerce").to_numpy(dtype=float)
+    valid = np.isfinite(x_vals) & np.isfinite(y_vals)
+    ax.set_title(title)
+
+    if not np.any(valid):
+        ax.text(0.5, 0.5, "No valid data", ha="center", va="center", transform=ax.transAxes)
+        return
+
+    x_valid = x_vals[valid]
+    y_valid = y_vals[valid]
+    x_limits = _task3_quantile_axis_limits(x_valid, low_q=low_q, high_q=high_q)
+    y_limits = _task3_quantile_axis_limits(y_valid, low_q=low_q, high_q=high_q)
+    if x_limits is None or y_limits is None:
+        ax.text(0.5, 0.5, "No finite data", ha="center", va="center", transform=ax.transAxes)
+        return
+
+    x_low, x_high = x_limits
+    y_low, y_high = y_limits
+    plot_mask = (
+        valid
+        & (x_vals >= x_low)
+        & (x_vals <= x_high)
+        & (y_vals >= y_low)
+        & (y_vals <= y_high)
+    )
+    if not np.any(plot_mask):
+        plot_mask = valid
+
+    ax.hexbin(
+        x_vals[plot_mask],
+        y_vals[plot_mask],
+        gridsize=gridsize,
+        cmap=cmap,
+        mincnt=1,
+        extent=(x_low, x_high, y_low, y_high),
+    )
+    ax.set_xlim(x_low, x_high)
+    ax.set_ylim(y_low, y_high)
 
 # Warning Filters
 warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
@@ -790,8 +842,7 @@ theta_right_filter = det_theta_right_filter
 phi_left_filter = det_phi_left_filter
 phi_right_filter = det_phi_right_filter
 
-fig_idx = 1
-plot_list = []
+fig_idx, plot_list = ensure_plot_state(globals())
 
 # Time dif calibration (time_dif_reference)
 time_dif_distance = 30
@@ -905,6 +956,20 @@ def ensure_global_count_keys(prefixes: Iterable[str]) -> None:
     for prefix in prefixes:
         for tt_value in TT_COUNT_VALUES:
             global_variables.setdefault(f"{prefix}_{tt_value}_count", 0)
+
+
+def refresh_global_count_metadata(df: pd.DataFrame, column_names: Iterable[str]) -> None:
+    prefixes = tuple(f"{column_name}_" for column_name in column_names)
+    for key in list(global_variables):
+        if key.endswith("_count") and any(key.startswith(prefix) for prefix in prefixes):
+            global_variables.pop(key, None)
+    for column_name in column_names:
+        if column_name not in df.columns:
+            continue
+        value_counts = df[column_name].value_counts()
+        for tt_value, count in value_counts.items():
+            tt_label = normalize_tt_label(tt_value)
+            global_variables[f"{column_name}_{tt_label}_count"] = int(count)
 
 TASK3_ACTIVE_STRIP_COLUMNS: tuple[str, ...] = tuple(f"active_strips_P{plane}" for plane in range(1, 5))
 
@@ -1880,6 +1945,17 @@ def collect_task3_plane_final_map(df: pd.DataFrame) -> dict[int, dict[str, str]]
     return plane_map
 
 
+TASK3_PLANE_KEYS: tuple[int, ...] = (1, 2, 3, 4)
+
+
+def _task3_plane_order_key(plane_key: int) -> tuple[int]:
+    return (plane_key,)
+
+
+def _task3_plane_offender_metric_key(plane_key: int) -> str:
+    return f"plane_combination_filter_offender_count_P{plane_key}"
+
+
 def apply_task3_plane_combination_filter(
     df_input: pd.DataFrame,
     *,
@@ -1901,9 +1977,9 @@ def apply_task3_plane_combination_filter(
     Apply a final Task 3 plane-combination consistency filter.
 
     Distinct plane pairs are evaluated only when both planes carry non-zero
-    `Q_sum/Q_dif/T_sum/T_dif/Y`. The filter computes semisums and
-    semidifferences for the four main plane observables and zeroes the full
-    plane blocks when any configured limit fails.
+    `Q_sum/Q_dif/T_sum/T_dif/Y`. Failed plane pairs are flagged first. Then,
+    per event, only the smallest high-impact set of offending planes is zeroed
+    so the full set of flagged plane pairs is covered.
     """
     plane_map = collect_task3_plane_final_map(df_input)
     if len(plane_map) < 2:
@@ -1923,11 +1999,19 @@ def apply_task3_plane_combination_filter(
             "failed_pair_y_dif": 0,
             "rows_affected": 0,
             "values_zeroed": 0,
+            "flagged_rows": 0,
+            "selected_offender_planes": 0,
+            "rows_with_multiple_offenders": 0,
+            "max_failed_pairs_in_row": 0,
+            "max_selected_offenders_in_row": 0,
+            "selected_offender_counts": {
+                plane_key: 0 for plane_key in TASK3_PLANE_KEYS
+            },
         }
 
     plane_fail_masks = {
         plane_key: np.zeros(len(df_input), dtype=bool)
-        for plane_key in plane_map
+        for plane_key in TASK3_PLANE_KEYS
     }
     summary = {
         "tracked_plane_count": len(plane_map),
@@ -1945,6 +2029,16 @@ def apply_task3_plane_combination_filter(
         "failed_pair_y_dif": 0,
         "rows_affected": 0,
         "values_zeroed": 0,
+        "flagged_rows": 0,
+        "selected_offender_planes": 0,
+        "rows_with_multiple_offenders": 0,
+        "max_failed_pairs_in_row": 0,
+        "max_selected_offenders_in_row": 0,
+    }
+    row_failed_edges: dict[int, list[tuple[int, int, float]]] = {}
+    offender_hit_counts = {
+        plane_key: 0
+        for plane_key in TASK3_PLANE_KEYS
     }
 
     for plane_a, plane_b in combinations(sorted(plane_map), 2):
@@ -2043,11 +2137,129 @@ def apply_task3_plane_combination_filter(
         summary["failed_pair_any"] += int(np.count_nonzero(fail_any))
 
         if np.any(fail_any):
-            plane_fail_masks[plane_a] |= fail_any
-            plane_fail_masks[plane_b] |= fail_any
+            q_sum_sum_width = max(abs(float(q_sum_sum_right) - float(q_sum_sum_left)), 1e-9)
+            q_sum_dif_scale = max(abs(float(q_sum_dif_threshold)), 1e-9)
+            q_dif_sum_scale = max(abs(float(q_dif_sum_threshold)), 1e-9)
+            q_dif_dif_scale = max(abs(float(q_dif_dif_threshold)), 1e-9)
+            t_sum_sum_width = max(abs(float(t_sum_sum_right) - float(t_sum_sum_left)), 1e-9)
+            t_sum_dif_scale = max(abs(float(t_sum_dif_threshold)), 1e-9)
+            t_dif_sum_scale = max(abs(float(t_dif_sum_threshold)), 1e-9)
+            t_dif_dif_scale = max(abs(float(t_dif_dif_threshold)), 1e-9)
+            y_sum_width = max(abs(float(y_sum_right) - float(y_sum_left)), 1e-9)
+            y_dif_scale = max(abs(float(y_dif_threshold)), 1e-9)
+
+            q_sum_sum_excess = np.maximum.reduce(
+                [
+                    np.zeros_like(pair_q_sum_sum, dtype=float),
+                    float(q_sum_sum_left) - pair_q_sum_sum,
+                    pair_q_sum_sum - float(q_sum_sum_right),
+                ]
+            ) / q_sum_sum_width
+            q_sum_dif_excess = (
+                np.maximum(np.abs(pair_q_sum_dif) - abs(float(q_sum_dif_threshold)), 0.0)
+                / q_sum_dif_scale
+            )
+            q_dif_sum_excess = (
+                np.maximum(np.abs(pair_q_dif_sum) - abs(float(q_dif_sum_threshold)), 0.0)
+                / q_dif_sum_scale
+            )
+            q_dif_dif_excess = (
+                np.maximum(np.abs(pair_q_dif_dif) - abs(float(q_dif_dif_threshold)), 0.0)
+                / q_dif_dif_scale
+            )
+            t_sum_sum_excess = np.maximum.reduce(
+                [
+                    np.zeros_like(pair_t_sum_sum, dtype=float),
+                    float(t_sum_sum_left) - pair_t_sum_sum,
+                    pair_t_sum_sum - float(t_sum_sum_right),
+                ]
+            ) / t_sum_sum_width
+            t_sum_dif_excess = (
+                np.maximum(np.abs(pair_t_sum_dif) - abs(float(t_sum_dif_threshold)), 0.0)
+                / t_sum_dif_scale
+            )
+            t_dif_sum_excess = (
+                np.maximum(np.abs(pair_t_dif_sum) - abs(float(t_dif_sum_threshold)), 0.0)
+                / t_dif_sum_scale
+            )
+            t_dif_dif_excess = (
+                np.maximum(np.abs(pair_t_dif_dif) - abs(float(t_dif_dif_threshold)), 0.0)
+                / t_dif_dif_scale
+            )
+            y_sum_excess = np.maximum.reduce(
+                [
+                    np.zeros_like(pair_y_sum, dtype=float),
+                    float(y_sum_left) - pair_y_sum,
+                    pair_y_sum - float(y_sum_right),
+                ]
+            ) / y_sum_width
+            y_dif_excess = (
+                np.maximum(np.abs(pair_y_dif) - abs(float(y_dif_threshold)), 0.0)
+                / y_dif_scale
+            )
+            pair_severity = (
+                q_sum_sum_excess
+                + q_sum_dif_excess
+                + q_dif_sum_excess
+                + q_dif_dif_excess
+                + t_sum_sum_excess
+                + t_sum_dif_excess
+                + t_dif_sum_excess
+                + t_dif_dif_excess
+                + y_sum_excess
+                + y_dif_excess
+            )
+            pair_severity = np.where(fail_any, pair_severity, 0.0)
+            pair_severity = np.where(fail_any & (pair_severity <= 0), 1.0, pair_severity)
+            for row_pos in np.flatnonzero(fail_any):
+                row_failed_edges.setdefault(int(row_pos), []).append(
+                    (plane_a, plane_b, float(pair_severity[row_pos]))
+                )
 
     any_row_affected = np.zeros(len(df_input), dtype=bool)
-    for plane_key, fail_mask in plane_fail_masks.items():
+    summary["flagged_rows"] = len(row_failed_edges)
+    for row_pos, edge_list in row_failed_edges.items():
+        uncovered_edges = list(edge_list)
+        selected_planes: list[int] = []
+        while uncovered_edges:
+            candidate_scores: dict[int, tuple[int, float]] = {}
+            for plane_a, plane_b, severity in uncovered_edges:
+                count_a, score_a = candidate_scores.get(plane_a, (0, 0.0))
+                candidate_scores[plane_a] = (count_a + 1, score_a + severity)
+                count_b, score_b = candidate_scores.get(plane_b, (0, 0.0))
+                candidate_scores[plane_b] = (count_b + 1, score_b + severity)
+
+            best_plane = min(
+                candidate_scores,
+                key=lambda plane_key: (
+                    -candidate_scores[plane_key][0],
+                    -candidate_scores[plane_key][1],
+                    *_task3_plane_order_key(plane_key),
+                ),
+            )
+            selected_planes.append(best_plane)
+            uncovered_edges = [
+                edge for edge in uncovered_edges
+                if best_plane not in edge[:2]
+            ]
+
+        summary["max_failed_pairs_in_row"] = max(
+            summary["max_failed_pairs_in_row"],
+            len(edge_list),
+        )
+        summary["max_selected_offenders_in_row"] = max(
+            summary["max_selected_offenders_in_row"],
+            len(selected_planes),
+        )
+        summary["selected_offender_planes"] += len(selected_planes)
+        if len(selected_planes) > 1:
+            summary["rows_with_multiple_offenders"] += 1
+        for plane_key in selected_planes:
+            plane_fail_masks[plane_key][row_pos] = True
+            offender_hit_counts[plane_key] += 1
+
+    for plane_key in plane_map:
+        fail_mask = plane_fail_masks[plane_key]
         if not np.any(fail_mask):
             continue
         cols = plane_map[plane_key]
@@ -2058,6 +2270,32 @@ def apply_task3_plane_combination_filter(
         df_input.loc[fail_mask, list(cols.values())] = 0
 
     summary["rows_affected"] = int(np.count_nonzero(any_row_affected))
+    top_offenders = sorted(
+        (
+            (plane_key, count)
+            for plane_key, count in offender_hit_counts.items()
+            if count > 0
+        ),
+        key=lambda item: (-item[1], *_task3_plane_order_key(item[0])),
+    )[:8]
+    if top_offenders:
+        top_offenders_str = ", ".join(
+            f"P{plane}:{count}"
+            for plane, count in top_offenders
+        )
+        print(
+            "[plane-combination-offenders] "
+            f"flagged_rows={summary['flagged_rows']} "
+            f"selected_offenders={summary['selected_offender_planes']} "
+            f"multi_offender_rows={summary['rows_with_multiple_offenders']} "
+            f"max_failed_pairs_in_row={summary['max_failed_pairs_in_row']} "
+            f"top={top_offenders_str}"
+        )
+
+    summary["selected_offender_counts"] = {
+        plane_key: int(offender_hit_counts.get(plane_key, 0))
+        for plane_key in TASK3_PLANE_KEYS
+    }
     return summary
 
 
@@ -2770,8 +3008,7 @@ theta_right_filter = det_theta_right_filter
 phi_left_filter = det_phi_left_filter
 phi_right_filter = det_phi_right_filter
 
-fig_idx = 1
-plot_list = []
+fig_idx, plot_list = ensure_plot_state(globals())
 
 # Time dif calibration (time_dif_reference)
 time_dif_distance = 30
@@ -3222,8 +3459,7 @@ theta_right_filter = det_theta_right_filter
 phi_left_filter = det_phi_left_filter
 phi_right_filter = det_phi_right_filter
 
-fig_idx = 1
-plot_list = []
+fig_idx, plot_list = ensure_plot_state(globals())
 
 # Time dif calibration (time_dif_reference)
 time_dif_distance = 30
@@ -3803,11 +4039,6 @@ else:
         .fillna(0)
         .astype(int)
     )
-cal_tt_counts_initial = working_df["cal_tt"].value_counts()
-for tt_value, count in cal_tt_counts_initial.items():
-    tt_label = normalize_tt_label(tt_value)
-    global_variables[f"cal_tt_{tt_label}_count"] = int(count)
-
 original_number_of_events = len(working_df)
 print(f"Original number of events in the dataframe: {original_number_of_events}")
 if status_execution_date is not None:
@@ -5239,7 +5470,7 @@ if task3_plot_enabled("strip_variable_pairgrid"):
 
             base_idx = (strip - 1) * 6
 
-            combinations = [
+            plot_pairs = [
                 (t_sum,  t_diff, f'{t_sum_col} vs {t_dif_col}'),
                 (t_sum,  q_sum,  f'{t_sum_col} vs {q_sum_col}'),
                 (t_diff, q_sum,  f'{t_dif_col} vs {q_sum_col}'),
@@ -5248,7 +5479,7 @@ if task3_plot_enabled("strip_variable_pairgrid"):
                 (q_sum,  q_diff, f'{q_sum_col} vs {q_dif_col}')
             ]
 
-            for offset, (x, yv, title) in enumerate(combinations):
+            for offset, (x, yv, title) in enumerate(plot_pairs):
                 ax = axes[base_idx + offset]
                 ax.hexbin(x, yv, gridsize=50, cmap='turbo')
                 # ax.scatter(x, yv)
@@ -5297,7 +5528,7 @@ if self_trigger:
 
                 base_idx = (strip - 1) * 6
 
-                combinations = [
+                plot_pairs = [
                     (t_sum,  t_diff, f'{t_sum_col} vs {t_dif_col}'),
                     (t_sum,  q_sum,  f'{t_sum_col} vs {q_sum_col}'),
                     (t_diff, q_sum,  f'{t_dif_col} vs {q_sum_col}'),
@@ -5306,7 +5537,7 @@ if self_trigger:
                     (q_sum,  q_diff, f'{q_sum_col} vs {q_dif_col}')
                 ]
 
-                for offset, (x, yv, title) in enumerate(combinations):
+                for offset, (x, yv, title) in enumerate(plot_pairs):
                     ax = axes[base_idx + offset]
                     ax.hexbin(x, yv, gridsize=50, cmap='turbo')
                     # ax.scatter(x, yv)
@@ -5334,50 +5565,50 @@ print("----------------------------------------------------------------------")
 print("----------------- Setting the variables of each RPC ------------------")
 print("----------------------------------------------------------------------")
 
-# Prepare containers for final results
-final_columns = {}
+# Build the raw per-plane observables first. The filtering/zeroing path is
+# applied immediately afterwards, one variable family at a time.
+plane_raw_values: dict[int, dict[str, np.ndarray]] = {}
+final_columns: dict[str, np.ndarray] = {}
 
 for i_plane in range(1, 5):
-    # Column names
-    T_sum_cols = [f'T{i_plane}_T_sum_{i+1}' for i in range(4)]
-    T_dif_cols = [f'T{i_plane}_T_dif_{i+1}' for i in range(4)]
-    Q_sum_cols = [f'Q{i_plane}_Q_sum_{i+1}' for i in range(4)]
-    Q_dif_cols = [f'Q{i_plane}_Q_dif_{i+1}' for i in range(4)]
+    t_sum_cols = [f'T{i_plane}_T_sum_{i+1}' for i in range(4)]
+    t_dif_cols = [f'T{i_plane}_T_dif_{i+1}' for i in range(4)]
+    q_sum_cols = [f'Q{i_plane}_Q_sum_{i+1}' for i in range(4)]
+    q_dif_cols = [f'Q{i_plane}_Q_dif_{i+1}' for i in range(4)]
 
-    # Extract data
-    T_sums = working_df[T_sum_cols].astype(float).fillna(0).values
-    T_difs = working_df[T_dif_cols].astype(float).fillna(0).values
-    Q_sums = working_df[Q_sum_cols].astype(float).fillna(0).values
-    Q_difs = working_df[Q_dif_cols].astype(float).fillna(0).values
+    t_sums = working_df[t_sum_cols].astype(float).fillna(0).to_numpy(copy=False)
+    t_difs = working_df[t_dif_cols].astype(float).fillna(0).to_numpy(copy=False)
+    q_sums = working_df[q_sum_cols].astype(float).fillna(0).to_numpy(copy=False)
+    q_difs = working_df[q_dif_cols].astype(float).fillna(0).to_numpy(copy=False)
 
-    # Decode binary topology
-    active_mask = np.array([
-        list(map(int, s)) for s in working_df[f'active_strips_P{i_plane}']
-    ])  # shape (N, 4)
-
-    # Compute strip activation count
+    active_mask = np.array(
+        [list(map(int, s)) for s in working_df[f'active_strips_P{i_plane}']],
+        dtype=float,
+    )
     n_active = active_mask.sum(axis=1)
     n_active_safe = np.where(n_active == 0, 1, n_active)
 
-    # Apply mask and compute means
-    T_sum_masked = T_sums * active_mask
-    T_dif_masked = T_difs * active_mask
-    Q_dif_masked = Q_difs * active_mask
+    t_sum_final = (t_sums * active_mask).sum(axis=1) / n_active_safe
+    t_dif_final = (t_difs * active_mask).sum(axis=1) / n_active_safe
+    q_sum_final = (q_sums * active_mask).sum(axis=1)
+    q_dif_final = (q_difs * active_mask).sum(axis=1)
 
-    T_sum_final = T_sum_masked.sum(axis=1) / n_active_safe
-    T_dif_final = T_dif_masked.sum(axis=1) / n_active_safe
+    t_sum_final[n_active == 0] = 0
+    t_dif_final[n_active == 0] = 0
+    q_sum_final[n_active == 0] = 0
+    q_dif_final[n_active == 0] = 0
 
-    # Enforce zero where no active strips
-    T_sum_final[n_active == 0] = 0
-    T_dif_final[n_active == 0] = 0
+    plane_raw_values[i_plane] = {
+        "T_sum": t_sum_final.copy(),
+        "T_dif": t_dif_final.copy(),
+        "Q_sum": q_sum_final.copy(),
+        "Q_dif": q_dif_final.copy(),
+    }
+    final_columns[f'P{i_plane}_T_sum_final'] = t_sum_final
+    final_columns[f'P{i_plane}_T_dif_final'] = t_dif_final
+    final_columns[f'P{i_plane}_Q_sum_final'] = q_sum_final
+    final_columns[f'P{i_plane}_Q_dif_final'] = q_dif_final
 
-    # Store final values in dictionary
-    final_columns[f'P{i_plane}_T_sum_final'] = T_sum_final
-    final_columns[f'P{i_plane}_T_dif_final'] = T_dif_final
-    final_columns[f'P{i_plane}_Q_sum_final'] = (Q_sums * active_mask).sum(axis=1)
-    final_columns[f'P{i_plane}_Q_dif_final'] = Q_dif_masked.sum(axis=1)
-
-# Concatenate all new final columns at once
 working_df = pd.concat([working_df, pd.DataFrame(final_columns, index=working_df.index)], axis=1)
 
 if task3_plot_enabled("rpc_variables_hexbin"):
@@ -5405,7 +5636,7 @@ if task3_plot_enabled("rpc_variables_hexbin"):
 
         base_idx = (i_plane - 1) * 10  # 10 plots per plane
 
-        combinations = [
+        plot_pairs = [
             (t_sum,  t_diff, f'{t_sum_col} vs {t_dif_col}'),
             (t_sum,  q_sum,  f'{t_sum_col} vs {q_sum_col}'),
             (t_sum,  y,      f'{t_sum_col} vs {y_col}'),
@@ -5418,10 +5649,9 @@ if task3_plot_enabled("rpc_variables_hexbin"):
             (q_sum,  q_diff, f'{q_sum_col} vs {q_dif_col}')
         ]
 
-        for offset, (x, yv, title) in enumerate(combinations):
+        for offset, (x, yv, title) in enumerate(plot_pairs):
             ax = axes[base_idx + offset]
-            ax.hexbin(x, yv, gridsize=50, cmap='turbo')
-            ax.set_title(title)
+            _task3_plot_quantile_hexbin(ax, x, yv, title, gridsize=50, cmap="turbo")
 
     plt.tight_layout()
     plt.subplots_adjust(top=0.92)
@@ -5464,7 +5694,7 @@ if task3_plot_enabled("rpc_variables_hexbin_low_charge"):
 
         base_idx = (i_plane - 1) * 10  # 10 plots per plane
 
-        combinations = [
+        plot_pairs = [
             (t_sum,  t_diff, f'{t_sum_col} vs {t_dif_col}'),
             (t_sum,  q_sum,  f'{t_sum_col} vs {q_sum_col}'),
             (t_sum,  y,      f'{t_sum_col} vs {y_col}'),
@@ -5477,10 +5707,9 @@ if task3_plot_enabled("rpc_variables_hexbin_low_charge"):
             (q_sum,  q_diff, f'{q_sum_col} vs {q_dif_col}')
         ]
 
-        for offset, (x, yv, title) in enumerate(combinations):
+        for offset, (x, yv, title) in enumerate(plot_pairs):
             ax = axes[base_idx + offset]
-            ax.hexbin(x, yv, gridsize=50, cmap='turbo')
-            ax.set_title(title)
+            _task3_plot_quantile_hexbin(ax, x, yv, title, gridsize=50, cmap="turbo")
 
     plt.tight_layout()
     plt.subplots_adjust(top=0.92)
@@ -5519,8 +5748,11 @@ vals_normalized[has_signal] = vals_normalized[has_signal] - baseline_vals[has_si
 vals_normalized[~nonzero_mask] = 0
 vals_normalized[~has_signal] = 0
 working_df[cols] = vals_normalized
+for i_plane in range(1, 5):
+    plane_raw_values[i_plane]["T_sum"] = vals_normalized[:, i_plane - 1].copy()
 
-# Helper to track how many events remain non-zero for key variables around Filter 6
+# Legacy metadata key retained for compatibility: it now tracks the new
+# sequential per-plane filtering cascade instead of the old all-at-once Filter 6.
 def record_filter6_counts(df: pd.DataFrame, tag: str) -> None:
     for i_plane in range(1, 5):
         columns = {
@@ -5564,7 +5796,7 @@ if filter6_cols and task3_any_plot_enabled(
             t_sum_cols,
             debug_thresholds,
             title=(
-                f"Task 3 pre-filter6: T_sum_RPC_left/right "
+                f"Task 3 pre-plane T_sum filter: T_sum_RPC_left/right "
                 f"[tunable] (station {station})"
             ),
             out_dir=debug_plot_directory,
@@ -5579,7 +5811,7 @@ if filter6_cols and task3_any_plot_enabled(
             t_dif_cols,
             debug_thresholds,
             title=(
-                f"Task 3 pre-filter6: T_dif_RPC_left/right "
+                f"Task 3 pre-plane T_dif filter: T_dif_RPC_left/right "
                 f"[tunable] (station {station})"
             ),
             out_dir=debug_plot_directory,
@@ -5594,7 +5826,7 @@ if filter6_cols and task3_any_plot_enabled(
             q_sum_cols,
             debug_thresholds,
             title=(
-                f"Task 3 pre-filter6: Q_RPC_left/right "
+                f"Task 3 pre-plane Q_sum filter: Q_RPC_left/right "
                 f"[tunable] (station {station})"
             ),
             out_dir=debug_plot_directory,
@@ -5609,7 +5841,7 @@ if filter6_cols and task3_any_plot_enabled(
             q_dif_cols,
             debug_thresholds,
             title=(
-                f"Task 3 pre-filter6: Q_dif_RPC_left/right "
+                f"Task 3 pre-plane Q_dif filter: Q_dif_RPC_left/right "
                 f"[tunable] (station {station})"
             ),
             out_dir=debug_plot_directory,
@@ -5623,7 +5855,7 @@ if filter6_cols and task3_any_plot_enabled(
             working_df,
             y_cols,
             debug_thresholds,
-            title=f"Task 3 pre-filter6: Y_RPC_left/right [tunable] (station {station})",
+            title=f"Task 3 pre-plane Y filter: Y_RPC_left/right [tunable] (station {station})",
             out_dir=debug_plot_directory,
             fig_idx=debug_fig_idx,
         )
@@ -5632,38 +5864,94 @@ record_filter6_counts(working_df, "before_filter6")
 
 _prof["s_tsum_ref_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
-print("--------------------- Filter 6: calibrated data ----------------------")
-for col in working_df.columns:
-    if 'T_sum_final' in col:
-        working_df[col] = np.where((working_df[col] < T_sum_RPC_left) | (working_df[col] > T_sum_RPC_right), 0, working_df[col])
-    if 'T_dif_final' in col:
-        working_df[col] = np.where((working_df[col] < T_dif_RPC_left) | (working_df[col] > T_dif_RPC_right), 0, working_df[col])
-    if 'Q_sum_final' in col:
-        working_df[col] = np.where((working_df[col] < Q_RPC_left) | (working_df[col] > Q_RPC_right), 0, working_df[col])
-    if 'Q_dif_final' in col:
-        working_df[col] = np.where((working_df[col] < Q_dif_RPC_left) | (working_df[col] > Q_dif_RPC_right), 0, working_df[col])
-    if 'Y_' in col:
-        working_df[col] = np.where((working_df[col] < Y_RPC_left) | (working_df[col] > Y_RPC_right), 0, working_df[col])
+print("----------- Sequential per-plane variable filtering ------------------")
 
-total_events = len(working_df)
+plane_dead_masks: dict[int, np.ndarray] = {
+    i_plane: np.zeros(len(working_df), dtype=bool)
+    for i_plane in range(1, 5)
+}
 
-for i_plane in range(1, 5):
-    y_col      = f'P{i_plane}_Y_final'
-    t_sum_col  = f'P{i_plane}_T_sum_final'
-    t_dif_col = f'P{i_plane}_T_dif_final'
-    q_sum_col  = f'P{i_plane}_Q_sum_final'
-    q_dif_col = f'P{i_plane}_Q_dif_final'
+def _task3_plane_block_columns(i_plane: int) -> list[str]:
+    return [
+        col for col in (
+            f"P{i_plane}_T_sum_final",
+            f"P{i_plane}_T_dif_final",
+            f"P{i_plane}_Q_dif_final",
+            f"P{i_plane}_Q_sum_final",
+            f"P{i_plane}_Y_final",
+        )
+        if col in working_df.columns
+    ]
 
-    cols = [y_col, t_sum_col, t_dif_col, q_sum_col, q_dif_col]
 
-    # Identify affected rows
-    mask = (working_df[cols] == 0).any(axis=1)
-    num_affected = mask.sum()
+def _task3_zero_plane_block(i_plane: int) -> None:
+    dead_mask = plane_dead_masks[i_plane]
+    if not np.any(dead_mask):
+        return
+    plane_cols = _task3_plane_block_columns(i_plane)
+    if plane_cols:
+        working_df.loc[dead_mask, plane_cols] = 0
 
-    print(f"Plane {i_plane}: {num_affected} out of {total_events} events affected ({(num_affected / total_events) * 100:.2f}%)")
 
-    # Apply zeroing
-    working_df.loc[mask, cols] = 0
+def _task3_apply_plane_stage(
+    *,
+    raw_key: str | None,
+    column_suffix: str,
+    left: float,
+    right: float,
+) -> None:
+    total_events = len(working_df)
+    for i_plane in range(1, 5):
+        col = f"P{i_plane}_{column_suffix}"
+        if raw_key is not None:
+            values = np.asarray(plane_raw_values[i_plane][raw_key], dtype=float).copy()
+        else:
+            values = pd.to_numeric(working_df[col], errors="coerce").fillna(0).to_numpy(dtype=float)
+
+        values[plane_dead_masks[i_plane]] = 0
+        out_of_range = (values != 0) & ((values < left) | (values > right))
+        values[out_of_range] = 0
+        working_df.loc[:, col] = values
+
+        plane_dead_masks[i_plane] |= (values == 0)
+        affected = int(np.count_nonzero(plane_dead_masks[i_plane]))
+        print(
+            f"Plane {i_plane}, {column_suffix}: {affected} out of {total_events} "
+            f"events affected ({(affected / total_events) * 100:.2f}%)"
+        )
+        _task3_zero_plane_block(i_plane)
+
+
+_task3_apply_plane_stage(
+    raw_key="T_sum",
+    column_suffix="T_sum_final",
+    left=T_sum_RPC_left,
+    right=T_sum_RPC_right,
+)
+_task3_apply_plane_stage(
+    raw_key="T_dif",
+    column_suffix="T_dif_final",
+    left=T_dif_RPC_left,
+    right=T_dif_RPC_right,
+)
+_task3_apply_plane_stage(
+    raw_key="Q_dif",
+    column_suffix="Q_dif_final",
+    left=Q_dif_RPC_left,
+    right=Q_dif_RPC_right,
+)
+_task3_apply_plane_stage(
+    raw_key="Q_sum",
+    column_suffix="Q_sum_final",
+    left=Q_RPC_left,
+    right=Q_RPC_right,
+)
+_task3_apply_plane_stage(
+    raw_key=None,
+    column_suffix="Y_final",
+    left=Y_RPC_left,
+    right=Y_RPC_right,
+)
 
 if filter6_cols and filter6_before_zero_mask is not None:
     filter6_after_zero_mask = (working_df[filter6_cols] == 0).any(axis=1)
@@ -5675,6 +5963,8 @@ if filter6_cols and filter6_before_zero_mask is not None:
     )
 
 record_filter6_counts(working_df, "after_filter6")
+_prof["s_filter6_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 
 print("----------------------------------------------------------------------")
 print("-------- Final plane-combination consistency filter -------------------")
@@ -5794,8 +6084,27 @@ print(
     "[plane-combination-filter] "
     f"valid_pair_obs={plane_combination_summary['valid_pair_observations']} "
     f"failed_any={plane_combination_summary['failed_pair_any']} "
-    f"rows_affected={plane_combination_summary['rows_affected']}"
+    f"rows_affected={plane_combination_summary['rows_affected']} "
+    f"flagged_rows={plane_combination_summary['flagged_rows']} "
+    f"selected_offenders={plane_combination_summary['selected_offender_planes']}"
 )
+global_variables["plane_combination_filter_flagged_rows"] = int(
+    plane_combination_summary["flagged_rows"]
+)
+global_variables["plane_combination_filter_selected_offender_planes"] = int(
+    plane_combination_summary["selected_offender_planes"]
+)
+global_variables["plane_combination_filter_rows_with_multiple_offenders"] = int(
+    plane_combination_summary["rows_with_multiple_offenders"]
+)
+global_variables["plane_combination_filter_max_failed_pairs_in_row"] = int(
+    plane_combination_summary["max_failed_pairs_in_row"]
+)
+global_variables["plane_combination_filter_max_selected_offenders_in_row"] = int(
+    plane_combination_summary["max_selected_offenders_in_row"]
+)
+for plane_key, offender_count in plane_combination_summary["selected_offender_counts"].items():
+    global_variables[_task3_plane_offender_metric_key(plane_key)] = int(offender_count)
 if _plot_plane_combination_filter_by_tt:
     plane_combination_hist_after = collect_task3_plane_combination_histogram_payload(
         working_df,
@@ -5824,6 +6133,8 @@ if _plot_plane_combination_filter_by_tt:
         plot_list=plot_list,
         limits_by_observable=plane_combination_limits,
     )
+_prof["s_plane_combination_filter_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 
 # ----------------------------------------------------------------------------------------------------------------
 # if stratos_save and station == 2:
@@ -5876,7 +6187,7 @@ if task3_plot_enabled("filtered_rpc_variables_hexbin"):
 
         base_idx = (i_plane - 1) * 10  # 10 plots per plane
 
-        combinations = [
+        plot_pairs = [
             (t_sum,  t_diff, f'{t_sum_col} vs {t_dif_col}'),
             (t_sum,  q_sum,  f'{t_sum_col} vs {q_sum_col}'),
             (t_sum,  y,      f'{t_sum_col} vs {y_col}'),
@@ -5889,10 +6200,9 @@ if task3_plot_enabled("filtered_rpc_variables_hexbin"):
             (q_sum,  q_diff, f'{q_sum_col} vs {q_dif_col}')
         ]
 
-        for offset, (x, yv, title) in enumerate(combinations):
+        for offset, (x, yv, title) in enumerate(plot_pairs):
             ax = axes[base_idx + offset]
-            ax.hexbin(x, yv, gridsize=50, cmap='turbo')
-            ax.set_title(title)
+            _task3_plot_quantile_hexbin(ax, x, yv, title, gridsize=50, cmap="turbo")
 
     plt.tight_layout()
     plt.subplots_adjust(top=0.92)
@@ -5906,81 +6216,6 @@ if task3_plot_enabled("filtered_rpc_variables_hexbin"):
         save_plot_figure(save_fig_path, format='png')
     if show_plots: plt.show()
     plt.close()
-
-# legacy pairgrid prototype kept for reference
-
-#     for i_plane in range(1, 5):
-#         # Column names
-#         t_sum_col  = f'P{i_plane}_T_sum_final'
-#         t_dif_col = f'P{i_plane}_T_dif_final'
-#         q_sum_col  = f'P{i_plane}_Q_sum_final'
-#         q_dif_col = f'P{i_plane}_Q_dif_final'
-#         y_col      = f'P{i_plane}_Y_final'
-
-#         cols = [t_sum_col, t_dif_col, q_sum_col, q_dif_col, y_col]
-
-#         # Keep only valid rows (non-zero) and enforce q_sum < 150
-#         valid_rows = (working_df[cols]
-#                       .replace(0, np.nan)
-#                       .dropna())
-#         cond = valid_rows[q_sum_col] < 150
-#         fr = valid_rows.loc[cond, cols]  # filtered rows, ordered as in cols
-
-#         # Prepare data as a dict: {col_name: Series}
-#         data = {c: fr[c] for c in cols}
-#         n = len(cols)
-
-#         # One figure per plane
-#         fig, axes = plt.subplots(n, n, figsize=(4*n, 4*n), squeeze=False)
-
-#         for i in range(n):
-#             for j in range(n):
-#                 ax = axes[i, j]
-
-#                 if i == j:
-#                     # Diagonal: histogram of the variable
-#                     ax.hist(data[cols[i]].dropna(), bins='auto')
-#                     ax.set_ylabel('Count' if j == 0 else '')
-#                 elif i > j:
-#                     # Lower triangle: hexbin of (x=cols[j], y=cols[i])
-#                     x = data[cols[j]]
-#                     yv = data[cols[i]]
-#                     hb = ax.hexbin(x, yv, gridsize=50, cmap='turbo')
-#                 else:
-#                     # Upper triangle: blank
-#                     ax.axis('off')
-
-#                 # Axis labels only on outer edges to reduce clutter
-#                 if i == n - 1:  # bottom row
-#                     ax.set_xlabel(cols[j])
-#                 else:
-#                     ax.set_xlabel('')
-#                 if j == 0:      # left column
-#                     ax.set_ylabel(cols[i] if i != j else ax.get_ylabel())
-#                 else:
-#                     if i != j:  # avoid clearing "Count" set above on diagonal
-#                         ax.set_ylabel('')
-
-#         # Put column headers on the (blank) top row to identify columns
-#         for j in range(n):
-#             axes[0, j].set_title(cols[j], fontsize=12)
-
-#         plt.tight_layout()
-#         plt.subplots_adjust(top=0.93)
-#         plt.suptitle(f'P{i_plane}: Pairwise Hexbins (lower) + Histograms (diagonal), filtered (Q_sum < 150)', fontsize=16)
-
-#         if save_plots:
-#             name_of_file = f'P{i_plane}_pairgrid_hexbin_hist_filtered'
-#             final_filename = f'{fig_idx}_{name_of_file}.png'
-#             fig_idx += 1
-#             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-#             plot_list.append(save_fig_path)
-#             save_plot_figure(save_fig_path, format='png', dpi=150)
-
-#         if show_plots:
-#             plt.show()
-
-#         plt.close(fig)
 
 # Path to save the cleaned dataframe
 # Create output directory if it does not exist.
@@ -6068,8 +6303,8 @@ list_tt_columns = {
 }
 working_df = compute_tt(working_df, "list_tt", list_tt_columns)
 task3_plane_activation_initial = store_task3_plane_activation_snapshot(
-    activation_meta=activation_metadata,
-    scalar_meta=global_variables,
+    activation_meta={},
+    scalar_meta={},
     df=working_df,
     snapshot_label="initial",
     tt_series=pd.to_numeric(working_df["list_tt"], errors="coerce"),
@@ -6097,16 +6332,10 @@ working_df.loc[:, "cal_to_list_tt"] = (
     + "_"
     + pd.to_numeric(working_df["list_tt"], errors="coerce").fillna(0).astype(int).astype(str)
 )
-
-list_tt_counts = working_df["list_tt"].value_counts()
-for tt_value, count in list_tt_counts.items():
-    tt_label = normalize_tt_label(tt_value)
-    global_variables[f"list_tt_{tt_label}_count"] = int(count)
-
-cal_to_list_counts = working_df["cal_to_list_tt"].value_counts()
-for combo_value, count in cal_to_list_counts.items():
-    combo_label = normalize_tt_label(combo_value)
-    global_variables[f"cal_to_list_tt_{combo_label}_count"] = int(count)
+refresh_global_count_metadata(
+    working_df,
+    ("cal_tt", "list_tt", "cal_to_list_tt"),
+)
 
 task3_plane_activation_filtered = store_task3_plane_activation_snapshot(
     activation_meta=activation_metadata,
@@ -8410,7 +8639,7 @@ if VERBOSE:
 data_purity = final_number_of_events / original_number_of_events * 100
 
 # End of the execution time
-_prof["s_filter6_s"] = round(time.perf_counter() - _t_sec, 2)
+_prof["s_finalize_s"] = round(time.perf_counter() - _t_sec, 2)
 end_time_execution = datetime.now()
 execution_time = end_time_execution - start_execution_time_counting
 # In minutes

@@ -4,7 +4,7 @@ selection:
   date_ranges:
     - start: 2024-09-27
       end: 2024-10-01
-complete_reanalysis: true
+complete_reanalysis: false
 force_replacement: true
 article_format: false
 # create_plots options: null | debug | usual | essential | all
@@ -13,3 +13,5 @@ create_plots: null
 limit_number: null
 EXPECTED_COLUMNS_config: 71
 time_window_filtering: false
+channel_combination_plot_top_n: 20
+channel_combination_plot_include_same_strip_pairs: false

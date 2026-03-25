@@ -20,6 +20,7 @@ import fnmatch
 import json
 import logging
 import re
+import sys
 from pathlib import Path
 
 import matplotlib
@@ -37,7 +38,7 @@ if STEP_DIR.parents[1].name == "STEPS":
 else:
     PIPELINE_DIR = STEP_DIR.parents[1]
 
-DEFAULT_CONFIG = PIPELINE_DIR / "config_method.json"
+DEFAULT_CONFIG = PIPELINE_DIR / "config_step_1.1_method.json"
 DEFAULT_DICTIONARY = STEP_DIR.parent / "STEP_1_3_BUILD_DICTIONARY" / "OUTPUTS" / "FILES" / "dictionary.csv"
 DEFAULT_DATASET = STEP_DIR.parent / "STEP_1_3_BUILD_DICTIONARY" / "OUTPUTS" / "FILES" / "dataset.csv"
 DEFAULT_SELECTED_FEATURES = (
@@ -46,6 +47,8 @@ DEFAULT_SELECTED_FEATURES = (
 DEFAULT_PARAMETER_SPACE = (
     STEP_DIR.parent / "STEP_1_1_COLLECT_DATA" / "OUTPUTS" / "FILES" / "parameter_space_columns.json"
 )
+STEP12_TRANSFORM_DIR = STEP_DIR.parent / "STEP_1_2_TRANSFORM_FEATURE_SPACE"
+STEP2_INFERENCE_DIR = PIPELINE_DIR / "STEPS" / "STEP_2_INFERENCE"
 
 FILES_DIR = STEP_DIR / "OUTPUTS" / "FILES"
 PLOTS_DIR = STEP_DIR / "OUTPUTS" / "PLOTS"
@@ -64,8 +67,43 @@ SHOWCASE_NEIGHBORS = 80
 HIST_RATE_COLUMN_RE = re.compile(r"^events_per_second_(?P<bin>\d+)_rate_hz$")
 RATE_HIST_PLACEHOLDER_COL = "__RATE_HISTOGRAM_SUPPRESSED__"
 RATE_HIST_PLACEHOLDER_LABEL = "events_per_second_<bin>_rate_hz [suppressed]"
+EFF_PLACEHOLDER_COL = "__EFFICIENCY_VECTORS_SUPPRESSED__"
+EFF_PLACEHOLDER_LABEL = "efficiency_vector_<axis>_bin_*_eff [suppressed]"
 PARAM_TO_FEATURE_BALL_RADIUS_FRACTION = 0.25
 PARAM_TO_FEATURE_RANDOM_SEED = 1234
+
+
+def _feature_placeholder_label(col: str) -> str | None:
+    if col == RATE_HIST_PLACEHOLDER_COL:
+        return RATE_HIST_PLACEHOLDER_LABEL
+    if col == EFF_PLACEHOLDER_COL:
+        return EFF_PLACEHOLDER_LABEL
+    return None
+
+
+def _feature_placeholder_message(
+    *,
+    x_col: str,
+    y_col: str,
+    rate_hist_count: int,
+    efficiency_vector_count: int,
+) -> str:
+    has_rate = x_col == RATE_HIST_PLACEHOLDER_COL or y_col == RATE_HIST_PLACEHOLDER_COL
+    has_eff = x_col == EFF_PLACEHOLDER_COL or y_col == EFF_PLACEHOLDER_COL
+    if has_rate and has_eff:
+        return (
+            "Suppressed grouped blocks\n"
+            f"(rate histogram: {rate_hist_count}, efficiency vectors: {efficiency_vector_count})"
+        )
+    if has_rate:
+        if rate_hist_count > 0:
+            return f"Rate-histogram block suppressed\n({rate_hist_count} columns)"
+        return "Rate-histogram block\nsuppressed for display"
+    if has_eff:
+        if efficiency_vector_count > 0:
+            return f"Efficiency-vector block suppressed\n({efficiency_vector_count} columns)"
+        return "Efficiency-vector block\nsuppressed for display"
+    return "Suppressed grouped block"
 
 
 def _save_figure(fig: plt.Figure, path: Path, **kwargs) -> None:
@@ -93,6 +131,29 @@ _PLOT_EXTENSIONS = {
 
 logging.basicConfig(format="[%(levelname)s] STEP_1.4 - %(message)s", level=logging.INFO)
 log = logging.getLogger("STEP_1.4")
+
+if str(STEP12_TRANSFORM_DIR) not in sys.path:
+    sys.path.insert(0, str(STEP12_TRANSFORM_DIR))
+try:
+    from transform_feature_space import (  # noqa: E402
+        _resolve_feature_matrix_plot_columns as _step12_resolve_feature_matrix_plot_columns,
+        _resolve_feature_space_plot_suppression_patterns as _step12_resolve_feature_space_plot_suppression_patterns,
+    )
+except Exception as exc:  # pragma: no cover - import failure is fatal
+    raise RuntimeError(
+        f"Could not import STEP 1.2 transform helpers from {STEP12_TRANSFORM_DIR}: {exc}"
+    ) from exc
+
+if str(STEP2_INFERENCE_DIR) not in sys.path:
+    sys.path.insert(0, str(STEP2_INFERENCE_DIR))
+try:
+    from estimate_parameters import (  # noqa: E402
+        _filter_efficiency_vector_payloads,
+        _prepare_efficiency_vector_group_payloads,
+        load_distance_definition,
+    )
+except Exception as exc:  # pragma: no cover - import failure is fatal
+    raise RuntimeError(f"Could not import estimate_parameters from {STEP2_INFERENCE_DIR}: {exc}") from exc
 
 
 def _clear_plots_dir() -> None:
@@ -123,12 +184,12 @@ def _load_config(path: Path) -> dict:
     else:
         log.warning("Config file not found: %s", path)
 
-    plots_path = path.with_name("config_plots.json")
+    plots_path = path.with_name("config_step_1.1_plots.json")
     if plots_path != path and plots_path.exists():
         cfg = _merge_dicts(cfg, json.loads(plots_path.read_text(encoding="utf-8")))
         log.info("Loaded plot config: %s", plots_path)
 
-    runtime_path = path.with_name("config_runtime.json")
+    runtime_path = path.with_name("config_step_1.1_runtime.json")
     if runtime_path.exists():
         cfg = _merge_dicts(cfg, json.loads(runtime_path.read_text(encoding="utf-8")))
         log.info("Loaded runtime overrides: %s", runtime_path)
@@ -300,13 +361,14 @@ def _resolve_feature_plot_columns(
     feature_cols: list[str],
     *,
     include_rate_histogram: bool,
-) -> tuple[list[str], list[str], bool]:
-    base = [c for c in feature_cols if isinstance(c, str) and c.strip()]
-    hist_cols = [c for c in base if _is_rate_histogram_feature(c)]
-    non_hist_cols = [c for c in base if c not in set(hist_cols)]
-    if include_rate_histogram or not hist_cols:
-        return non_hist_cols + hist_cols, hist_cols, False
-    return non_hist_cols + [RATE_HIST_PLACEHOLDER_COL], hist_cols, True
+    suppressed_patterns: Sequence[str] | None = None,
+) -> tuple[list[str], list[str], list[str], bool, bool]:
+    return _step12_resolve_feature_matrix_plot_columns(
+        feature_cols,
+        include_rate_histogram=include_rate_histogram,
+        include_efficiency_vectors=True,
+        suppressed_patterns=suppressed_patterns,
+    )
 
 
 def _matrix_cell_size(n_dim: int) -> float:
@@ -324,6 +386,7 @@ def _prepare_numeric_features(
     feature_cols: list[str],
     *,
     param_cols: list[str],
+    min_feature_non_null_fraction: float = MIN_FEATURE_NON_NULL_FRACTION,
 ) -> tuple[pd.DataFrame, np.ndarray, np.ndarray, np.ndarray, list[str]]:
     """Extract raw numeric feature and parameter matrices from dictionary.
 
@@ -332,11 +395,12 @@ def _prepare_numeric_features(
     """
     feat_num = dictionary[feature_cols].apply(pd.to_numeric, errors="coerce")
     non_null_frac = feat_num.notna().mean(axis=0)
-    kept_feature_cols = [c for c in feature_cols if float(non_null_frac.get(c, 0.0)) >= MIN_FEATURE_NON_NULL_FRACTION]
+    threshold = max(float(min_feature_non_null_fraction), 0.0)
+    kept_feature_cols = [c for c in feature_cols if float(non_null_frac.get(c, 0.0)) >= threshold]
 
     if not kept_feature_cols:
         raise RuntimeError(
-            f"No continuity feature columns remain after min_non_null_fraction={MIN_FEATURE_NON_NULL_FRACTION:.2f}."
+            f"No continuity feature columns remain after min_non_null_fraction={threshold:.2f}."
         )
 
     feat_num = dictionary[kept_feature_cols].apply(pd.to_numeric, errors="coerce")
@@ -565,6 +629,409 @@ def _plot_spread_vs_feature_distance(flags: pd.DataFrame, *, param_cols: list[st
     plt.close(fig)
 
 
+def _resolve_grouped_feature_blocks(
+    df: pd.DataFrame,
+    *,
+    selected_feature_cols: list[str],
+) -> tuple[dict[str, object], list[str], list[dict[str, object]], list[str]]:
+    dd = load_distance_definition(selected_feature_cols) if selected_feature_cols else {"available": False}
+    dd_group_weights = dd.get("group_weights", {}) if isinstance(dd, dict) else {}
+    if not isinstance(dd_group_weights, dict):
+        dd_group_weights = {}
+    dd_feature_groups = dd.get("feature_groups", {}) if isinstance(dd, dict) else {}
+    if not isinstance(dd_feature_groups, dict):
+        dd_feature_groups = {}
+
+    hist_cfg = dd_feature_groups.get("rate_histogram", {})
+    if not isinstance(hist_cfg, dict):
+        hist_cfg = {}
+    hist_active = (not dd_group_weights) or float(dd_group_weights.get("rate_histogram", 0.0)) > 0.0
+    hist_cols = [
+        str(col)
+        for col in hist_cfg.get("feature_columns", [])
+        if str(col) in df.columns
+    ]
+    if not hist_cols and hist_active:
+        hist_cols = sorted(
+            [str(c) for c in df.columns if HIST_RATE_COLUMN_RE.match(str(c))],
+            key=lambda c: int(HIST_RATE_COLUMN_RE.match(str(c)).group("bin")) if HIST_RATE_COLUMN_RE.match(str(c)) else 0,
+        )
+
+    eff_cfg = dd_feature_groups.get("efficiency_vectors", {})
+    if not isinstance(eff_cfg, dict):
+        eff_cfg = {}
+    eff_active = (not dd_group_weights) or float(dd_group_weights.get("efficiency_vectors", 0.0)) > 0.0
+    eff_payloads: list[dict[str, object]] = []
+    if eff_active:
+        eff_payloads = _prepare_efficiency_vector_group_payloads(dict_df=df, data_df=df)
+        eff_payloads = _filter_efficiency_vector_payloads(
+            eff_payloads,
+            feature_groups_cfg=eff_cfg if eff_cfg else None,
+            selected_feature_columns=selected_feature_cols,
+        )
+
+    axes_to_plot = sorted(
+        {
+            str(payload.get("axis", "")).strip().lower()
+            for payload in eff_payloads
+            if str(payload.get("axis", "")).strip().lower() in {"x", "y", "theta"}
+        },
+        key=lambda axis: {"x": 0, "y": 1, "theta": 2}.get(axis, 99),
+    )
+    return dd, hist_cols, eff_payloads, axes_to_plot
+
+
+def _parameter_order_coordinate(
+    df: pd.DataFrame,
+    *,
+    param_cols: list[str],
+) -> tuple[np.ndarray, str]:
+    if not param_cols:
+        return np.full(len(df), np.nan, dtype=float), "parameter_space"
+    if len(param_cols) == 1:
+        series = pd.to_numeric(df[param_cols[0]], errors="coerce")
+        return series.to_numpy(dtype=float), str(param_cols[0])
+    param_arr = df[param_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+    proj = _pca_2d(param_arr)
+    return proj[:, 0].astype(float, copy=False), "parameter_space_pc1"
+
+
+def _quantile_group_masks(values: np.ndarray) -> list[tuple[str, np.ndarray]]:
+    finite = np.isfinite(values)
+    if int(np.sum(finite)) < 3:
+        return []
+    q0, q1, q2, q3 = np.nanquantile(values[finite], [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0])
+    intervals = [
+        ("Low", q0, q1, False),
+        ("Mid", q1, q2, False),
+        ("High", q2, q3, True),
+    ]
+    out: list[tuple[str, np.ndarray]] = []
+    for label, lo, hi, closed_right in intervals:
+        if not np.isfinite(lo) or not np.isfinite(hi):
+            continue
+        if closed_right:
+            mask = finite & (values >= lo) & (values <= hi)
+        else:
+            mask = finite & (values >= lo) & (values < hi)
+        if bool(np.any(mask)):
+            out.append((label, mask))
+    if len(out) >= 2:
+        return out
+    return [("All", finite)]
+
+
+def _plot_grouped_neighborhood_fallback(
+    *,
+    flags: pd.DataFrame,
+    feature_cols: list[str],
+    param_cols: list[str],
+    out_path: Path | None = None,
+) -> dict[str, object]:
+    info: dict[str, object] = {
+        "status": "skipped_no_grouped_blocks",
+        "feature_plot_mode": "grouped_fallback",
+        "parameter_order_axis": None,
+        "rate_histogram_bins_used": 0,
+        "efficiency_vector_groups_used": 0,
+        "efficiency_vector_axes_used": [],
+        "quantile_groups_used": [],
+    }
+    if not param_cols:
+        info["status"] = "skipped_no_parameter_columns"
+        return info
+
+    used_cols = [c for c in param_cols if c in flags.columns]
+    if not used_cols:
+        info["status"] = "skipped_no_parameter_columns"
+        return info
+    work = flags.copy().reset_index(drop=True)
+    param_valid = work[used_cols].apply(pd.to_numeric, errors="coerce").notna().all(axis=1)
+    work = work.loc[param_valid].reset_index(drop=True)
+    if len(work) < 3:
+        info["status"] = "skipped_too_few_rows"
+        return info
+
+    dd, hist_cols, eff_payloads, axes_to_plot = _resolve_grouped_feature_blocks(
+        work,
+        selected_feature_cols=feature_cols,
+    )
+    info["rate_histogram_bins_used"] = int(len(hist_cols))
+    info["efficiency_vector_groups_used"] = int(len(eff_payloads))
+    info["efficiency_vector_axes_used"] = axes_to_plot
+    info["distance_definition_available"] = bool(dd.get("available")) if isinstance(dd, dict) else False
+    if not hist_cols and not eff_payloads:
+        return info
+
+    order_values, order_label = _parameter_order_coordinate(work, param_cols=used_cols)
+    group_specs = _quantile_group_masks(order_values)
+    if not group_specs:
+        info["status"] = "skipped_too_few_rows"
+        return info
+    info["parameter_order_axis"] = order_label
+    info["quantile_groups_used"] = [label for label, _ in group_specs]
+
+    plot_path = out_path or (PLOTS_DIR / "neighborhood_correspondence_grouped_feature_fallback.png")
+    n_panels = (1 if hist_cols else 0) + len(axes_to_plot)
+    fig, axes = plt.subplots(
+        n_panels,
+        1,
+        figsize=(11.6, max(3.0 * n_panels, 4.8)),
+        squeeze=False,
+    )
+    axes_flat = axes[:, 0]
+    panel_idx = 0
+    group_colors = {"Low": "#1F77B4", "Mid": "#FF7F0E", "High": "#2CA02C", "All": "#1F77B4"}
+    group_styles = {"Low": "-", "Mid": "--", "High": ":", "All": "-"}
+    plane_colors = {1: "#1F77B4", 2: "#FF7F0E", 3: "#2CA02C", 4: "#D62728"}
+
+    if hist_cols:
+        ax = axes_flat[panel_idx]
+        panel_idx += 1
+        hist_bins = np.asarray(
+            [int(HIST_RATE_COLUMN_RE.match(col).group("bin")) for col in hist_cols],
+            dtype=float,
+        )
+        hist_frame = work[hist_cols].apply(pd.to_numeric, errors="coerce")
+        for label, mask in group_specs:
+            group_frame = hist_frame.loc[mask]
+            if group_frame.empty:
+                continue
+            hist_med = group_frame.median(axis=0, skipna=True).to_numpy(dtype=float)
+            ax.plot(
+                hist_bins,
+                hist_med,
+                color=group_colors.get(label, "#1F77B4"),
+                linestyle=group_styles.get(label, "-"),
+                linewidth=1.8,
+                label=f"{label} {order_label} tercile (n={int(mask.sum())})",
+            )
+        ax.set_xlabel("Rate-histogram bin index", fontsize=8)
+        ax.set_ylabel("Rate [Hz]", fontsize=8)
+        ax.set_title(f"Rate histogram evolution along {order_label}", fontsize=9)
+        ax.grid(True, alpha=0.18)
+        ax.legend(fontsize=7, loc="best", frameon=False)
+
+    axis_payloads: dict[str, list[dict[str, object]]] = {"x": [], "y": [], "theta": []}
+    for payload in eff_payloads:
+        axis_name = str(payload.get("axis", "")).strip().lower()
+        if axis_name in axis_payloads:
+            axis_payloads[axis_name].append(payload)
+
+    for axis_name in axes_to_plot:
+        ax = axes_flat[panel_idx]
+        panel_idx += 1
+        for label, mask in group_specs:
+            for payload in sorted(axis_payloads[axis_name], key=lambda item: int(item.get("plane", 0))):
+                centers = np.asarray(payload.get("centers", []), dtype=float)
+                if centers.size == 0:
+                    continue
+                eff_frame = pd.DataFrame(np.asarray(payload.get("dict_eff", []), dtype=float))
+                group_frame = eff_frame.loc[mask]
+                if group_frame.empty:
+                    continue
+                eff_med = group_frame.median(axis=0, skipna=True).to_numpy(dtype=float)
+                valid = np.isfinite(centers) & np.isfinite(eff_med)
+                if not np.any(valid):
+                    continue
+                plane = int(payload.get("plane", 0))
+                ax.plot(
+                    centers[valid],
+                    eff_med[valid],
+                    color=plane_colors.get(plane, "#4C78A8"),
+                    linestyle=group_styles.get(label, "-"),
+                    linewidth=1.3,
+                    alpha=0.95,
+                )
+        axis_label = {"x": "Projected X [mm]", "y": "Projected Y [mm]", "theta": "Theta [deg]"}.get(axis_name, axis_name)
+        ax.set_xlabel(axis_label, fontsize=8)
+        ax.set_ylabel("Efficiency", fontsize=8)
+        ax.set_ylim(0.0, 1.05)
+        ax.set_title(
+            f"Efficiency vectors vs {axis_name} along {order_label} "
+            "(color=plane, linestyle=Low/Mid/High)",
+            fontsize=9,
+        )
+        ax.grid(True, alpha=0.18)
+
+    fig.suptitle("STEP 1.4 grouped feature continuity fallback", fontsize=12, y=0.995)
+    fig.tight_layout(rect=[0, 0, 1, 0.985])
+    _save_figure(fig, plot_path, dpi=150)
+    plt.close(fig)
+    info["status"] = "grouped_feature_fallback"
+    info["n_panels"] = int(n_panels)
+    return info
+
+
+def _plot_grouped_ball_convex_fallback(
+    *,
+    flags: pd.DataFrame,
+    feature_cols: list[str],
+    param_cols: list[str],
+    random_seed: int,
+    radius_fraction: float,
+    out_path: Path | None = None,
+) -> dict[str, object]:
+    info: dict[str, object] = {
+        "status": "skipped_no_grouped_blocks",
+        "feature_plot_mode": "grouped_fallback",
+        "parameter_order_axis": None,
+        "center_index": None,
+        "selected_count": 0,
+        "selected_fraction": 0.0,
+        "rate_histogram_bins_used": 0,
+        "efficiency_vector_groups_used": 0,
+        "efficiency_vector_axes_used": [],
+    }
+    if radius_fraction <= 0.0:
+        info["status"] = "skipped_non_positive_radius_fraction"
+        return info
+    if not param_cols:
+        info["status"] = "skipped_no_parameter_columns"
+        return info
+
+    used_cols = [c for c in param_cols if c in flags.columns]
+    if not used_cols:
+        info["status"] = "skipped_no_parameter_columns"
+        return info
+    work = flags.copy().reset_index(drop=True)
+    param_valid = work[used_cols].apply(pd.to_numeric, errors="coerce").notna().all(axis=1)
+    work = work.loc[param_valid].reset_index(drop=True)
+    if len(work) < 3:
+        info["status"] = "skipped_too_few_rows"
+        return info
+
+    dd, hist_cols, eff_payloads, axes_to_plot = _resolve_grouped_feature_blocks(
+        work,
+        selected_feature_cols=feature_cols,
+    )
+    info["rate_histogram_bins_used"] = int(len(hist_cols))
+    info["efficiency_vector_groups_used"] = int(len(eff_payloads))
+    info["efficiency_vector_axes_used"] = axes_to_plot
+    info["distance_definition_available"] = bool(dd.get("available")) if isinstance(dd, dict) else False
+    if not hist_cols and not eff_payloads:
+        return info
+
+    order_values, order_label = _parameter_order_coordinate(work, param_cols=used_cols)
+    finite = np.isfinite(order_values)
+    if int(np.sum(finite)) < 3:
+        info["status"] = "skipped_too_few_rows"
+        return info
+    info["parameter_order_axis"] = order_label
+
+    rng = np.random.default_rng(int(random_seed))
+    finite_idx = np.flatnonzero(finite)
+    center_local_idx = int(rng.integers(0, len(finite_idx)))
+    center_idx = int(finite_idx[center_local_idx])
+    center_value = float(order_values[center_idx])
+    order_range = float(np.nanmax(order_values[finite]) - np.nanmin(order_values[finite]))
+    half_width = abs(center_value) * float(radius_fraction) if abs(center_value) > 1e-12 else order_range * float(radius_fraction)
+    if not np.isfinite(half_width) or half_width <= 0.0:
+        half_width = max(order_range * float(radius_fraction), 1e-9)
+    selected_mask = finite & (np.abs(order_values - center_value) <= half_width)
+    if not np.any(selected_mask):
+        selected_mask[center_idx] = True
+
+    info["center_index"] = int(center_idx)
+    info["center_value"] = float(center_value)
+    info["selected_count"] = int(np.sum(selected_mask))
+    info["selected_fraction"] = float(np.sum(selected_mask) / max(1, len(work)))
+
+    plot_path = out_path or (PLOTS_DIR / "param_to_feature_ball_convex_grouped_fallback.png")
+    n_panels = (1 if hist_cols else 0) + len(axes_to_plot)
+    fig, axes = plt.subplots(
+        n_panels,
+        1,
+        figsize=(11.6, max(3.0 * n_panels, 4.8)),
+        squeeze=False,
+    )
+    axes_flat = axes[:, 0]
+    panel_idx = 0
+    plane_colors = {1: "#1F77B4", 2: "#FF7F0E", 3: "#2CA02C", 4: "#D62728"}
+
+    if hist_cols:
+        ax = axes_flat[panel_idx]
+        panel_idx += 1
+        hist_bins = np.asarray(
+            [int(HIST_RATE_COLUMN_RE.match(col).group("bin")) for col in hist_cols],
+            dtype=float,
+        )
+        hist_frame = work[hist_cols].apply(pd.to_numeric, errors="coerce")
+        full_med = hist_frame.median(axis=0, skipna=True).to_numpy(dtype=float)
+        full_lo = hist_frame.quantile(0.25).to_numpy(dtype=float)
+        full_hi = hist_frame.quantile(0.75).to_numpy(dtype=float)
+        sel_frame = hist_frame.loc[selected_mask]
+        sel_med = sel_frame.median(axis=0, skipna=True).to_numpy(dtype=float)
+        ax.fill_between(hist_bins, full_lo, full_hi, color="#BDBDBD", alpha=0.28, label="Global IQR")
+        ax.plot(hist_bins, full_med, color="#7F7F7F", linewidth=1.2, label="Global median")
+        ax.plot(hist_bins, sel_med, color="#1F77B4", linewidth=1.9, label=f"Local window (n={int(np.sum(selected_mask))})")
+        ax.set_xlabel("Rate-histogram bin index", fontsize=8)
+        ax.set_ylabel("Rate [Hz]", fontsize=8)
+        ax.set_title(f"Rate histogram near {order_label}={center_value:.3g}", fontsize=9)
+        ax.grid(True, alpha=0.18)
+        ax.legend(fontsize=7, loc="best", frameon=False)
+
+    axis_payloads: dict[str, list[dict[str, object]]] = {"x": [], "y": [], "theta": []}
+    for payload in eff_payloads:
+        axis_name = str(payload.get("axis", "")).strip().lower()
+        if axis_name in axis_payloads:
+            axis_payloads[axis_name].append(payload)
+
+    for axis_name in axes_to_plot:
+        ax = axes_flat[panel_idx]
+        panel_idx += 1
+        for payload in sorted(axis_payloads[axis_name], key=lambda item: int(item.get("plane", 0))):
+            centers = np.asarray(payload.get("centers", []), dtype=float)
+            if centers.size == 0:
+                continue
+            eff_frame = pd.DataFrame(np.asarray(payload.get("dict_eff", []), dtype=float))
+            if eff_frame.empty:
+                continue
+            full_med = eff_frame.median(axis=0, skipna=True).to_numpy(dtype=float)
+            sel_med = eff_frame.loc[selected_mask].median(axis=0, skipna=True).to_numpy(dtype=float)
+            valid = np.isfinite(centers) & np.isfinite(full_med) & np.isfinite(sel_med)
+            if not np.any(valid):
+                continue
+            plane = int(payload.get("plane", 0))
+            color = plane_colors.get(plane, "#4C78A8")
+            ax.plot(
+                centers[valid],
+                full_med[valid],
+                color="#A9A9A9",
+                linewidth=1.0,
+                linestyle="--",
+                alpha=0.9,
+            )
+            ax.plot(
+                centers[valid],
+                sel_med[valid],
+                color=color,
+                linewidth=1.5,
+                label=f"Plane {plane}",
+            )
+        axis_label = {"x": "Projected X [mm]", "y": "Projected Y [mm]", "theta": "Theta [deg]"}.get(axis_name, axis_name)
+        ax.set_xlabel(axis_label, fontsize=8)
+        ax.set_ylabel("Efficiency", fontsize=8)
+        ax.set_ylim(0.0, 1.05)
+        ax.set_title(
+            f"Efficiency vectors near {order_label}={center_value:.3g} "
+            "(gray dashed = global median)",
+            fontsize=9,
+        )
+        ax.grid(True, alpha=0.18)
+        handles, labels = ax.get_legend_handles_labels()
+        if handles:
+            ax.legend(fontsize=7, loc="best", frameon=False, ncol=min(4, len(handles)))
+
+    fig.suptitle("STEP 1.4 grouped local-window fallback", fontsize=12, y=0.995)
+    fig.tight_layout(rect=[0, 0, 1, 0.985])
+    _save_figure(fig, plot_path, dpi=150)
+    plt.close(fig)
+    info["status"] = "grouped_feature_fallback"
+    info["n_panels"] = int(n_panels)
+    return info
+
+
 def _plot_bidirectional_neighborhood_showcase(
     *,
     x_feat: np.ndarray,
@@ -575,15 +1042,20 @@ def _plot_bidirectional_neighborhood_showcase(
     param_cols: list[str],
     include_rate_histogram_features: bool,
     plot_background_max_rows: int,
+    suppressed_patterns: Sequence[str] | None = None,
 ) -> dict[str, object]:
     include_rate_histogram = bool(include_rate_histogram_features)
     info: dict[str, object] = {
         "feature_plot_columns_used": [],
         "feature_plot_columns_count": 0,
+        "feature_space_lower_triangle_suppressed_patterns": list(suppressed_patterns or []),
         "feature_plot_include_rate_histogram": bool(include_rate_histogram),
         "feature_plot_rate_histogram_columns_total": 0,
         "feature_plot_rate_histogram_columns_suppressed": 0,
         "feature_plot_rate_histogram_placeholder_added": False,
+        "feature_plot_efficiency_vector_columns_total": 0,
+        "feature_plot_efficiency_vector_columns_suppressed": 0,
+        "feature_plot_efficiency_vector_placeholder_added": False,
         "feature_plot_status": "skipped",
     }
     if x_feat.shape[0] < 8:
@@ -591,22 +1063,41 @@ def _plot_bidirectional_neighborhood_showcase(
 
     param_cols = [c for c in (param_cols or []) if c in flags.columns]
     feat_cols_all = [c for c in (feature_cols or []) if c in flags.columns]
-    feat_cols_plot, hist_cols, placeholder_added = _resolve_feature_plot_columns(
+    (
+        feat_cols_plot,
+        hist_cols,
+        eff_cols,
+        hist_placeholder_added,
+        eff_placeholder_added,
+    ) = _resolve_feature_plot_columns(
         feat_cols_all,
         include_rate_histogram=include_rate_histogram,
+        suppressed_patterns=suppressed_patterns,
     )
     info["feature_plot_columns_used"] = feat_cols_plot
     info["feature_plot_columns_count"] = int(len(feat_cols_plot))
     info["feature_plot_include_rate_histogram"] = bool(include_rate_histogram)
     info["feature_plot_rate_histogram_columns_total"] = int(len(hist_cols))
-    info["feature_plot_rate_histogram_columns_suppressed"] = int(
-        0 if include_rate_histogram else len(hist_cols)
+    info["feature_plot_rate_histogram_columns_suppressed"] = int(len(hist_cols) if hist_placeholder_added else 0)
+    info["feature_plot_rate_histogram_placeholder_added"] = bool(hist_placeholder_added)
+    info["feature_plot_efficiency_vector_columns_total"] = int(len(eff_cols))
+    info["feature_plot_efficiency_vector_columns_suppressed"] = int(
+        len(eff_cols) if eff_placeholder_added else 0
     )
-    info["feature_plot_rate_histogram_placeholder_added"] = bool(placeholder_added)
+    info["feature_plot_efficiency_vector_placeholder_added"] = bool(eff_placeholder_added)
 
     if len(param_cols) < 2 or len(feat_cols_plot) < 2:
+        fallback_info = _plot_grouped_neighborhood_fallback(
+            flags=flags,
+            feature_cols=feat_cols_all,
+            param_cols=param_cols,
+        )
+        if str(fallback_info.get("status", "")).startswith("grouped_feature_fallback"):
+            info.update(fallback_info)
+            info["feature_plot_status"] = str(fallback_info.get("status"))
+            return info
         log.warning("Skipping continuity neighborhood matrices: need >=2 parameter cols and >=2 feature cols.")
-        info["feature_plot_status"] = "skipped_insufficient_dimensions"
+        info["feature_plot_status"] = str(fallback_info.get("status", "skipped_insufficient_dimensions"))
         return info
 
     used_cols = sorted(set(param_cols + feat_cols_all))
@@ -741,18 +1232,22 @@ def _plot_bidirectional_neighborhood_showcase(
                     ax.axis("off")
                     continue
                 x_col = cols[col]
-                x_is_placeholder = (x_col == RATE_HIST_PLACEHOLDER_COL)
-                y_is_placeholder = (y_col == RATE_HIST_PLACEHOLDER_COL)
+                x_label = _feature_placeholder_label(x_col)
+                y_label = _feature_placeholder_label(y_col)
+                x_is_placeholder = x_label is not None
+                y_is_placeholder = y_label is not None
                 if x_is_placeholder or y_is_placeholder:
                     ax.set_facecolor("#F5F5F5")
                     if (x_is_placeholder and y_is_placeholder) or (y_is_placeholder and col == 0):
-                        msg = "Rate-histogram block\nsuppressed for display"
-                        if len(hist_cols) > 0:
-                            msg = f"Rate-histogram block suppressed\n({len(hist_cols)} columns)"
                         ax.text(
                             0.5,
                             0.5,
-                            msg,
+                            _feature_placeholder_message(
+                                x_col=x_col,
+                                y_col=y_col,
+                                rate_hist_count=len(hist_cols),
+                                efficiency_vector_count=len(eff_cols),
+                            ),
                             ha="center",
                             va="center",
                             fontsize=7,
@@ -795,13 +1290,11 @@ def _plot_bidirectional_neighborhood_showcase(
                         zorder=3,
                     )
                 if row == n_dim - 2:
-                    xlabel = RATE_HIST_PLACEHOLDER_LABEL if x_is_placeholder else x_col
-                    ax.set_xlabel(xlabel, fontsize=7)
+                    ax.set_xlabel(x_label or x_col, fontsize=7)
                 else:
                     ax.set_xticklabels([])
                 if col == 0:
-                    ylabel = RATE_HIST_PLACEHOLDER_LABEL if y_is_placeholder else y_col
-                    ax.set_ylabel(ylabel, fontsize=7)
+                    ax.set_ylabel(y_label or y_col, fontsize=7)
                 else:
                     ax.set_yticklabels([])
                 ax.tick_params(labelsize=6, length=2)
@@ -947,6 +1440,7 @@ def _plot_param_to_feature_ball_convex_showcase(
     include_rate_histogram_features: bool,
     random_seed: int,
     radius_fraction: float,
+    suppressed_patterns: Sequence[str] | None = None,
 ) -> dict[str, object]:
     include_rate_histogram = bool(include_rate_histogram_features)
     info: dict[str, object] = {
@@ -958,10 +1452,14 @@ def _plot_param_to_feature_ball_convex_showcase(
         "selected_fraction": 0.0,
         "feature_plot_columns_used": [],
         "feature_plot_columns_count": 0,
+        "feature_space_lower_triangle_suppressed_patterns": list(suppressed_patterns or []),
         "feature_plot_include_rate_histogram": bool(include_rate_histogram),
         "feature_plot_rate_histogram_columns_total": 0,
         "feature_plot_rate_histogram_columns_suppressed": 0,
         "feature_plot_rate_histogram_placeholder_added": False,
+        "feature_plot_efficiency_vector_columns_total": 0,
+        "feature_plot_efficiency_vector_columns_suppressed": 0,
+        "feature_plot_efficiency_vector_placeholder_added": False,
     }
 
     if radius_fraction <= 0.0:
@@ -970,34 +1468,59 @@ def _plot_param_to_feature_ball_convex_showcase(
 
     param_cols = [c for c in (param_cols or []) if c in flags.columns]
     feat_cols_all = [c for c in (feature_cols or []) if c in flags.columns]
-    feat_cols_plot, hist_cols, placeholder_added = _resolve_feature_plot_columns(
+    (
+        feat_cols_plot,
+        hist_cols,
+        eff_cols,
+        hist_placeholder_added,
+        eff_placeholder_added,
+    ) = _resolve_feature_plot_columns(
         feat_cols_all,
         include_rate_histogram=include_rate_histogram,
+        suppressed_patterns=suppressed_patterns,
     )
     info["feature_plot_columns_used"] = feat_cols_plot
     info["feature_plot_columns_count"] = int(len(feat_cols_plot))
     info["feature_plot_include_rate_histogram"] = bool(include_rate_histogram)
     info["feature_plot_rate_histogram_columns_total"] = int(len(hist_cols))
-    info["feature_plot_rate_histogram_columns_suppressed"] = int(
-        0 if include_rate_histogram else len(hist_cols)
+    info["feature_plot_rate_histogram_columns_suppressed"] = int(len(hist_cols) if hist_placeholder_added else 0)
+    info["feature_plot_rate_histogram_placeholder_added"] = bool(hist_placeholder_added)
+    info["feature_plot_efficiency_vector_columns_total"] = int(len(eff_cols))
+    info["feature_plot_efficiency_vector_columns_suppressed"] = int(
+        len(eff_cols) if eff_placeholder_added else 0
     )
-    info["feature_plot_rate_histogram_placeholder_added"] = bool(placeholder_added)
+    info["feature_plot_efficiency_vector_placeholder_added"] = bool(eff_placeholder_added)
 
     n_plotted = len(feat_cols_plot)
     n_total = len(feat_cols_all)
+    suppressed_parts: list[str] = []
+    if hist_placeholder_added and hist_cols:
+        suppressed_parts.append(f"{len(hist_cols)} bulk-rate columns -> 1 placeholder")
+    if eff_placeholder_added and eff_cols:
+        suppressed_parts.append(f"{len(eff_cols)} efficiency-vector columns -> 1 placeholder")
     log.info(
         "Ball-convex plot — parameter cols: %d | feature cols to plot: %d / %d total%s",
         len(param_cols),
         n_plotted,
         n_total,
-        f" ({len(hist_cols)} bulk-rate suppressed → 1 placeholder)" if hist_cols and not include_rate_histogram else "",
+        f" ({'; '.join(suppressed_parts)})" if suppressed_parts else "",
     )
 
     if len(param_cols) < 2 or len(feat_cols_plot) < 2:
+        fallback_info = _plot_grouped_ball_convex_fallback(
+            flags=flags,
+            feature_cols=feat_cols_all,
+            param_cols=param_cols,
+            random_seed=random_seed,
+            radius_fraction=radius_fraction,
+        )
+        if str(fallback_info.get("status", "")).startswith("grouped_feature_fallback"):
+            info.update(fallback_info)
+            return info
         log.warning(
             "Skipping random-ball param->feature matrix: need >=2 parameter cols and >=2 feature cols."
         )
-        info["status"] = "skipped_insufficient_dimensions"
+        info["status"] = str(fallback_info.get("status", "skipped_insufficient_dimensions"))
         return info
 
     used_cols = sorted(set(param_cols + feat_cols_all))
@@ -1080,18 +1603,22 @@ def _plot_param_to_feature_ball_convex_showcase(
                     ax.axis("off")
                     continue
                 x_col = cols[col]
-                x_is_placeholder = (x_col == RATE_HIST_PLACEHOLDER_COL)
-                y_is_placeholder = (y_col == RATE_HIST_PLACEHOLDER_COL)
+                x_label = _feature_placeholder_label(x_col)
+                y_label = _feature_placeholder_label(y_col)
+                x_is_placeholder = x_label is not None
+                y_is_placeholder = y_label is not None
                 if x_is_placeholder or y_is_placeholder:
                     ax.set_facecolor("#F5F5F5")
                     if (x_is_placeholder and y_is_placeholder) or (y_is_placeholder and col == 0):
-                        msg = "Rate-histogram block\nsuppressed for display"
-                        if len(hist_cols) > 0:
-                            msg = f"Rate-histogram block suppressed\n({len(hist_cols)} columns)"
                         ax.text(
                             0.5,
                             0.5,
-                            msg,
+                            _feature_placeholder_message(
+                                x_col=x_col,
+                                y_col=y_col,
+                                rate_hist_count=len(hist_cols),
+                                efficiency_vector_count=len(eff_cols),
+                            ),
                             ha="center",
                             va="center",
                             fontsize=7,
@@ -1149,13 +1676,11 @@ def _plot_param_to_feature_ball_convex_showcase(
                         zorder=5,
                     )
                 if row == n_dim - 2:
-                    xlabel = RATE_HIST_PLACEHOLDER_LABEL if x_is_placeholder else x_col
-                    ax.set_xlabel(xlabel, fontsize=7)
+                    ax.set_xlabel(x_label or x_col, fontsize=7)
                 else:
                     ax.set_xticklabels([])
                 if col == 0:
-                    ylabel = RATE_HIST_PLACEHOLDER_LABEL if y_is_placeholder else y_col
-                    ax.set_ylabel(ylabel, fontsize=7)
+                    ax.set_ylabel(y_label or y_col, fontsize=7)
                 else:
                     ax.set_yticklabels([])
                 ax.tick_params(labelsize=6, length=2)
@@ -1281,6 +1806,10 @@ def main() -> int:
         ),
         default=True,
     )
+    feature_space_plot_suppressed_patterns = _step12_resolve_feature_space_plot_suppression_patterns(
+        config,
+        step_cfg=cfg_14 if isinstance(cfg_14, dict) else {},
+    )
     try:
         plot_background_max_rows = int(
             cfg_14.get("neighborhood_matrix_plot_sample_max_rows", 900)
@@ -1368,10 +1897,19 @@ def main() -> int:
         return 1
 
     try:
+        min_feature_non_null_fraction = float(
+            cfg_14.get("min_feature_non_null_fraction", MIN_FEATURE_NON_NULL_FRACTION)
+        )
+    except (TypeError, ValueError):
+        min_feature_non_null_fraction = float(MIN_FEATURE_NON_NULL_FRACTION)
+    min_feature_non_null_fraction = max(min_feature_non_null_fraction, 0.0)
+
+    try:
         dict_valid, x_raw, y_param, valid_idx, feature_cols_used = _prepare_numeric_features(
             dictionary,
             feature_cols_requested,
             param_cols=param_cols,
+            min_feature_non_null_fraction=min_feature_non_null_fraction,
         )
     except RuntimeError as exc:
         log.error("%s", exc)
@@ -1386,14 +1924,27 @@ def main() -> int:
     # ── L1 robust z-score for continuity checking ─────────────────────
     x_feat = _robust_scale_matrix(x_raw)
     log.info("Feature-space distance for continuity: L1 (Manhattan) on robust z-scored features.")
-    _feat_cols_plot_preview, _hist_cols_preview, _ = _resolve_feature_plot_columns(
-        feature_cols_used, include_rate_histogram=include_rate_histogram_features
+    (
+        _feat_cols_plot_preview,
+        _hist_cols_preview,
+        _eff_cols_preview,
+        _hist_placeholder_preview,
+        _eff_placeholder_preview,
+    ) = _resolve_feature_plot_columns(
+        feature_cols_used,
+        include_rate_histogram=include_rate_histogram_features,
+        suppressed_patterns=feature_space_plot_suppressed_patterns,
     )
+    _suppressed_preview_parts: list[str] = []
+    if _hist_placeholder_preview and _hist_cols_preview:
+        _suppressed_preview_parts.append(f"bulk-rate: {len(_hist_cols_preview)} -> 1 placeholder")
+    if _eff_placeholder_preview and _eff_cols_preview:
+        _suppressed_preview_parts.append(f"efficiency vectors: {len(_eff_cols_preview)} -> 1 placeholder")
     log.info(
-        "Feature columns for plots: %d / %d total (suppressed bulk-rate: %d → 1 placeholder)",
+        "Feature columns for plots: %d / %d total%s",
         len(_feat_cols_plot_preview),
         len(feature_cols_used),
-        len(_hist_cols_preview),
+        f" ({'; '.join(_suppressed_preview_parts)})" if _suppressed_preview_parts else "",
     )
 
     flags, keep_mask, score_threshold, _nn_feat_idx, _nn_param_idx = _compute_pairwise_continuity(
@@ -1404,19 +1955,24 @@ def main() -> int:
     )
     log.info("Computed pairwise continuity flags for %d rows.", len(flags))
 
-    dict_out = dict_valid.loc[keep_mask].copy().reset_index(drop=True)
+    apply_continuity_filter = _as_bool(cfg_14.get("apply_continuity_filter", True), default=True)
+    dict_out = (
+        dict_valid.loc[keep_mask].copy().reset_index(drop=True)
+        if apply_continuity_filter
+        else dict_valid.copy().reset_index(drop=True)
+    )
 
-    removed = int(len(dict_valid) - len(dict_out))
+    removed = int(len(dict_valid) - len(dict_out)) if apply_continuity_filter else 0
     removal_fraction = float(removed / max(1, len(dict_valid)))
 
     status = "PASS"
     messages: list[str] = []
-    if removal_fraction > STATUS_FAIL_REMOVAL_FRAC:
+    if apply_continuity_filter and removal_fraction > STATUS_FAIL_REMOVAL_FRAC:
         status = "FAIL"
         messages.append(
             f"continuity filtering removed {removal_fraction:.1%} (> {STATUS_FAIL_REMOVAL_FRAC:.0%} fail threshold)"
         )
-    elif removal_fraction > STATUS_WARN_REMOVAL_FRAC:
+    elif apply_continuity_filter and removal_fraction > STATUS_WARN_REMOVAL_FRAC:
         status = "WARN"
         messages.append(
             f"continuity filtering removed {removal_fraction:.1%} (> {STATUS_WARN_REMOVAL_FRAC:.0%} warn threshold)"
@@ -1452,6 +2008,7 @@ def main() -> int:
         param_cols=param_cols,
         include_rate_histogram_features=include_rate_histogram_features,
         plot_background_max_rows=plot_background_max_rows,
+        suppressed_patterns=feature_space_plot_suppressed_patterns,
     )
     log.info(
         "Neighborhood correspondence plot status: %s",
@@ -1464,6 +2021,7 @@ def main() -> int:
         include_rate_histogram_features=include_rate_histogram_features,
         random_seed=random_ball_seed,
         radius_fraction=random_ball_radius_fraction,
+        suppressed_patterns=feature_space_plot_suppressed_patterns,
     )
 
     continuity_validation = {
@@ -1498,13 +2056,16 @@ def main() -> int:
         "n_rows_dictionary_input": int(len(dictionary)),
         "n_rows_dictionary_valid_for_continuity": int(len(dict_valid)),
         "n_rows_dictionary_output": int(len(dict_out)),
+        "apply_continuity_filter": bool(apply_continuity_filter),
         "rows_removed_by_continuity": int(removed),
         "rows_removed_by_continuity_fraction": float(removal_fraction),
         "feature_columns_requested": feature_cols_requested,
         "feature_columns_used": feature_cols_used,
+        "min_feature_non_null_fraction": float(min_feature_non_null_fraction),
         "parameter_columns_used": param_cols,
         "parameter_columns_source": param_cols_source,
         "feature_matrix_plot_include_rate_histogram": bool(include_rate_histogram_features),
+        "feature_space_lower_triangle_suppressed_patterns": feature_space_plot_suppressed_patterns,
         "neighborhood_matrix_plot_sample_max_rows": int(plot_background_max_rows),
         "neighborhood_plot": neighborhood_plot_info,
         "param_to_feature_ball_convex_enabled": bool(ball_convex_enabled),

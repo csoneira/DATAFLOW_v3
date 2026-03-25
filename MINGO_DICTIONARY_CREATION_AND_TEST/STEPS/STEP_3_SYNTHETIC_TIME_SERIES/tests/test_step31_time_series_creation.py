@@ -12,7 +12,9 @@ _STEP31_DIR = (
 )
 sys.path.insert(0, str(_STEP31_DIR))
 
+from create_time_series import _apply_parameter_space_aliases
 from create_time_series import _build_dataset_backed_curve, _normalize_curve_data_mode
+from create_time_series import _resolve_parameter_curve_columns
 from create_time_series import _select_dataset_curve_smooth_order
 
 
@@ -50,6 +52,52 @@ def test_build_dataset_backed_curve_selects_actual_source_rows() -> None:
     assert file_df["step31_source_filename_base"].tolist() == ["a", "d"]
     assert file_df["flux_cm2_min"].tolist() == [1.0, 1.6]
     assert dense_df["curve_index"].tolist() == [0, 1]
+
+
+def test_parameter_curve_columns_accept_step1_aliases() -> None:
+    rate_df = pd.DataFrame(
+        {
+            "flux_cm2_min": [1.0, 1.1],
+            "eff_p1": [0.70, 0.72],
+            "eff_p2": [0.60, 0.62],
+            "eff_p3": [0.50, 0.52],
+            "eff_p4": [0.40, 0.42],
+        }
+    )
+    spec = {
+        "parameter_space_column_aliases": {
+            "eff_p1": "eff_sim_1",
+            "eff_p2": "eff_sim_2",
+            "eff_p3": "eff_sim_3",
+            "eff_p4": "eff_sim_4",
+        }
+    }
+
+    rate_df, added = _apply_parameter_space_aliases(rate_df, spec)
+    resolved = _resolve_parameter_curve_columns(
+        rate_df,
+        {"parameter_curve_columns": ["flux_cm2_min", "eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4"]},
+    )
+
+    assert added == ["eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4"]
+    assert resolved == ["flux_cm2_min", "eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4"]
+    assert np.allclose(rate_df["eff_sim_3"], rate_df["eff_p3"])
+
+
+def test_parameter_curve_columns_allow_single_dimension() -> None:
+    rate_df = pd.DataFrame(
+        {
+            "flux_cm2_min": [1.0, 1.2, 1.4],
+            "events_per_second_global_rate": [10.0, 12.0, 14.0],
+        }
+    )
+
+    resolved = _resolve_parameter_curve_columns(
+        rate_df,
+        {"parameter_curve_columns": ["flux_cm2_min"]},
+    )
+
+    assert resolved == ["flux_cm2_min"]
 
 
 def test_select_dataset_curve_smooth_order_avoids_large_midpoint_jump() -> None:

@@ -13,26 +13,22 @@ observables alone.
 ## Pipeline overview
 
 ```
-STEP 1  Build Dictionary         builds the param-metadata dictionary CSV
-                                  from simulated data files
+STEP 1.1  Collect simulated metadata and simulation parameters
+STEP 1.2  Transform feature space
+STEP 1.3  Build dictionary + holdout
+STEP 1.4  Enforce continuity and filter discontinuities
+STEP 1.5  Tune feature-distance definition
 
-STEP 2  Validate Simulation      compares topology-estimated efficiencies
-                                  against the simulation truth per plane
+STEP 2.1  Estimate parameters on holdout/dataset
+STEP 2.2  Validate estimates vs simulation truth
+STEP 2.3  Build uncertainty LUT
 
-STEP 3  Relative Error           computes relative errors, applies quality
-                                  cuts, produces a filtered reference CSV
+STEP 3.1  Create synthetic parameter time series
+STEP 3.2  Build synthetic dataset from dictionary + trajectory
+STEP 3.3  Apply inference correction + LUT on synthetic data
 
-STEP 4  Self-Consistency         matches every data sample against the
-                                  dictionary and recovers (flux, eff)
-
-STEP 5  Uncertainty Limits       calibrates uncertainty curves and
-                                  dictionary-coverage diagnostics
-
-STEP 6  Uncertainty LUT          builds a 3-D empirical uncertainty
-                                  look-up table for inference
-
-STEP 7  Simulated Demo           generates demo artifacts with point
-                                  estimates and uncertainty coverage checks
+STEP 4.1  Collect real metadata (station/task/date windows)
+STEP 4.2  Infer real parameters and attach uncertainties
 ```
 
 ### Shared libraries (not steps — imported by the scripts above)
@@ -40,7 +36,8 @@ STEP 7  Simulated Demo           generates demo artifacts with point
 | File | Purpose |
 |---|---|
 | `MODULES/simulation_validation_utils.py` | Common helpers: logging, config, parsing, scoring, plotting, geometry, uncertainty |
-| `uncertainty_lut.py` | LUT loader + trilinear interpolation class (used by steps 6 & 7) |
+| `MODULES/feature_space_config.py` | Shared feature-space catalog/config resolution helpers |
+| `MODULES/uncertainty_lut.py` | LUT loader + interpolation helpers used by downstream inference |
 
 ## Directory layout
 
@@ -50,9 +47,9 @@ into an `OUTPUTS/` subdirectory that is created automatically:
 ```
 STEP_N_<NAME>/
   script.py
-  config_method.json     (optional method config)
-  config_plots.json      (optional plotting config)
-  config_runtime.json    (optional runtime/path overrides)
+  config_step_1.1_method.json   (optional method config)
+  config_step_1.1_plots.json    (optional plotting config)
+  config_step_1.1_runtime.json  (optional runtime/path overrides)
   OUTPUTS/
     FILES/               CSVs, JSONs, markdown reports
     PLOTS/               PNG figures
@@ -60,38 +57,34 @@ STEP_N_<NAME>/
 
 ## Running
 
-### Full pipeline (steps 1–6)
+### Full pipeline (current runner)
 
 ```bash
-./run_pipeline.sh              # all steps
-./run_pipeline.sh 3 4 6        # only steps 3, 4, 6
-./run_pipeline.sh --from 4     # steps 4, 5, 6
+./run_new_pipeline.sh                     # all steps (1.1 → 4.2)
+./run_new_pipeline.sh 1.1 1.2 1.3        # selected steps
+./run_new_pipeline.sh --from 2.1         # run from a step onward
+./run_new_pipeline.sh --list             # show step IDs and descriptions
 ```
 
-### Metric comparison (steps 1–3 + per-metric 4→6→7)
-
-```bash
-./run_metric_comparison.sh                 # all 4 metrics (l2, chi2, poisson, r2)
-./run_metric_comparison.sh l2 chi2         # selected metrics
-./run_metric_comparison.sh --skip-shared l2
-```
-
-Results are collected in `COMPARISON/metric_comparison.csv`.
+Each step writes to `STEP_*/.../OUTPUTS/{FILES,PLOTS}`.
 
 ## Configuration
 
 Each step reads parameters in this priority order:
 
 ```
-CLI argument  >  config_runtime.json override  >  config_plots.json key  >  config_method.json key  >  hardcoded default
+CLI argument  >  config_step_1.1_runtime.json override  >  config_step_1.1_plots.json key  >  config_step_1.1_method.json key  >  hardcoded default
 ```
 
 Main configuration files at repo root:
 
-- `config_method.json`: inference and processing method knobs
-- `config_plots.json`: plotting/display knobs
-- `config_runtime.json`: runtime path overrides
-- `config_legacy.json`: deprecated keys kept only as reference
+- `config_step_1.1_method.json`: inference and processing method knobs (first consumed in STEP 1.1)
+- `config_step_1.1_plots.json`: plotting/display knobs (first consumed in STEP 1.1)
+- `config_step_1.1_runtime.json`: runtime overrides plus execution-only passthrough columns (first consumed in STEP 1.1)
+- `config_step_1.2_feature_space.json`: STEP 1.2 feature-space dimensions only (`kept` features + `new` feature expressions)
+- `config_step_1.5_feature_groups.json`: STEP 1.5 grouped-feature definitions (vector/grouped distances)
+- `config_step_2.1_columns.json`: compact feature-column selector overrides
+- `.ATTIC/config_legacy.json`: deprecated keys kept only as reference
 
 `config.json` has been retired.
 

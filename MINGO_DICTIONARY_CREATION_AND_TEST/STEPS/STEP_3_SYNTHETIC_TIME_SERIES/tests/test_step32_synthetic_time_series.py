@@ -13,12 +13,14 @@ _STEP32_DIR = (
 sys.path.insert(0, str(_STEP32_DIR))
 
 from synthetic_time_series import (
+    _apply_parameter_space_aliases,
     _build_event_mask,
     _build_weights,
     _enforce_rate_consistency_constraints,
     _make_synthetic_dataset,
     _rebuild_weighted_step12_helper_columns,
     _resolve_basis_source,
+    _resolve_parameter_space_columns_from_cfg,
     _resolve_step31_curve_data_mode,
     _weighted_numeric_columns,
 )
@@ -133,6 +135,99 @@ def test_rate_consistency_clips_negative_rate_like_columns_even_without_blend() 
     assert float(out_df.loc[0, "post_tt_12_rate_hz"]) == 0.0
     assert float(out_df.loc[0, "events_per_second_0_rate_hz"]) == 0.0
     assert float(out_df.loc[1, "events_per_second_1_rate_hz"]) == 0.0
+
+
+def test_parameter_space_aliases_make_efficiency_columns_common() -> None:
+    time_df = pd.DataFrame(
+        {
+            "flux_cm2_min": [1.3],
+            "eff_sim_1": [0.82],
+            "eff_sim_2": [0.73],
+            "eff_sim_3": [0.64],
+            "eff_sim_4": [0.55],
+        }
+    )
+    basis_df = pd.DataFrame(
+        {
+            "flux_cm2_min": [1.0, 2.0],
+            "eff_p1": [0.70, 0.90],
+            "eff_p2": [0.60, 0.80],
+            "eff_p3": [0.50, 0.70],
+            "eff_p4": [0.40, 0.60],
+        }
+    )
+    spec = {
+        "parameter_space_column_aliases": {
+            "eff_p1": "eff_sim_1",
+            "eff_p2": "eff_sim_2",
+            "eff_p3": "eff_sim_3",
+            "eff_p4": "eff_sim_4",
+        }
+    }
+
+    basis_df, added = _apply_parameter_space_aliases(basis_df, spec)
+    resolved = _resolve_parameter_space_columns_from_cfg(
+        time_df=time_df,
+        basis_df=basis_df,
+        preferred_eff="eff_sim_1",
+        configured_columns=["flux_cm2_min", "eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4"],
+    )
+
+    assert added == ["eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4"]
+    assert resolved == ["flux_cm2_min", "eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4"]
+    assert np.isclose(float(basis_df.loc[1, "eff_sim_4"]), 0.60)
+
+
+def test_make_synthetic_dataset_supports_flux_only_parameter_space() -> None:
+    dictionary_df = pd.DataFrame(
+        {
+            "flux_cm2_min": [1.0, 2.0],
+            "events_per_second_global_rate": [11.0, 22.0],
+            "feature_linear": [100.0, 200.0],
+            "n_events": [1000, 2000],
+            "count_rate_denominator_seconds": [100.0, 100.0],
+        }
+    )
+    template_df = dictionary_df.copy()
+    time_df = pd.DataFrame(
+        {
+            "flux_cm2_min": [1.8],
+            "duration_seconds": [60.0],
+            "n_events": [900],
+        }
+    )
+
+    basis_params = dictionary_df[["flux_cm2_min"]].to_numpy(dtype=float)
+    target_params = time_df[["flux_cm2_min"]].to_numpy(dtype=float)
+    weights = _build_weights(
+        dict_param_matrix=basis_params,
+        target_param_matrix=target_params,
+        method="closest_point",
+        top_k=None,
+        distance_hardness=2.0,
+        event_mask=np.ones((1, len(dictionary_df)), dtype=bool),
+    )
+
+    out, dominant_idx = _make_synthetic_dataset(
+        dictionary_df=dictionary_df,
+        template_df=template_df,
+        time_df=time_df,
+        weights=weights,
+        basis_param_matrix=basis_params,
+        target_param_matrix=target_params,
+        feature_generation_mode="closest_point",
+        flux_col="flux_cm2_min",
+        eff_col=None,
+        time_rate_col=None,
+        time_events_col="n_events",
+        time_duration_col="duration_seconds",
+        interpolation_aggregation="local_linear",
+    )
+
+    assert int(dominant_idx[0]) == 1
+    assert float(out.loc[0, "flux_cm2_min"]) == 2.0
+    assert float(out.loc[0, "flux"]) == 2.0
+    assert pd.isna(out.loc[0, "eff"])
 
 
 def test_event_filter_can_pad_with_parameter_nearest_rows() -> None:

@@ -2,7 +2,7 @@
 ## Angular distribution
 cos_n: [2, 2]
 ## Flux
-flux_cm2_min: [1.2, 1.8]
+flux_cm2_min: [0.6, 1.2]
 
 # Append strategy:
 # - uniform_random: existing behavior
@@ -19,7 +19,7 @@ regular_mesh_relative_span: 0.5
 
 # Step 3
 ## Efficiencies
-efficiencies: [0.7, 1]
+efficiencies: [0.6, 1]
 efficiencies_identical: false
 # Used only when efficiencies_identical=false.
 # Maximum allowed difference between the lowest and highest plane efficiency

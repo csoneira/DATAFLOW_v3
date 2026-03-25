@@ -39,7 +39,7 @@ if STEP_DIR.parents[1].name == "STEPS":
 else:
     PIPELINE_DIR = STEP_DIR.parents[1]
 REPO_ROOT = PIPELINE_DIR.parent
-DEFAULT_CONFIG = PIPELINE_DIR / "config_method.json"
+DEFAULT_CONFIG = PIPELINE_DIR / "config_step_1.1_method.json"
 
 FILES_DIR = STEP_DIR / "OUTPUTS" / "FILES"
 PLOTS_DIR = STEP_DIR / "OUTPUTS" / "PLOTS"
@@ -141,6 +141,10 @@ def _task_rate_histogram_metadata_path(station_id: int, task_id: int) -> Path:
     return _task_metadata_dir(station_id, task_id) / f"task_{task_id}_metadata_rate_histogram.csv"
 
 
+def _task_efficiency_metadata_path(station_id: int, task_id: int) -> Path:
+    return _task_metadata_dir(station_id, task_id) / f"task_{task_id}_metadata_efficiency.csv"
+
+
 def _load_config(path: Path) -> dict:
     def _merge_dicts(base: dict, override: dict) -> dict:
         out = dict(base)
@@ -157,13 +161,13 @@ def _load_config(path: Path) -> dict:
     else:
         log.warning("Config file not found: %s", path)
 
-    plots_path = path.with_name("config_plots.json")
+    plots_path = path.with_name("config_step_1.1_plots.json")
     if plots_path != path and plots_path.exists():
         plots_cfg = json.loads(plots_path.read_text(encoding="utf-8"))
         cfg = _merge_dicts(cfg, plots_cfg)
         log.info("Loaded plot config: %s", plots_path)
 
-    runtime_path = path.with_name("config_runtime.json")
+    runtime_path = path.with_name("config_step_1.1_runtime.json")
     if runtime_path.exists():
         runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
         cfg = _merge_dicts(cfg, runtime_cfg)
@@ -209,6 +213,20 @@ def _safe_task_ids(raw: object) -> list[int]:
             except (TypeError, ValueError):
                 continue
     return sorted(set(out)) or [1]
+
+
+def _resolve_efficiency_metadata_source_task_id(raw: object, *, default_task_id: int) -> int:
+    if raw in (None, "", "null", "None", "same"):
+        return int(default_task_id)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        log.warning(
+            "Invalid step_1_1.efficiency_metadata_source_task_id=%r; using task %d.",
+            raw,
+            int(default_task_id),
+        )
+        return int(default_task_id)
 
 
 def _normalize_string_list(raw: object) -> list[str]:
@@ -411,6 +429,27 @@ def _merge_metadata_sources_equal_level(
     return merged, info
 
 
+def _merge_optional_metadata_sources_left(
+    *,
+    merged: pd.DataFrame,
+    info: dict,
+    optional_sources: list[tuple[str, pd.DataFrame]],
+) -> tuple[pd.DataFrame, dict]:
+    out = merged.copy()
+    for source_name, source_df in optional_sources:
+        overlap = sorted(
+            set(out.columns).intersection(set(source_df.columns)) - {"filename_base"}
+        )
+        renamed = {}
+        if overlap:
+            renamed = {col: f"{source_name}__{col}" for col in overlap}
+            source_df = source_df.rename(columns=renamed)
+        out = out.merge(source_df, on="filename_base", how="left")
+        info["renamed_overlap_columns"][source_name] = renamed
+        info[f"rows_after_left_merge_with_{source_name}"] = int(len(out))
+    return out, info
+
+
 def _normalize_metadata_agg(raw: object) -> str:
     """STEP 1.1 uses a single aggregation policy for determinism."""
     value = str(raw).strip().lower() if raw is not None else "latest"
@@ -530,6 +569,7 @@ def main() -> int:
             ignored,
         )
     cfg_11 = config.get("step_1_1", {})
+    efficiency_metadata_source_task_raw = cfg_11.get("efficiency_metadata_source_task_id", None)
     min_rows_raw = cfg_11.get("min_rows_for_dataset", 0)
     try:
         min_rows_for_dataset = max(0, int(min_rows_raw))
@@ -663,6 +703,11 @@ def main() -> int:
         specific_path = _task_specific_metadata_path(station_id, task_id)
         trigger_path = _task_trigger_type_metadata_path(station_id, task_id)
         rate_hist_path = _task_rate_histogram_metadata_path(station_id, task_id)
+        efficiency_source_task_id = _resolve_efficiency_metadata_source_task_id(
+            efficiency_metadata_source_task_raw,
+            default_task_id=task_id,
+        )
+        efficiency_path = _task_efficiency_metadata_path(station_id, efficiency_source_task_id)
         try:
             trigger_df = _load_task_metadata_csv(
                 station_id=station_id,
@@ -689,6 +734,36 @@ def main() -> int:
             log.error("%s", exc)
             return 1
 
+        optional_sources: list[tuple[str, pd.DataFrame]] = []
+        if efficiency_path.exists():
+            try:
+                efficiency_df = _load_task_metadata_csv(
+                    station_id=station_id,
+                    task_id=efficiency_source_task_id,
+                    source_name="efficiency",
+                    path=efficiency_path,
+                    metadata_agg=metadata_agg,
+                )
+            except (FileNotFoundError, KeyError) as exc:
+                log.error("%s", exc)
+                return 1
+            if not efficiency_df.empty:
+                optional_sources.append(("efficiency", efficiency_df))
+            else:
+                log.warning(
+                    "Optional efficiency metadata is empty for task %d (source task %d): %s",
+                    task_id,
+                    efficiency_source_task_id,
+                    efficiency_path,
+                )
+        else:
+            log.warning(
+                "Optional efficiency metadata missing for task %d (source task %d): %s",
+                task_id,
+                efficiency_source_task_id,
+                efficiency_path,
+            )
+
         meta_df, merge_info = _merge_metadata_sources_equal_level(
             task_id=task_id,
             ordered_sources=[
@@ -697,6 +772,12 @@ def main() -> int:
                 ("specific", specific_df),
             ],
         )
+        if optional_sources:
+            meta_df, merge_info = _merge_optional_metadata_sources_left(
+                merged=meta_df,
+                info=merge_info,
+                optional_sources=optional_sources,
+            )
         log.info(
             "  Metadata merged at equal level for task %d: rows=%d, columns=%d.",
             task_id,
@@ -793,6 +874,14 @@ def main() -> int:
         "mesh_support_filter_mode": "disabled",
         "rows_removed_outside_mesh_support": 0,
         "metadata_sources_required": ["trigger_type", "rate_histogram", "specific"],
+        "metadata_sources_optional": ["efficiency"],
+        "efficiency_metadata_source_task_id": (
+            None if efficiency_metadata_source_task_raw in (None, "", "null", "None", "same")
+            else int(_resolve_efficiency_metadata_source_task_id(
+                efficiency_metadata_source_task_raw,
+                default_task_id=task_ids[0],
+            ))
+        ),
         "min_rows_for_dataset": int(min_rows_for_dataset),
         "event_count_column_used": ev_col,
         "rows_removed_below_min_rows": int(removed_below_min_rows),

@@ -73,6 +73,17 @@ PDF_TARGETS = {
         / "execution_metadata_report.pdf",
         "description": "Execution metadata report",
     },
+    "efficiency_metadata_report": {
+        "path": BASE_DIR
+        / "MASTER"
+        / "ANCILLARY"
+        / "PLOTTERS"
+        / "METADATA"
+        / "EFFICIENCIES"
+        / "PLOTS"
+        / "efficiency_metadata_report.pdf",
+        "description": "Efficiency metadata report",
+    },
     "simulated_data_evolution_report": {
         "path": BASE_DIR
         / "MASTER"
@@ -133,6 +144,7 @@ HELP_TEXT = (
     "  /filter_metadata_report - Filter metadata PDF.\n"
     "  /rates_metadata_report - Rates metadata PDF.\n"
     "  /execution_metadata_report - Execution metadata PDF.\n"
+    "  /efficiency_metadata_report - Efficiency metadata PDF.\n"
     "  /simulated_data_evolution_report - Simulated data evolution report PDF.\n\n"
     "Maintenance Tools:\n"
     "  /clean_dataflow_status - Run clean_dataflow.sh --compact to show disk usage.\n"

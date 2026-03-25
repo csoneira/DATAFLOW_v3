@@ -1,0 +1,429 @@
+{
+  "_comment": "Pipeline configuration for INFERENCE_DICTIONARY_VALIDATION",
+  "station_id": 0,
+  "task_ids": [
+    5
+  ],
+  "date_from": null,
+  "_date_from_comment": "ISO 8601 string ('2026-01-01' or '2026-01-01T00:00:00Z'). Null = no lower bound. Used by STEP 4.1.",
+  "date_to": null,
+  "_date_to_comment": "ISO 8601 string. Null = no upper bound. Used by STEP 4.1.",
+  "_runtime_paths_comment": "Optional runtime overrides and execution-only passthrough columns are defined in config_step_1.1_runtime.json.",
+  "feature_space_config_json": null,
+  "_feature_space_config_json_comment": "Optional override for the dedicated feature-space definition file. Null uses MINGO_DICTIONARY_CREATION_AND_TEST/config_step_1.2_feature_space.json.",
+  "z_position_config": [
+    0,
+    65,
+    130,
+    195
+  ],
+  "_z_position_config_comment": "Set to [z1, z2, z3, z4] to select a specific z config, e.g. [0.0, 100.0, 200.0, 400.0]. If null, a random one is chosen.",
+  "metadata_agg": "latest",
+  "common_feature_space": {
+    "feature_columns": "step12_selected",
+    "derived_features": {
+      "prefix": "last",
+      "trigger_types": [
+        "1234",
+        "123",
+        "234",
+        "124",
+        "134",
+        "12",
+        "23",
+        "34"
+      ],
+      "include_to_tt_rate_hz": false,
+      "include_trigger_type_rates": false,
+      "include_rate_histogram": false,
+      "physics_features": []
+    },
+    "include_global_rate": false,
+    "global_rate_col": "events_per_second_global_rate"
+  },
+  "_common_feature_space_comment": "Single source of truth for inference feature-space selection across STEP 1.2 continuity, STEP 2.1, STEP 3.3, and STEP 4.2. Step-local step_2_1 values with the same keys override this block only when explicitly set.",
+  "step_1_1": {
+    "_path_overrides_comment": "Optional simulation_params_csv override is defined at top-level in config_step_1.1_runtime.json.",
+    "min_rows_for_dataset": 40000,
+    "_min_rows_for_dataset_comment": "STEP 1.1 keeps only rows with event_count_column >= this threshold (selected_rows/requested_rows fallback chain).",
+    "metadata_prefix": "auto",
+    "_metadata_prefix_comment": "TT prefix for STEP 1.1 global-rate derivation. 'auto' uses task_ids and prioritizes the most advanced task prefix with fallback to older prefixes.",
+    "efficiency_metadata_source_task_id": 4,
+    "_efficiency_metadata_source_task_id_comment": "Task ID that provides optional task_<id>_metadata_efficiency.csv sidecar data for STEP 1.1. Use null or 'same' to read efficiency metadata from the same task_id as the main collection stage.",
+    "parameter_space_columns": [
+      "flux_cm2_min",
+      "eff_p1",
+      "eff_p2",
+      "eff_p3",
+      "eff_p4"
+    ],
+    "_parameter_space_columns_comment": "STEP 1.1 parameter-space selector. Use 'auto' (flux + efficiencies + optional cos_n) or an explicit list.",
+    "parameter_space_exclude_columns": [
+      "cos_n"
+    ],
+    "_parameter_space_exclude_columns_comment": "Columns removed from parameter space even when auto is used.",
+    "parameter_space_drop_constant_columns": true,
+    "_parameter_space_drop_constant_columns_comment": "If true, STEP 1.1 removes selected parameter columns that are constant in the selected z-configuration.",
+    "drop_unselected_parameter_columns_from_dataset": true,
+    "_drop_unselected_parameter_columns_from_dataset_comment": "If true, STEP 1.1 removes non-selected parameter columns from collected_data.csv."
+  },
+  "step_1_2": {
+    "transform_keep_columns": [
+      "filename_base",
+      "task_id",
+      "param_hash_x",
+      "param_set_id",
+      "flux_cm2_min",
+      "z_plane_1",
+      "z_plane_2",
+      "z_plane_3",
+      "z_plane_4",
+      "eff_p1",
+      "eff_p2",
+      "eff_p3",
+      "eff_p4",
+      "eff_sim_1",
+      "eff_sim_2",
+      "eff_sim_3",
+      "eff_sim_4",
+      "selected_rows",
+      "requested_rows",
+      "eff_empirical_1",
+      "eff_empirical_2",
+      "eff_empirical_3",
+      "eff_empirical_4",
+      "events_per_second_global_rate",
+      "events_per_second_global_rate_raw_tt",
+      "events_per_second_global_rate_clean_tt",
+      "events_per_second_global_rate_cal_tt",
+      "events_per_second_global_rate_list_tt",
+      "events_per_second_global_rate_fit_tt",
+      "events_per_second_global_rate_post_tt",
+      "events_per_second_*_rate_hz",
+      "efficiency_product_4planes",
+      "efficiency_product_123",
+      "efficiency_product_234",
+      "efficiency_product_12",
+      "efficiency_product_34",
+      "flux_proxy_rate_div_effprod",
+      "flux_proxy_rate_div_effprod_123",
+      "flux_proxy_rate_div_effprod_234",
+      "flux_proxy_rate_div_effprod_12",
+      "flux_proxy_rate_div_effprod_34"
+    ],
+    "_transform_keep_columns_comment": "Legacy fallback for STEP 1.2 materialized columns when config_step_1.2_feature_space.json is absent. Exact names or wildcard patterns are allowed; config_step_1.2_feature_space.json is now the preferred source of truth.",
+    "feature_space_plot_pairs": [
+      [
+        "post_tt_four_plane_rate_hz",
+        "post_tt_two_plane_total_rate_hz"
+      ],
+      [
+        "post_tt_three_plane_total_rate_hz",
+        "flux_cm2_min"
+      ],
+      [
+        "events_per_second_global_rate",
+        "post_tt_four_plane_rate_hz"
+      ]
+    ],
+    "_feature_space_plot_pairs_comment": "Each pair [x,y] is rendered in STEP 1.2 as full-range + zoomed central-region feature-space panels.",
+    "feature_space_plot_zoom_quantiles": [
+      0.05,
+      0.95
+    ],
+    "_feature_space_plot_zoom_quantiles_comment": "Central quantile window [q_low, q_high] for the zoomed feature-space region plots.",
+    "feature_space_plot_sample_max_rows": 25000,
+    "_feature_space_plot_sample_max_rows_comment": "Maximum sampled rows used to render feature-space region plots for speed/readability.",
+    "feature_space_plot_random_seed": 1234,
+    "_feature_space_plot_random_seed_comment": "Deterministic random seed for feature-space plot row sampling.",
+    "feature_scatter_matrix_max_side": 15,
+    "_feature_scatter_matrix_max_side_comment": "Maximum number of feature columns plotted per side in the STEP 1.2 scatter matrix (caps the 1_2_4_feature_scatter_matrix.png grid).",
+    "min_simulated_efficiency": 0.5,
+    "_min_simulated_efficiency_comment": "Rows with any eff_sim_i below this threshold are removed in STEP 1.2.",
+    "max_simulated_efficiency_spread": 0.35,
+    "_max_simulated_efficiency_spread_comment": "Rows where max(eff_sim) - min(eff_sim) exceeds this value are removed in STEP 1.2.",
+    "feature_matrix_plot_include_rate_histogram": false,
+    "_feature_matrix_plot_include_rate_histogram_comment": "Controls matrix-plot display in STEP 1.2 and STEP 1.4. true: include all events_per_second_<bin>_rate_hz columns. false: suppress those columns and show one blank placeholder row/column for the histogram block.",
+    "outlier_eff_2_range": [
+      0,
+      1.0
+    ],
+    "outlier_eff_3_range": [
+      0,
+      1.0
+    ],
+    "dictionary_relerr_eff_1_fit_max_pct": 25,
+    "dictionary_relerr_eff_2_fit_max_pct": 25,
+    "dictionary_relerr_eff_3_fit_max_pct": 25,
+    "dictionary_relerr_eff_4_fit_max_pct": 25,
+    "dictionary_min_events": 50000,
+    "dictionary_exclude_rows_with_all_sim_eff_equal": true,
+    "_dictionary_exclude_rows_with_all_sim_eff_equal_comment": "If true, STEP 1.2 excludes dictionary candidates where eff_sim_1 == eff_sim_2 == eff_sim_3 == eff_sim_4.",
+    "dictionary_paramset_prototype": "all_candidates",
+    "_dictionary_paramset_prototype_comment": "How STEP 1.2 builds dictionary support from quality-passing candidates: all_candidates (no param-set deduplication), max_events (legacy one-row per param set), mean_numeric, or median_numeric. all_candidates preserves stochastic feature clouds and can reduce inverse-map aliasing.",
+    "eff_fit_polynomial_order": 4,
+    "_eff_fit_polynomial_order_comment": "Polynomial order n for empirical-vs-simulated fits used in STEP 1.2 and STEP 4.2 efficiency correction.",
+    "continuity_validation": {
+      "enabled": true,
+      "fail_on_error": false,
+      "local_continuity_k": 10,
+      "local_continuity_cv_p95_max": 0.50,
+      "topology_k": 12,
+      "topology_overlap_p10_min": 0.35,
+      "topology_overlap_median_min": 0.55,
+      "topology_forward_expansion_p95_max": 3.0,
+      "topology_backward_expansion_p95_max": 3.0,
+      "topology_bad_fraction_max": 0.08,
+      "injectivity_enabled": true,
+      "injectivity_k": 10,
+      "injectivity_span_fraction_p95_max": 0.35,
+      "injectivity_flux_span_fraction_p95_max": 0.30,
+      "injectivity_point_span_fraction_max": 0.45,
+      "injectivity_bad_fraction_max": 0.05,
+      "out_of_support_max_fraction": 0.30,
+      "density_grid_bins": 5,
+      "density_ratio_max": 20.0,
+      "filter_enabled": true,
+      "filter_max_drop_fraction": 0.25,
+      "filter_allow_large_drop": false,
+      "filter_include_topology": true,
+      "filter_include_injectivity": true,
+      "feature_selection_size_penalty": 0.0
+    },
+    "_continuity_validation_comment": "Dictionary continuity checks in STEP 1.2. fail_on_error=true aborts on FAIL status, preventing silent use of ambiguous dictionaries. local_continuity_* controls CV-based smoothness in feature->parameter inverse mapping. topology_* controls bidirectional neighborhood continuity (parameter<->feature) using kNN overlap and neighborhood expansion ratios. injectivity_* enforces local feature-space injectivity by limiting parameter-span spread inside feature-neighborhoods (especially flux). out_of_support_max_fraction: max allowed fraction of dataset outside dictionary range per eff plane. density_grid_bins: grid resolution for uniformity. density_ratio_max: max ratio max/median density. filter_enabled=true removes rows flagged by continuity checks before final save; filter_max_drop_fraction limits removals unless filter_allow_large_drop=true. filter_include_topology/filter_include_injectivity toggle those flags in filtering. feature_selection_size_penalty applies an optional per-feature complexity penalty when ranking STEP 1.2 feature subsets."
+  },
+  "step_1_3": {
+    "dataset_holdout_fraction": 0.2,
+    "_dataset_holdout_fraction_comment": "STEP 1.3 split fraction for holdout dataset (evaluation set not used in dictionary training).",
+    "split_random_seed": 42,
+    "_split_random_seed_comment": "Deterministic split seed for dictionary/holdout split.",
+    "split_group_column": "auto",
+    "_split_group_column_comment": "Group-aware split column (auto -> param_set_id, then param_hash_x, else row-random).",
+    "dictionary_min_events": 70000,
+    "_dictionary_min_events_comment": "Primary STEP 1.3 quality cut for dictionary rows. Lowered from 150000 to 70000 so newly generated parameter points are still eligible while keeping a strict event-count cut.",
+    "dictionary_relerr_eff_1_max_pct": 25.0,
+    "dictionary_relerr_eff_2_max_pct": 25.0,
+    "dictionary_relerr_eff_3_max_pct": 25.0,
+    "dictionary_relerr_eff_4_max_pct": 25.0,
+    "_dictionary_relerr_comment": "Secondary dictionary quality cuts: |eff_empirical - eff_sim| / eff_sim [%] per plane.",
+    "dictionary_require_positive_global_rate": true,
+    "dictionary_require_finite_columns": [
+      "flux_cm2_min",
+      "events_per_second_global_rate",
+      "eff_empirical_1",
+      "eff_empirical_2",
+      "eff_empirical_3",
+      "eff_empirical_4",
+      "eff_sim_1",
+      "eff_sim_2",
+      "eff_sim_3",
+      "eff_sim_4"
+    ],
+    "_dictionary_require_finite_columns_comment": "Simple sanity filter: remove dictionary rows with missing values in these key columns."
+  },
+  "step_1_4": {
+    "feature_columns": "auto",
+    "_feature_columns_comment": "Feature-space columns for continuity and neighborhood correspondence. 'auto' loads STEP 1.3 selected_feature_columns.json.",
+    "parameter_columns": "auto",
+    "_parameter_columns_comment": "Parameter-space columns used to compute component-wise absolute deltas against nearest feature neighbors. 'auto' loads STEP 1.1 parameter_space_columns.json.",
+    "neighborhood_matrix_plot_sample_max_rows": 900,
+    "_neighborhood_matrix_plot_sample_max_rows_comment": "Maximum background rows shown in STEP 1.4 neighborhood correspondence matrices (selected neighborhood points are always kept).",
+    "param_to_feature_ball_convex_enabled": false,
+    "_param_to_feature_ball_convex_enabled_comment": "Optional extra STEP 1.4 plot (parameter-ball to feature-hull). false keeps only the bidirectional neighborhood matrices.",
+    "fail_on_error": false
+  },
+  "step_1_5": {
+    "feature_distance_definition": "auto",
+    "_feature_distance_definition_comment": "Distance mode for feature space. 'auto' tries all normalization×Lp combos and per-feature weights via LOO on dictionary. Options: auto | l2_robust_zscore | l2_standard_zscore | l2_raw | l1_robust_zscore | l1_standard_zscore | l1_raw (legacy aliases: l2_zscore, l1_zscore).",
+    "feature_group_config_json": "config_step_1.5_feature_groups.json",
+    "_feature_group_config_json_comment": "Optional override for STEP 1.5 feature-group definitions. Defaults to config_step_1.5_feature_groups.json when present."
+  },
+  "step_2_1": {
+    "_feature_space_source_comment": "Feature-space keys (feature_columns, derived_features, include_global_rate, global_rate_col) are inherited from top-level common_feature_space unless explicitly overridden here.",
+    "shared_parameter_exclusion_mode": "off",
+    "_shared_parameter_exclusion_mode_comment": "Options: 'off' | 'full' | 'partial'. 'off' keeps continuity-focused neighbor selection; 'full' excludes candidates only when all selected physical parameters coincide; 'partial' excludes when any selected physical parameter coincides.",
+    "shared_parameter_exclusion_columns": "auto",
+    "_shared_parameter_exclusion_columns_comment": "'auto' uses estimated parameter columns; list/CSV string allowed.",
+    "shared_parameter_exclusion_ignore": [
+      "cos_n"
+    ],
+    "_shared_parameter_exclusion_ignore_comment": "Columns ignored in shared-value exclusion.",
+    "shared_parameter_match_atol": 1e-12,
+    "_shared_parameter_match_atol_comment": "Absolute tolerance for numeric equality checks in shared-parameter candidate exclusion.",
+    "distance_metric": "l2_zscore",
+    "_distance_metric_comment": "Options: l2_zscore, l2_raw, chi2, poisson",
+    "exclude_dictionary_entries_from_plots": true,
+    "exclude_dictionary_paramset_matches_from_plots": true,
+    "_exclude_dictionary_like_plots_comment": "STEP 2.1 diagnostics/plots (distance and true-vs-estimated) exclude dictionary-origin or dictionary-equivalent rows so near-zero artifacts do not bias visual interpretation.",
+    "density_correction_enabled": false,
+    "_density_correction_enabled_comment": "STEP 2.1-local override. false avoids feature-space density reweighting, which can over-amplify flux outliers.",
+    "interpolation_k": null,
+    "_interpolation_k_comment": "Legacy fallback for inverse mapping neighbor count. Prefer step_2_1.inverse_mapping.neighbor_selection + neighbor_count.",
+    "inverse_mapping": {
+      "estimation_mode": "two_stage_eff_address_then_flux",
+      "neighbor_selection": "knn",
+      "neighbor_count": 320,
+      "weighting": "inverse_distance",
+      "inverse_distance_power": 2.0,
+      "softmax_temperature": 1.0,
+      "distance_floor": 1e-12,
+      "aggregation": "local_linear",
+      "stage2_efficiency_conditioning_weight": 1.0,
+      "stage2_efficiency_gate_max": 0.2,
+      "stage2_efficiency_gate_min_candidates": 24,
+      "stage2_use_rate_histogram": true,
+      "stage2_histogram_distance_weight": 1.0,
+      "histogram_distance_weight": 1.0,
+      "histogram_distance_blend_mode": "normalized",
+      "efficiency_vector_distance": {
+        "enabled": true,
+        "weight": 1.0,
+        "blend_mode": "normalized",
+        "stage2_enabled": true,
+        "stage2_weight": 1.0,
+        "uncertainty_floor": 0.02,
+        "min_valid_bins_per_vector": 3,
+        "fiducial": {
+          "x_abs_max_mm": null,
+          "y_abs_max_mm": null,
+          "theta_max_deg": null
+        }
+      }
+    },
+    "_inverse_mapping_comment": "Inverse mapping from feature space to parameter space. estimation_mode: single_stage|two_stage_eff_then_flux|two_stage_eff_address_then_flux. neighbor_selection: nearest|knn|all. weighting: uniform|inverse_distance|softmax. aggregation: weighted_mean|weighted_median|local_linear. stage2_efficiency_conditioning_weight controls flux-stage penalty to efficiency mismatch in two-stage modes. stage2_efficiency_gate_max and stage2_efficiency_gate_min_candidates define the hard address gate in two_stage_eff_address_then_flux. histogram_distance_blend_mode: normalized|raw. efficiency_vector_distance controls the grouped X/Y/theta efficiency-vector distance family. Note: once a STEP 1.5 distance_definition.json artifact is loaded, grouped vector terms are taken from that artifact and runtime estimation is forced back to single_stage; the legacy stage2_* group toggles are not used in that post-STEP-1.5 path."
+  },
+  "step_2_2": {
+    "exclude_dictionary_entries": true,
+    "exclude_dictionary_paramset_matches": true,
+    "plot_population": "off_dict_strict",
+    "_exclude_dictionary_like_comment": "STEP 2.2 computes both all-rows and off-dict-strict metrics. Top-level summary keys use off-dict-strict as primary scope by default.",
+    "_plot_population_comment": "Population used for STEP 2.2 plots: 'off_dict_strict' (recommended realism) or 'all'."
+  },
+  "step_2_3": {
+    "n_bins_per_param": {
+      "__default__": 1,
+      "cos_n": 1,
+      "flux_cm2_min": 2,
+      "eff_sim_1": 2,
+      "eff_sim_2": 2,
+      "eff_sim_3": 2,
+      "eff_sim_4": 2
+    },
+    "_n_bins_per_param_comment": "Set an integer to use the same bins for all parameters, or a dict with per-parameter bin counts.",
+    "n_bins_events": 2,
+    "exclude_dictionary_entries": true,
+    "_exclude_dictionary_entries_comment": "If true, rows marked true_is_dictionary_entry are removed before LUT/error calculations.",
+    "relerr_filter_pct": [
+      -2.0,
+      2.0
+    ],
+    "_relerr_filter_pct_comment": "Signed relative-error window [min, max] (%) applied before histogramming and LUT statistics.",
+    "min_bin_count": 1,
+    "quantiles": [
+      0.5,
+      0.68,
+      0.9,
+      0.95
+    ],
+    "outlier_iqr_factor": 3,
+    "_outlier_iqr_factor_comment": "Outliers are defined as points outside [Q1 - factor*IQR, Q3 + factor*IQR]."
+  },
+  "step_3_1": {
+    "_path_overrides_comment": "Optional source_csv/rate_dictionary_csv overrides are defined in config_step_1.1_runtime.json.",
+    "curve_data_mode": "dataset_data_curve",
+    "_curve_data_mode_comment": "STEP 3.1 owns the high-level curve mode. 'synthetic_data_curve' first defines a parameter-space curve and lets STEP 3.2 synthesize feature-space rows. 'dataset_data_curve' builds the curve directly from real dataset rows and STEP 3.2 copies those exact entries.",
+    "source_table": "dataset",
+    "_source_table_comment": "dataset or dictionary. Used when source_csv is null.",
+    "parameter_curve_columns": [
+      "flux_cm2_min",
+      "eff_sim_1",
+      "eff_sim_2",
+      "eff_sim_3",
+      "eff_sim_4"
+    ],
+    "_parameter_curve_columns_comment": "Parameter-space columns used to generate the STEP 3.1 curve. Columns must exist in the rate dictionary.",
+    "identical_efficiencies": false,
+    "_identical_efficiencies_comment": "If true, all available eff_sim_i curve coordinates are forced to the same trajectory as eff_sim_1.",
+    "flux_range": [
+      0.92,
+      1.08
+    ],
+    "_flux_range_comment": "Set [min, max] for flux movement. Use equal values for constant flux.",
+    "eff_range": [
+      0.75,
+      0.93
+    ],
+    "_eff_range_comment": "Set [min, max] for efficiency movement. Use equal values for constant efficiency.",
+    "duration_hours": 48.0,
+    "dense_points": 4000,
+    "_dense_points_comment": "High-resolution points used for event integration along the smooth trajectory.",
+    "start_time_utc": "2026-01-01T00:00:00Z",
+    "random_seed": null,
+    "_random_seed_comment": "(1784447138, 1168061690 was nice) - Set an integer to reproduce exactly the same curve. Null means random seed each run (saved in summary JSON).",
+    "events_per_file": 90000,
+    "_events_per_file_comment": "Target counts per synthetic file used to discretize the trajectory.",
+    "include_partial_last_file": false,
+    "_include_partial_last_file_comment": "If true, include final partial segment when remaining events are below events_per_file.",
+    "rate_column": "events_per_second_global_rate",
+    "rate_flux_column": "flux_cm2_min",
+    "rate_eff_column": "eff_sim_1",
+    "weighted_feature_columns": "auto",
+    "_weighted_feature_columns_comment": "Feature-space columns synthesized by weighted averaging over dictionary points. Use 'auto' or an explicit list.",
+    "weighting_top_k": 64,
+    "_weighting_top_k_comment": "Top-K nearest dictionary points (in parameter space) kept per curve point for weighting.",
+    "weighting_power": 1.0,
+    "_weighting_power_comment": "Inverse-distance exponent p used in weights 1/(distance^p).",
+    "n_harmonics": 2,
+    "_n_harmonics_comment": "Higher values add more local structure while staying smooth.",
+    "roughness": 3,
+    "_roughness_comment": "Higher values suppress high-frequency components (smoother look).",
+    "smoothing_window_points": 11,
+    "smoothing_passes": 2
+  },
+  "step_3_2": {
+    "_path_overrides_comment": "Optional CSV path overrides moved to config_step_1.1_runtime.json.",
+    "_weighting_source_comment": "STEP 3.2 now follows the STEP 3.1 curve_data_mode. For synthetic_data_curve it still uses step_1_3.simple_weighting / weighting_shared to synthesize feature-space rows. For dataset_data_curve it copies the exact STEP 3.1 source rows and bypasses STEP 3.2 row selection."
+  },
+  "step_3_3": {
+    "_path_overrides_comment": "Optional synthetic_dataset_csv/dictionary_csv/uncertainty_lut_csv/uncertainty_lut_meta_json/step32_diagnostic_center_csv/build_summary_json are defined in config_step_1.1_runtime.json."
+  },
+  "step_4_1": {
+    "station_id": 1,
+    "_station_id_comment": "Station selector for STEP 4 real-data collection. Use 1 or 'MINGO01'. Null falls back to top-level station_id.",
+    "task_ids": [
+      5
+    ],
+    "_task_ids_comment": "Task IDs for STEP 4 real-data collection (e.g. [1] or [1,2,3,4,5]). Null falls back to top-level task_ids.",
+    "efficiency_metadata_source_task_id": 4,
+    "_efficiency_metadata_source_task_id_comment": "Task ID that provides optional task_<id>_metadata_efficiency.csv sidecar data for STEP 4.1. Use null or 'same' to read efficiency metadata from the same task_id as the main collection stage.",
+    "_path_overrides_comment": "Optional dictionary_csv/build_summary_json path overrides moved to config_step_1.1_runtime.json.",
+    "timestamp_column": "execution_timestamp",
+    "_timestamp_column_comment": "Column used for latest-execution aggregation per filename_base.",
+    "date_from": "2024-09-16",
+    "_date_from_comment": "Optional ISO 8601 lower bound applied to data-time parsed from filename_base (inclusive).",
+    "date_to": "2024-10-07",
+    "_date_to_comment": "Optional ISO 8601 upper bound applied to data-time parsed from filename_base (inclusive).",
+    "event_count_column": "auto",
+    "_event_count_column_comment": "Column used for event-count filtering/histogram. 'auto' picks the best TT_1234 count-like column, then falls back to global_rate*duration.",
+    "min_n_events": 30000,
+    "_min_n_events_comment": "STEP 4.1 keeps only rows with event count strictly greater than this threshold. Set null to disable.",
+    "timeline_freq": "D",
+    "_timeline_freq_comment": "Pandas time-floor frequency used for timeline coverage plot bins (e.g., D, 12H, W)."
+  },
+  "step_4_2": {
+    "_path_overrides_comment": "Optional real_collected_csv/dictionary_csv/uncertainty_lut_csv/uncertainty_lut_meta_json moved to config_step_1.1_runtime.json.",
+    "_criteria_source_comment": "STEP 4.2 matching criteria are always inherited from step_2_1, with feature-space keys first resolved from top-level common_feature_space then optional step_2_1 overrides (feature_columns, distance_metric, interpolation_k, include_global_rate). Global-rate columns are auto-detected in STEP 4.x diagnostics.",
+    "inherit_step_2_1_method": true,
+    "_inherit_step_2_1_method_comment": "If true (recommended), STEP 4.2 uses the exact same inference method and feature-space definition as STEP 2.1, without STEP 4.2-specific neighbor/feature overrides.",
+    "efficiency_source_prefix_mode": "feature_consistent",
+    "_efficiency_source_prefix_mode_comment": "How STEP 4.2 computes eff*_from_data for diagnostics/plots. 'feature_consistent' uses the same prefix ordering as inference features (recommended). 'task_chain' keeps legacy task-priority prefixes.",
+    "exclude_same_file": false,
+    "shared_parameter_exclusion_ignore": [],
+    "_shared_parameter_exclusion_ignore_comment": "Only used when inherit_step_2_1_method=false. Parameter-space columns to ignore in shared-parameter exclusion. Keep empty if cos_n or other dimensions should participate normally.",
+    "uncertainty_quantile": 0.68,
+    "n_events_column": "auto",
+    "_n_events_column_comment": "Column used as n_events for LUT interpolation. 'auto' selects the best available count-like column.",
+    "coverage_frequency": "D",
+    "_coverage_frequency_comment": "Time-bin frequency for coverage-fraction plot when timestamps are available."
+  }
+}

@@ -9,8 +9,8 @@ plots:
   timtrack_residuals_combo: usual
   combined_timeseries_combo: usual
   combined_residuals_combo: usual
-  hist_core_errs_combined: essential
-  hist_core_errs_combined_with_fits: essential
+  hist_core_errs_combined: usual
+  hist_core_errs_combined_with_fits: usual
   stat_window_accumulation: usual
   trigger_types_raw_and_list: usual
   trigger_types_tracking_and_list: usual
@@ -18,21 +18,21 @@ plots:
   trigger_types_definitive_tt_and_raw: usual
   timtrack_results_hexbin_combination_projections: usual
   theta_det_theta_zoom_tracking_tt: usual
-  polar_theta_phi_definitive_tt_2d: essential
+  polar_theta_phi_definitive_tt_2d: usual
   polar_theta_phi_tracking_tt_2d: usual
   events_per_second_by_plane_cardinality_double_row: usual
   timtrack_residuals_gaussian: usual
   external_residuals_gaussian: usual
   all_channels_charge: usual
-  event_display_sample: essential
-  track_consistency_loo_residuals: essential
-  strip_hit_occupancy: essential
+  event_display_sample: usual
+  track_consistency_loo_residuals: usual
+  strip_hit_occupancy: usual
   track_based_efficiency: essential
   track_based_efficiency_tt_stability: essential
   track_based_efficiency_vs_theta: essential
-  chi2_charge_populations: essential
-  chi2_residuals_populations: essential
-  event_display_sample_3fold: essential
-  chi2_charge_populations_3fold: essential
-  chi2_residuals_populations_3fold: essential
-  adj_dis_comparison: essential
+  chi2_charge_populations: usual
+  chi2_residuals_populations: usual
+  event_display_sample_3fold: usual
+  chi2_charge_populations_3fold: usual
+  chi2_residuals_populations_3fold: usual
+  adj_dis_comparison: usual

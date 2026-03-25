@@ -13,7 +13,7 @@ plots:
   y_position_by_cal_tt: usual
   strip_variable_pairgrid: usual
   self_trigger_strip_variable_pairgrid: usual
-  rpc_variables_hexbin: usual
+  rpc_variables_hexbin: essential
   rpc_variables_hexbin_low_charge: usual
   filter6_tsum_debug: debug
   filter6_tdif_debug: debug
@@ -29,7 +29,7 @@ plots:
   list_tt_transition_matrices: usual
   list_tt_retention_curves: usual
   list_tt_minimum_charge_distributions: usual
-  list_tt_empirical_efficiency_vs_threshold: usual
+  list_tt_empirical_efficiency_vs_threshold: essential
   full_topology_threshold_retention: usual
   full_topology_exact_retention: usual
   full_topology_class_fraction: usual

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -100,6 +101,10 @@ def test_best_match_group_shares_are_present_and_sum_to_one() -> None:
     assert 0.0 <= eff_share <= 1.0
     assert 0.0 <= tt_share <= 1.0
     assert 0.0 <= other_share <= 1.0
+    term_shares = json.loads(str(out.loc[0, "best_distance_term_shares_json"]))
+    assert term_shares == {"scalar_base": 1.0}
+    assert str(out.loc[0, "best_distance_dominant_term"]) == "scalar_base"
+    assert float(out.loc[0, "best_distance_dominant_term_share"]) == 1.0
 
 
 def test_derived_tt_global_feature_is_not_counted_as_raw_tt_share() -> None:

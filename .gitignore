@@ -58,7 +58,11 @@ OPERATIONS_RUNTIME/LOG_THROTTLE/*.ts
 !MASTER/CONFIG_FILES/STAGE_1/LAB_LOGS/config_lab_logs.csv
 !grafana/**/*.json
 !MINGO_DICTIONARY_CREATION_AND_TEST/config.json
-!MINGO_DICTIONARY_CREATION_AND_TEST/config_runtime.json
+!MINGO_DICTIONARY_CREATION_AND_TEST/config_step_1.1_method.json
+!MINGO_DICTIONARY_CREATION_AND_TEST/config_step_1.1_plots.json
+!MINGO_DICTIONARY_CREATION_AND_TEST/config_step_1.1_runtime.json
+!MINGO_DICTIONARY_CREATION_AND_TEST/config_step_1.2_feature_space.json
+!MINGO_DICTIONARY_CREATION_AND_TEST/config_step_2.1_columns.json
 
 # ----------------------------------------------------------------------
 # Logs, temp files, and merge leftovers

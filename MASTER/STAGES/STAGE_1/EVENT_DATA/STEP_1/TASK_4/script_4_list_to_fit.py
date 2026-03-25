@@ -109,7 +109,11 @@ from MASTER.common.path_config import (
     get_repo_root,
     resolve_home_path_from_config,
 )
-from MASTER.common.plot_utils import pdf_save_rasterized_page
+from MASTER.common.plot_utils import (
+    collect_saved_plot_paths,
+    ensure_plot_state,
+    pdf_save_rasterized_page,
+)
 from MASTER.common.selection_config import load_selection_for_paths, station_is_selected
 from MASTER.common.status_csv import initialize_status_row, update_status_progress
 from MASTER.common.reprocessing_utils import get_reprocessing_value
@@ -1057,6 +1061,10 @@ csv_path_rate_histogram = os.path.join(
     metadata_directory,
     f"task_{task_number}_metadata_rate_histogram.csv",
 )
+csv_path_efficiency = os.path.join(
+    metadata_directory,
+    f"task_{task_number}_metadata_efficiency.csv",
+)
 csv_path_trigger_type = os.path.join(
     metadata_directory,
     f"task_{task_number}_metadata_trigger_type.csv",
@@ -1808,8 +1816,7 @@ theta_right_filter = det_theta_right_filter
 phi_left_filter = det_phi_left_filter
 phi_right_filter = det_phi_right_filter
 
-fig_idx = 1
-plot_list = []
+fig_idx, plot_list = ensure_plot_state(globals())
 
 # Time dif calibration (time_dif_reference)
 time_dif_distance = 30
@@ -1937,9 +1944,6 @@ RESIDUAL_SERIES: tuple[str, ...] = (
 )
 
 FILTER_METRIC_NAMES: tuple[str, ...] = (
-    "det_residual_zeroed_event_pct",
-    "det_bounds_zeroed_event_pct",
-    "residual_zeroed_event_pct",
     "small_values_zeroed_event_pct",
     "small_values_zeroed_value_pct",
     "definitive_small_values_zeroed_event_pct",
@@ -1960,7 +1964,6 @@ FILTER_METRIC_NAMES: tuple[str, ...] = (
     "definitive_t0_zero_rows_pct",
     "definitive_theta_zero_rows_pct",
     "definitive_phi_zero_rows_pct",
-    "ancillary_charge_filtered_rows_pct",
     "data_purity_percentage",
     "all_components_zero_rows_removed_pct",
     "fit_tt_lt_10_rows_removed_pct",
@@ -2207,8 +2210,7 @@ theta_right_filter = det_theta_right_filter
 phi_left_filter = det_phi_left_filter
 phi_right_filter = det_phi_right_filter
 
-fig_idx = 1
-plot_list = []
+fig_idx, plot_list = ensure_plot_state(globals())
 
 # Time dif calibration (time_dif_reference)
 time_dif_distance = 30
@@ -2612,8 +2614,7 @@ theta_right_filter = det_theta_right_filter
 phi_left_filter = det_phi_left_filter
 phi_right_filter = det_phi_right_filter
 
-fig_idx = 1
-plot_list = []
+fig_idx, plot_list = ensure_plot_state(globals())
 
 # Time dif calibration (time_dif_reference)
 time_dif_distance = 30
@@ -6368,11 +6369,6 @@ cond = ( df_plot_ancillary['charge_1'] < charge_plot_limit_right ) &\
     ( df_plot_ancillary['charge_event'] > charge_plot_limit_left )
 
 df_plot_ancillary = df_plot_ancillary.loc[cond].copy()
-record_filter_metric(
-    "ancillary_charge_filtered_rows_pct",
-    ancillary_before - len(df_plot_ancillary),
-    ancillary_before if ancillary_before else 0,
-)
 
 # -----------------------------------------------------------------------------------------------------------------------------
 
@@ -6774,177 +6770,543 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("strip_hit_oc
             plt.show()
         plt.close()
 
+_EFFICIENCY_VECTOR_AXIS_ORDER = ("x", "y", "theta")
+
+
+def _safe_cfg_int(value, default):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _safe_cfg_float(value, default):
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    return float(out) if np.isfinite(out) else float(default)
+
+
+def _safe_cfg_optional_float(value):
+    if value in (None, "", "null", "None"):
+        return None
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return float(out) if np.isfinite(out) else None
+
+
+def _resolve_task4_efficiency_metadata_cfg(config_dict):
+    raw = config_dict.get("efficiency_metadata", {})
+    if not isinstance(raw, dict):
+        raw = {}
+    return {
+        "x_bin_count": max(1, _safe_cfg_int(raw.get("x_bin_count", 15), 15)),
+        "y_bin_count": max(1, _safe_cfg_int(raw.get("y_bin_count", 20), 20)),
+        "theta_bin_count": max(1, _safe_cfg_int(raw.get("theta_bin_count", 20), 20)),
+        "x_min_mm": raw.get("x_min_mm", None),
+        "x_max_mm": raw.get("x_max_mm", None),
+        "y_min_mm": raw.get("y_min_mm", None),
+        "y_max_mm": raw.get("y_max_mm", None),
+        "theta_min_deg": raw.get("theta_min_deg", None),
+        "theta_max_deg": raw.get("theta_max_deg", None),
+        "min_pool_events": max(1, _safe_cfg_int(raw.get("min_pool_events", 20), 20)),
+        "min_accepted_events": max(1, _safe_cfg_int(raw.get("min_accepted_events", 10), 10)),
+        "summary_fiducial_x_abs_max_mm": _safe_cfg_optional_float(
+            raw.get("summary_fiducial_x_abs_max_mm", None)
+        ),
+        "summary_fiducial_y_abs_max_mm": _safe_cfg_optional_float(
+            raw.get("summary_fiducial_y_abs_max_mm", None)
+        ),
+        "summary_fiducial_theta_max_deg": _safe_cfg_optional_float(
+            raw.get("summary_fiducial_theta_max_deg", None)
+        ),
+    }
+
+
+def _efficiency_center_field(axis_name):
+    return "center_deg" if axis_name == "theta" else "center_mm"
+
+
+def _make_efficiency_curve(values, fired, bins):
+    vals = np.asarray(values, dtype=float)
+    fire = np.asarray(fired, dtype=float)
+    centers = 0.5 * (bins[:-1] + bins[1:])
+    num, _ = np.histogram(vals[fire > 0.5], bins=bins)
+    den, _ = np.histogram(vals, bins=bins)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        eff = np.where(den > 0, num / den, np.nan)
+        unc = np.where(
+            den > 0,
+            np.sqrt(np.maximum(eff * (1.0 - eff) / np.maximum(den, 1), 0.0)),
+            np.nan,
+        )
+    return {
+        "centers": centers.astype(float),
+        "eff": np.asarray(eff, dtype=float),
+        "unc": np.asarray(unc, dtype=float),
+        "den": np.asarray(den, dtype=float),
+    }
+
+
+def _compute_efficiency_scalar_summary(axis_payload, axis_name, cfg_eff):
+    centers = np.asarray(axis_payload.get("centers", []), dtype=float)
+    eff_vals = np.asarray(axis_payload.get("eff", []), dtype=float)
+    unc_vals = np.asarray(axis_payload.get("unc", []), dtype=float)
+    den_vals = np.asarray(axis_payload.get("den", []), dtype=float)
+    valid = np.isfinite(centers) & np.isfinite(eff_vals) & np.isfinite(den_vals) & (den_vals > 0)
+    if axis_name == "x":
+        limit = cfg_eff.get("summary_fiducial_x_abs_max_mm", None)
+        if limit is not None:
+            valid &= np.abs(centers) <= float(limit)
+    elif axis_name == "y":
+        limit = cfg_eff.get("summary_fiducial_y_abs_max_mm", None)
+        if limit is not None:
+            valid &= np.abs(centers) <= float(limit)
+    elif axis_name == "theta":
+        limit = cfg_eff.get("summary_fiducial_theta_max_deg", None)
+        if limit is not None:
+            valid &= centers <= float(limit)
+
+    out = {
+        "eff": np.nan,
+        "unc": np.nan,
+        "n_denom": 0,
+        "n_bins_used": int(np.sum(valid)),
+        "selected_center": np.nan,
+    }
+    if not np.any(valid):
+        return out
+
+    if axis_name == "theta":
+        valid_idx = np.flatnonzero(valid)
+        # The theta scalar summary is defined by the bin closest to normal incidence,
+        # not by the maximum efficiency inside the fiducial theta band.
+        best_local = valid_idx[np.nanargmin(np.abs(centers[valid_idx]))]
+        out["eff"] = float(eff_vals[best_local])
+        out["unc"] = float(unc_vals[best_local]) if best_local < len(unc_vals) else np.nan
+        out["n_denom"] = int(den_vals[best_local]) if best_local < len(den_vals) else 0
+        out["selected_center"] = float(centers[best_local])
+        return out
+
+    den_region = den_vals[valid]
+    eff_region = eff_vals[valid]
+    denom = float(np.sum(den_region))
+    if not np.isfinite(denom) or denom <= 0.0:
+        return out
+    num = float(np.sum(den_region * eff_region))
+    eff_mean = num / denom
+    out["eff"] = float(eff_mean)
+    out["unc"] = float(np.sqrt(max(eff_mean * (1.0 - eff_mean) / denom, 0.0)))
+    out["n_denom"] = int(round(denom))
+    return out
+
+
+def _resolve_efficiency_edges(
+    *,
+    cfg_eff,
+    strip_half,
+    width_half,
+    theta_left_filter,
+    theta_right_filter,
+):
+    x_min = _safe_cfg_float(cfg_eff.get("x_min_mm", None), -float(strip_half))
+    x_max = _safe_cfg_float(cfg_eff.get("x_max_mm", None), float(strip_half))
+    y_min = _safe_cfg_float(cfg_eff.get("y_min_mm", None), -float(width_half))
+    y_max = _safe_cfg_float(cfg_eff.get("y_max_mm", None), float(width_half))
+    theta_min_deg = _safe_cfg_float(
+        cfg_eff.get("theta_min_deg", None),
+        float(np.degrees(theta_left_filter)),
+    )
+    theta_max_deg = _safe_cfg_float(
+        cfg_eff.get("theta_max_deg", None),
+        float(np.degrees(theta_right_filter)),
+    )
+
+    x_min = max(-float(strip_half), min(x_min, float(strip_half)))
+    x_max = max(-float(strip_half), min(x_max, float(strip_half)))
+    y_min = max(-float(width_half), min(y_min, float(width_half)))
+    y_max = max(-float(width_half), min(y_max, float(width_half)))
+    theta_min_deg = max(0.0, theta_min_deg)
+    theta_max_deg = max(theta_min_deg + 1e-6, min(theta_max_deg, 90.0))
+
+    if x_max <= x_min:
+        x_min, x_max = -float(strip_half), float(strip_half)
+    if y_max <= y_min:
+        y_min, y_max = -float(width_half), float(width_half)
+
+    return {
+        "x": np.linspace(x_min, x_max, int(cfg_eff["x_bin_count"]) + 1),
+        "y": np.linspace(y_min, y_max, int(cfg_eff["y_bin_count"]) + 1),
+        "theta": np.linspace(theta_min_deg, theta_max_deg, int(cfg_eff["theta_bin_count"]) + 1),
+    }
+
+
+def _compute_track_based_efficiency_payload(
+    df_plot,
+    *,
+    cfg_eff,
+    z_positions,
+    strip_half,
+    width_half,
+    theta_left_filter,
+    theta_right_filter,
+    y_pos_p13,
+    y_pos_p24,
+):
+    edges = _resolve_efficiency_edges(
+        cfg_eff=cfg_eff,
+        strip_half=strip_half,
+        width_half=width_half,
+        theta_left_filter=theta_left_filter,
+        theta_right_filter=theta_right_filter,
+    )
+    plane_pool_tt = {
+        1: [234, 1234],
+        2: [134, 1234],
+        3: [124, 1234],
+        4: [123, 1234],
+    }
+    payload = {
+        "available": False,
+        "reason": "",
+        "config": dict(cfg_eff),
+        "edges": edges,
+        "plane_results": {},
+    }
+
+    required = ("x", "y", "xp", "yp", "theta", "definitive_tt")
+    missing = [col for col in required if col not in df_plot.columns]
+    if missing:
+        payload["reason"] = f"missing_required_columns:{','.join(missing)}"
+        return payload
+
+    z_arr = np.asarray(z_positions, dtype=float)
+    x_all = pd.to_numeric(df_plot["x"], errors="coerce").to_numpy(dtype=float)
+    y_all = pd.to_numeric(df_plot["y"], errors="coerce").to_numpy(dtype=float)
+    xp_all = pd.to_numeric(df_plot["xp"], errors="coerce").to_numpy(dtype=float)
+    yp_all = pd.to_numeric(df_plot["yp"], errors="coerce").to_numpy(dtype=float)
+    theta_all_deg = np.degrees(
+        pd.to_numeric(df_plot["theta"], errors="coerce").to_numpy(dtype=float)
+    )
+    dtt_all = (
+        pd.to_numeric(df_plot["definitive_tt"], errors="coerce")
+        .fillna(0)
+        .to_numpy(dtype=np.int32)
+    )
+
+    any_plane_available = False
+    for plane in range(1, 5):
+        y_reference = y_pos_p13 if (plane - 1) % 2 == 0 else y_pos_p24
+        plane_result = {
+            "plane": int(plane),
+            "overall_eff": np.nan,
+            "n_denom": 0,
+            "y_reference": np.asarray(y_reference, dtype=float),
+            "eff_2d": np.full(
+                (len(edges["x"]) - 1, len(edges["y"]) - 1),
+                np.nan,
+                dtype=float,
+            ),
+            "x": _make_efficiency_curve(np.asarray([], dtype=float), np.asarray([], dtype=float), edges["x"]),
+            "y": _make_efficiency_curve(np.asarray([], dtype=float), np.asarray([], dtype=float), edges["y"]),
+            "theta": _make_efficiency_curve(
+                np.asarray([], dtype=float),
+                np.asarray([], dtype=float),
+                edges["theta"],
+            ),
+            "scalar_summary": {
+                "x": {
+                    "eff": np.nan,
+                    "unc": np.nan,
+                    "n_denom": 0,
+                    "n_bins_used": 0,
+                    "selected_center": np.nan,
+                },
+                "y": {
+                    "eff": np.nan,
+                    "unc": np.nan,
+                    "n_denom": 0,
+                    "n_bins_used": 0,
+                    "selected_center": np.nan,
+                },
+                "theta": {
+                    "eff": np.nan,
+                    "unc": np.nan,
+                    "n_denom": 0,
+                    "n_bins_used": 0,
+                    "selected_center": np.nan,
+                },
+            },
+        }
+
+        pool_mask = np.isin(dtt_all, plane_pool_tt[plane])
+        if int(np.sum(pool_mask)) < int(cfg_eff["min_pool_events"]):
+            payload["plane_results"][plane] = plane_result
+            continue
+
+        z_test = float(z_arr[plane - 1])
+        x_pred = x_all[pool_mask] + xp_all[pool_mask] * z_test
+        y_pred = y_all[pool_mask] + yp_all[pool_mask] * z_test
+        theta_pred_deg = theta_all_deg[pool_mask]
+        fired = (dtt_all[pool_mask] == 1234).astype(float)
+
+        accepted_xy = (
+            np.isfinite(x_pred)
+            & np.isfinite(y_pred)
+            & (np.abs(x_pred) <= strip_half)
+            & (np.abs(y_pred) <= width_half)
+        )
+        accepted_theta = accepted_xy & np.isfinite(theta_pred_deg)
+
+        x_acc = x_pred[accepted_xy]
+        y_acc = y_pred[accepted_xy]
+        fired_acc = fired[accepted_xy]
+        theta_acc = theta_pred_deg[accepted_theta]
+        fired_theta = fired[accepted_theta]
+
+        plane_result["n_denom"] = int(len(fired_acc))
+        if len(fired_acc) > 0:
+            plane_result["overall_eff"] = float(np.mean(fired_acc) * 100.0)
+
+        if len(fired_acc) >= int(cfg_eff["min_accepted_events"]):
+            num_2d, _, _ = np.histogram2d(
+                x_acc[fired_acc > 0.5],
+                y_acc[fired_acc > 0.5],
+                bins=[edges["x"], edges["y"]],
+            )
+            den_2d, _, _ = np.histogram2d(
+                x_acc,
+                y_acc,
+                bins=[edges["x"], edges["y"]],
+            )
+            with np.errstate(invalid="ignore", divide="ignore"):
+                plane_result["eff_2d"] = np.where(den_2d > 0, num_2d / den_2d, np.nan)
+
+            plane_result["x"] = _make_efficiency_curve(x_acc, fired_acc, edges["x"])
+            plane_result["y"] = _make_efficiency_curve(y_acc, fired_acc, edges["y"])
+            any_plane_available = True
+
+        if len(fired_theta) >= int(cfg_eff["min_accepted_events"]):
+            plane_result["theta"] = _make_efficiency_curve(
+                theta_acc,
+                fired_theta,
+                edges["theta"],
+            )
+            any_plane_available = True
+
+        plane_result["scalar_summary"] = {
+            axis_name: _compute_efficiency_scalar_summary(
+                plane_result.get(axis_name, {}),
+                axis_name,
+                cfg_eff,
+            )
+            for axis_name in _EFFICIENCY_VECTOR_AXIS_ORDER
+        }
+
+        payload["plane_results"][plane] = plane_result
+
+    payload["available"] = bool(any_plane_available)
+    if not payload["available"] and not payload["reason"]:
+        payload["reason"] = "no_planes_with_minimum_statistics"
+    return payload
+
+
+def _flatten_track_based_efficiency_metadata(
+    payload,
+    *,
+    filename_base,
+    execution_timestamp,
+    param_hash,
+):
+    row = {
+        "filename_base": filename_base,
+        "execution_timestamp": execution_timestamp,
+        "param_hash": param_hash,
+        "efficiency_metadata_available": bool(isinstance(payload, dict) and payload.get("available", False)),
+        "efficiency_metadata_reason": (
+            str(payload.get("reason", "")) if isinstance(payload, dict) else "payload_missing"
+        ),
+    }
+    if not isinstance(payload, dict):
+        return row
+
+    cfg_eff = payload.get("config", {})
+    if isinstance(cfg_eff, dict):
+        for key in (
+            "x_bin_count",
+            "y_bin_count",
+            "theta_bin_count",
+            "min_pool_events",
+            "min_accepted_events",
+            "summary_fiducial_x_abs_max_mm",
+            "summary_fiducial_y_abs_max_mm",
+            "summary_fiducial_theta_max_deg",
+        ):
+            row[f"efficiency_metadata_{key}"] = cfg_eff.get(key, "")
+
+    for plane in range(1, 5):
+        plane_result = payload.get("plane_results", {}).get(plane, {})
+        row[f"efficiency_vector_p{plane}_overall_eff_percent"] = plane_result.get("overall_eff", "")
+        row[f"efficiency_vector_p{plane}_n_denom"] = plane_result.get("n_denom", "")
+        scalar_summary = plane_result.get("scalar_summary", {})
+        for axis_name in _EFFICIENCY_VECTOR_AXIS_ORDER:
+            summary = scalar_summary.get(axis_name, {})
+            row[f"efficiency_scalar_p{plane}_{axis_name}_fiducial_eff"] = summary.get("eff", "")
+            row[f"efficiency_scalar_p{plane}_{axis_name}_fiducial_unc"] = summary.get("unc", "")
+            row[f"efficiency_scalar_p{plane}_{axis_name}_fiducial_n_denom"] = summary.get("n_denom", "")
+            row[f"efficiency_scalar_p{plane}_{axis_name}_fiducial_n_bins_used"] = summary.get("n_bins_used", "")
+            if axis_name == "theta":
+                row[f"efficiency_scalar_p{plane}_{axis_name}_fiducial_selected_center_deg"] = summary.get(
+                    "selected_center", ""
+                )
+
+        for axis_name in _EFFICIENCY_VECTOR_AXIS_ORDER:
+            axis_payload = plane_result.get(axis_name, {})
+            centers = np.asarray(axis_payload.get("centers", []), dtype=float)
+            eff_vals = np.asarray(axis_payload.get("eff", []), dtype=float)
+            unc_vals = np.asarray(axis_payload.get("unc", []), dtype=float)
+            center_field = _efficiency_center_field(axis_name)
+            n_bins = max(len(centers), len(eff_vals), len(unc_vals))
+            for idx in range(n_bins):
+                prefix = f"efficiency_vector_p{plane}_{axis_name}_bin_{idx:03d}"
+                center_val = centers[idx] if idx < len(centers) else np.nan
+                eff_val = eff_vals[idx] if idx < len(eff_vals) else np.nan
+                unc_val = unc_vals[idx] if idx < len(unc_vals) else np.nan
+                row[f"{prefix}_{center_field}"] = center_val
+                row[f"{prefix}_eff"] = eff_val
+                row[f"{prefix}_unc"] = unc_val
+    return row
+
+
+efficiency_metadata_cfg = _resolve_task4_efficiency_metadata_cfg(config)
+efficiency_metadata_payload = _compute_track_based_efficiency_payload(
+    df_plot_ancillary,
+    cfg_eff=efficiency_metadata_cfg,
+    z_positions=z_positions,
+    strip_half=strip_half,
+    width_half=width_half,
+    theta_left_filter=theta_left_filter,
+    theta_right_filter=theta_right_filter,
+    y_pos_p13=np.asarray(y_pos_P1_and_P3, dtype=float),
+    y_pos_p24=np.asarray(y_pos_P2_and_P4, dtype=float),
+)
+if not bool(efficiency_metadata_payload.get("available", False)):
+    print(
+        "[track_based_efficiency] metadata payload unavailable: "
+        f"{efficiency_metadata_payload.get('reason', 'unknown')}"
+    )
+
 # ---------------------------------------------------------------------------
 # Track-based single-plane efficiency (telescope method)
 # Use 3 planes as a telescope, project to the 4th, ask: did the 4th fire?
 # ---------------------------------------------------------------------------
-if (create_essential_plots or create_plots) and task4_plot_enabled("track_based_efficiency"):
-    _eff_cols_need = ("x", "y", "xp", "yp", "definitive_tt")
-    _eff_have = all(c in df_plot_ancillary.columns for c in _eff_cols_need)
-    if _eff_have:
-        z_arr_eff = np.asarray(z_positions, dtype=float)
+if (
+    (create_essential_plots or create_plots)
+    and task4_plot_enabled("track_based_efficiency")
+    and bool(efficiency_metadata_payload.get("available", False))
+):
+    edges_eff = efficiency_metadata_payload["edges"]
+    fig, axes = plt.subplots(3, 4, figsize=(18, 13), squeeze=False)
 
-        # For each plane under test, which trigger-type values form the telescope pool?
-        # Pool = events where the OTHER 3 planes all fired (3-plane + 4-plane events).
-        # "fired" = definitively_tt == 1234 (the test plane also fired).
-        plane_pool_tt = {
-            1: [234, 1234],
-            2: [134, 1234],
-            3: [124, 1234],
-            4: [123, 1234],
-        }
+    for plane_idx, plane in enumerate(range(1, 5)):
+        plane_result = efficiency_metadata_payload["plane_results"].get(plane, {})
+        ax_2d = axes[0][plane_idx]
+        ax_1dy = axes[1][plane_idx]
+        ax_1dx = axes[2][plane_idx]
 
-        fig, axes = plt.subplots(3, 4, figsize=(18, 13), squeeze=False)
+        n_denom = int(plane_result.get("n_denom", 0))
+        if n_denom < int(efficiency_metadata_cfg["min_accepted_events"]):
+            ax_2d.set_visible(False)
+            ax_1dy.set_visible(False)
+            ax_1dx.set_visible(False)
+            continue
 
-        x_all = pd.to_numeric(df_plot_ancillary["x"], errors="coerce").to_numpy(dtype=float)
-        y_all = pd.to_numeric(df_plot_ancillary["y"], errors="coerce").to_numpy(dtype=float)
-        xp_all = pd.to_numeric(df_plot_ancillary["xp"], errors="coerce").to_numpy(dtype=float)
-        yp_all = pd.to_numeric(df_plot_ancillary["yp"], errors="coerce").to_numpy(dtype=float)
-        dtt_all = pd.to_numeric(df_plot_ancillary["definitive_tt"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
+        overall_eff = plane_result.get("overall_eff", np.nan)
+        y_reference = np.asarray(plane_result.get("y_reference", []), dtype=float)
+        eff_2d = np.asarray(plane_result.get("eff_2d", np.empty((0, 0))), dtype=float)
 
-        n_x_bins = 15
-        n_y_bins = 20
-        x_bins = np.linspace(-strip_half, strip_half, n_x_bins + 1)
-        y_bins = np.linspace(-width_half, width_half, n_y_bins + 1)
-
-        for plane_idx, p in enumerate(range(1, 5)):
-            ax_2d  = axes[0][plane_idx]
-            ax_1dy = axes[1][plane_idx]
-            ax_1dx = axes[2][plane_idx]
-
-            pool_tt_vals = plane_pool_tt[p]
-            pool_mask = np.isin(dtt_all, pool_tt_vals)
-
-            if pool_mask.sum() < 20:
-                ax_2d.set_visible(False)
-                ax_1dy.set_visible(False)
-                ax_1dx.set_visible(False)
-                continue
-
-            z_test = float(z_arr_eff[p - 1])
-            x_pred = x_all[pool_mask] + xp_all[pool_mask] * z_test
-            y_pred = y_all[pool_mask] + yp_all[pool_mask] * z_test
-            fired = (dtt_all[pool_mask] == 1234).astype(float)
-
-            # Restrict to detector acceptance
-            in_acc = (
-                np.isfinite(x_pred) & np.isfinite(y_pred)
-                & (np.abs(x_pred) <= strip_half)
-                & (np.abs(y_pred) <= width_half)
-            )
-            x_pred = x_pred[in_acc]
-            y_pred = y_pred[in_acc]
-            fired = fired[in_acc]
-
-            if len(x_pred) < 10:
-                ax_2d.set_visible(False)
-                ax_1dy.set_visible(False)
-                ax_1dx.set_visible(False)
-                continue
-
-            overall_eff = float(fired.mean()) * 100
-            n_denom = len(fired)
-            y_ctrs = y_pos_P1_and_P3 if (p - 1) % 2 == 0 else y_pos_P2_and_P4
-
-            # --- 2D efficiency map ---
-            num_2d, _, _ = np.histogram2d(
-                x_pred[fired > 0.5], y_pred[fired > 0.5], bins=[x_bins, y_bins]
-            )
-            den_2d, _, _ = np.histogram2d(x_pred, y_pred, bins=[x_bins, y_bins])
-            with np.errstate(invalid="ignore", divide="ignore"):
-                eff_2d = np.where(den_2d > 0, num_2d / den_2d, np.nan)
-
-            im = ax_2d.imshow(
-                eff_2d.T,
-                origin="lower",
-                aspect="auto",
-                extent=[-strip_half, strip_half, -width_half, width_half],
-                vmin=0,
-                vmax=1,
-                cmap="RdYlGn",
-            )
-            plt.colorbar(im, ax=ax_2d, label="efficiency")
-            for sy in y_ctrs:
-                ax_2d.axhline(sy, color="cyan", lw=0.7, ls="--", alpha=0.7)
-            ax_2d.set_xlabel("Projected X (mm)", fontsize=8)
-            ax_2d.set_ylabel("Projected Y (mm)", fontsize=8)
-            ax_2d.set_title(
-                f"Plane {p}  eff={overall_eff:.1f}%  (n={n_denom})", fontsize=9
-            )
-
-            # --- 1D efficiency vs projected Y ---
-            num_1dy, _ = np.histogram(y_pred[fired > 0.5], bins=y_bins)
-            den_1dy, _ = np.histogram(y_pred, bins=y_bins)
-            y_centers = 0.5 * (y_bins[:-1] + y_bins[1:])
-            with np.errstate(invalid="ignore", divide="ignore"):
-                eff_1dy = np.where(den_1dy > 0, num_1dy / den_1dy, np.nan)
-                err_1dy = np.where(
-                    den_1dy > 0,
-                    np.sqrt(np.maximum(eff_1dy * (1.0 - eff_1dy) / np.maximum(den_1dy, 1), 0)),
-                    np.nan,
-                )
-            valid_y = np.isfinite(eff_1dy) & (den_1dy > 0)
-            median_eff_y = float(np.nanmedian(eff_1dy[valid_y]))
-            ax_1dy.errorbar(
-                y_centers[valid_y], eff_1dy[valid_y], yerr=err_1dy[valid_y],
-                fmt="o-", ms=4, color=f"C{p - 1}", alpha=0.85,
-            )
-            for sy in y_ctrs:
-                ax_1dy.axvline(sy, color="lightgray", lw=0.9, ls="--", alpha=0.8)
-            ax_1dy.axhline(
-                median_eff_y, color="red", lw=0.8, ls="--", alpha=0.6,
-                label=f"median {median_eff_y * 100:.1f}%",
-            )
-            ax_1dy.set_ylim(0, 1.08)
-            ax_1dy.set_xlim(-width_half, width_half)
-            ax_1dy.set_xlabel("Projected Y (mm)", fontsize=8)
-            ax_1dy.set_ylabel("Efficiency", fontsize=8)
-            ax_1dy.legend(fontsize=7)
-            ax_1dy.grid(True, alpha=0.3)
-
-            # --- 1D efficiency vs projected X ---
-            num_1dx, _ = np.histogram(x_pred[fired > 0.5], bins=x_bins)
-            den_1dx, _ = np.histogram(x_pred, bins=x_bins)
-            x_centers = 0.5 * (x_bins[:-1] + x_bins[1:])
-            with np.errstate(invalid="ignore", divide="ignore"):
-                eff_1dx = np.where(den_1dx > 0, num_1dx / den_1dx, np.nan)
-                err_1dx = np.where(
-                    den_1dx > 0,
-                    np.sqrt(np.maximum(eff_1dx * (1.0 - eff_1dx) / np.maximum(den_1dx, 1), 0)),
-                    np.nan,
-                )
-            valid_x = np.isfinite(eff_1dx) & (den_1dx > 0)
-            median_eff_x = float(np.nanmedian(eff_1dx[valid_x]))
-            ax_1dx.errorbar(
-                x_centers[valid_x], eff_1dx[valid_x], yerr=err_1dx[valid_x],
-                fmt="o-", ms=4, color=f"C{p - 1}", alpha=0.85,
-            )
-            ax_1dx.axhline(
-                median_eff_x, color="red", lw=0.8, ls="--", alpha=0.6,
-                label=f"median {median_eff_x * 100:.1f}%",
-            )
-            ax_1dx.set_ylim(0, 1.08)
-            ax_1dx.set_xlim(-strip_half, strip_half)
-            ax_1dx.set_xlabel("Projected X (mm)", fontsize=8)
-            ax_1dx.set_ylabel("Efficiency", fontsize=8)
-            ax_1dx.legend(fontsize=7)
-            ax_1dx.grid(True, alpha=0.3)
-
-        plt.suptitle(
-            "Track-based single-plane efficiency (telescope method)\n"
-            "3 planes build a track → project to test plane → did the test plane fire?",
-            fontsize=11,
+        im = ax_2d.imshow(
+            eff_2d.T,
+            origin="lower",
+            aspect="auto",
+            extent=[
+                float(edges_eff["x"][0]),
+                float(edges_eff["x"][-1]),
+                float(edges_eff["y"][0]),
+                float(edges_eff["y"][-1]),
+            ],
+            vmin=0,
+            vmax=1,
+            cmap="RdYlGn",
         )
-        plt.tight_layout(rect=[0, 0, 1, 0.94])
-        if save_plots:
-            final_filename = f"{fig_idx}_track_based_efficiency.png"
-            fig_idx += 1
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            save_plot_figure(save_fig_path, format="png", alias="track_based_efficiency")
-        if show_plots:
-            plt.show()
-        plt.close()
+        plt.colorbar(im, ax=ax_2d, label="efficiency")
+        for sy in y_reference:
+            ax_2d.axhline(float(sy), color="cyan", lw=0.7, ls="--", alpha=0.7)
+        ax_2d.set_xlabel("Projected X (mm)", fontsize=8)
+        ax_2d.set_ylabel("Projected Y (mm)", fontsize=8)
+        ax_2d.set_title(
+            f"Plane {plane}  eff={float(overall_eff):.1f}%  (n={n_denom})",
+            fontsize=9,
+        )
+
+        for axis_payload, axis, xlabel, half_range in (
+            (plane_result.get("y", {}), ax_1dy, "Projected Y (mm)", float(width_half)),
+            (plane_result.get("x", {}), ax_1dx, "Projected X (mm)", float(strip_half)),
+        ):
+            centers = np.asarray(axis_payload.get("centers", []), dtype=float)
+            eff_vals = np.asarray(axis_payload.get("eff", []), dtype=float)
+            unc_vals = np.asarray(axis_payload.get("unc", []), dtype=float)
+            den_vals = np.asarray(axis_payload.get("den", []), dtype=float)
+            valid = np.isfinite(eff_vals) & (den_vals > 0)
+            median_eff = float(np.nanmedian(eff_vals[valid])) if np.any(valid) else np.nan
+
+            if np.any(valid):
+                axis.errorbar(
+                    centers[valid],
+                    eff_vals[valid],
+                    yerr=unc_vals[valid],
+                    fmt="o-",
+                    ms=4,
+                    color=f"C{plane - 1}",
+                    alpha=0.85,
+                )
+            if xlabel.startswith("Projected Y"):
+                for sy in y_reference:
+                    axis.axvline(float(sy), color="lightgray", lw=0.9, ls="--", alpha=0.8)
+            if np.isfinite(median_eff):
+                axis.axhline(
+                    median_eff,
+                    color="red",
+                    lw=0.8,
+                    ls="--",
+                    alpha=0.6,
+                    label=f"median {median_eff * 100:.1f}%",
+                )
+            axis.set_ylim(0, 1.08)
+            axis.set_xlim(-half_range, half_range)
+            axis.set_xlabel(xlabel, fontsize=8)
+            axis.set_ylabel("Efficiency", fontsize=8)
+            axis.legend(fontsize=7)
+            axis.grid(True, alpha=0.3)
+
+    plt.suptitle(
+        "Track-based single-plane efficiency (telescope method)\n"
+        "3 planes build a track → project to test plane → did the test plane fire?",
+        fontsize=11,
+    )
+    plt.tight_layout(rect=[0, 0, 1, 0.94])
+    if save_plots:
+        final_filename = f"{fig_idx}_track_based_efficiency.png"
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        save_plot_figure(save_fig_path, format="png", alias="track_based_efficiency")
+    if show_plots:
+        plt.show()
+    plt.close()
 
 # ---------------------------------------------------------------------------
 # Track-based efficiency: all events vs. tt-unchanged (raw_tt == list_tt)
@@ -7124,97 +7486,66 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("track_based_
 # Same telescope method; reveals angular efficiency dependence for
 # comparison between real data and simulation.
 # ---------------------------------------------------------------------------
-if (create_essential_plots or create_plots) and task4_plot_enabled("track_based_efficiency_vs_theta"):
-    _teff_need = ("x", "y", "xp", "yp", "theta", "definitive_tt")
-    _teff_have = all(c in df_plot_ancillary.columns for c in _teff_need)
-    if _teff_have:
-        z_arr_teff = np.asarray(z_positions, dtype=float)
-        plane_pool_tt_t = {1: [234, 1234], 2: [134, 1234], 3: [124, 1234], 4: [123, 1234]}
+if (
+    (create_essential_plots or create_plots)
+    and task4_plot_enabled("track_based_efficiency_vs_theta")
+    and bool(efficiency_metadata_payload.get("available", False))
+):
+    fig, axes = plt.subplots(1, 4, figsize=(16, 4), squeeze=False)
 
-        x_all_t  = pd.to_numeric(df_plot_ancillary["x"],   errors="coerce").to_numpy(dtype=float)
-        y_all_t  = pd.to_numeric(df_plot_ancillary["y"],   errors="coerce").to_numpy(dtype=float)
-        xp_all_t = pd.to_numeric(df_plot_ancillary["xp"],  errors="coerce").to_numpy(dtype=float)
-        yp_all_t = pd.to_numeric(df_plot_ancillary["yp"],  errors="coerce").to_numpy(dtype=float)
-        th_all_t = pd.to_numeric(df_plot_ancillary["theta"], errors="coerce").to_numpy(dtype=float)
-        dtt_all_t = pd.to_numeric(df_plot_ancillary["definitive_tt"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
+    for plane_idx, plane in enumerate(range(1, 5)):
+        ax = axes[0][plane_idx]
+        plane_result = efficiency_metadata_payload["plane_results"].get(plane, {})
+        theta_payload = plane_result.get("theta", {})
+        centers = np.asarray(theta_payload.get("centers", []), dtype=float)
+        eff_vals = np.asarray(theta_payload.get("eff", []), dtype=float)
+        unc_vals = np.asarray(theta_payload.get("unc", []), dtype=float)
+        den_vals = np.asarray(theta_payload.get("den", []), dtype=float)
+        valid = np.isfinite(eff_vals) & (den_vals > 0)
+        if not np.any(valid):
+            ax.set_visible(False)
+            continue
 
-        n_theta_bins = 20
-        theta_lo = float(np.nanpercentile(th_all_t[np.isfinite(th_all_t)], 0.5))
-        theta_hi = float(np.nanpercentile(th_all_t[np.isfinite(th_all_t)], 99.5))
-        theta_bins_t = np.linspace(theta_lo, theta_hi, n_theta_bins + 1)
-        theta_centers = 0.5 * (theta_bins_t[:-1] + theta_bins_t[1:])
-
-        fig, axes = plt.subplots(1, 4, figsize=(16, 4), squeeze=False)
-
-        for plane_idx, p in enumerate(range(1, 5)):
-            ax = axes[0][plane_idx]
-            pool_mask_t = np.isin(dtt_all_t, plane_pool_tt_t[p])
-            if pool_mask_t.sum() < 20:
-                ax.set_visible(False)
-                continue
-
-            z_test_t = float(z_arr_teff[p - 1])
-            x_pred_t = x_all_t[pool_mask_t] + xp_all_t[pool_mask_t] * z_test_t
-            y_pred_t = y_all_t[pool_mask_t] + yp_all_t[pool_mask_t] * z_test_t
-            theta_t  = th_all_t[pool_mask_t]
-            fired_t  = (dtt_all_t[pool_mask_t] == 1234).astype(float)
-
-            in_acc_t = (
-                np.isfinite(x_pred_t) & np.isfinite(y_pred_t) & np.isfinite(theta_t)
-                & (np.abs(x_pred_t) <= strip_half)
-                & (np.abs(y_pred_t) <= width_half)
-            )
-            theta_t = theta_t[in_acc_t]
-            fired_t = fired_t[in_acc_t]
-
-            if len(theta_t) < 10:
-                ax.set_visible(False)
-                continue
-
-            num_th, _ = np.histogram(theta_t[fired_t > 0.5], bins=theta_bins_t)
-            den_th, _ = np.histogram(theta_t, bins=theta_bins_t)
-            with np.errstate(invalid="ignore", divide="ignore"):
-                eff_th = np.where(den_th > 0, num_th / den_th, np.nan)
-                err_th = np.where(
-                    den_th > 0,
-                    np.sqrt(np.maximum(eff_th * (1.0 - eff_th) / np.maximum(den_th, 1), 0)),
-                    np.nan,
-                )
-            valid_th = np.isfinite(eff_th) & (den_th > 0)
-            median_eff_th = float(np.nanmedian(eff_th[valid_th]))
-
-            ax.errorbar(
-                np.degrees(theta_centers[valid_th]),
-                eff_th[valid_th],
-                yerr=err_th[valid_th],
-                fmt="o-", ms=4, color=f"C{p - 1}", alpha=0.85,
-            )
-            ax.axhline(
-                median_eff_th, color="red", lw=0.8, ls="--", alpha=0.6,
-                label=f"median {median_eff_th * 100:.1f}%",
-            )
-            ax.set_ylim(0, 1.08)
-            ax.set_xlabel("θ (deg)", fontsize=9)
-            ax.set_ylabel("Efficiency", fontsize=9)
-            ax.set_title(f"Plane {p}  (n={int(den_th.sum())})", fontsize=10)
-            ax.legend(fontsize=8)
-            ax.grid(True, alpha=0.3)
-
-        plt.suptitle(
-            "Track-based efficiency vs polar angle θ (telescope method)\n"
-            "Useful for sim/data comparison of angular efficiency dependence",
-            fontsize=11,
+        median_eff_th = float(np.nanmedian(eff_vals[valid]))
+        ax.errorbar(
+            centers[valid],
+            eff_vals[valid],
+            yerr=unc_vals[valid],
+            fmt="o-",
+            ms=4,
+            color=f"C{plane - 1}",
+            alpha=0.85,
         )
-        plt.tight_layout(rect=[0, 0, 1, 0.91])
-        if save_plots:
-            final_filename = f"{fig_idx}_track_based_efficiency_vs_theta.png"
-            fig_idx += 1
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            save_plot_figure(save_fig_path, format="png", alias="track_based_efficiency_vs_theta")
-        if show_plots:
-            plt.show()
-        plt.close()
+        ax.axhline(
+            median_eff_th,
+            color="red",
+            lw=0.8,
+            ls="--",
+            alpha=0.6,
+            label=f"median {median_eff_th * 100:.1f}%",
+        )
+        ax.set_ylim(0, 1.08)
+        ax.set_xlabel("θ (deg)", fontsize=9)
+        ax.set_ylabel("Efficiency", fontsize=9)
+        ax.set_title(f"Plane {plane}  (n={int(np.nansum(den_vals))})", fontsize=10)
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+    plt.suptitle(
+        "Track-based efficiency vs polar angle θ (telescope method)\n"
+        "Useful for sim/data comparison of angular efficiency dependence",
+        fontsize=11,
+    )
+    plt.tight_layout(rect=[0, 0, 1, 0.91])
+    if save_plots:
+        final_filename = f"{fig_idx}_track_based_efficiency_vs_theta.png"
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        save_plot_figure(save_fig_path, format="png", alias="track_based_efficiency_vs_theta")
+    if show_plots:
+        plt.show()
+    plt.close()
 
 # ── chi2 vs charge population diagnostic ─────────────────────────────────────
 # 3 figures (one per charge metric): rows = missed / hit (separate panels),
@@ -11092,7 +11423,7 @@ if create_plots:
 
 if create_pdf:
     print(f"Creating PDF with all plots in {save_pdf_path}")
-    existing_pngs = [png for png in plot_list if os.path.exists(png)]
+    existing_pngs = collect_saved_plot_paths(plot_list, base_directories["figure_directory"])
 
     if _direct_pdf_pages is not None:
         for png in existing_pngs:
@@ -11424,6 +11755,8 @@ for (list_tt_value, fit_tt_value), count in zip(combo_vals, combo_counts):
 # Final number of events
 final_number_of_events = len(working_df)
 print(f"Final number of events in the dataframe: {final_number_of_events}")
+_prof["s_post_fit_filtering_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 
 print(
     f"Writing fit parquet: rows={len(working_df)} cols={len(working_df.columns)} -> {OUT_PATH}"
@@ -11436,8 +11769,6 @@ if VERBOSE:
 # Data purity
 data_purity = final_number_of_events / original_number_of_events * 100
 
-# End of the execution time
-_prof["s_save_finish_s"] = round(time.perf_counter() - _t_sec, 2)
 end_time_execution = datetime.now()
 execution_time = end_time_execution - start_execution_time_counting
 # In minutes
@@ -11535,6 +11866,18 @@ metadata_rate_histogram_csv_path = save_metadata(
 )
 print(f"Metadata (rate_histogram) CSV updated at: {metadata_rate_histogram_csv_path}")
 
+efficiency_metadata_row = _flatten_track_based_efficiency_metadata(
+    efficiency_metadata_payload,
+    filename_base=filename_base,
+    execution_timestamp=execution_timestamp,
+    param_hash=param_hash_value,
+)
+metadata_efficiency_csv_path = save_metadata(
+    csv_path_efficiency,
+    efficiency_metadata_row,
+)
+print(f"Metadata (efficiency) CSV updated at: {metadata_efficiency_csv_path}")
+
 # Keep denominator available for both trigger_type and specific metadata outputs.
 global_variables["count_rate_denominator_seconds"] = rate_histogram_variables.get(
     "count_rate_denominator_seconds",
@@ -11626,5 +11969,6 @@ if status_execution_date is not None:
         completion_fraction=1.0,
         param_hash=str(global_variables.get("param_hash", "")),
     )
+_prof["s_save_finish_s"] = round(time.perf_counter() - _t_sec, 2)
 
 # %%

@@ -26,6 +26,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 from matplotlib.tri import LinearTriInterpolator, Triangulation
 import numpy as np
 import pandas as pd
@@ -39,8 +40,8 @@ if STEP_DIR.parents[2].name == "STEPS":
     PIPELINE_DIR = STEP_DIR.parents[3]
 else:
     PIPELINE_DIR = STEP_DIR.parents[2]
-DEFAULT_CONFIG = PIPELINE_DIR / "config_method.json"
-CONFIG_COLUMNS_PATH = PIPELINE_DIR / "config_columns.json"
+DEFAULT_CONFIG = PIPELINE_DIR / "config_step_1.1_method.json"
+CONFIG_COLUMNS_PATH = PIPELINE_DIR / "config_step_2.1_columns.json"
 
 if (PIPELINE_DIR / "STEP_1_SETUP").exists() and (PIPELINE_DIR / "STEP_2_INFERENCE").exists():
     STEP_ROOT = PIPELINE_DIR
@@ -96,14 +97,24 @@ DEFAULT_STEP12_SELECTED_FEATURE_COLUMNS = (
     / "FILES"
     / "selected_feature_columns.json"
 )
+DEFAULT_PARAMETER_SPACE_SPEC = (
+    STEP_ROOT
+    / "STEP_1_SETUP"
+    / "STEP_1_1_COLLECT_DATA"
+    / "OUTPUTS"
+    / "FILES"
+    / "parameter_space_columns.json"
+)
 
 FILES_DIR = STEP_DIR / "OUTPUTS" / "FILES"
 PLOTS_DIR = STEP_DIR / "OUTPUTS" / "PLOTS"
 FILES_DIR.mkdir(parents=True, exist_ok=True)
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 
+PLOT_PARAMETER_SERIES = PLOTS_DIR / "STEP_4_2_5_parameter_estimate_series.png"
 PLOT_EST_CURVE = PLOTS_DIR / "STEP_4_2_6_estimated_curve_flux_vs_eff.png"
 PLOT_RECOVERY_STORY = PLOTS_DIR / "STEP_4_2_7_flux_recovery_vs_global_rate.png"
+PLOT_DISTANCE_DOMINANCE = PLOTS_DIR / "STEP_4_2_8_feature_distance_dominance.png"
 
 _PLOT_EXTENSIONS = {
     ".png",
@@ -121,6 +132,8 @@ _PLOT_EXTENSIONS = {
 
 logging.basicConfig(format="[%(levelname)s] STEP_4.2 - %(message)s", level=logging.INFO)
 log = logging.getLogger("STEP_4.2")
+
+CANONICAL_FLUX_COLUMN = "flux_cm2_min"
 
 # Import estimator directly from STEP_2_INFERENCE.
 if str(INFERENCE_DIR) not in sys.path:
@@ -175,13 +188,13 @@ def _load_config(path: Path) -> dict:
     else:
         log.warning("Config file not found: %s", path)
 
-    plots_path = path.with_name("config_plots.json")
+    plots_path = path.with_name("config_step_1.1_plots.json")
     if plots_path != path and plots_path.exists():
         plots_cfg = json.loads(plots_path.read_text(encoding="utf-8"))
         cfg = _merge_dicts(cfg, plots_cfg)
         log.info("Loaded plot config: %s", plots_path)
 
-    runtime_path = path.with_name("config_runtime.json")
+    runtime_path = path.with_name("config_step_1.1_runtime.json")
     if runtime_path.exists():
         runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
         cfg = _merge_dicts(cfg, runtime_cfg)
@@ -374,6 +387,176 @@ def _load_step12_selected_feature_columns(path: Path) -> tuple[list[str], dict]:
     return selected, info
 
 
+def _load_parameter_space_spec(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        log.warning("Could not load parameter-space spec %s: %s", path, exc)
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _load_parameter_space_columns(path: Path) -> list[str]:
+    payload = _load_parameter_space_spec(path)
+    if not payload:
+        return []
+    candidates: list[object] = [
+        payload.get("parameter_space_columns_downstream_preferred"),
+        payload.get("selected_parameter_space_columns_downstream_preferred"),
+        payload.get("selected_parameter_space_columns"),
+        payload.get("parameter_space_columns"),
+    ]
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in candidates:
+        if not isinstance(raw, list):
+            continue
+        for col in raw:
+            if not isinstance(col, str):
+                continue
+            text = col.strip()
+            if not text or text in seen:
+                continue
+            out.append(text)
+            seen.add(text)
+        if out:
+            break
+    return out
+
+
+def _apply_parameter_space_aliases(df: pd.DataFrame, spec: dict) -> tuple[pd.DataFrame, list[str]]:
+    if df.empty or not isinstance(spec, dict):
+        return df, []
+
+    raw_aliases = spec.get("parameter_space_column_aliases", {})
+    aliases = raw_aliases if isinstance(raw_aliases, dict) else {}
+    to_add: dict[str, pd.Series] = {}
+
+    for source_col_raw, target_col_raw in aliases.items():
+        source_col = str(source_col_raw).strip()
+        target_col = str(target_col_raw).strip()
+        if not source_col or not target_col or source_col == target_col:
+            continue
+        if target_col in df.columns or source_col not in df.columns or target_col in to_add:
+            continue
+        to_add[target_col] = df[source_col].copy()
+
+    if not to_add:
+        return df, []
+
+    alias_df = pd.DataFrame(to_add, index=df.index)
+    out = pd.concat([df, alias_df], axis=1)
+    return out, sorted(alias_df.columns.tolist())
+
+
+DEFAULT_PARAMETER_SPACE_PRIORITY = [
+    "flux_cm2_min",
+    "cos_n",
+    "eff_sim_1",
+    "eff_sim_2",
+    "eff_sim_3",
+    "eff_sim_4",
+    "eff_empirical_1",
+    "eff_empirical_2",
+    "eff_empirical_3",
+    "eff_empirical_4",
+]
+
+
+def _is_parameter_space_column(name: str) -> bool:
+    col = str(name).strip()
+    if not col:
+        return False
+    if col in {"flux_cm2_min", "cos_n"}:
+        return True
+    if col.startswith("eff_sim_") or col.startswith("eff_empirical_"):
+        return True
+    return False
+
+
+def _parse_column_spec(value: object) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or text.lower() == "auto":
+            return []
+        if text.startswith("[") and text.endswith("]"):
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                return [str(x).strip() for x in parsed if str(x).strip()]
+        return [part.strip() for part in text.split(",") if part.strip()]
+    if isinstance(value, (list, tuple, set)):
+        return [str(x).strip() for x in value if str(x).strip()]
+    text = str(value).strip()
+    return [text] if text and text.lower() != "auto" else []
+
+
+def _resolve_estimation_parameter_columns(
+    *,
+    dictionary_df: pd.DataFrame,
+    configured_columns: object = None,
+    default_columns: list[str] | None = None,
+) -> list[str]:
+    requested = _parse_column_spec(configured_columns)
+    if not requested and isinstance(default_columns, list):
+        requested = [str(c).strip() for c in default_columns if str(c).strip()]
+    if not requested:
+        requested = list(DEFAULT_PARAMETER_SPACE_PRIORITY)
+
+    resolved: list[str] = []
+    missing: list[str] = []
+    for col in requested:
+        if col in dictionary_df.columns and col not in resolved:
+            resolved.append(col)
+        elif col not in missing:
+            missing.append(col)
+    if missing:
+        log.warning(
+            "Ignoring estimated-parameter columns not present in the dictionary: %s",
+            missing,
+        )
+    if resolved:
+        return resolved
+
+    fallback: list[str] = []
+    for col in sorted(dictionary_df.columns):
+        if _is_parameter_space_column(col) and col not in fallback:
+            fallback.append(col)
+    return fallback
+
+
+def _find_estimated_parameter_column(df: pd.DataFrame, pname: str) -> str | None:
+    for candidate in (f"corrected_{pname}", f"est_{pname}"):
+        if candidate in df.columns:
+            return candidate
+    return None
+
+
+def _is_efficiency_parameter_column(name: str) -> bool:
+    text = str(name).strip().lower()
+    return text.startswith("eff_") or "_eff_" in text or text.endswith("_eff") or text.startswith("eff")
+
+
+def _series_median_or_none(values: object) -> float | None:
+    if values is None:
+        return None
+    series = pd.to_numeric(values, errors="coerce")
+    if isinstance(series, pd.Series):
+        if not series.notna().any():
+            return None
+        return float(series.median())
+    arr = np.asarray(series, dtype=float)
+    if not np.isfinite(arr).any():
+        return None
+    return float(np.nanmedian(arr))
+
+
 def _parse_ts(series: pd.Series) -> pd.Series:
     s = series.astype("string")
     parsed = pd.to_datetime(s, format="%Y-%m-%d_%H.%M.%S", errors="coerce", utc=True)
@@ -400,15 +583,17 @@ def _tt_rate_columns(df: pd.DataFrame) -> list[str]:
 
 def _prefix_rank(prefix: str) -> int:
     order = [
-        "raw",
-        "clean",
-        "cal",
-        "list",
+        "post",
         "fit",
+        "list",
+        "cal",
+        "clean",
+        "raw",
         "corr",
         "definitive",
-        "raw_to_clean",
+        "fit_to_post",
         "list_to_fit",
+        "raw_to_clean",
         "fit_to_corr",
         "task5_to_corr",
     ]
@@ -419,15 +604,19 @@ def _prefix_rank(prefix: str) -> int:
 
 
 def _choose_best_col(columns: list[str], df: pd.DataFrame | None = None) -> str:
-    scored: list[tuple[int, int, str]] = []
-    for col in columns:
+    scored_physical: list[tuple[int, int, str]] = []
+    scored_transition: list[tuple[int, int, str]] = []
+    for col in sorted(set(columns)):
         parts = _extract_tt_parts(col)
         rank = _prefix_rank(parts[0]) if parts is not None else 999
         finite_rank = 0
         if df is not None and col in df.columns:
             finite_count = int(pd.to_numeric(df[col], errors="coerce").notna().sum())
             finite_rank = -finite_count
-        scored.append((finite_rank, rank, col))
+        prefix = parts[0] if parts is not None else ""
+        target = scored_transition if "_to_" in prefix else scored_physical
+        target.append((finite_rank, rank, col))
+    scored = scored_physical or scored_transition
     scored.sort(key=lambda x: (x[0], x[1], x[2]))
     return scored[0][2]
 
@@ -456,7 +645,7 @@ def _resolve_feature_columns_auto(
     # 1) Prefer same-prefix direct intersections (mirrors STEP 2.1 behavior).
     prefixes = [str(p).strip() for p in (preferred_prefixes or []) if str(p).strip()]
     if not prefixes:
-        prefixes = ["raw", "clean", "cal", "list", "fit", "corr", "definitive"]
+        prefixes = ["post", "fit", "list", "cal", "clean", "raw", "corr", "definitive"]
     for prefix in prefixes:
         common = sorted(
             [c for c in dict_tt if c.startswith(f"{prefix}_tt_") and c in set(real_tt)]
@@ -1324,7 +1513,9 @@ def _pick_dictionary_eff_col_for_plane(df: pd.DataFrame, plane: int = 2) -> str 
     preferred = f"eff_sim_{int(plane)}"
     if preferred in df.columns and pd.to_numeric(df[preferred], errors="coerce").notna().any():
         return preferred
-    for c in ("eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4"):
+    for c in sorted(
+        [col for col in df.columns if re.match(r"^eff_sim_\d+$", str(col))]
+    ):
         if c in df.columns and pd.to_numeric(df[c], errors="coerce").notna().any():
             return c
     return None
@@ -1334,12 +1525,12 @@ def _mask_sim_eff_within_tolerance_band(
     df: pd.DataFrame,
     tolerance_pct: float,
 ) -> np.ndarray:
-    """Rows where eff_sim_1..4 are finite and inside one tolerance band."""
+    """Rows where all available eff_sim_* columns are finite and inside one tolerance band."""
     n_rows = len(df)
     if n_rows == 0:
         return np.zeros(0, dtype=bool)
-    eff_cols = [f"eff_sim_{i}" for i in range(1, 5)]
-    if not all(col in df.columns for col in eff_cols):
+    eff_cols = sorted([c for c in df.columns if re.match(r"^eff_sim_\d+$", str(c))])
+    if len(eff_cols) < 2:
         return np.zeros(n_rows, dtype=bool)
 
     tol_pct = float(tolerance_pct)
@@ -1472,9 +1663,9 @@ def _interpolate_uncertainties(
 
 
 def _choose_primary_eff_est_col(df: pd.DataFrame) -> str | None:
-    for candidate in ("est_eff_sim_1", "est_eff_sim_2", "est_eff_sim_3", "est_eff_sim_4"):
-        if candidate in df.columns:
-            return candidate
+    preferred = sorted([c for c in df.columns if re.match(r"^est_eff_sim_\d+$", str(c))])
+    if preferred:
+        return preferred[0]
     generic = [c for c in df.columns if c.startswith("est_eff_")]
     return sorted(generic)[0] if generic else None
 
@@ -1553,6 +1744,478 @@ def _plot_series_with_uncertainty(
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
+
+
+def _plot_parameter_estimate_series(
+    *,
+    x: pd.Series,
+    has_time_axis: bool,
+    xlabel: str,
+    df: pd.DataFrame,
+    parameter_columns: list[str],
+    out_path: Path,
+) -> int:
+    """Plot estimated parameter time series with uncertainty for all resolved dimensions."""
+    panels: list[tuple[str, np.ndarray, np.ndarray, np.ndarray | None]] = []
+    x_values = x.to_numpy()
+
+    for pname in parameter_columns:
+        est_col = _find_estimated_parameter_column(df, pname)
+        if est_col is None:
+            continue
+        y = pd.to_numeric(df.get(est_col), errors="coerce").to_numpy(dtype=float)
+        if not np.isfinite(y).any():
+            continue
+        unc_col = f"unc_{pname}_abs" if f"unc_{pname}_abs" in df.columns else None
+        unc = (
+            pd.to_numeric(df.get(unc_col), errors="coerce").to_numpy(dtype=float)
+            if unc_col is not None
+            else None
+        )
+        panels.append((pname, x_values, y, unc))
+
+    if not panels:
+        _plot_placeholder(
+            out_path,
+            "Estimated parameters vs time",
+            "No finite estimated parameter series are available.",
+        )
+        return 0
+
+    n_rows = len(panels)
+    fig, axes = plt.subplots(
+        n_rows,
+        1,
+        figsize=(11.0, max(3.0 * n_rows, 4.8)),
+        sharex=True,
+        squeeze=False,
+    )
+
+    for row, (pname, xv, yv, unc) in enumerate(panels):
+        ax = axes[row, 0]
+        mask = np.isfinite(xv) & np.isfinite(yv)
+        if np.any(mask):
+            xs = xv[mask]
+            ys = yv[mask]
+            order = np.argsort(xs)
+            xs = xs[order]
+            ys = ys[order]
+            ax.plot(
+                xs,
+                ys,
+                color="#1F77B4",
+                linewidth=1.25,
+                alpha=0.92,
+                marker="o",
+                markersize=2.6,
+            )
+            if unc is not None and len(unc) == len(xv):
+                us = np.abs(np.asarray(unc, dtype=float)[mask][order])
+                valid_u = np.isfinite(us)
+                if np.any(valid_u):
+                    ax.fill_between(
+                        xs[valid_u],
+                        ys[valid_u] - us[valid_u],
+                        ys[valid_u] + us[valid_u],
+                        color="#1F77B4",
+                        alpha=0.14,
+                        linewidth=0.0,
+                        label="Estimate +/- uncertainty",
+                    )
+                    ax.legend(loc="best", fontsize=8, framealpha=0.92)
+        else:
+            ax.text(0.5, 0.5, f"No finite estimates for {pname}", ha="center", va="center", transform=ax.transAxes)
+        ax.set_ylabel(pname)
+        ax.grid(True, alpha=0.22)
+
+    axes[-1, 0].set_xlabel(xlabel)
+    if not has_time_axis and len(x_values) > 0:
+        xmin = float(np.nanmin(x_values))
+        xmax = float(np.nanmax(x_values)) if len(x_values) > 1 else xmin + 1.0
+        axes[-1, 0].set_xlim(xmin, xmax)
+    fig.suptitle("Estimated parameter time series", fontsize=12)
+    fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.98])
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return n_rows
+
+
+def _parse_named_float_dict(value: object) -> dict[str, float]:
+    if value in (None, "", "null", "None"):
+        return {}
+    payload = value
+    if isinstance(value, str):
+        try:
+            payload = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+    if not isinstance(payload, dict):
+        return {}
+    out: dict[str, float] = {}
+    for raw_key, raw_val in payload.items():
+        key = str(raw_key).strip()
+        if not key:
+            continue
+        try:
+            num = float(raw_val)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(num) and num >= 0.0:
+            out[key] = num
+    return out
+
+
+def _format_distance_term_label(name: str) -> str:
+    text = str(name).strip()
+    if text == "scalar_base":
+        return "Scalar features"
+    if text == "rate_histogram":
+        return "Rate histogram"
+    if text == "efficiency_vectors":
+        return "Efficiency vs X/Y/theta"
+    return text.replace("_", " ")
+
+
+def _split_group_component_name(name: str) -> tuple[str, str]:
+    text = str(name).strip()
+    if "::" not in text:
+        return "", text
+    parent, child = text.split("::", 1)
+    return str(parent).strip(), str(child).strip()
+
+
+def _format_group_component_label(name: str) -> str:
+    parent, child = _split_group_component_name(name)
+    if parent == "rate_histogram":
+        match = re.match(r"^events_per_second_(?P<bin>\d+)_rate_hz$", child)
+        if match is not None:
+            return f"Hist bin {int(match.group('bin'))}"
+        return child or "Rate-hist component"
+    if parent == "efficiency_vectors":
+        match = re.match(r"^p(?P<plane>\d+)_(?P<axis>x|y|theta)$", child)
+        if match is not None:
+            axis = str(match.group("axis"))
+            axis_label = {"x": "X", "y": "Y", "theta": "theta"}.get(axis, axis)
+            return f"Eff p{int(match.group('plane'))} {axis_label}"
+        return child or "Efficiency-vector component"
+    return child or name
+
+
+def _distance_term_color(name: str) -> str:
+    fixed = {
+        "scalar_base": "#4C78A8",
+        "rate_histogram": "#F58518",
+        "efficiency_vectors": "#54A24B",
+    }
+    if name in fixed:
+        return fixed[name]
+    palette = plt.get_cmap("tab20").colors
+    return palette[abs(hash(name)) % len(palette)]
+
+
+def _plot_distance_term_dominance(
+    *,
+    x: pd.Series,
+    has_time_axis: bool,
+    xlabel: str,
+    df: pd.DataFrame,
+    out_path: Path,
+) -> dict[str, object]:
+    term_rows: list[dict[str, float]] = []
+    scalar_rows: list[dict[str, float]] = []
+    group_component_rows: list[dict[str, float]] = []
+    group_component_within_rows: list[dict[str, float]] = []
+    keep_idx: list[int] = []
+
+    distance_vals = pd.to_numeric(df.get("best_distance"), errors="coerce")
+    for idx in range(len(df)):
+        if idx >= len(distance_vals) or not np.isfinite(float(distance_vals.iloc[idx])):
+            continue
+        term_payload = _parse_named_float_dict(df.iloc[idx].get("best_distance_term_shares_json"))
+        if not term_payload:
+            continue
+        total = float(sum(term_payload.values()))
+        if not np.isfinite(total) or total <= 0.0:
+            continue
+        if abs(total - 1.0) > 1e-9:
+            term_payload = {k: float(v / total) for k, v in term_payload.items() if np.isfinite(v) and v >= 0.0}
+        term_rows.append(term_payload)
+        scalar_rows.append(_parse_named_float_dict(df.iloc[idx].get("best_distance_scalar_feature_shares_json")))
+        group_component_rows.append(_parse_named_float_dict(df.iloc[idx].get("best_distance_group_component_shares_json")))
+        group_component_within_rows.append(
+            _parse_named_float_dict(df.iloc[idx].get("best_distance_group_component_within_term_shares_json"))
+        )
+        keep_idx.append(idx)
+
+    if not term_rows:
+        _plot_placeholder(
+            out_path,
+            "Feature-space distance dominance",
+            "No exact distance-term breakdowns are available for successful rows.",
+        )
+        return {
+            "plot_available": False,
+            "n_rows": 0,
+            "term_median_share": {},
+            "term_dominant_fraction": {},
+            "top_scalar_feature_median_share": {},
+            "top_group_component_median_total_share": {},
+            "top_group_component_median_within_term_share": {},
+        }
+
+    term_df = pd.DataFrame(term_rows).fillna(0.0)
+    x_used = x.iloc[keep_idx].reset_index(drop=True)
+
+    term_order = (
+        term_df.median(axis=0, skipna=True)
+        .sort_values(ascending=False)
+        .index.tolist()
+    )
+    term_df = term_df[term_order]
+    term_medians = {
+        name: float(term_df[name].median(skipna=True))
+        for name in term_order
+    }
+
+    row_sums = term_df.sum(axis=1)
+    dominant_labels: list[str] = []
+    for row_idx in range(len(term_df)):
+        if not np.isfinite(float(row_sums.iloc[row_idx])) or float(row_sums.iloc[row_idx]) <= 0.0:
+            continue
+        dominant_labels.append(str(term_df.iloc[row_idx].idxmax()))
+    dominant_fraction = {
+        name: float(np.mean([label == name for label in dominant_labels]))
+        for name in term_order
+    }
+
+    scalar_df = pd.DataFrame(scalar_rows).fillna(0.0) if scalar_rows else pd.DataFrame()
+    scalar_medians: dict[str, float] = {}
+    scalar_order: list[str] = []
+    if not scalar_df.empty:
+        scalar_medians = {
+            name: float(val)
+            for name, val in scalar_df.median(axis=0, skipna=True).sort_values(ascending=False).items()
+            if np.isfinite(float(val)) and float(val) > 0.0
+        }
+        scalar_order = list(scalar_medians.keys())[:10]
+
+    component_total_df = pd.DataFrame(group_component_rows).fillna(0.0) if group_component_rows else pd.DataFrame()
+    component_within_df = (
+        pd.DataFrame(group_component_within_rows).fillna(0.0) if group_component_within_rows else pd.DataFrame()
+    )
+    component_total_medians: dict[str, float] = {}
+    component_total_order: list[str] = []
+    if not component_total_df.empty:
+        component_total_medians = {
+            name: float(val)
+            for name, val in component_total_df.median(axis=0, skipna=True).sort_values(ascending=False).items()
+            if np.isfinite(float(val)) and float(val) > 0.0
+        }
+        component_total_order = list(component_total_medians.keys())[:12]
+    component_within_medians: dict[str, float] = {}
+    component_within_order: list[str] = []
+    if not component_within_df.empty:
+        for name in component_within_df.columns:
+            series = pd.to_numeric(component_within_df[name], errors="coerce")
+            active = series[np.isfinite(series.to_numpy(dtype=float)) & (series > 0.0)]
+            if active.empty:
+                continue
+            value = float(active.median(skipna=True))
+            if np.isfinite(value) and value > 0.0:
+                component_within_medians[str(name)] = value
+        component_within_medians = dict(
+            sorted(component_within_medians.items(), key=lambda item: (-float(item[1]), str(item[0])))
+        )
+        component_within_order = list(component_within_medians.keys())[:12]
+
+    has_component_breakdown = bool(component_total_order or component_within_order)
+    height_ratios = [2.4, 1.2]
+    if has_component_breakdown:
+        height_ratios.append(1.5)
+    if scalar_order:
+        height_ratios.append(1.2)
+    n_rows = len(height_ratios)
+    fig = plt.figure(figsize=(12.8, 11.4 if has_component_breakdown and scalar_order else (9.8 if has_component_breakdown else (10.0 if scalar_order else 8.2))))
+    gs = fig.add_gridspec(n_rows, 2, height_ratios=height_ratios)
+    ax_stack = fig.add_subplot(gs[0, :])
+    ax_median = fig.add_subplot(gs[1, 0])
+    ax_dom = fig.add_subplot(gs[1, 1])
+    component_row_idx = 2 if has_component_breakdown else None
+    ax_component_total = fig.add_subplot(gs[component_row_idx, 0]) if has_component_breakdown else None
+    ax_component_within = fig.add_subplot(gs[component_row_idx, 1]) if has_component_breakdown else None
+    scalar_row_idx = (3 if has_component_breakdown else 2) if scalar_order else None
+    ax_scalar = fig.add_subplot(gs[scalar_row_idx, :]) if scalar_order else None
+
+    x_numeric: np.ndarray
+    if has_time_axis:
+        x_dt = pd.to_datetime(x_used, errors="coerce")
+        x_numeric = mdates.date2num(x_dt.to_numpy())
+    else:
+        x_numeric = pd.to_numeric(x_used, errors="coerce").to_numpy(dtype=float)
+    finite_x = np.isfinite(x_numeric)
+    if not np.any(finite_x):
+        x_numeric = np.arange(len(term_df), dtype=float)
+        finite_x = np.ones(len(term_df), dtype=bool)
+    order = np.argsort(x_numeric[finite_x])
+    xs = x_numeric[finite_x][order]
+    ys_df = term_df.loc[finite_x].reset_index(drop=True).iloc[order]
+    bottom = np.zeros(len(ys_df), dtype=float)
+    for term_name in term_order:
+        vals = np.clip(pd.to_numeric(ys_df[term_name], errors="coerce").to_numpy(dtype=float), 0.0, 1.0)
+        ax_stack.fill_between(
+            xs,
+            bottom,
+            bottom + vals,
+            color=_distance_term_color(term_name),
+            alpha=0.88,
+            linewidth=0.0,
+            label=_format_distance_term_label(term_name),
+        )
+        bottom = bottom + vals
+    ax_stack.set_ylim(0.0, 1.0)
+    ax_stack.set_ylabel("Share of best-match distance")
+    ax_stack.set_title("Feature-space distance dominance by active term")
+    ax_stack.grid(True, alpha=0.2)
+    ax_stack.legend(loc="upper center", bbox_to_anchor=(0.5, 1.18), ncol=max(1, min(len(term_order), 3)), fontsize=9)
+    if has_time_axis:
+        ax_stack.xaxis_date()
+        locator = mdates.AutoDateLocator()
+        ax_stack.xaxis.set_major_locator(locator)
+        ax_stack.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
+    else:
+        ax_stack.set_xlabel(xlabel)
+
+    y_pos = np.arange(len(term_order), dtype=float)
+    ax_median.barh(
+        y_pos,
+        [term_medians[name] for name in term_order],
+        color=[_distance_term_color(name) for name in term_order],
+        alpha=0.9,
+    )
+    ax_median.set_yticks(y_pos, labels=[_format_distance_term_label(name) for name in term_order])
+    ax_median.set_xlim(0.0, 1.0)
+    ax_median.set_xlabel("Median share")
+    ax_median.set_title("Median contribution")
+    ax_median.grid(True, axis="x", alpha=0.2)
+
+    ax_dom.barh(
+        y_pos,
+        [dominant_fraction.get(name, 0.0) for name in term_order],
+        color=[_distance_term_color(name) for name in term_order],
+        alpha=0.9,
+    )
+    ax_dom.set_yticks(y_pos, labels=[_format_distance_term_label(name) for name in term_order])
+    ax_dom.set_xlim(0.0, 1.0)
+    ax_dom.set_xlabel("Fraction of rows dominant")
+    ax_dom.set_title("Dominant-term frequency")
+    ax_dom.grid(True, axis="x", alpha=0.2)
+
+    if ax_component_total is not None and ax_component_within is not None:
+        if component_total_order:
+            comp_y = np.arange(len(component_total_order), dtype=float)
+            comp_colors = [
+                _distance_term_color(_split_group_component_name(name)[0] or name)
+                for name in component_total_order
+            ]
+            ax_component_total.barh(
+                comp_y,
+                [component_total_medians[name] for name in component_total_order],
+                color=comp_colors,
+                alpha=0.9,
+            )
+            ax_component_total.set_yticks(
+                comp_y,
+                labels=[_format_group_component_label(name) for name in component_total_order],
+            )
+            ax_component_total.set_xlim(0.0, max(max(component_total_medians.values()) * 1.15, 0.05))
+            ax_component_total.set_xlabel("Median total-distance share")
+            ax_component_total.set_title("Top grouped components by total share")
+            ax_component_total.grid(True, axis="x", alpha=0.2)
+        else:
+            ax_component_total.axis("off")
+            ax_component_total.text(
+                0.5,
+                0.5,
+                "No grouped-component total-share diagnostics",
+                ha="center",
+                va="center",
+                fontsize=10,
+                transform=ax_component_total.transAxes,
+            )
+
+        if component_within_order:
+            comp_y = np.arange(len(component_within_order), dtype=float)
+            comp_colors = [
+                _distance_term_color(_split_group_component_name(name)[0] or name)
+                for name in component_within_order
+            ]
+            ax_component_within.barh(
+                comp_y,
+                [component_within_medians[name] for name in component_within_order],
+                color=comp_colors,
+                alpha=0.9,
+            )
+            ax_component_within.set_yticks(
+                comp_y,
+                labels=[_format_group_component_label(name) for name in component_within_order],
+            )
+            ax_component_within.set_xlim(0.0, 1.0)
+            ax_component_within.set_xlabel("Median share within parent term (when active)")
+            ax_component_within.set_title("Top grouped components inside their term")
+            ax_component_within.grid(True, axis="x", alpha=0.2)
+        else:
+            ax_component_within.axis("off")
+            ax_component_within.text(
+                0.5,
+                0.5,
+                "No grouped-component within-term diagnostics",
+                ha="center",
+                va="center",
+                fontsize=10,
+                transform=ax_component_within.transAxes,
+            )
+
+    if ax_scalar is not None:
+        ax_scalar.barh(
+            np.arange(len(scalar_order), dtype=float),
+            [scalar_medians[name] for name in scalar_order],
+            color="#4C78A8",
+            alpha=0.9,
+        )
+        ax_scalar.set_yticks(np.arange(len(scalar_order), dtype=float), labels=scalar_order)
+        ax_scalar.set_xlim(0.0, max(max(scalar_medians.values()) * 1.15, 0.05))
+        ax_scalar.set_xlabel("Median total-distance share")
+        ax_scalar.set_title("Top scalar features by median share")
+        ax_scalar.grid(True, axis="x", alpha=0.2)
+
+    if has_time_axis:
+        ax_dom.set_xlabel("Fraction of rows dominant")
+        if ax_scalar is not None:
+            ax_scalar.set_xlabel("Median total-distance share")
+    else:
+        ax_stack.set_xlabel(xlabel)
+
+    fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.98])
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return {
+        "plot_available": True,
+        "n_rows": int(len(term_df)),
+        "term_median_share": term_medians,
+        "term_dominant_fraction": dominant_fraction,
+        "top_scalar_feature_median_share": {
+            name: float(scalar_medians[name])
+            for name in scalar_order
+        },
+        "top_group_component_median_total_share": {
+            name: float(component_total_medians[name])
+            for name in component_total_order
+        },
+        "top_group_component_median_within_term_share": {
+            name: float(component_within_medians[name])
+            for name in component_within_order
+        },
+    }
 
 
 def _plot_flux_recovery_story_real(
@@ -1958,60 +2621,34 @@ def _plot_estimated_curve_flux_vs_eff(
     *,
     real_df: pd.DataFrame,
     dict_df: pd.DataFrame,
-    est_flux_col: str,
-    est_eff_col: str,
-    dict_eff_col: str,
-    dict_rate_col: str,
+    parameter_columns: list[str],
     out_path: Path,
 ) -> tuple[int, int]:
     """Lower-triangle matrix: estimated real-data parameter curve vs dictionary."""
-    del dict_rate_col  # kept in signature for backward compatibility
-
-    flux_param = "flux_cm2_min"
     param_specs: list[tuple[str, str, str]] = []
-    if (
-        est_flux_col in real_df.columns
-        and flux_param in dict_df.columns
-        and pd.to_numeric(real_df[est_flux_col], errors="coerce").notna().any()
-        and pd.to_numeric(dict_df[flux_param], errors="coerce").notna().any()
-    ):
-        param_specs.append((flux_param, est_flux_col, flux_param))
-
-    def _eff_label_from_col(col: str, fallback_plane: int) -> str:
-        m = re.search(r"eff_sim_(\d+)", str(col))
-        if m is not None:
-            return f"eff_sim_{m.group(1)}"
-        return f"eff_sim_{int(fallback_plane)}"
-
-    if (
-        est_eff_col in real_df.columns
-        and dict_eff_col in dict_df.columns
-        and pd.to_numeric(real_df[est_eff_col], errors="coerce").notna().any()
-        and pd.to_numeric(dict_df[dict_eff_col], errors="coerce").notna().any()
-    ):
-        param_specs.append((_eff_label_from_col(est_eff_col, 2), est_eff_col, dict_eff_col))
-
-    seen_labels = {name for name, _, _ in param_specs}
-    for plane in (1, 2, 3, 4):
-        pname = f"eff_sim_{plane}"
-        if pname in seen_labels:
+    seen_labels: set[str] = set()
+    for pname in parameter_columns:
+        dict_col = str(pname).strip()
+        real_col = _find_estimated_parameter_column(real_df, dict_col)
+        if not dict_col or dict_col in seen_labels:
             continue
-        real_col = f"est_eff_sim_{plane}"
-        dict_col = f"eff_sim_{plane}"
-        if real_col not in real_df.columns or dict_col not in dict_df.columns:
+        if real_col is None or dict_col not in dict_df.columns:
             continue
         if not pd.to_numeric(real_df[real_col], errors="coerce").notna().any():
             continue
         if not pd.to_numeric(dict_df[dict_col], errors="coerce").notna().any():
             continue
-        param_specs.append((pname, real_col, dict_col))
-        seen_labels.add(pname)
+        param_specs.append((dict_col, real_col, dict_col))
+        seen_labels.add(dict_col)
 
     if len(param_specs) < 2:
         _plot_placeholder(
             out_path,
             "Estimated curve in parameter space",
-            "Not enough estimated parameter dimensions to build a lower-triangle matrix.",
+            (
+                "Not enough estimated parameter dimensions to build a lower-triangle matrix. "
+                f"Resolved dimensions: {parameter_columns}"
+            ),
         )
         return (0, 0)
 
@@ -2162,12 +2799,14 @@ def main() -> int:
     lut_csv_cfg = cfg_42.get("uncertainty_lut_csv", None)
     lut_meta_cfg = cfg_42.get("uncertainty_lut_meta_json", None)
     build_summary_cfg = cfg_42.get("build_summary_json", None)
+    parameter_space_spec_cfg = cfg_42.get("parameter_space_columns_json", None)
 
     real_path = _resolve_input_path(args.real_csv or real_csv_cfg or DEFAULT_REAL_COLLECTED)
     dict_path = _resolve_input_path(args.dictionary_csv or dictionary_csv_cfg or DEFAULT_DICTIONARY)
     lut_path = _resolve_input_path(args.lut_csv or lut_csv_cfg or DEFAULT_LUT)
     lut_meta_path = _resolve_input_path(args.lut_meta_json or lut_meta_cfg or DEFAULT_LUT_META)
     build_summary_path = _resolve_input_path(build_summary_cfg or DEFAULT_BUILD_SUMMARY)
+    parameter_space_spec_path = _resolve_input_path(parameter_space_spec_cfg or DEFAULT_PARAMETER_SPACE_SPEC)
 
     for label, path in (
         ("Real collected CSV", real_path),
@@ -2210,6 +2849,9 @@ def main() -> int:
     include_global_rate = _safe_bool(cfg_21.get("include_global_rate", True), True)
     global_rate_col = str(cfg_21.get("global_rate_col", "events_per_second_global_rate"))
     exclude_same_file = _safe_bool(cfg_42.get("exclude_same_file", False), False)
+    shared_parameter_exclusion_ignore_cfg = _parse_column_spec(
+        cfg_42.get("shared_parameter_exclusion_ignore", None)
+    )
     uncertainty_quantile = _safe_float(cfg_42.get("uncertainty_quantile", 0.68), 0.68)
     uncertainty_quantile = float(np.clip(uncertainty_quantile, 0.0, 1.0))
     contour_eff_band_tolerance_pct = max(
@@ -2327,6 +2969,16 @@ def main() -> int:
     if dict_df.empty:
         log.error("Dictionary table is empty: %s", dict_path)
         return 1
+    parameter_space_spec = _load_parameter_space_spec(parameter_space_spec_path)
+    default_parameter_space_columns = _load_parameter_space_columns(parameter_space_spec_path)
+    real_df, real_alias_cols = _apply_parameter_space_aliases(real_df, parameter_space_spec)
+    dict_df, dict_alias_cols = _apply_parameter_space_aliases(dict_df, parameter_space_spec)
+    if real_alias_cols or dict_alias_cols:
+        log.info(
+            "Applied STEP 1 parameter-space aliases: real=%s dictionary=%s",
+            real_alias_cols,
+            dict_alias_cols,
+        )
 
     # Prepare per-plane empirical efficiencies before feature resolution so
     # derived mode can use efficiency coordinates (same method domain as STEP 2.1).
@@ -2495,6 +3147,7 @@ def main() -> int:
         )
         if (
             derived_rate_col_local is None
+            and include_global_rate
             and global_rate_col in dict_in.columns
             and global_rate_col in real_in.columns
         ):
@@ -2687,11 +3340,14 @@ def main() -> int:
 
     dd = load_distance_definition(feature_columns)
     if dd["available"]:
+        n_active_groups = int(
+            sum(float(v) > 0.0 for v in (dd.get("group_weights", {}) or {}).values())
+        )
         log.info(
-            "Loaded STEP 1.5 distance definition: %s (p=%.1f, k=%d, λ=%.2g, %d/%d active)",
+            "Loaded STEP 1.5 distance definition: %s (p=%.1f, k=%d, λ=%.2g, scalar_active=%d/%d, grouped_active=%d)",
             dd["selected_mode"], dd["p_norm"], dd["optimal_k"],
             dd["optimal_lambda"],
-            int(np.sum(dd["weights"] > 0)), len(feature_columns),
+            int(np.sum(dd["weights"] > 0)), len(feature_columns), n_active_groups,
         )
         if interpolation_k is None or interpolation_k != dd["optimal_k"]:
             log.info("Overriding interpolation_k %s → %d from distance definition.", interpolation_k, dd["optimal_k"])
@@ -2744,18 +3400,19 @@ def main() -> int:
             inverse_mapping_cfg_runtime["aggregation"],
         )
 
-    param_columns = [
-        col
-        for col in (
-            "flux_cm2_min",
-            "cos_n",
-            "eff_sim_1",
-            "eff_sim_2",
-            "eff_sim_3",
-            "eff_sim_4",
+    parameter_space_cfg = cfg_42.get("parameter_space_columns", None)
+    param_columns = _resolve_estimation_parameter_columns(
+        dictionary_df=dict_work,
+        configured_columns=parameter_space_cfg,
+        default_columns=default_parameter_space_columns,
+    )
+    if not param_columns:
+        log.error(
+            "No parameter-space columns available for STEP 4.2 estimation (spec=%s).",
+            parameter_space_spec_path,
         )
-        if col in dict_work.columns
-    ]
+        return 1
+    log.info("Parameter-space columns used for STEP 4.2 estimation: %s", param_columns)
     est_df = estimate_from_dataframes(
         dict_df=dict_work,
         data_df=real_work,
@@ -2768,7 +3425,11 @@ def main() -> int:
         exclude_same_file=False if inherit_step_2_1_method else exclude_same_file,
         shared_parameter_exclusion_mode="full" if inherit_step_2_1_method else None,
         shared_parameter_exclusion_columns=["param_set_id"] if inherit_step_2_1_method else None,
-        shared_parameter_exclusion_ignore=() if inherit_step_2_1_method else ("cos_n",),
+        shared_parameter_exclusion_ignore=(
+            ()
+            if inherit_step_2_1_method
+            else tuple(shared_parameter_exclusion_ignore_cfg)
+        ),
         density_weighting_cfg=None,
         inverse_mapping_cfg=inverse_mapping_cfg_runtime,
         distance_definition=dd,
@@ -2961,7 +3622,8 @@ def main() -> int:
         else:
             merged[unc_abs_col] = np.nan
 
-    flux_est_col = "est_flux_cm2_min" if "est_flux_cm2_min" in merged.columns else None
+    flux_param = next((c for c in param_columns if "flux" in str(c).lower()), None)
+    flux_est_col = _find_estimated_parameter_column(merged, flux_param) if flux_param else None
     eff_est_col = _choose_primary_eff_est_col(merged)
     distance_col = "best_distance" if "best_distance" in merged.columns else None
 
@@ -3026,6 +3688,22 @@ def main() -> int:
     x, x_label, has_time_axis = _time_axis(merged)
     if has_time_axis:
         merged = merged.assign(execution_time_for_plot=x)
+
+    n_parameter_series_panels = _plot_parameter_estimate_series(
+        x=x,
+        has_time_axis=has_time_axis,
+        xlabel=x_label,
+        df=merged,
+        parameter_columns=param_columns,
+        out_path=PLOT_PARAMETER_SERIES,
+    )
+    distance_term_dominance_summary = _plot_distance_term_dominance(
+        x=x,
+        has_time_axis=has_time_axis,
+        xlabel=x_label,
+        df=merged,
+        out_path=PLOT_DISTANCE_DOMINANCE,
+    )
 
     out_csv = FILES_DIR / "real_results.csv"
     merged.to_csv(out_csv, index=False)
@@ -3130,34 +3808,20 @@ def main() -> int:
     n_est_curve_dict = 0
     est_curve_eff_col = _pick_estimated_eff_col_for_plane(merged, plane=2)
     dict_curve_eff_col = _pick_dictionary_eff_col_for_plane(dict_df_plot, plane=2)
-    if (
-        flux_est_col is not None
-        and est_curve_eff_col is not None
-        and dict_curve_eff_col is not None
-        and dict_global_rate_col is not None
-    ):
+    if len(param_columns) >= 2:
         n_est_curve_real, n_est_curve_dict = _plot_estimated_curve_flux_vs_eff(
             real_df=merged,
             dict_df=dict_df_contours,
-            est_flux_col=flux_est_col,
-            est_eff_col=est_curve_eff_col,
-            dict_eff_col=dict_curve_eff_col,
-            dict_rate_col=dict_global_rate_col,
+            parameter_columns=param_columns,
             out_path=PLOT_EST_CURVE,
         )
     else:
         missing = []
-        if flux_est_col is None:
-            missing.append("estimated flux column")
-        if est_curve_eff_col is None:
-            missing.append("estimated efficiency column")
-        if dict_curve_eff_col is None:
-            missing.append("dictionary efficiency column")
-        if dict_global_rate_col is None:
-            missing.append("dictionary global_rate column")
+        if len(param_columns) < 2:
+            missing.append("at least two resolved parameter-space dimensions")
         _plot_placeholder(
             PLOT_EST_CURVE,
-            "Estimated curve in flux-eff plane",
+            "Estimated curve in parameter space",
             "Cannot build plot: missing " + ", ".join(missing) + ".",
         )
 
@@ -3235,6 +3899,19 @@ def main() -> int:
         "dictionary_csv": str(dict_path),
         "uncertainty_lut_csv": str(lut_path),
         "matching_criteria_source": "step_2_1",
+        "parameter_space_spec_json": str(parameter_space_spec_path),
+        "parameter_space_spec_columns_default": default_parameter_space_columns,
+        "parameter_space_columns_config": parameter_space_cfg,
+        "parameter_space_columns_used": param_columns,
+        "parameter_series_plot": str(PLOT_PARAMETER_SERIES),
+        "parameter_series_plot_panels": int(n_parameter_series_panels),
+        "distance_term_dominance_plot": str(PLOT_DISTANCE_DOMINANCE),
+        "distance_term_dominance_summary": distance_term_dominance_summary,
+        "parameter_estimate_columns": {
+            pname: _find_estimated_parameter_column(merged, pname)
+            for pname in param_columns
+            if _find_estimated_parameter_column(merged, pname) is not None
+        },
         "distance_metric": distance_metric,
         "distance_definition_used": dd is not None,
         "distance_definition_mode": dd["selected_mode"] if dd is not None else None,
@@ -3242,6 +3919,7 @@ def main() -> int:
         "inverse_mapping": inverse_mapping_cfg_requested,
         "inverse_mapping_runtime_applied": inverse_mapping_cfg_runtime,
         "inherit_step_2_1_method": bool(inherit_step_2_1_method),
+        "shared_parameter_exclusion_ignore": shared_parameter_exclusion_ignore_cfg,
         "feature_strategy": feature_strategy,
         "derived_feature_subset_mode_requested": derived_feature_subset_mode_requested,
         "derived_feature_subset_mode": derived_feature_subset_mode,
@@ -3252,6 +3930,11 @@ def main() -> int:
         "n_rows": int(len(merged)),
         "n_successful_rows": int(merged["inference_success"].sum()),
         "coverage_fraction": float(merged["inference_success"].mean()),
+        "n_successful_parameter_estimates": {
+            pname: int(pd.to_numeric(merged.get(_find_estimated_parameter_column(merged, pname)), errors="coerce").notna().sum())
+            for pname in param_columns
+            if _find_estimated_parameter_column(merged, pname) is not None
+        },
         "flux_estimate_column": flux_est_col,
         "eff_estimate_column": eff_est_col,
         "distance_column": distance_col,
@@ -3397,6 +4080,11 @@ def main() -> int:
         "recovery_story_eff_column": story_eff_col,
         "recovery_story_global_rate_column": real_global_rate_col,
         "recovery_story_flux_column": flux_est_col,
+        "parameter_space_estimate_uncertainty_medians_pct": {
+            pname: _series_median_or_none(merged.get(f"unc_{pname}_pct"))
+            for pname in param_columns
+            if f"unc_{pname}_pct" in merged.columns
+        },
         "lut_param_names_used": lut_params,
         "uncertainty_quantile": uncertainty_quantile,
         "has_time_axis": bool(has_time_axis),

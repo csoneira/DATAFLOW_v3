@@ -7,7 +7,7 @@ selection:
       end: 2024-10-01
 self_trigger: false
 timeseries_and_fits: false
-complete_reanalysis: false
+complete_reanalysis: true
 # create_plots options: null | debug | usual | essential | all
 # Task 4 plot alias statuses live in config_plots_task_4.yaml
 create_plots: null
@@ -20,6 +20,23 @@ number_of_tt_executions: 1
 fit_method: both
 fixed_speed: false
 res_ana_removing_planes: true
+efficiency_metadata:
+  x_bin_count: 15
+  y_bin_count: 20
+  theta_bin_count: 20
+  x_min_mm: null
+  x_max_mm: null
+  y_min_mm: null
+  y_max_mm: null
+  theta_min_deg: null
+  theta_max_deg: null
+  min_pool_events: 20
+  min_accepted_events: 10
+  summary_fiducial_x_abs_max_mm: null
+  summary_fiducial_y_abs_max_mm: null
+  # Limits the candidate theta bins for the scalar summary; the saved value is
+  # taken from the bin center closest to 0 deg within this admissible region.
+  summary_fiducial_theta_max_deg: null
 # Optional TimTrack LOO (external residual) controls for runtime tuning:
 # - every_n=1 means compute LOO on every eligible event (current behavior).
 # - increase every_n to reduce CPU cost when LOO diagnostics are not critical.

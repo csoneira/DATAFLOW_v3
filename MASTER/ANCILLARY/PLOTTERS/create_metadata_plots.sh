@@ -56,6 +56,11 @@ run_plotter \
   --config "$PLOTTERS_ROOT/METADATA/EXECUTION/execution_metadata_config.json"
 
 run_plotter \
+  "efficiency_metadata_plotter" \
+  python3 -u "$PLOTTERS_ROOT/METADATA/EFFICIENCIES/efficiency_metadata_plotter.py" \
+  --config "$PLOTTERS_ROOT/METADATA/EFFICIENCIES/efficiency_metadata_config.json"
+
+run_plotter \
   "simulated_data_evolution_plotter" \
   python3 -u "$PLOTTERS_ROOT/SIMULATED_DATA_EVOLUTION/simulated_data_evolution_plotter.py" \
   --config "$PLOTTERS_ROOT/SIMULATED_DATA_EVOLUTION/simulated_data_evolution_config.json"

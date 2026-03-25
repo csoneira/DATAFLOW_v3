@@ -14,19 +14,19 @@
 # =============================================================================
 
 # ===========================================================================
-# run_pipeline.sh — Run the inference dictionary validation pipeline.
+# run_new_pipeline.sh — Run the inference dictionary validation pipeline.
 #
 # Usage:
-#   ./run_pipeline.sh                  # Run all steps
-#   ./run_pipeline.sh 1.1 1.2          # Run specific steps
-#   ./run_pipeline.sh --from 2.1       # Run from a specific step onwards
-#   ./run_pipeline.sh --list           # List available steps
+#   ./run_new_pipeline.sh                  # Run all steps
+#   ./run_new_pipeline.sh 1.1 1.2          # Run specific steps
+#   ./run_new_pipeline.sh --from 2.1       # Run from a specific step onwards
+#   ./run_new_pipeline.sh --list           # List available steps
 # ===========================================================================
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG="${SCRIPT_DIR}/config_method.json"
+CONFIG="${SCRIPT_DIR}/config_step_1.1_method.json"
 
 # Preferred layout: STEP_* directories directly under SCRIPT_DIR.
 # Legacy layout fallback: SCRIPT_DIR/STEPS/STEP_*.
@@ -91,6 +91,7 @@ Usage:
   ./${script_name}                 Run all steps
   ./${script_name} <step...>       Run specific steps (e.g. 1.1 2.3)
   ./${script_name} --from <step>   Run from a specific step onwards
+  ./${script_name} --config <cfg>  Use an alternate pipeline config JSON
   ./${script_name} --list          List available steps
   ./${script_name} -h|--help       Show this help message
 EOF
@@ -151,23 +152,52 @@ clear_output_plots() {
 
 # ── Argument parsing ──────────────────────────────────────────────────
 
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-    print_help
-    exit 0
+POSITIONAL_ARGS=()
+FROM_STEP=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            print_help
+            exit 0
+            ;;
+        --list)
+            list_steps
+            exit 0
+            ;;
+        --config)
+            if [[ $# -lt 2 ]]; then
+                echo "ERROR: --config requires a JSON file path." >&2
+                exit 1
+            fi
+            CONFIG="$2"
+            shift 2
+            ;;
+        --from)
+            if [[ $# -lt 2 ]]; then
+                echo "ERROR: --from requires a step number (e.g. --from 2.1)" >&2
+                exit 1
+            fi
+            FROM_STEP="$2"
+            shift 2
+            ;;
+        *)
+            POSITIONAL_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if [[ ! -f "$CONFIG" ]]; then
+    echo "ERROR: Config file not found: $CONFIG" >&2
+    exit 1
 fi
 
-if [[ "${1:-}" == "--list" ]]; then
-    list_steps
-    exit 0
+if [[ ! "$CONFIG" = /* ]]; then
+    CONFIG="${PWD}/${CONFIG}"
 fi
 
-if [[ "${1:-}" == "--from" ]]; then
-    FROM_STEP="${2:-}"
+if [[ -n "$FROM_STEP" ]]; then
     RUN_STEPS=()
-    if [[ -z "$FROM_STEP" ]]; then
-        echo "ERROR: --from requires a step number (e.g. --from 2.1)" >&2
-        exit 1
-    fi
     if [[ -z "${STEP_SCRIPTS[$FROM_STEP]:-}" ]]; then
         echo "ERROR: Unknown step: $FROM_STEP" >&2
         list_steps
@@ -195,16 +225,16 @@ if [[ "${1:-}" == "--from" ]]; then
 fi
 
 # If specific steps are given, run only those
-if [[ $# -gt 0 ]]; then
-    for step in "$@"; do
+if [[ ${#POSITIONAL_ARGS[@]} -gt 0 ]]; then
+    for step in "${POSITIONAL_ARGS[@]}"; do
         if [[ -z "${STEP_SCRIPTS[$step]:-}" ]]; then
             echo "ERROR: Unknown step: $step" >&2
             list_steps
             exit 1
         fi
     done
-    clear_output_plots "$@"
-    for step in "$@"; do
+    clear_output_plots "${POSITIONAL_ARGS[@]}"
+    for step in "${POSITIONAL_ARGS[@]}"; do
         run_step "$step"
     done
     exit 0

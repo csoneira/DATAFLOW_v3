@@ -37,7 +37,7 @@ if (PIPELINE_DIR / "STEP_1_SETUP").exists() and (PIPELINE_DIR / "STEP_2_INFERENC
 else:
     STEP_ROOT = PIPELINE_DIR / "STEPS"
 
-DEFAULT_CONFIG = PIPELINE_DIR / "config_method.json"
+DEFAULT_CONFIG = PIPELINE_DIR / "config_step_1.1_method.json"
 DEFAULT_DATASET = (
     STEP_ROOT
     / "STEP_1_SETUP"
@@ -53,6 +53,14 @@ DEFAULT_DICTIONARY = (
     / "OUTPUTS"
     / "FILES"
     / "dictionary.csv"
+)
+DEFAULT_PARAMETER_SPACE_SPEC = (
+    STEP_ROOT
+    / "STEP_1_SETUP"
+    / "STEP_1_1_COLLECT_DATA"
+    / "OUTPUTS"
+    / "FILES"
+    / "parameter_space_columns.json"
 )
 
 FILES_DIR = STEP_DIR / "OUTPUTS" / "FILES"
@@ -151,12 +159,12 @@ def _load_config(path: Path) -> dict:
     else:
         log.warning("Config file not found: %s", path)
 
-    plots_path = path.with_name("config_plots.json")
+    plots_path = path.with_name("config_step_1.1_plots.json")
     if plots_path.exists() and plots_path != path:
         cfg = _merge(cfg, json.loads(plots_path.read_text(encoding="utf-8")))
         log.info("Loaded plot config: %s", plots_path)
 
-    runtime_path = path.with_name("config_runtime.json")
+    runtime_path = path.with_name("config_step_1.1_runtime.json")
     if runtime_path.exists():
         cfg = _merge(cfg, json.loads(runtime_path.read_text(encoding="utf-8")))
         log.info("Loaded runtime overrides: %s", runtime_path)
@@ -203,6 +211,42 @@ def _resolve_input_path(path_like: str | Path) -> Path:
     if candidate_step.exists():
         return candidate_step
     return candidate_pipeline
+
+
+def _load_parameter_space_spec(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        log.warning("Could not load parameter-space spec %s: %s", path, exc)
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _apply_parameter_space_aliases(df: pd.DataFrame, spec: dict) -> tuple[pd.DataFrame, list[str]]:
+    if df.empty or not isinstance(spec, dict):
+        return df, []
+
+    raw_aliases = spec.get("parameter_space_column_aliases", {})
+    aliases = raw_aliases if isinstance(raw_aliases, dict) else {}
+    to_add: dict[str, pd.Series] = {}
+
+    for source_col_raw, target_col_raw in aliases.items():
+        source_col = str(source_col_raw).strip()
+        target_col = str(target_col_raw).strip()
+        if not source_col or not target_col or source_col == target_col:
+            continue
+        if target_col in df.columns or source_col not in df.columns or target_col in to_add:
+            continue
+        to_add[target_col] = df[source_col].copy()
+
+    if not to_add:
+        return df, []
+
+    alias_df = pd.DataFrame(to_add, index=df.index)
+    out = pd.concat([df, alias_df], axis=1)
+    return out, sorted(alias_df.columns.tolist())
 
 
 def _choose_eff_column(df: pd.DataFrame, preferred: str) -> str:
@@ -373,16 +417,8 @@ def _resolve_parameter_curve_columns(rate_df: pd.DataFrame, cfg_31: dict) -> lis
     cols = [str(c) for c in raw if str(c) in rate_df.columns]
     cols = list(dict.fromkeys(cols))
 
-    if CANONICAL_FLUX_COLUMN in rate_df.columns and CANONICAL_FLUX_COLUMN not in cols:
-        cols = [CANONICAL_FLUX_COLUMN] + cols
     if not cols:
         raise ValueError("No valid parameter_curve_columns found in rate dictionary.")
-
-    if CANONICAL_FLUX_COLUMN in cols:
-        cols = [CANONICAL_FLUX_COLUMN] + [c for c in cols if c != CANONICAL_FLUX_COLUMN]
-
-    if len(cols) < 2:
-        raise ValueError("At least two parameter curve columns are required for STEP 3.1.")
 
     return cols
 
@@ -1265,15 +1301,17 @@ def main() -> int:
         log.error("Rate dictionary CSV is empty: %s", rate_path)
         return 1
 
+    parameter_space_spec = _load_parameter_space_spec(DEFAULT_PARAMETER_SPACE_SPEC)
+    source_df, source_alias_cols = _apply_parameter_space_aliases(source_df, parameter_space_spec)
+    rate_df, rate_alias_cols = _apply_parameter_space_aliases(rate_df, parameter_space_spec)
+    if source_alias_cols:
+        log.info("Materialized STEP 1 parameter-space aliases in source table: %s", source_alias_cols)
+    if rate_alias_cols:
+        log.info("Materialized STEP 1 parameter-space aliases in rate dictionary: %s", rate_alias_cols)
+
     # Resolve canonical columns and rate source.
     if CANONICAL_FLUX_COLUMN not in rate_df.columns:
         log.error("Rate dictionary must contain '%s'.", CANONICAL_FLUX_COLUMN)
-        return 1
-
-    try:
-        _ = _choose_eff_column(rate_df, CANONICAL_EFF_COLUMN)
-    except KeyError as exc:
-        log.error("%s", exc)
         return 1
 
     rate_col_requested = str(cfg_31.get("rate_column", "events_per_second_global_rate"))
@@ -1281,6 +1319,12 @@ def main() -> int:
     if rate_col is None:
         log.error("Could not find/derive rate column in rate dictionary (requested='%s').", rate_col_requested)
         return 1
+    source_rate_col = rate_col
+    if curve_data_mode == "dataset_data_curve":
+        source_rate_col = _pick_rate_column(source_df, rate_col_requested)
+        if source_rate_col is None:
+            log.error("Could not find/derive rate column in source table (requested='%s').", rate_col_requested)
+            return 1
     try:
         rate_range_hz = _resolve_global_rate_range_hz(
             rate_df=rate_df,
@@ -1376,7 +1420,7 @@ def main() -> int:
             dense_df, file_df, curve_build_info = _build_dataset_backed_curve(
                 source_df=source_df,
                 param_cols=param_cols,
-                rate_col=rate_col,
+                rate_col=source_rate_col,
                 duration_seconds_target=duration_seconds,
                 events_per_file_fallback=events_per_file,
                 start_time=start_time,
@@ -1569,8 +1613,13 @@ def main() -> int:
     summary = {
         "source_csv": str(source_path),
         "rate_dictionary_csv": str(rate_path),
+        "parameter_space_spec_json": str(DEFAULT_PARAMETER_SPACE_SPEC),
+        "parameter_space_alias_columns_added_source": source_alias_cols,
+        "parameter_space_alias_columns_added_rate_dictionary": rate_alias_cols,
         "curve_data_mode_requested": curve_data_mode,
         "curve_data_mode_used": curve_data_mode,
+        "source_rate_column_used": source_rate_col,
+        "rate_dictionary_rate_column_used": rate_col,
         "parameter_curve_columns": param_cols,
         "parameter_ranges_used": {k: [float(v[0]), float(v[1])] for k, v in param_ranges.items()},
         "identical_efficiencies": bool(identical_efficiencies),

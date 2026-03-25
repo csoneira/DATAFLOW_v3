@@ -19,7 +19,10 @@ import argparse
 import json
 import logging
 from pathlib import Path
+import re
+import sys
 import warnings
+from typing import Sequence
 
 import matplotlib
 matplotlib.use("Agg")
@@ -34,9 +37,13 @@ if STEP_DIR.parents[1].name == "STEPS":
     PIPELINE_DIR = STEP_DIR.parents[2]
 else:
     PIPELINE_DIR = STEP_DIR.parents[1]
-DEFAULT_CONFIG = PIPELINE_DIR / "config_method.json"
+DEFAULT_CONFIG = PIPELINE_DIR / "config_step_1.1_method.json"
+MODULES_DIR = PIPELINE_DIR / "STEPS" / "MODULES" if (PIPELINE_DIR / "STEPS" / "MODULES").exists() else PIPELINE_DIR / "MODULES"
 DEFAULT_INPUT = (
     STEP_DIR.parent / "STEP_1_2_TRANSFORM_FEATURE_SPACE" / "OUTPUTS" / "FILES" / "transformed_feature_space.csv"
+)
+DEFAULT_STEP11_COLLECTED = (
+    STEP_DIR.parent / "STEP_1_1_COLLECT_DATA" / "OUTPUTS" / "FILES" / "collected_data.csv"
 )
 
 FILES_DIR = STEP_DIR / "OUTPUTS" / "FILES"
@@ -76,6 +83,43 @@ logging.basicConfig(
 )
 log = logging.getLogger("STEP_1.3")
 
+if str(MODULES_DIR) not in sys.path:
+    sys.path.insert(0, str(MODULES_DIR))
+try:
+    from feature_space_config import (  # noqa: E402
+        extract_feature_dimensions,
+        load_feature_space_config,
+        resolve_feature_space_config_path,
+        resolve_selected_feature_space_columns,
+    )
+except Exception as exc:  # pragma: no cover - import failure is fatal
+    raise RuntimeError(f"Could not import feature_space_config from {MODULES_DIR}: {exc}") from exc
+
+TT_RATE_COLUMN_RE = re.compile(r"^(?P<prefix>.+?)_tt_(?P<label>[^_]+)_rate_hz$")
+PHYSICAL_TT_RATE_LABELS = (
+    "1234",
+    "123",
+    "124",
+    "134",
+    "234",
+    "12",
+    "13",
+    "14",
+    "23",
+    "24",
+    "34",
+)
+TT_PREFIX_PRIORITY = [
+    "post",
+    "fit",
+    "list",
+    "cal",
+    "clean",
+    "raw",
+    "corr",
+    "definitive",
+]
+
 
 def _clear_plots_dir() -> None:
     removed = 0
@@ -105,13 +149,13 @@ def _load_config(path: Path) -> dict:
     else:
         log.warning("Config file not found: %s", path)
 
-    plots_path = path.with_name("config_plots.json")
+    plots_path = path.with_name("config_step_1.1_plots.json")
     if plots_path != path and plots_path.exists():
         plots_cfg = json.loads(plots_path.read_text(encoding="utf-8"))
         cfg = _merge_dicts(cfg, plots_cfg)
         log.info("Loaded plot config: %s", plots_path)
 
-    runtime_path = path.with_name("config_runtime.json")
+    runtime_path = path.with_name("config_step_1.1_runtime.json")
     if runtime_path.exists():
         runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
         cfg = _merge_dicts(cfg, runtime_cfg)
@@ -132,6 +176,121 @@ def _resolve_events_column(df: pd.DataFrame) -> str | None:
         if col in df.columns:
             return col
     return None
+
+
+def _normalize_tt_label(label: object) -> str:
+    text = str(label).strip()
+    if not text:
+        return ""
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        return text
+    if not np.isfinite(value):
+        return ""
+    if float(value).is_integer():
+        return str(int(value))
+    return text
+
+
+def _is_multi_plane_tt_label(label: object) -> bool:
+    norm = _normalize_tt_label(label)
+    if len(norm) < 2:
+        return False
+    if not all(ch in {"1", "2", "3", "4"} for ch in norm):
+        return False
+    return len(set(norm)) == len(norm)
+
+
+def _tt_prefix_rank(prefix: str) -> int:
+    try:
+        return TT_PREFIX_PRIORITY.index(prefix)
+    except ValueError:
+        return len(TT_PREFIX_PRIORITY)
+
+
+def _resolve_physical_tt_rate_columns_from_names(columns: list[str]) -> tuple[str | None, dict[str, str]]:
+    wanted = set(PHYSICAL_TT_RATE_LABELS)
+    by_prefix: dict[str, dict[str, str]] = {}
+    for col in columns:
+        text = str(col).strip()
+        match = TT_RATE_COLUMN_RE.match(text)
+        if match is None:
+            continue
+        prefix = str(match.group("prefix")).strip()
+        if "_to_" in prefix:
+            continue
+        label = _normalize_tt_label(match.group("label"))
+        if not _is_multi_plane_tt_label(label) or label not in wanted:
+            continue
+        by_prefix.setdefault(prefix, {})[label] = text
+
+    if not by_prefix:
+        return None, {}
+
+    selected_prefix = min(
+        by_prefix.keys(),
+        key=lambda p: (_tt_prefix_rank(p), -len(by_prefix[p]), p),
+    )
+    ordered = {
+        label: by_prefix[selected_prefix][label]
+        for label in PHYSICAL_TT_RATE_LABELS
+        if label in by_prefix[selected_prefix]
+    }
+    return selected_prefix, ordered
+
+
+def _merge_step11_physical_tt_columns(
+    df: pd.DataFrame,
+    *,
+    step11_path: Path,
+) -> tuple[pd.DataFrame, dict[str, object]]:
+    info: dict[str, object] = {
+        "enabled": True,
+        "source_csv": str(step11_path),
+        "selected_prefix": None,
+        "selected_columns": [],
+        "merge_keys": [],
+        "columns_added": [],
+    }
+    if "filename_base" not in df.columns:
+        info["enabled"] = False
+        info["reason"] = "filename_base_missing_from_step13_input"
+        return df, info
+    if not step11_path.exists():
+        info["enabled"] = False
+        info["reason"] = "step11_collected_csv_missing"
+        return df, info
+
+    header = pd.read_csv(step11_path, nrows=0)
+    source_columns = [str(c) for c in header.columns]
+    merge_keys = [c for c in ("filename_base", "task_id") if c in df.columns and c in source_columns]
+    if "filename_base" not in merge_keys:
+        info["enabled"] = False
+        info["reason"] = "filename_base_missing_from_step11_source"
+        return df, info
+    info["merge_keys"] = merge_keys
+
+    selected_prefix, tt_cols_by_label = _resolve_physical_tt_rate_columns_from_names(source_columns)
+    selected_cols = list(tt_cols_by_label.values())
+    info["selected_prefix"] = selected_prefix
+    info["selected_columns"] = selected_cols
+    if not selected_cols:
+        info["enabled"] = False
+        info["reason"] = "no_physical_tt_rate_columns_found_in_step11"
+        return df, info
+
+    usecols = list(dict.fromkeys(merge_keys + selected_cols))
+    step11_df = pd.read_csv(step11_path, usecols=usecols, low_memory=False)
+    step11_df = step11_df.drop_duplicates(subset=merge_keys, keep="last")
+    cols_to_add = [c for c in selected_cols if c in step11_df.columns and c not in df.columns]
+    info["columns_added"] = cols_to_add
+    if not cols_to_add:
+        info["reason"] = "selected_tt_rate_columns_already_present"
+        return df, info
+
+    merged = df.merge(step11_df[merge_keys + cols_to_add], on=merge_keys, how="left")
+    return merged, info
 
 
 def _resolve_group_column(df: pd.DataFrame, raw: object) -> str | None:
@@ -476,7 +635,11 @@ def _apply_dictionary_quality_filters(
     return work, report
 
 
-def _build_selected_feature_columns(df: pd.DataFrame) -> list[str]:
+def _default_selected_feature_columns(
+    df: pd.DataFrame,
+    *,
+    base_columns: Sequence[str] | None = None,
+) -> list[str]:
     exclude: set[str] = {
         "filename_base",
         "task_id",
@@ -503,15 +666,36 @@ def _build_selected_feature_columns(df: pd.DataFrame) -> list[str]:
         "event_count",
         "n_events",
     }
+    source_cols = list(base_columns) if base_columns is not None else list(df.columns)
     cols = [
         c
-        for c in df.columns
+        for c in source_cols
         if c not in exclude
+        and not str(c).startswith("events_per_second_global_rate")
         and not c.startswith("relerr_eff_")
         and not c.startswith("abs_relerr_eff_")
         and not c.startswith("eff_fitline_")
     ]
     return cols
+
+
+def _build_selected_feature_columns(
+    df: pd.DataFrame,
+    *,
+    feature_space_cfg: dict | None,
+) -> tuple[list[str], dict]:
+    keep_dimensions = extract_feature_dimensions(feature_space_cfg)
+    fallback = (
+        _default_selected_feature_columns(df, base_columns=keep_dimensions)
+        if keep_dimensions
+        else _default_selected_feature_columns(df)
+    )
+    selected, info = resolve_selected_feature_space_columns(
+        available_columns=list(df.columns),
+        feature_space_cfg=feature_space_cfg or {},
+        fallback_columns=fallback,
+    )
+    return selected, info
 
 
 def _plot_split_counts(n_total: int, n_dict_pool: int, n_dict_final: int, n_dataset: int) -> None:
@@ -1177,6 +1361,17 @@ def main() -> int:
 
     cfg_12 = config.get("step_1_2", {}) if isinstance(config, dict) else {}
     cfg_13 = config.get("step_1_3", {}) if isinstance(config, dict) else {}
+    feature_space_config_path = resolve_feature_space_config_path(
+        PIPELINE_DIR,
+        config=config,
+        step_cfg=cfg_12 if isinstance(cfg_12, dict) else {},
+    )
+    feature_space_all = load_feature_space_config(feature_space_config_path)
+    feature_space_cfg = (
+        feature_space_all.get("step_1_2", {})
+        if isinstance(feature_space_all.get("step_1_2", {}), dict)
+        else {}
+    )
 
     input_cfg = cfg_13.get("input_csv") if isinstance(cfg_13, dict) else None
     if args.input_csv:
@@ -1195,6 +1390,22 @@ def main() -> int:
     if df.empty:
         log.error("Input transformed feature space is empty.")
         return 1
+
+    df, tt_passthrough_info = _merge_step11_physical_tt_columns(
+        df,
+        step11_path=DEFAULT_STEP11_COLLECTED,
+    )
+    if tt_passthrough_info.get("enabled"):
+        log.info(
+            "Merged STEP 1.1 physical TT-rate passthrough: prefix=%s added=%d columns.",
+            str(tt_passthrough_info.get("selected_prefix")),
+            int(len(tt_passthrough_info.get("columns_added", []))),
+        )
+    else:
+        log.warning(
+            "STEP 1.1 physical TT-rate passthrough disabled: %s.",
+            str(tt_passthrough_info.get("reason")),
+        )
 
     try:
         poly_order = int(cfg_12.get("eff_fit_polynomial_order", 4))
@@ -1265,7 +1476,13 @@ def main() -> int:
     if dataset.empty:
         log.warning("Holdout dataset is empty after split. Validation will be disabled downstream.")
 
-    selected_feature_columns = _build_selected_feature_columns(dictionary)
+    selected_feature_columns, selected_feature_info = _build_selected_feature_columns(
+        dictionary,
+        feature_space_cfg=feature_space_cfg,
+    )
+    if not selected_feature_columns:
+        log.error("No selected feature columns resolved for STEP 1.3.")
+        return 1
 
     dictionary_path = FILES_DIR / "dictionary.csv"
     dataset_path = FILES_DIR / "dataset.csv"
@@ -1276,10 +1493,17 @@ def main() -> int:
     dataset.to_csv(dataset_path, index=False)
     selected_features_payload = {
         "selected_feature_columns": selected_feature_columns,
-        "selection_strategy": "step_1_3_simple_features_v1",
+        "selection_strategy": str(selected_feature_info.get("source", "step_1_3_simple_features_v1")),
         "selection_report": {
-            "source": "all_non_parameter_columns_from_step_1_3_dictionary",
+            "source": str(selected_feature_info.get("source", "all_non_parameter_columns_from_step_1_3_dictionary")),
             "selected_feature_count": int(len(selected_feature_columns)),
+            "feature_space_config_path": str(feature_space_config_path),
+            "feature_space_config_loaded": bool(feature_space_cfg),
+            "used_feature_space_config": bool(selected_feature_info.get("used_feature_space_config", False)),
+            "include_patterns": selected_feature_info.get("include_patterns", []),
+            "exclude_patterns": selected_feature_info.get("exclude_patterns", []),
+            "unmatched_include_patterns": selected_feature_info.get("unmatched_include_patterns", []),
+            "unmatched_exclude_patterns": selected_feature_info.get("unmatched_exclude_patterns", []),
         },
     }
     selected_features_path.write_text(json.dumps(selected_features_payload, indent=2), encoding="utf-8")
@@ -1295,6 +1519,8 @@ def main() -> int:
 
     summary = {
         "input_csv": str(input_path),
+        "feature_space_config_path": str(feature_space_config_path),
+        "feature_space_config_loaded": bool(feature_space_cfg),
         "dictionary_csv": str(dictionary_path),
         "dataset_csv": str(dataset_path),
         "selected_feature_columns_json": str(selected_features_path),
@@ -1320,6 +1546,8 @@ def main() -> int:
             "messages": ["STEP 1.3 does not run continuity; use STEP 1.4."],
             "checks": {},
         },
+        "selected_feature_columns_info": selected_feature_info,
+        "tt_rate_passthrough": tt_passthrough_info,
     }
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 

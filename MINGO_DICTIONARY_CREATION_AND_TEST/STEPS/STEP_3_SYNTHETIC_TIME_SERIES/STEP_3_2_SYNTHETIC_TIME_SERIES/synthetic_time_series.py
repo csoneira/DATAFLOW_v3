@@ -43,8 +43,8 @@ if (PIPELINE_DIR / "STEP_1_SETUP").exists() and (PIPELINE_DIR / "STEP_2_INFERENC
 else:
     STEP_ROOT = PIPELINE_DIR / "STEPS"
 SYNTHETIC_DIR = STEP_DIR.parent      # STEP_3_SYNTHETIC_TIME_SERIES
-DEFAULT_CONFIG = PIPELINE_DIR / "config_method.json"
-CONFIG_COLUMNS_PATH = PIPELINE_DIR / "config_columns.json"
+DEFAULT_CONFIG = PIPELINE_DIR / "config_step_1.1_method.json"
+CONFIG_COLUMNS_PATH = PIPELINE_DIR / "config_step_2.1_columns.json"
 
 DEFAULT_TIME_SERIES = (
     SYNTHETIC_DIR / "STEP_3_1_TIME_SERIES_CREATION" / "OUTPUTS" / "FILES" / "time_series.csv"
@@ -57,6 +57,14 @@ DEFAULT_DICTIONARY = (
 )
 DEFAULT_DATASET_TEMPLATE = (
     STEP_ROOT / "STEP_1_SETUP" / "STEP_1_4_ENSURE_CONTINUITY_DICTIONARY" / "OUTPUTS" / "FILES" / "dataset.csv"
+)
+DEFAULT_PARAMETER_SPACE_SPEC = (
+    STEP_ROOT
+    / "STEP_1_SETUP"
+    / "STEP_1_1_COLLECT_DATA"
+    / "OUTPUTS"
+    / "FILES"
+    / "parameter_space_columns.json"
 )
 
 FILES_DIR = STEP_DIR / "OUTPUTS" / "FILES"
@@ -295,13 +303,13 @@ def _load_config(path: Path) -> dict:
     else:
         log.warning("Config file not found: %s", path)
 
-    plots_path = path.with_name("config_plots.json")
+    plots_path = path.with_name("config_step_1.1_plots.json")
     if plots_path != path and plots_path.exists():
         plots_cfg = json.loads(plots_path.read_text(encoding="utf-8"))
         cfg = _merge_dicts(cfg, plots_cfg)
         log.info("Loaded plot config: %s", plots_path)
 
-    runtime_path = path.with_name("config_runtime.json")
+    runtime_path = path.with_name("config_step_1.1_runtime.json")
     if runtime_path.exists():
         runtime_cfg = json.loads(runtime_path.read_text(encoding="utf-8"))
         cfg = _merge_dicts(cfg, runtime_cfg)
@@ -453,6 +461,42 @@ def _resolve_input_path(path_like: str | Path) -> Path:
     return candidate_pipeline
 
 
+def _load_parameter_space_spec(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        log.warning("Could not load parameter-space spec %s: %s", path, exc)
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _apply_parameter_space_aliases(df: pd.DataFrame, spec: dict) -> tuple[pd.DataFrame, list[str]]:
+    if df.empty or not isinstance(spec, dict):
+        return df, []
+
+    raw_aliases = spec.get("parameter_space_column_aliases", {})
+    aliases = raw_aliases if isinstance(raw_aliases, dict) else {}
+    to_add: dict[str, pd.Series] = {}
+
+    for source_col_raw, target_col_raw in aliases.items():
+        source_col = str(source_col_raw).strip()
+        target_col = str(target_col_raw).strip()
+        if not source_col or not target_col or source_col == target_col:
+            continue
+        if target_col in df.columns or source_col not in df.columns or target_col in to_add:
+            continue
+        to_add[target_col] = df[source_col].copy()
+
+    if not to_add:
+        return df, []
+
+    alias_df = pd.DataFrame(to_add, index=df.index)
+    out = pd.concat([df, alias_df], axis=1)
+    return out, sorted(alias_df.columns.tolist())
+
+
 def _choose_eff_column(df: pd.DataFrame, preferred: str) -> str:
     """Return efficiency column from table, with fallback candidates."""
     if preferred in df.columns:
@@ -490,6 +534,19 @@ def _choose_common_eff_column(
         "No common efficiency column found between time series and basis "
         f"(preferred={preferred!r})."
     )
+
+
+def _optional_common_column(
+    time_df: pd.DataFrame,
+    basis_df: pd.DataFrame,
+    preferred: str,
+) -> str | None:
+    name = str(preferred).strip()
+    if not name:
+        return None
+    if name in time_df.columns and name in basis_df.columns:
+        return name
+    return None
 
 
 def _is_parameter_space_column(name: str) -> bool:
@@ -1390,7 +1447,7 @@ def _rebuild_weighted_step12_helper_columns(df: pd.DataFrame) -> dict[str, objec
 
 
 def _load_trigger_type_consistency_catalog() -> tuple[str, list[str]]:
-    """Read trigger-type consistency selector from config_columns.json when present."""
+    """Read trigger-type consistency selector from config_step_2.1_columns.json when present."""
     prefix = "last"
     trigger_types: list[str] = []
     if not CONFIG_COLUMNS_PATH.exists():
@@ -1668,8 +1725,8 @@ def _make_synthetic_dataset(
     target_param_matrix: np.ndarray,
     *,
     feature_generation_mode: str,
-    flux_col: str,
-    eff_col: str,
+    flux_col: str | None,
+    eff_col: str | None,
     time_rate_col: str | None,
     time_events_col: str | None,
     time_duration_col: str,
@@ -1710,8 +1767,16 @@ def _make_synthetic_dataset(
             out[col] = values
 
     # Parameter-space target overrides from STEP 3.1.
-    target_flux = pd.to_numeric(time_df[flux_col], errors="coerce")
-    target_eff = pd.to_numeric(time_df[eff_col], errors="coerce")
+    target_flux = (
+        pd.to_numeric(time_df[flux_col], errors="coerce")
+        if flux_col is not None and flux_col in time_df.columns
+        else pd.Series(np.nan, index=time_df.index, dtype=float)
+    )
+    target_eff = (
+        pd.to_numeric(time_df[eff_col], errors="coerce")
+        if eff_col is not None and eff_col in time_df.columns
+        else pd.Series(np.nan, index=time_df.index, dtype=float)
+    )
     if time_rate_col is not None and time_rate_col in time_df.columns:
         target_rate_from_time = pd.to_numeric(time_df[time_rate_col], errors="coerce")
     else:
@@ -1729,14 +1794,20 @@ def _make_synthetic_dataset(
         target_output_eff = pd.Series(np.asarray(eff_output_values, dtype=float), index=time_df.index)
 
     if copy_closest_basis_row:
-        output_flux = pd.Series(
-            pd.to_numeric(dictionary_df.iloc[dominant_idx][flux_col], errors="coerce").to_numpy(dtype=float),
-            index=time_df.index,
-        )
-        output_eff = pd.Series(
-            pd.to_numeric(dictionary_df.iloc[dominant_idx][eff_col], errors="coerce").to_numpy(dtype=float),
-            index=time_df.index,
-        )
+        if flux_col is not None and flux_col in dictionary_df.columns:
+            output_flux = pd.Series(
+                pd.to_numeric(dictionary_df.iloc[dominant_idx][flux_col], errors="coerce").to_numpy(dtype=float),
+                index=time_df.index,
+            )
+        else:
+            output_flux = pd.Series(np.nan, index=time_df.index, dtype=float)
+        if eff_col is not None and eff_col in dictionary_df.columns:
+            output_eff = pd.Series(
+                pd.to_numeric(dictionary_df.iloc[dominant_idx][eff_col], errors="coerce").to_numpy(dtype=float),
+                index=time_df.index,
+            )
+        else:
+            output_eff = pd.Series(np.nan, index=time_df.index, dtype=float)
     else:
         output_flux = target_output_flux
         output_eff = target_output_eff
@@ -1797,10 +1868,22 @@ def _make_synthetic_dataset(
         else:
             output_events = target_events_from_time.copy()
 
-    out["flux_cm2_min"] = output_flux
-    out["flux"] = output_flux
-    out["eff_sim_1"] = output_eff
-    out["eff"] = output_eff
+    if flux_col is not None:
+        out[flux_col] = output_flux
+    if eff_col is not None:
+        out[eff_col] = output_eff
+    if CANONICAL_FLUX_COLUMN in out.columns:
+        out["flux"] = pd.to_numeric(out[CANONICAL_FLUX_COLUMN], errors="coerce")
+    elif flux_col is not None:
+        out["flux"] = output_flux
+    elif "flux" not in out.columns:
+        out["flux"] = np.nan
+    if CANONICAL_EFF_COLUMN in out.columns:
+        out["eff"] = pd.to_numeric(out[CANONICAL_EFF_COLUMN], errors="coerce")
+    elif eff_col is not None:
+        out["eff"] = output_eff
+    elif "eff" not in out.columns:
+        out["eff"] = np.nan
     out["events_per_second_global_rate"] = weighted_rate
     out["n_events"] = pd.to_numeric(output_events, errors="coerce").round().astype("Int64")
     for c in ("selected_rows", "requested_rows", "generated_events_count"):
@@ -2034,8 +2117,8 @@ def _plot_time_series_overview(
     complete_df: pd.DataFrame | None,
     time_df: pd.DataFrame,
     synthetic_df: pd.DataFrame,
-    flux_col: str,
-    eff_col: str,
+    flux_col: str | None,
+    eff_col: str | None,
     time_rate_col: str | None,
     interpolated_flux: np.ndarray | None,
     interpolated_eff: np.ndarray | None,
@@ -2050,12 +2133,21 @@ def _plot_time_series_overview(
 
     x_disc = pd.to_numeric(time_df.get("elapsed_hours"), errors="coerce")
     x_syn = pd.to_numeric(synthetic_df.get("elapsed_hours"), errors="coerce")
-    y_flux_disc = pd.to_numeric(time_df.get(flux_col), errors="coerce")
-    y_syn_flux = pd.to_numeric(synthetic_df.get(flux_col), errors="coerce")
+    flux_plot_col = None
+    for candidate in (flux_col, CANONICAL_FLUX_COLUMN, "flux"):
+        if isinstance(candidate, str) and candidate and (
+            candidate in time_df.columns
+            or candidate in synthetic_df.columns
+            or (complete_df is not None and candidate in complete_df.columns)
+        ):
+            flux_plot_col = candidate
+            break
+    y_flux_disc = pd.to_numeric(time_df.get(flux_plot_col), errors="coerce")
+    y_syn_flux = pd.to_numeric(synthetic_df.get(flux_plot_col), errors="coerce")
 
-    if complete_df is not None and not complete_df.empty:
+    if flux_plot_col is not None and complete_df is not None and not complete_df.empty:
         x_comp = pd.to_numeric(complete_df.get("elapsed_hours"), errors="coerce")
-        y_flux_comp = pd.to_numeric(complete_df.get(flux_col), errors="coerce")
+        y_flux_comp = pd.to_numeric(complete_df.get(flux_plot_col), errors="coerce")
         m0 = x_comp.notna() & y_flux_comp.notna()
         if m0.any():
             axes[0].plot(
@@ -2068,7 +2160,7 @@ def _plot_time_series_overview(
             )
 
     m0d = x_disc.notna() & y_flux_disc.notna()
-    if m0d.any():
+    if flux_plot_col is not None and m0d.any():
         axes[0].scatter(
             x_disc[m0d],
             y_flux_disc[m0d],
@@ -2080,7 +2172,7 @@ def _plot_time_series_overview(
         )
 
     m0s = x_syn.notna() & y_syn_flux.notna()
-    if m0s.any():
+    if flux_plot_col is not None and m0s.any():
         axes[0].plot(
             x_syn[m0s],
             y_syn_flux[m0s],
@@ -2092,7 +2184,7 @@ def _plot_time_series_overview(
         )
 
     has_interp_flux = False
-    if show_diagnostic_center and interpolated_flux is not None:
+    if flux_plot_col is not None and show_diagnostic_center and interpolated_flux is not None:
         y_flux_interp = pd.to_numeric(pd.Series(interpolated_flux), errors="coerce")
         m0i = x_disc.notna() & y_flux_interp.notna()
         if m0i.any():
@@ -2108,8 +2200,10 @@ def _plot_time_series_overview(
             )
 
     eff_candidates = [f"eff_sim_{i}" for i in range(1, 5)]
-    if eff_col not in eff_candidates:
+    if isinstance(eff_col, str) and eff_col and eff_col not in eff_candidates:
         eff_candidates.append(eff_col)
+    if "eff" not in eff_candidates:
+        eff_candidates.append("eff")
     eff_cols: list[str] = []
     for col in eff_candidates:
         if (
@@ -2181,16 +2275,42 @@ def _plot_time_series_overview(
                 label=interpolated_label,
             )
 
-    axes[0].set_ylabel("flux_cm2_min")
-    if has_interp_flux:
+    axes[0].set_ylabel(flux_plot_col if flux_plot_col is not None else "value")
+    if flux_plot_col is None:
+        axes[0].text(
+            0.5,
+            0.5,
+            "No common flux-like column available",
+            transform=axes[0].transAxes,
+            ha="center",
+            va="center",
+            fontsize=10,
+            color="#666666",
+        )
+        axes[0].set_title("Flux-like control unavailable")
+    elif has_interp_flux:
         axes[0].set_title("Flux: complete + discretized + synthetic (+ diagnostic center)")
     else:
         axes[0].set_title("Flux: complete + discretized + synthetic")
     axes[0].grid(True, alpha=0.25)
-    axes[0].legend(loc="best", fontsize=8, framealpha=0.92, facecolor="white")
+    handles0, labels0 = axes[0].get_legend_handles_labels()
+    if handles0:
+        axes[0].legend(loc="best", fontsize=8, framealpha=0.92, facecolor="white")
 
     axes[1].set_ylabel("eff")
-    if has_interp_eff:
+    if not eff_cols:
+        axes[1].text(
+            0.5,
+            0.5,
+            "No common efficiency-like column available",
+            transform=axes[1].transAxes,
+            ha="center",
+            va="center",
+            fontsize=10,
+            color="#666666",
+        )
+        axes[1].set_title("Efficiency control unavailable")
+    elif has_interp_eff:
         axes[1].set_title("Efficiencies: complete + discretized + synthetic (+ diagnostic center)")
     else:
         axes[1].set_title("Efficiencies: complete + discretized + synthetic")
@@ -2560,6 +2680,22 @@ def main() -> int:
     if complete_curve_path.exists():
         complete_df = pd.read_csv(complete_curve_path, low_memory=False)
 
+    parameter_space_spec = _load_parameter_space_spec(DEFAULT_PARAMETER_SPACE_SPEC)
+    time_df, time_alias_cols = _apply_parameter_space_aliases(time_df, parameter_space_spec)
+    dictionary_df, dictionary_alias_cols = _apply_parameter_space_aliases(dictionary_df, parameter_space_spec)
+    template_df, template_alias_cols = _apply_parameter_space_aliases(template_df, parameter_space_spec)
+    complete_alias_cols: list[str] = []
+    if complete_df is not None:
+        complete_df, complete_alias_cols = _apply_parameter_space_aliases(complete_df, parameter_space_spec)
+    if time_alias_cols:
+        log.info("Materialized STEP 1 parameter-space aliases in time series: %s", time_alias_cols)
+    if dictionary_alias_cols:
+        log.info("Materialized STEP 1 parameter-space aliases in dictionary: %s", dictionary_alias_cols)
+    if template_alias_cols:
+        log.info("Materialized STEP 1 parameter-space aliases in dataset template: %s", template_alias_cols)
+    if complete_alias_cols:
+        log.info("Materialized STEP 1 parameter-space aliases in complete curve: %s", complete_alias_cols)
+
     if time_df.empty:
         log.error("Time series CSV is empty: %s", time_series_path)
         return 1
@@ -2600,7 +2736,7 @@ def main() -> int:
         log.error("Dictionary CSV is empty: %s", dictionary_path)
         return 1
 
-    flux_col = CANONICAL_FLUX_COLUMN
+    flux_col: str | None = None
     eff_pref = CANONICAL_EFF_COLUMN
     basis_source = basis_source_cfg
     if basis_source == "dictionary":
@@ -2618,28 +2754,12 @@ def main() -> int:
         )
         return 1
 
-    if flux_col not in time_df.columns or flux_col not in basis_input_df.columns:
-        log.error("Flux column '%s' must exist in time series and selected basis (%s).", flux_col, basis_source)
-        return 1
-    try:
-        eff_col_common = _choose_common_eff_column(time_df, basis_input_df, eff_pref)
-    except KeyError as exc:
-        log.error("%s", exc)
-        return 1
-    eff_col_time = eff_col_common
-    eff_col_basis = eff_col_common
-    if eff_col_common != eff_pref:
-        log.info(
-            "Requested efficiency column %s not available in both tables; using common column %s.",
-            eff_pref,
-            eff_col_common,
-        )
     parameter_space_cfg = cfg_32.get("parameter_space_columns", None)
     try:
         parameter_space_cols = _resolve_parameter_space_columns_from_cfg(
             time_df=time_df,
             basis_df=basis_input_df,
-            preferred_eff=eff_col_common,
+            preferred_eff=None,
             configured_columns=parameter_space_cfg,
         )
     except KeyError as exc:
@@ -2648,6 +2768,30 @@ def main() -> int:
     if not parameter_space_cols:
         log.error("No shared parameter-space columns available between time series and selected basis.")
         return 1
+    flux_col = _optional_common_column(time_df, basis_input_df, CANONICAL_FLUX_COLUMN)
+    eff_col_common: str | None = None
+    try:
+        eff_col_common = _choose_common_eff_column(time_df, basis_input_df, eff_pref)
+    except KeyError:
+        eff_col_common = None
+    eff_col_time = eff_col_common
+    eff_col_basis = eff_col_common
+    if flux_col is None:
+        log.info(
+            "No common canonical flux column '%s' in time series and selected basis; proceeding with parameter-space columns %s.",
+            CANONICAL_FLUX_COLUMN,
+            parameter_space_cols,
+        )
+    if eff_col_common is None:
+        log.info(
+            "No common efficiency column found between time series and selected basis; proceeding without dedicated efficiency diagnostic axis.",
+        )
+    elif eff_col_common != eff_pref:
+        log.info(
+            "Requested efficiency column %s not available in both tables; using common column %s.",
+            eff_pref,
+            eff_col_common,
+        )
 
     for legacy_key in ("time_n_events_column", "time_rate_column", "time_duration_column"):
         if cfg_32.get(legacy_key) is not None:
@@ -2755,10 +2899,26 @@ def main() -> int:
 
     dictionary_work = basis_input_df.loc[valid_basis].reset_index(drop=True)
     basis_param_matrix = basis_param_all[valid_basis]
-    basis_flux = pd.to_numeric(dictionary_work[flux_col], errors="coerce").to_numpy(dtype=float)
-    basis_eff = pd.to_numeric(dictionary_work[eff_col_basis], errors="coerce").to_numpy(dtype=float)
-    target_flux = pd.to_numeric(time_df[flux_col], errors="coerce").to_numpy(dtype=float)
-    target_eff = pd.to_numeric(time_df[eff_col_time], errors="coerce").to_numpy(dtype=float)
+    basis_flux = (
+        pd.to_numeric(dictionary_work[flux_col], errors="coerce").to_numpy(dtype=float)
+        if flux_col is not None and flux_col in dictionary_work.columns
+        else np.full(len(dictionary_work), np.nan, dtype=float)
+    )
+    basis_eff = (
+        pd.to_numeric(dictionary_work[eff_col_basis], errors="coerce").to_numpy(dtype=float)
+        if eff_col_basis is not None and eff_col_basis in dictionary_work.columns
+        else np.full(len(dictionary_work), np.nan, dtype=float)
+    )
+    target_flux = (
+        pd.to_numeric(time_df[flux_col], errors="coerce").to_numpy(dtype=float)
+        if flux_col is not None and flux_col in time_df.columns
+        else np.full(len(time_df), np.nan, dtype=float)
+    )
+    target_eff = (
+        pd.to_numeric(time_df[eff_col_time], errors="coerce").to_numpy(dtype=float)
+        if eff_col_time is not None and eff_col_time in time_df.columns
+        else np.full(len(time_df), np.nan, dtype=float)
+    )
     basis_events = None if basis_events_all is None else basis_events_all[valid_basis]
     basis_parameter_set_col = _select_parameter_set_column(dictionary_work, basis_parameter_set_col_cfg)
     if basis_parameter_set_col is None:
@@ -2945,7 +3105,9 @@ def main() -> int:
     # Diagnostic center in parameter space: weighted by the same basis weights
     # used for synthetic-column generation (includes density modulation when enabled).
     diagnostic_columns: list[str] = []
-    for col in parameter_space_cols + [flux_col, eff_col_basis]:
+    for col in [*parameter_space_cols, flux_col, eff_col_basis]:
+        if not isinstance(col, str) or not col:
+            continue
         if col in dictionary_work.columns and col not in diagnostic_columns:
             diagnostic_columns.append(col)
     diagnostic_center_values = _weighted_numeric_columns(
@@ -2957,11 +3119,17 @@ def main() -> int:
         target_param_matrix=target_param_matrix,
     )
     diagnostic_flux = np.asarray(
-        diagnostic_center_values.get(flux_col, np.full(len(time_df), np.nan, dtype=float)),
+        diagnostic_center_values.get(
+            flux_col,
+            np.full(len(time_df), np.nan, dtype=float),
+        ) if isinstance(flux_col, str) and flux_col else np.full(len(time_df), np.nan, dtype=float),
         dtype=float,
     )
     diagnostic_eff = np.asarray(
-        diagnostic_center_values.get(eff_col_basis, np.full(len(time_df), np.nan, dtype=float)),
+        diagnostic_center_values.get(
+            eff_col_basis,
+            np.full(len(time_df), np.nan, dtype=float),
+        ) if isinstance(eff_col_basis, str) and eff_col_basis else np.full(len(time_df), np.nan, dtype=float),
         dtype=float,
     )
     diagnostic_param_mae: dict[str, float | None] = {}
@@ -2984,19 +3152,21 @@ def main() -> int:
         diagnostic_center_label = f"{center_prefix}local-linear parameter-space center (diagnostic)"
     else:
         diagnostic_center_label = f"{center_prefix}weighted parameter-space center (diagnostic)"
-    diagnostic_flux_mae = diagnostic_param_mae.get(flux_col)
-    diagnostic_eff_mae = diagnostic_param_mae.get(eff_col_time)
+    diagnostic_flux_mae = diagnostic_param_mae.get(flux_col) if flux_col is not None else None
+    diagnostic_eff_mae = diagnostic_param_mae.get(eff_col_time) if eff_col_time is not None else None
+    flux_label = flux_col if flux_col is not None else "no_flux_axis"
+    eff_label = eff_col_time if eff_col_time is not None else "no_eff_axis"
     log.info(
         "Diagnostic center check: %s MAE=%.6g, %s MAE=%.6g.",
-        flux_col,
+        flux_label,
         float(diagnostic_flux_mae) if diagnostic_flux_mae is not None else float("nan"),
-        eff_col_time,
+        eff_label,
         float(diagnostic_eff_mae) if diagnostic_eff_mae is not None else float("nan"),
     )
 
     # Flux/eff assigned to synthetic rows: fixed to STEP 3.1 discretized target.
-    flux_linear = target_flux.copy()
-    eff_linear = target_eff.copy()
+    flux_linear = target_flux.copy() if flux_col is not None else None
+    eff_linear = target_eff.copy() if eff_col_time is not None else None
 
     synthetic_df, dominant_idx = _make_synthetic_dataset(
         dictionary_df=dictionary_work,
@@ -3142,10 +3312,12 @@ def main() -> int:
         "weight_pct": contrib * 100.0,
         "is_event_allowed": event_allowed_highlight,
         "is_weight_positive": contrib > 0.0,
-        flux_col: basis_flux,
-        eff_col_basis: basis_eff,
         "basis_source": basis_source,
     })
+    if flux_col is not None:
+        contrib_df[flux_col] = basis_flux
+    if eff_col_basis is not None:
+        contrib_df[eff_col_basis] = basis_eff
     for col in parameter_space_cols:
         if col in contrib_df.columns or col not in dictionary_work.columns:
             continue
@@ -3236,6 +3408,11 @@ def main() -> int:
         "complete_curve_csv": str(complete_curve_path if complete_curve_path.exists() else ""),
         "dictionary_csv": str(dictionary_path),
         "dataset_template_csv": str(template_path),
+        "parameter_space_spec_json": str(DEFAULT_PARAMETER_SPACE_SPEC),
+        "parameter_space_alias_columns_added_time_series": time_alias_cols,
+        "parameter_space_alias_columns_added_dictionary": dictionary_alias_cols,
+        "parameter_space_alias_columns_added_dataset_template": template_alias_cols,
+        "parameter_space_alias_columns_added_complete_curve": complete_alias_cols,
         "basis_source": basis_source,
         "basis_csv": str(basis_path),
         "flux_column_used": flux_col,

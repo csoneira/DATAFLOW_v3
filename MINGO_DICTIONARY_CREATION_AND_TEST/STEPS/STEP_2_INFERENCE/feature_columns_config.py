@@ -9,7 +9,7 @@ Last Updated: 2026-03-09
 Runtime: python3
 Usage: Imported by STEP_2.1 / STEP_3.3 / STEP_4.2 scripts.
 Inputs: DataFrames and JSON selector path.
-Outputs: Updated config_columns.json and resolved feature-column lists.
+Outputs: Updated config_step_2.1_columns.json and resolved feature-column lists.
 Notes: Keep behavior configuration-driven and reproducible.
 """
 
@@ -292,7 +292,7 @@ def sync_feature_column_catalog(
     default_enabled_columns: Sequence[str] = (),
 ) -> dict:
     """
-    Create/update compact `config_columns.json` selector file.
+    Create/update compact `config_step_2.1_columns.json` selector file.
 
     Compact format with category controls:
       - "prefix": "last" | explicit prefix name
@@ -469,7 +469,7 @@ def resolve_feature_columns_from_catalog(
     available_columns: Sequence[str],
 ) -> tuple[list[str], dict]:
     """
-    Resolve selected feature columns from `config_columns.json`.
+    Resolve selected feature columns from `config_step_2.1_columns.json`.
 
     Supports both compact (3-key) and legacy catalog formats.
     """

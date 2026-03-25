@@ -31,7 +31,7 @@ STEP_DIR = Path(__file__).resolve().parent
 INFERENCE_DIR = STEP_DIR.parent
 PIPELINE_DIR = INFERENCE_DIR.parent
 PROJECT_DIR = PIPELINE_DIR.parent
-DEFAULT_CONFIG = PROJECT_DIR / "config_method.json"
+DEFAULT_CONFIG = PROJECT_DIR / "config_step_1.1_method.json"
 
 DEFAULT_VALIDATION = (
     INFERENCE_DIR / "STEP_2_2_VALIDATION" / "OUTPUTS" / "FILES" / "validation_results.csv"
@@ -108,12 +108,12 @@ def _load_config(path: Path) -> dict:
     else:
         log.warning("Config file not found: %s", path)
 
-    plots_path = path.with_name("config_plots.json")
+    plots_path = path.with_name("config_step_1.1_plots.json")
     if plots_path.exists() and plots_path != path:
         cfg = _merge(cfg, json.loads(plots_path.read_text(encoding="utf-8")))
         log.info("Loaded plot config: %s", plots_path)
 
-    runtime_path = path.with_name("config_runtime.json")
+    runtime_path = path.with_name("config_step_1.1_runtime.json")
     if runtime_path.exists():
         cfg = _merge(cfg, json.loads(runtime_path.read_text(encoding="utf-8")))
         log.info("Loaded runtime overrides: %s", runtime_path)
