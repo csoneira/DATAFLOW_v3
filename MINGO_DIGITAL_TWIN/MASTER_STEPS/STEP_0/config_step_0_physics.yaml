@@ -2,7 +2,7 @@
 ## Angular distribution
 cos_n: [2, 2]
 ## Flux
-flux_cm2_min: [0.6, 1.2]
+flux_cm2_min: [1.15, 1.8]
 
 # Append strategy:
 # - uniform_random: existing behavior

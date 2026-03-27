@@ -4,7 +4,7 @@ selection:
   date_ranges:
     - start: 2024-09-27
       end: 2024-10-01
-complete_reanalysis: true
+complete_reanalysis: false
 article_format: false
 # create_plots options: null | debug | usual | essential | all
 # Task 2 plot alias statuses live in config_plots_task_2.yaml

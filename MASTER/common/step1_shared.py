@@ -18,10 +18,11 @@ import argparse
 import builtins
 import csv
 import fcntl
+from functools import lru_cache
 import math
 import re
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Mapping, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Mapping, Sequence, Tuple, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -66,6 +67,7 @@ CANONICAL_TT_LABELS: frozenset[str] = frozenset(
 )
 TT_RATE_COLUMN_RE = re.compile(r"^(?P<prefix>.+_tt)_(?P<label>[^_]+)_rate_hz$")
 METADATA_MAX_FULL_SCAN_BYTES = 128 * 1024 * 1024
+VertexKeyT = TypeVar("VertexKeyT")
 
 
 def _metadata_value_is_empty(value: object) -> bool:
@@ -104,6 +106,229 @@ def normalize_tt_label(value: object, default: str = "0") -> str:
     if numeric.is_integer():
         return str(int(numeric))
     return text
+
+
+def select_exact_minimum_vertex_cover(
+    weighted_edges: Sequence[tuple[VertexKeyT, VertexKeyT, float]],
+    order_key_fn: Callable[[VertexKeyT], tuple],
+) -> List[VertexKeyT]:
+    """Return a deterministic exact minimum vertex cover for a weighted edge list.
+
+    The primary objective is minimum cardinality. When multiple minimum-cardinality
+    covers exist, ties are broken deterministically by preferring the cover whose
+    selected vertices touch the largest number of failed pairs, then the largest
+    summed failure severity, and finally the lexicographically-smallest vertex
+    list under *order_key_fn*.
+    """
+    if not weighted_edges:
+        return []
+
+    vertex_keys = sorted(
+        {
+            vertex_key
+            for edge in weighted_edges
+            for vertex_key in edge[:2]
+        },
+        key=order_key_fn,
+    )
+    if not vertex_keys:
+        return []
+
+    index_by_vertex = {vertex_key: idx for idx, vertex_key in enumerate(vertex_keys)}
+    n_vertices = len(vertex_keys)
+    adjacency_masks = [0] * n_vertices
+    severity_matrix = [[0.0] * n_vertices for _ in range(n_vertices)]
+    incident_edge_counts = [0] * n_vertices
+    incident_severity_sums = [0.0] * n_vertices
+
+    for vertex_a, vertex_b, raw_severity in weighted_edges:
+        idx_a = index_by_vertex[vertex_a]
+        idx_b = index_by_vertex[vertex_b]
+        if idx_a == idx_b:
+            continue
+        try:
+            severity = float(raw_severity)
+        except (TypeError, ValueError):
+            severity = 1.0
+        if not math.isfinite(severity) or severity <= 0:
+            severity = 1.0
+
+        adjacency_masks[idx_a] |= 1 << idx_b
+        adjacency_masks[idx_b] |= 1 << idx_a
+        severity_matrix[idx_a][idx_b] = severity
+        severity_matrix[idx_b][idx_a] = severity
+        incident_edge_counts[idx_a] += 1
+        incident_edge_counts[idx_b] += 1
+        incident_severity_sums[idx_a] += severity
+        incident_severity_sums[idx_b] += severity
+
+    full_mask = (1 << n_vertices) - 1
+
+    def _iter_bits(mask: int):
+        while mask:
+            bit = mask & -mask
+            yield bit.bit_length() - 1
+            mask ^= bit
+
+    @lru_cache(maxsize=None)
+    def _vertex_remaining_score(active_mask: int, vertex_idx: int) -> tuple[int, float]:
+        neighbors_mask = adjacency_masks[vertex_idx] & active_mask
+        if neighbors_mask == 0:
+            return (0, 0.0)
+        severity_sum = 0.0
+        temp_mask = neighbors_mask
+        while temp_mask:
+            bit = temp_mask & -temp_mask
+            neighbor_idx = bit.bit_length() - 1
+            severity_sum += severity_matrix[vertex_idx][neighbor_idx]
+            temp_mask ^= bit
+        return (neighbors_mask.bit_count(), severity_sum)
+
+    @lru_cache(maxsize=None)
+    def _pick_uncovered_edge(active_mask: int) -> tuple[int, int] | None:
+        best_vertex = -1
+        best_rank: tuple[int, float, int] | None = None
+        for vertex_idx in _iter_bits(active_mask):
+            degree_count, severity_sum = _vertex_remaining_score(active_mask, vertex_idx)
+            if degree_count == 0:
+                continue
+            rank = (degree_count, severity_sum, -vertex_idx)
+            if best_rank is None or rank > best_rank:
+                best_rank = rank
+                best_vertex = vertex_idx
+        if best_vertex < 0:
+            return None
+
+        best_neighbor = -1
+        best_neighbor_rank: tuple[int, float, int] | None = None
+        for neighbor_idx in _iter_bits(adjacency_masks[best_vertex] & active_mask):
+            degree_count, severity_sum = _vertex_remaining_score(active_mask, neighbor_idx)
+            rank = (degree_count, severity_sum, -neighbor_idx)
+            if best_neighbor_rank is None or rank > best_neighbor_rank:
+                best_neighbor_rank = rank
+                best_neighbor = neighbor_idx
+        if best_neighbor < 0:
+            return None
+        return (best_vertex, best_neighbor)
+
+    @lru_cache(maxsize=None)
+    def _maximal_matching_lower_bound(active_mask: int) -> int:
+        unmatched_mask = active_mask
+        used_mask = 0
+        matching_size = 0
+        while unmatched_mask:
+            bit = unmatched_mask & -unmatched_mask
+            vertex_idx = bit.bit_length() - 1
+            unmatched_mask ^= bit
+            if used_mask & (1 << vertex_idx):
+                continue
+            neighbor_mask = adjacency_masks[vertex_idx] & active_mask & ~used_mask
+            if neighbor_mask == 0:
+                continue
+            neighbor_bit = neighbor_mask & -neighbor_mask
+            neighbor_idx = neighbor_bit.bit_length() - 1
+            used_mask |= (1 << vertex_idx) | (1 << neighbor_idx)
+            matching_size += 1
+        return matching_size
+
+    def _greedy_cover_mask(active_mask: int) -> int:
+        selected_mask = 0
+        working_mask = active_mask
+        while True:
+            uncovered_edge = _pick_uncovered_edge(working_mask)
+            if uncovered_edge is None:
+                return selected_mask
+
+            best_vertex = -1
+            best_rank: tuple[int, float, int] | None = None
+            for vertex_idx in _iter_bits(working_mask):
+                degree_count, severity_sum = _vertex_remaining_score(working_mask, vertex_idx)
+                if degree_count == 0:
+                    continue
+                rank = (degree_count, severity_sum, -vertex_idx)
+                if best_rank is None or rank > best_rank:
+                    best_rank = rank
+                    best_vertex = vertex_idx
+
+            if best_vertex < 0:
+                return selected_mask
+            selected_mask |= 1 << best_vertex
+            working_mask &= ~(1 << best_vertex)
+
+    @lru_cache(maxsize=None)
+    def _cover_rank(selected_mask: int) -> tuple[int, int, float, tuple[int, ...]]:
+        selected_indices = tuple(_iter_bits(selected_mask))
+        degree_sum = sum(incident_edge_counts[idx] for idx in selected_indices)
+        severity_sum = sum(incident_severity_sums[idx] for idx in selected_indices)
+        return (
+            len(selected_indices),
+            -degree_sum,
+            -severity_sum,
+            selected_indices,
+        )
+
+    @lru_cache(maxsize=None)
+    def _can_cover(active_mask: int, remaining_budget: int) -> bool:
+        if remaining_budget < 0:
+            return False
+        uncovered_edge = _pick_uncovered_edge(active_mask)
+        if uncovered_edge is None:
+            return True
+        if _maximal_matching_lower_bound(active_mask) > remaining_budget:
+            return False
+
+        vertex_a, vertex_b = uncovered_edge
+        return _can_cover(active_mask & ~(1 << vertex_a), remaining_budget - 1) or _can_cover(
+            active_mask & ~(1 << vertex_b), remaining_budget - 1
+        )
+
+    @lru_cache(maxsize=None)
+    def _best_cover(active_mask: int, remaining_budget: int) -> int | None:
+        if remaining_budget < 0:
+            return None
+        uncovered_edge = _pick_uncovered_edge(active_mask)
+        if uncovered_edge is None:
+            return 0
+        if _maximal_matching_lower_bound(active_mask) > remaining_budget:
+            return None
+
+        vertex_a, vertex_b = uncovered_edge
+        branch_vertices = sorted(
+            (vertex_a, vertex_b),
+            key=lambda vertex_idx: (
+                -_vertex_remaining_score(active_mask, vertex_idx)[0],
+                -_vertex_remaining_score(active_mask, vertex_idx)[1],
+                vertex_idx,
+            ),
+        )
+
+        best_mask: int | None = None
+        for vertex_idx in branch_vertices:
+            next_mask = active_mask & ~(1 << vertex_idx)
+            if not _can_cover(next_mask, remaining_budget - 1):
+                continue
+            submask = _best_cover(next_mask, remaining_budget - 1)
+            if submask is None:
+                continue
+            candidate_mask = submask | (1 << vertex_idx)
+            if best_mask is None or _cover_rank(candidate_mask) < _cover_rank(best_mask):
+                best_mask = candidate_mask
+        return best_mask
+
+    greedy_mask = _greedy_cover_mask(full_mask)
+    greedy_size = greedy_mask.bit_count()
+    lower_bound = _maximal_matching_lower_bound(full_mask)
+    optimum_size = greedy_size
+    for candidate_size in range(lower_bound, greedy_size + 1):
+        if _can_cover(full_mask, candidate_size):
+            optimum_size = candidate_size
+            break
+
+    best_mask = _best_cover(full_mask, optimum_size)
+    if best_mask is None:
+        best_mask = greedy_mask
+
+    return [vertex_keys[idx] for idx in _iter_bits(best_mask)]
 
 
 def _normalize_metadata_tt_key(key: str) -> str:

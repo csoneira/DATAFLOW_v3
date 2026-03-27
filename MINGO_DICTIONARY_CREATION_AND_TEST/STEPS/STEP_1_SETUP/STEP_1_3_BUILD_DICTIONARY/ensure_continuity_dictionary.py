@@ -36,8 +36,10 @@ if STEP_DIR.parents[1].name == "STEPS":
     PIPELINE_DIR = STEP_DIR.parents[2]
 else:
     PIPELINE_DIR = STEP_DIR.parents[1]
-
-DEFAULT_CONFIG = PIPELINE_DIR / "config_step_1.1_method.json"
+STEP_ROOT = PIPELINE_DIR if (PIPELINE_DIR / "STEP_1_SETUP").exists() else PIPELINE_DIR / "STEPS"
+DEFAULT_CONFIG = (
+    STEP_ROOT / "STEP_1_SETUP" / "STEP_1_1_COLLECT_DATA" / "INPUTS" / "config_step_1.1_method.json"
+)
 DEFAULT_DICTIONARY = STEP_DIR.parent / "STEP_1_3_BUILD_DICTIONARY" / "OUTPUTS" / "FILES" / "dictionary.csv"
 DEFAULT_DATASET = STEP_DIR.parent / "STEP_1_3_BUILD_DICTIONARY" / "OUTPUTS" / "FILES" / "dataset.csv"
 DEFAULT_SELECTED_FEATURES = (

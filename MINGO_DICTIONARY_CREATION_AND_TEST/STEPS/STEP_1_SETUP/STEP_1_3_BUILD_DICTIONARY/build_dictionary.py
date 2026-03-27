@@ -37,10 +37,16 @@ if STEP_DIR.parents[1].name == "STEPS":
     PIPELINE_DIR = STEP_DIR.parents[2]
 else:
     PIPELINE_DIR = STEP_DIR.parents[1]
-DEFAULT_CONFIG = PIPELINE_DIR / "config_step_1.1_method.json"
+STEP_ROOT = PIPELINE_DIR if (PIPELINE_DIR / "STEP_1_SETUP").exists() else PIPELINE_DIR / "STEPS"
+DEFAULT_CONFIG = (
+    STEP_ROOT / "STEP_1_SETUP" / "STEP_1_1_COLLECT_DATA" / "INPUTS" / "config_step_1.1_method.json"
+)
 MODULES_DIR = PIPELINE_DIR / "STEPS" / "MODULES" if (PIPELINE_DIR / "STEPS" / "MODULES").exists() else PIPELINE_DIR / "MODULES"
 DEFAULT_INPUT = (
     STEP_DIR.parent / "STEP_1_2_TRANSFORM_FEATURE_SPACE" / "OUTPUTS" / "FILES" / "transformed_feature_space.csv"
+)
+DEFAULT_STEP12_MANIFEST = (
+    STEP_DIR.parent / "STEP_1_2_TRANSFORM_FEATURE_SPACE" / "OUTPUTS" / "FILES" / "feature_space_manifest.json"
 )
 DEFAULT_STEP11_COLLECTED = (
     STEP_DIR.parent / "STEP_1_1_COLLECT_DATA" / "OUTPUTS" / "FILES" / "collected_data.csv"
@@ -94,6 +100,13 @@ try:
     )
 except Exception as exc:  # pragma: no cover - import failure is fatal
     raise RuntimeError(f"Could not import feature_space_config from {MODULES_DIR}: {exc}") from exc
+try:
+    from step1_manifest import (  # noqa: E402
+        load_step1_feature_manifest,
+        manifest_primary_feature_columns,
+    )
+except Exception as exc:  # pragma: no cover - import failure is fatal
+    raise RuntimeError(f"Could not import step1_manifest from {MODULES_DIR}: {exc}") from exc
 
 TT_RATE_COLUMN_RE = re.compile(r"^(?P<prefix>.+?)_tt_(?P<label>[^_]+)_rate_hz$")
 PHYSICAL_TT_RATE_LABELS = (
@@ -683,8 +696,13 @@ def _build_selected_feature_columns(
     df: pd.DataFrame,
     *,
     feature_space_cfg: dict | None,
+    feature_manifest: dict | None = None,
 ) -> tuple[list[str], dict]:
-    keep_dimensions = extract_feature_dimensions(feature_space_cfg)
+    manifest_primary = manifest_primary_feature_columns(
+        feature_manifest or {},
+        available_columns=list(df.columns),
+    )
+    keep_dimensions = manifest_primary or extract_feature_dimensions(feature_space_cfg)
     fallback = (
         _default_selected_feature_columns(df, base_columns=keep_dimensions)
         if keep_dimensions
@@ -695,6 +713,11 @@ def _build_selected_feature_columns(
         feature_space_cfg=feature_space_cfg or {},
         fallback_columns=fallback,
     )
+    info = dict(info)
+    info["feature_manifest_loaded"] = bool(feature_manifest)
+    info["feature_manifest_primary_columns"] = manifest_primary
+    if manifest_primary and info.get("source") == "fallback_columns":
+        info["source"] = "step_1_2.feature_space_manifest.primary_feature_columns"
     return selected, info
 
 
@@ -947,15 +970,17 @@ def _plot_relerr_report(
 
         rel_non = pd.to_numeric(non_dict[rel_col], errors="coerce")
         rel_dic = pd.to_numeric(only_dict[rel_col], errors="coerce")
-        relm_non = x_non.notna() & rel_non.notna()
-        relm_dic = x_dic.notna() & rel_dic.notna()
+        relx_non = pd.to_numeric(non_dict[sim_col], errors="coerce")
+        relx_dic = pd.to_numeric(only_dict[sim_col], errors="coerce")
+        relm_non = relx_non.notna() & rel_non.notna()
+        relm_dic = relx_dic.notna() & rel_dic.notna()
         if relm_non.any():
             ax_rel.scatter(
-                x_non[relm_non], rel_non[relm_non], s=7, alpha=0.2, color="#8E8E8E", edgecolors="none", label="Non-dictionary"
+                relx_non[relm_non], rel_non[relm_non], s=7, alpha=0.2, color="#8E8E8E", edgecolors="none", label="Non-dictionary"
             )
         if relm_dic.any():
             ax_rel.scatter(
-                x_dic[relm_dic], rel_dic[relm_dic], s=20, alpha=0.75, marker="x", color="#D7301F", linewidths=0.9, label="Dictionary"
+                relx_dic[relm_dic], rel_dic[relm_dic], s=20, alpha=0.75, marker="x", color="#D7301F", linewidths=0.9, label="Dictionary"
             )
 
         thr = _as_float_or_none(
@@ -972,11 +997,11 @@ def _plot_relerr_report(
         if not np.isfinite(rel_hi) or rel_hi <= 0.0:
             rel_hi = 1.0
         ax_rel.set_ylim(0.0, max(rel_hi, 1.0))
-        rel_x_lo, rel_x_hi = _tight_unit_interval_bounds(x_non[relm_non], x_dic[relm_dic], fit_x)
+        rel_x_lo, rel_x_hi = _tight_unit_interval_bounds(relx_non[relm_non], relx_dic[relm_dic], fit_y)
         ax_rel.set_xlim(rel_x_lo, rel_x_hi)
-        ax_rel.set_xlabel("Empirical efficiency")
+        ax_rel.set_xlabel("Simulated efficiency")
         ax_rel.set_ylabel("Relative error [%]")
-        ax_rel.set_title(f"Plane {plane}: relerr ({'fit' if rel_col == rel_fit_col else 'raw'})")
+        ax_rel.set_title(f"Plane {plane}: relerr vs simulated ({'fit' if rel_col == rel_fit_col else 'raw'})")
         ax_rel.grid(True, alpha=0.2)
         if plane == 1:
             ax_rel.legend(fontsize=7, loc="upper left")
@@ -1372,6 +1397,7 @@ def main() -> int:
         if isinstance(feature_space_all.get("step_1_2", {}), dict)
         else {}
     )
+    feature_manifest = load_step1_feature_manifest(DEFAULT_STEP12_MANIFEST)
 
     input_cfg = cfg_13.get("input_csv") if isinstance(cfg_13, dict) else None
     if args.input_csv:
@@ -1479,6 +1505,7 @@ def main() -> int:
     selected_feature_columns, selected_feature_info = _build_selected_feature_columns(
         dictionary,
         feature_space_cfg=feature_space_cfg,
+        feature_manifest=feature_manifest,
     )
     if not selected_feature_columns:
         log.error("No selected feature columns resolved for STEP 1.3.")
@@ -1499,6 +1526,8 @@ def main() -> int:
             "selected_feature_count": int(len(selected_feature_columns)),
             "feature_space_config_path": str(feature_space_config_path),
             "feature_space_config_loaded": bool(feature_space_cfg),
+            "feature_space_manifest_json": str(DEFAULT_STEP12_MANIFEST),
+            "feature_space_manifest_loaded": bool(feature_manifest),
             "used_feature_space_config": bool(selected_feature_info.get("used_feature_space_config", False)),
             "include_patterns": selected_feature_info.get("include_patterns", []),
             "exclude_patterns": selected_feature_info.get("exclude_patterns", []),
@@ -1521,6 +1550,8 @@ def main() -> int:
         "input_csv": str(input_path),
         "feature_space_config_path": str(feature_space_config_path),
         "feature_space_config_loaded": bool(feature_space_cfg),
+        "feature_space_manifest_json": str(DEFAULT_STEP12_MANIFEST),
+        "feature_space_manifest_loaded": bool(feature_manifest),
         "dictionary_csv": str(dictionary_path),
         "dataset_csv": str(dataset_path),
         "selected_feature_columns_json": str(selected_features_path),

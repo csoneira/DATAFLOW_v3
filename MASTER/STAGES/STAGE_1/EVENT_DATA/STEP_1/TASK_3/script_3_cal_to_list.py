@@ -141,6 +141,7 @@ from MASTER.common.step1_shared import (
     normalize_tt_label,
     prune_redundant_count_metadata,
     save_metadata,
+    select_exact_minimum_vertex_cover,
     set_global_rate_from_tt_rates,
     validate_step1_input_file_args,
     y_pos,
@@ -972,6 +973,7 @@ def refresh_global_count_metadata(df: pd.DataFrame, column_names: Iterable[str])
             global_variables[f"{column_name}_{tt_label}_count"] = int(count)
 
 TASK3_ACTIVE_STRIP_COLUMNS: tuple[str, ...] = tuple(f"active_strips_P{plane}" for plane in range(1, 5))
+TASK3_SELECTED_OFFENDER_CARDINALITY_VALUES: tuple[int, ...] = tuple(range(1, 5))
 
 FILTER_METRIC_NAMES: tuple[str, ...] = (
     "filter6_new_zero_rows_pct",
@@ -988,6 +990,10 @@ FILTER_METRIC_NAMES: tuple[str, ...] = (
     "plane_combination_filter_t_dif_dif_failed_pct",
     "plane_combination_filter_y_sum_failed_pct",
     "plane_combination_filter_y_dif_failed_pct",
+    *tuple(
+        f"plane_combination_filter_rows_with_{selected_count}_selected_offenders_pct"
+        for selected_count in TASK3_SELECTED_OFFENDER_CARDINALITY_VALUES
+    ),
     "q_sum_all_zero_rows_removed_pct",
     "data_purity_percentage",
     "all_components_zero_rows_removed_pct",
@@ -1956,6 +1962,14 @@ def _task3_plane_offender_metric_key(plane_key: int) -> str:
     return f"plane_combination_filter_offender_count_P{plane_key}"
 
 
+def _task3_selected_offender_cardinality_metric_key(selected_count: int) -> str:
+    return f"plane_combination_filter_rows_with_{selected_count}_selected_offenders"
+
+
+def _task3_selected_offender_cardinality_pct_metric_key(selected_count: int) -> str:
+    return f"{_task3_selected_offender_cardinality_metric_key(selected_count)}_pct"
+
+
 def apply_task3_plane_combination_filter(
     df_input: pd.DataFrame,
     *,
@@ -1978,7 +1992,7 @@ def apply_task3_plane_combination_filter(
 
     Distinct plane pairs are evaluated only when both planes carry non-zero
     `Q_sum/Q_dif/T_sum/T_dif/Y`. Failed plane pairs are flagged first. Then,
-    per event, only the smallest high-impact set of offending planes is zeroed
+    per event, the exact minimum-cardinality set of offending planes is zeroed
     so the full set of flagged plane pairs is covered.
     """
     plane_map = collect_task3_plane_final_map(df_input)
@@ -2004,6 +2018,10 @@ def apply_task3_plane_combination_filter(
             "rows_with_multiple_offenders": 0,
             "max_failed_pairs_in_row": 0,
             "max_selected_offenders_in_row": 0,
+            "selected_offender_cardinality_counts": {
+                selected_count: 0
+                for selected_count in TASK3_SELECTED_OFFENDER_CARDINALITY_VALUES
+            },
             "selected_offender_counts": {
                 plane_key: 0 for plane_key in TASK3_PLANE_KEYS
             },
@@ -2034,6 +2052,10 @@ def apply_task3_plane_combination_filter(
         "rows_with_multiple_offenders": 0,
         "max_failed_pairs_in_row": 0,
         "max_selected_offenders_in_row": 0,
+        "selected_offender_cardinality_counts": {
+            selected_count: 0
+            for selected_count in TASK3_SELECTED_OFFENDER_CARDINALITY_VALUES
+        },
     }
     row_failed_edges: dict[int, list[tuple[int, int, float]]] = {}
     offender_hit_counts = {
@@ -2219,29 +2241,10 @@ def apply_task3_plane_combination_filter(
     any_row_affected = np.zeros(len(df_input), dtype=bool)
     summary["flagged_rows"] = len(row_failed_edges)
     for row_pos, edge_list in row_failed_edges.items():
-        uncovered_edges = list(edge_list)
-        selected_planes: list[int] = []
-        while uncovered_edges:
-            candidate_scores: dict[int, tuple[int, float]] = {}
-            for plane_a, plane_b, severity in uncovered_edges:
-                count_a, score_a = candidate_scores.get(plane_a, (0, 0.0))
-                candidate_scores[plane_a] = (count_a + 1, score_a + severity)
-                count_b, score_b = candidate_scores.get(plane_b, (0, 0.0))
-                candidate_scores[plane_b] = (count_b + 1, score_b + severity)
-
-            best_plane = min(
-                candidate_scores,
-                key=lambda plane_key: (
-                    -candidate_scores[plane_key][0],
-                    -candidate_scores[plane_key][1],
-                    *_task3_plane_order_key(plane_key),
-                ),
-            )
-            selected_planes.append(best_plane)
-            uncovered_edges = [
-                edge for edge in uncovered_edges
-                if best_plane not in edge[:2]
-            ]
+        selected_planes = select_exact_minimum_vertex_cover(
+            edge_list,
+            _task3_plane_order_key,
+        )
 
         summary["max_failed_pairs_in_row"] = max(
             summary["max_failed_pairs_in_row"],
@@ -2254,6 +2257,9 @@ def apply_task3_plane_combination_filter(
         summary["selected_offender_planes"] += len(selected_planes)
         if len(selected_planes) > 1:
             summary["rows_with_multiple_offenders"] += 1
+        summary["selected_offender_cardinality_counts"][len(selected_planes)] = (
+            int(summary["selected_offender_cardinality_counts"].get(len(selected_planes), 0)) + 1
+        )
         for plane_key in selected_planes:
             plane_fail_masks[plane_key][row_pos] = True
             offender_hit_counts[plane_key] += 1
@@ -6103,6 +6109,17 @@ global_variables["plane_combination_filter_max_failed_pairs_in_row"] = int(
 global_variables["plane_combination_filter_max_selected_offenders_in_row"] = int(
     plane_combination_summary["max_selected_offenders_in_row"]
 )
+for selected_count in TASK3_SELECTED_OFFENDER_CARDINALITY_VALUES:
+    selected_rows = int(
+        plane_combination_summary["selected_offender_cardinality_counts"].get(selected_count, 0)
+    )
+    global_variables[_task3_selected_offender_cardinality_metric_key(selected_count)] = selected_rows
+    record_activity_metric(
+        _task3_selected_offender_cardinality_pct_metric_key(selected_count),
+        selected_rows,
+        plane_combination_summary["flagged_rows"],
+        label=f"flagged rows solved by selecting exactly {selected_count} offending planes",
+    )
 for plane_key, offender_count in plane_combination_summary["selected_offender_counts"].items():
     global_variables[_task3_plane_offender_metric_key(plane_key)] = int(offender_count)
 if _plot_plane_combination_filter_by_tt:

@@ -13,6 +13,7 @@ sys.path.insert(0, str(_STEP41_DIR))
 
 import collect_real_data as step41  # noqa: E402
 from collect_real_data import (  # noqa: E402
+    _enforce_complete_estimation_feature_space,
     _make_grouped_feature_space_comparison_plot,
     _nonobservable_efficiency_columns,
     _resolve_tt_rate_breakdown_entries,
@@ -128,3 +129,48 @@ def test_grouped_feature_space_comparison_plot_handles_hist_and_eff_vectors(
     assert summary["status"] == "ok"
     assert int(summary["rate_histogram_bins_used"]) == 2
     assert int(summary["efficiency_vector_groups_used"]) == 1
+
+
+def test_enforce_complete_estimation_feature_space_drops_incomplete_rows() -> None:
+    df = pd.DataFrame(
+        {
+            "feature_a": [1.0, 2.0, None],
+            "feature_b": [3.0, None, 5.0],
+            "other": [10, 11, 12],
+        }
+    )
+
+    filtered, info = _enforce_complete_estimation_feature_space(
+        df,
+        selected_feature_columns=["feature_a", "feature_b"],
+        feature_manifest=None,
+    )
+
+    assert filtered.to_dict(orient="list") == {
+        "feature_a": [1.0],
+        "feature_b": [3.0],
+        "other": [10],
+    }
+    assert info["feature_columns_source"] == "step_1_4.selected_feature_columns"
+    assert int(info["rows_removed"]) == 2
+    assert int(info["rows_kept"]) == 1
+
+
+def test_enforce_complete_estimation_feature_space_requires_all_selected_columns() -> None:
+    df = pd.DataFrame(
+        {
+            "feature_a": [1.0, 2.0],
+            "other": [10, 11],
+        }
+    )
+
+    try:
+        _enforce_complete_estimation_feature_space(
+            df,
+            selected_feature_columns=["feature_a", "feature_b"],
+            feature_manifest=None,
+        )
+    except ValueError as exc:
+        assert "feature_b" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for missing selected feature columns")

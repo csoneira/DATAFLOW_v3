@@ -31,7 +31,9 @@ STEP_DIR = Path(__file__).resolve().parent
 INFERENCE_DIR = STEP_DIR.parent
 PIPELINE_DIR = INFERENCE_DIR.parent
 PROJECT_DIR = PIPELINE_DIR.parent
-DEFAULT_CONFIG = PROJECT_DIR / "config_step_1.1_method.json"
+DEFAULT_CONFIG = (
+    PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_1_COLLECT_DATA" / "INPUTS" / "config_step_1.1_method.json"
+)
 
 DEFAULT_VALIDATION = (
     INFERENCE_DIR / "STEP_2_2_VALIDATION" / "OUTPUTS" / "FILES" / "validation_results.csv"

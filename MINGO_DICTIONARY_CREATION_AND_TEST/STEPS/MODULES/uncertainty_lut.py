@@ -19,6 +19,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Sequence
 
 import numpy as np
 import pandas as pd
@@ -561,6 +562,157 @@ def _fill_nan_nearest_3d(grid: np.ndarray) -> None:
                      + (valid_ijk[:, 2] - nk) ** 2)
             best = valid_ijk[dists.argmin()]
             grid[ni, nj, nk] = grid[best[0], best[1], best[2]]
+
+
+def load_uncertainty_lut_table(lut_csv_path: str | Path) -> pd.DataFrame:
+    """Load the STEP 2.3 LUT CSV, allowing comment-prefixed metadata headers."""
+    return pd.read_csv(Path(lut_csv_path), comment="#", low_memory=False)
+
+
+def detect_uncertainty_lut_param_names(
+    lut_df: pd.DataFrame,
+    lut_meta_path: str | Path | None = None,
+) -> list[str]:
+    """Resolve parameter names represented in the uncertainty LUT."""
+    meta_path = Path(lut_meta_path) if lut_meta_path is not None else None
+    if meta_path is not None and meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            params = meta.get("param_names", [])
+            if isinstance(params, list):
+                cleaned = [str(p) for p in params if str(p)]
+                if cleaned:
+                    return cleaned
+        except Exception:
+            pass
+
+    params: list[str] = []
+    for c in lut_df.columns:
+        if not str(c).startswith("sigma_"):
+            continue
+        if "_p" in str(c):
+            pname = str(c)[len("sigma_") :].split("_p", 1)[0]
+        elif str(c).endswith("_std"):
+            pname = str(c)[len("sigma_") : -len("_std")]
+        else:
+            continue
+        if pname and pname not in params:
+            params.append(pname)
+    return params
+
+
+def interpolate_uncertainty_columns(
+    query_df: pd.DataFrame,
+    lut_df: pd.DataFrame,
+    *,
+    param_names: Sequence[str],
+    quantile: float,
+    neighbor_count: int | None = None,
+    distance_power: float = 2.0,
+    min_neighbors: int = 4,
+) -> pd.DataFrame:
+    """Smoothly interpolate LUT uncertainty columns onto query rows.
+
+    This is a generic multidimensional LUT interpolator used by STEP 3.3 and
+    STEP 4.2. Unlike the old nearest-row lookup, it uses inverse-distance
+    weighting over the closest valid LUT rows, which avoids staircase-like
+    uncertainty outputs when the LUT grid is coarse.
+    """
+    if lut_df.empty or query_df.empty:
+        return pd.DataFrame(index=query_df.index)
+
+    q_label = str(int(round(float(quantile) * 100.0)))
+    centre_cols = [str(c) for c in lut_df.columns if str(c).endswith("_centre")]
+    if not centre_cols:
+        return pd.DataFrame(index=query_df.index)
+
+    lut_centres_df = lut_df[centre_cols].apply(pd.to_numeric, errors="coerce")
+    lut_centres = lut_centres_df.to_numpy(dtype=float)
+    valid_centres = np.all(np.isfinite(lut_centres), axis=1)
+    if not np.any(valid_centres):
+        return pd.DataFrame(index=query_df.index)
+
+    centre_valid = lut_centres[valid_centres]
+    dim_center = np.nanmedian(centre_valid, axis=0)
+    dim_scale = np.nanpercentile(centre_valid, 90, axis=0) - np.nanpercentile(centre_valid, 10, axis=0)
+    dim_scale = np.where(np.isfinite(dim_scale) & (dim_scale > 0.0), dim_scale, np.nanmax(centre_valid, axis=0) - np.nanmin(centre_valid, axis=0))
+    dim_scale = np.where(np.isfinite(dim_scale) & (dim_scale > 0.0), dim_scale, 1.0)
+
+    n_rows = len(query_df)
+    n_dims = len(centre_cols)
+    query_vals = np.zeros((n_rows, n_dims), dtype=float)
+    for j, cc in enumerate(centre_cols):
+        dim = cc[: -len("_centre")]
+        if dim in query_df.columns:
+            qv = pd.to_numeric(query_df[dim], errors="coerce").to_numpy(dtype=float)
+        elif dim == "n_events":
+            qv = pd.to_numeric(query_df.get("n_events"), errors="coerce").to_numpy(dtype=float)
+        else:
+            qv = np.full(n_rows, np.nan, dtype=float)
+        qv = np.where(np.isfinite(qv), qv, dim_center[j])
+        query_vals[:, j] = qv
+
+    normalized_lut = centre_valid / dim_scale[np.newaxis, :]
+    normalized_query = query_vals / dim_scale[np.newaxis, :]
+    diff = normalized_query[:, np.newaxis, :] - normalized_lut[np.newaxis, :, :]
+    distances = np.sqrt(np.sum(diff * diff, axis=2))
+
+    out = pd.DataFrame(index=query_df.index)
+    for pname in param_names:
+        pref_col = f"sigma_{pname}_p{q_label}"
+        sigma_col = pref_col if pref_col in lut_df.columns else None
+        if sigma_col is None:
+            alt = f"sigma_{pname}_std"
+            sigma_col = alt if alt in lut_df.columns else None
+        if sigma_col is None:
+            out[f"unc_{pname}_pct_raw"] = np.nan
+            out[f"unc_{pname}_pct"] = np.nan
+            continue
+
+        sigma_vals = pd.to_numeric(lut_df[sigma_col], errors="coerce").to_numpy(dtype=float)[valid_centres]
+        valid_sigma = np.isfinite(sigma_vals)
+        if not np.any(valid_sigma):
+            out[f"unc_{pname}_pct_raw"] = np.nan
+            out[f"unc_{pname}_pct"] = np.nan
+            continue
+
+        sigma_valid = sigma_vals[valid_sigma]
+        distances_valid = distances[:, valid_sigma]
+        if sigma_valid.size == 0 or distances_valid.shape[1] == 0:
+            out[f"unc_{pname}_pct_raw"] = np.nan
+            out[f"unc_{pname}_pct"] = np.nan
+            continue
+
+        k = int(neighbor_count) if neighbor_count is not None else min(max(int(min_neighbors), 2 * n_dims), int(sigma_valid.size))
+        k = max(1, min(k, int(sigma_valid.size)))
+        order = np.argpartition(distances_valid, kth=k - 1, axis=1)[:, :k]
+        local_dist = np.take_along_axis(distances_valid, order, axis=1)
+        local_sigma = sigma_valid[order]
+
+        exact_mask = np.any(local_dist <= 1e-12, axis=1)
+        raw = np.full(n_rows, np.nan, dtype=float)
+        if np.any(exact_mask):
+            exact_pos = np.argmin(local_dist[exact_mask], axis=1)
+            raw[exact_mask] = local_sigma[exact_mask, exact_pos]
+
+        non_exact_mask = ~exact_mask
+        if np.any(non_exact_mask):
+            local_dist_ne = local_dist[non_exact_mask]
+            local_sigma_ne = local_sigma[non_exact_mask]
+            weights = 1.0 / np.power(np.maximum(local_dist_ne, 1e-12), max(float(distance_power), 0.0))
+            weights = np.where(np.isfinite(weights), weights, 0.0)
+            weight_sum = np.sum(weights, axis=1)
+            weighted = np.sum(weights * local_sigma_ne, axis=1)
+            sigma_median = float(np.nanmedian(sigma_valid))
+            interp = np.where(weight_sum > 0.0, weighted / weight_sum, sigma_median)
+            raw[non_exact_mask] = interp
+
+        sigma_median = float(np.nanmedian(sigma_valid))
+        raw = np.where(np.isfinite(raw), raw, sigma_median)
+        out[f"unc_{pname}_pct_raw"] = raw
+        out[f"unc_{pname}_pct"] = np.abs(raw)
+
+    return out
 
 
 # ── convenience for scripts ─────────────────────────────────────────────────

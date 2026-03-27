@@ -22,6 +22,7 @@ import logging
 import re
 import sys
 from pathlib import Path
+from typing import Mapping
 
 import matplotlib
 
@@ -41,11 +42,13 @@ if STEP_DIR.parents[2].name == "STEPS":
 else:
     PIPELINE_DIR = STEP_DIR.parents[2]
 REPO_ROOT = PIPELINE_DIR.parent
-DEFAULT_CONFIG = PIPELINE_DIR / "config_step_1.1_method.json"
 if (PIPELINE_DIR / "STEP_1_SETUP").exists():
     STEP_ROOT = PIPELINE_DIR
 else:
     STEP_ROOT = PIPELINE_DIR / "STEPS"
+DEFAULT_CONFIG = (
+    STEP_ROOT / "STEP_1_SETUP" / "STEP_1_1_COLLECT_DATA" / "INPUTS" / "config_step_1.1_method.json"
+)
 DEFAULT_DICTIONARY = (
     STEP_ROOT
     / "STEP_1_SETUP"
@@ -61,6 +64,14 @@ DEFAULT_STEP14_SELECTED_FEATURES = (
     / "OUTPUTS"
     / "FILES"
     / "selected_feature_columns.json"
+)
+DEFAULT_STEP12_MANIFEST = (
+    STEP_ROOT
+    / "STEP_1_SETUP"
+    / "STEP_1_2_TRANSFORM_FEATURE_SPACE"
+    / "OUTPUTS"
+    / "FILES"
+    / "feature_space_manifest.json"
 )
 DEFAULT_BUILD_SUMMARY = (
     STEP_ROOT
@@ -149,11 +160,17 @@ try:
         append_polynomial_corrected_efficiency_columns,
         load_efficiency_fit_models,
     )
+    import feature_space_transform_engine  # noqa: E402
     from feature_space_config import (  # noqa: E402
         load_feature_space_config,
         resolve_feature_space_config_path,
         resolve_feature_space_transform_options,
         resolve_materialized_feature_space_columns,
+    )
+    from step1_manifest import (  # noqa: E402
+        load_step1_feature_manifest,
+        manifest_target_columns,
+        manifest_primary_feature_columns,
     )
 except Exception as exc:
     log.error("Could not import efficiency_fit_utils from %s: %s", MODULES_DIR, exc)
@@ -164,23 +181,12 @@ if str(STEP12_TRANSFORM_DIR) not in sys.path:
     sys.path.insert(0, str(STEP12_TRANSFORM_DIR))
 try:
     from transform_feature_space import (  # noqa: E402
-        CANONICAL_PREFIX_PRIORITY as STEP12_CANONICAL_PREFIX_PRIORITY,
         EFF_PLACEHOLDER_COL as STEP12_EFF_PLACEHOLDER_COL,
         EFF_PLACEHOLDER_LABEL as STEP12_EFF_PLACEHOLDER_LABEL,
         RATE_HIST_PLACEHOLDER_COL as STEP12_RATE_HIST_PLACEHOLDER_COL,
         RATE_HIST_PLACEHOLDER_LABEL as STEP12_RATE_HIST_PLACEHOLDER_LABEL,
-        _add_derived_physics_helper_columns as _step12_add_derived_physics_helper_columns,
-        _apply_column_transformations as _step12_apply_column_transformations,
-        _build_prefix_global_rate_columns as _step12_build_prefix_global_rate_columns,
-        _compute_empirical_efficiencies as _step12_compute_empirical_efficiencies,
-        _drop_non_best_tt_columns as _step12_drop_non_best_tt_columns,
-        _ensure_standard_task_prefix_rate_columns as _step12_ensure_standard_task_prefix_rate_columns,
-        _normalize_requested_columns as _step12_normalize_requested_columns,
         _resolve_feature_matrix_plot_columns as _step12_resolve_feature_matrix_plot_columns,
         _resolve_feature_space_plot_suppression_patterns as _step12_resolve_feature_space_plot_suppression_patterns,
-        _resolve_column_transformations as _step12_resolve_column_transformations,
-        _select_best_tt_prefix as _step12_select_best_tt_prefix,
-        _select_canonical_global_rate as _step12_select_canonical_global_rate,
     )
 except Exception as exc:
     log.error(
@@ -238,6 +244,12 @@ def _load_config(path: Path) -> dict:
         cfg = json.loads(path.read_text(encoding="utf-8"))
     else:
         log.warning("Config file not found: %s", path)
+
+    columns_path = path.with_name("config_step_1.1_columns.json")
+    if columns_path != path and columns_path.exists():
+        columns_cfg = json.loads(columns_path.read_text(encoding="utf-8"))
+        cfg = _merge_dicts(cfg, columns_cfg)
+        log.info("Loaded column-role config: %s", columns_path)
 
     plots_path = path.with_name("config_step_1.1_plots.json")
     if plots_path != path and plots_path.exists():
@@ -1239,14 +1251,16 @@ def _apply_step12_feature_space_transform(
     *,
     cfg_12: dict,
     feature_space_cfg: dict | None = None,
+    feature_manifest: dict | None = None,
+    selected_feature_columns: list[str] | None = None,
     identity_column: str | None = None,
 ) -> tuple[pd.DataFrame, dict]:
     """Apply STEP 1.2 feature-space transformation using STEP 1.2 definitions."""
-    requested_keep_patterns = _step12_normalize_requested_columns(
+    requested_keep_patterns = feature_space_transform_engine.normalize_requested_columns(
         cfg_12.get("transform_keep_columns")
     )
     requested_keep_patterns_cfg = list(requested_keep_patterns)
-    column_transform_cfg = _step12_resolve_column_transformations(
+    column_transform_cfg = feature_space_transform_engine.resolve_column_transformations(
         feature_space_cfg=feature_space_cfg or {},
     )
     column_transform_enabled = bool(column_transform_cfg.get("enabled", False))
@@ -1270,71 +1284,48 @@ def _apply_step12_feature_space_transform(
 
     transform_options = resolve_feature_space_transform_options(
         feature_space_cfg=feature_space_cfg or {},
-        default_tt_prefix_priority=STEP12_CANONICAL_PREFIX_PRIORITY,
+        default_tt_prefix_priority=feature_space_transform_engine.CANONICAL_PREFIX_PRIORITY,
     )
     preferred_prefixes_t = tuple(transform_options["tt_prefix_priority"])
-    out, rate_col_by_prefix, tt_cols_by_prefix = _step12_build_prefix_global_rate_columns(df)
-    out, added_standard_rate_cols = _step12_ensure_standard_task_prefix_rate_columns(
-        out,
-        rate_col_by_prefix=rate_col_by_prefix,
+    out, transform_engine_info = feature_space_transform_engine.apply_feature_space_transform(
+        df,
+        cfg_12=cfg_12 if isinstance(cfg_12, Mapping) else {},
+        feature_space_cfg=feature_space_cfg or {},
+        default_tt_prefix_priority=feature_space_transform_engine.CANONICAL_PREFIX_PRIORITY,
+        backfill_efficiency_from_empirical_enabled=True,
+        logger=log,
     )
-    canonical_source_counts: dict[str, int] = {}
-    if transform_options["derive_canonical_global_rate"]:
-        out, canonical_source_counts = _step12_select_canonical_global_rate(
-            out,
-            rate_col_by_prefix=rate_col_by_prefix,
-            preferred_prefixes=preferred_prefixes_t,
+    transform_options = dict(transform_engine_info.get("transform_options", transform_options))
+    preferred_prefixes_t = tuple(transform_engine_info.get("preferred_prefixes", preferred_prefixes_t))
+    rate_col_by_prefix = {
+        str(key): str(value)
+        for key, value in dict(transform_engine_info.get("rate_col_by_prefix", {})).items()
+    }
+    tt_cols_by_prefix = {
+        str(key): [str(col) for col in value]
+        for key, value in dict(transform_engine_info.get("tt_cols_by_prefix", {})).items()
+    }
+    added_standard_rate_cols = list(transform_engine_info.get("added_standard_rate_cols", []))
+    canonical_source_counts = dict(transform_engine_info.get("canonical_source_counts", {}))
+    empirical_selected_prefix = transform_engine_info.get("empirical_selected_prefix")
+    empirical_used_prefixes = list(transform_engine_info.get("empirical_used_prefixes", []))
+    helper_count = int(transform_engine_info.get("helper_count", 0))
+    backfilled_eff_cols = int(transform_engine_info.get("backfilled_efficiency_columns", 0))
+    min_eff_sim = float(transform_engine_info.get("min_simulated_efficiency", cfg_12.get("min_simulated_efficiency", 0.5)))
+    max_eff_spread = float(
+        transform_engine_info.get(
+            "max_simulated_efficiency_spread",
+            cfg_12.get("max_simulated_efficiency_spread", 0.15),
         )
-    empirical_selected_prefix = None
-    empirical_used_prefixes: list[str] = []
-    if transform_options["derive_empirical_efficiencies"]:
-        out, empirical_selected_prefix, empirical_used_prefixes = _step12_compute_empirical_efficiencies(
-            out,
-            preferred_prefixes=preferred_prefixes_t,
-        )
-    helper_count = 0
-    if transform_options["derive_physics_helpers"]:
-        out, helper_count = _step12_add_derived_physics_helper_columns(out)
-
-    try:
-        min_eff_sim = float(cfg_12.get("min_simulated_efficiency", 0.5))
-    except (TypeError, ValueError):
-        min_eff_sim = 0.5
-    try:
-        max_eff_spread = float(cfg_12.get("max_simulated_efficiency_spread", 0.15))
-    except (TypeError, ValueError):
-        max_eff_spread = 0.15
-
-    eff_sim_cols = _sim_efficiency_columns(out)
-    rows_before_min_eff_filter = int(len(out))
-    rows_removed_min_eff_filter = 0
-    if eff_sim_cols and min_eff_sim > 0.0:
-        eff_vals = out[eff_sim_cols].apply(pd.to_numeric, errors="coerce")
-        keep_mask = (eff_vals >= min_eff_sim).all(axis=1)
-        rows_removed_min_eff_filter = int(np.count_nonzero(~keep_mask))
-        out = out.loc[keep_mask].reset_index(drop=True)
-
-    rows_before_spread_filter = int(len(out))
-    rows_removed_spread_filter = 0
-    if eff_sim_cols and max_eff_spread > 0.0:
-        eff_vals = out[eff_sim_cols].apply(pd.to_numeric, errors="coerce")
-        spread = eff_vals.max(axis=1) - eff_vals.min(axis=1)
-        keep_mask = spread <= max_eff_spread
-        rows_removed_spread_filter = int(np.count_nonzero(~keep_mask))
-        out = out.loc[keep_mask].reset_index(drop=True)
-
-    # Real-data path: materialize STEP 1 helper columns from empirical efficiencies
-    # when eff_p*/eff_sim_* are absent, so feature-space dimensionality stays aligned.
-    out, backfilled_eff_cols = _backfill_efficiency_columns_from_empirical(out)
-    out, helper_count_post = _step12_add_derived_physics_helper_columns(out)
-    helper_count += int(helper_count_post)
-
-    column_transform_info: dict[str, object] = {"enabled": False}
+    )
+    eff_sim_cols = list(transform_engine_info.get("eff_sim_cols", []))
+    rows_before_min_eff_filter = int(transform_engine_info.get("rows_before_min_eff_filter", len(out)))
+    rows_removed_min_eff_filter = int(transform_engine_info.get("rows_removed_min_eff_filter", 0))
+    rows_before_spread_filter = int(transform_engine_info.get("rows_before_spread_filter", len(out)))
+    rows_removed_spread_filter = int(transform_engine_info.get("rows_removed_spread_filter", 0))
+    column_transform_info = dict(transform_engine_info.get("column_transform_info", {"enabled": False}))
     if column_transform_enabled:
-        out, column_transform_info, missing_keep = _step12_apply_column_transformations(
-            out,
-            transform_cfg=column_transform_cfg,
-        )
+        missing_keep = list(transform_engine_info.get("missing_keep_dimensions", []))
         if missing_keep:
             log.warning(
                 "STEP 4.1: STEP 1.2 keep_dimensions missing on real data: %s",
@@ -1351,7 +1342,27 @@ def _apply_step12_feature_space_transform(
     if nonobservable_eff_cols:
         out = out.drop(columns=nonobservable_eff_cols, errors="ignore")
 
-    if column_transform_enabled:
+    manifest_target_cols = manifest_target_columns(
+        feature_manifest or {},
+        include_primary_features=True,
+        include_ancillary=True,
+        include_general_passthrough=True,
+        include_parameter_passthrough=False,
+        available_columns=list(out.columns),
+    )
+
+    if manifest_target_cols:
+        curated_cols = list(manifest_target_cols)
+        materialized_cols_info = {
+            "source": "step_1_2.feature_space_manifest",
+            "include_patterns": list(manifest_target_cols),
+            "exclude_patterns": [],
+            "unmatched_include_patterns": [],
+            "unmatched_exclude_patterns": [],
+        }
+        unmatched_keep_patterns = []
+        unmatched_keep_exclude_patterns = []
+    elif column_transform_enabled:
         curated_cols = [
             c
             for c in column_transform_info.get("final_keep_dimensions", [])
@@ -1425,16 +1436,23 @@ def _apply_step12_feature_space_transform(
                 if vals.notna().any():
                     available_tt_prefixes.add(prefix)
 
-        best_tt_prefix = _step12_select_best_tt_prefix(
+        best_tt_prefix = feature_space_transform_engine.select_best_tt_prefix(
             available_tt_prefixes,
             priority=preferred_prefixes_t,
         )
-        out, dropped_tt_cols = _step12_drop_non_best_tt_columns(
+        out, dropped_tt_cols = feature_space_transform_engine.drop_non_best_tt_columns(
             out,
             best_prefix=best_tt_prefix,
             tt_cols_by_prefix=tt_cols_by_prefix,
             rate_col_by_prefix=rate_col_by_prefix,
         )
+
+    rows_before_estimation_feature_filter = int(len(out))
+    out, estimation_feature_space_completeness = _enforce_complete_estimation_feature_space(
+        out,
+        selected_feature_columns=selected_feature_columns,
+        feature_manifest=feature_manifest,
+    )
 
     info = {
         "step12_transform_keep_columns_requested": requested_keep_patterns_cfg,
@@ -1473,6 +1491,8 @@ def _apply_step12_feature_space_transform(
         "step12_best_tt_prefix_selected": best_tt_prefix,
         "step12_dropped_tt_columns_count": int(len(dropped_tt_cols)),
         "step12_dropped_tt_columns": dropped_tt_cols,
+        "estimation_feature_space_rows_before_filter": int(rows_before_estimation_feature_filter),
+        "estimation_feature_space_completeness": estimation_feature_space_completeness,
     }
     return out, info
 
@@ -1565,6 +1585,49 @@ def _load_selected_feature_columns(path: Path) -> list[str]:
         out.append(text)
         seen.add(text)
     return out
+
+
+def _enforce_complete_estimation_feature_space(
+    df: pd.DataFrame,
+    *,
+    selected_feature_columns: list[str] | None,
+    feature_manifest: dict | None,
+) -> tuple[pd.DataFrame, dict[str, object]]:
+    selected_cols = []
+    seen: set[str] = set()
+    for raw_col in list(selected_feature_columns or []):
+        col = str(raw_col).strip()
+        if not col or col in seen:
+            continue
+        seen.add(col)
+        selected_cols.append(col)
+
+    if selected_cols:
+        missing_selected = [col for col in selected_cols if col not in df.columns]
+        if missing_selected:
+            raise ValueError(
+                "STEP 4.1 real feature space is missing selected STEP 1.4 feature columns after STEP 1.2 transform: "
+                + ", ".join(missing_selected[:50])
+                + (" ..." if len(missing_selected) > 50 else "")
+            )
+        required_cols = list(selected_cols)
+        source = "step_1_4.selected_feature_columns"
+    else:
+        required_cols = manifest_primary_feature_columns(
+            feature_manifest or {},
+            available_columns=list(df.columns),
+        )
+        source = "step_1_2.feature_space_manifest.primary_feature_columns"
+
+    filtered, completeness = feature_space_transform_engine.filter_rows_with_complete_numeric_columns(
+        df,
+        required_columns=required_cols,
+    )
+    completeness = dict(completeness)
+    completeness["feature_columns_source"] = source
+    completeness["required_feature_columns"] = list(required_cols)
+    completeness["required_feature_columns_count"] = int(len(required_cols))
+    return filtered, completeness
 
 
 def _resolve_feature_matrix_columns(
@@ -1836,6 +1899,7 @@ def _make_feature_scatter_matrix_real_vs_dictionary(
     dict_df: pd.DataFrame,
     *,
     selected_features_path: Path,
+    feature_manifest: dict | None,
     sample_max_rows: int,
     random_seed: int,
     include_rate_histogram: bool,
@@ -1858,6 +1922,13 @@ def _make_feature_scatter_matrix_real_vs_dictionary(
             selected_feature_cols=selected_feature_cols,
             include_global_rate=include_global_rate,
         )
+    elif feature_manifest:
+        preferred_cols = manifest_primary_feature_columns(
+            feature_manifest,
+            available_columns=sorted(set(real_df.columns) & set(dict_df.columns)),
+        )
+        if preferred_cols:
+            source_label = "step_1_2.feature_space_manifest.primary_feature_columns"
     (
         matrix_cols,
         rate_hist_cols,
@@ -2524,6 +2595,12 @@ def main() -> int:
         else {}
     )
     cfg_41 = config.get("step_4_1", {})
+    feature_manifest_path = _resolve_input_path(
+        cfg_41.get("feature_space_manifest_json", DEFAULT_STEP12_MANIFEST)
+        if isinstance(cfg_41, dict)
+        else DEFAULT_STEP12_MANIFEST
+    )
+    feature_manifest = load_step1_feature_manifest(feature_manifest_path)
     _clear_plots_dir()
 
     station_cfg = cfg_41.get("station_id", config.get("station_id", 0))
@@ -2550,6 +2627,7 @@ def main() -> int:
     selected_features_path = _resolve_input_path(
         selected_features_json_cfg or DEFAULT_STEP14_SELECTED_FEATURES
     )
+    selected_feature_cols = _load_selected_feature_columns(selected_features_path)
     matrix_sample_max_raw = _coalesce(
         cfg_41.get("feature_matrix_plot_sample_max_rows", None),
         cfg_12.get("feature_space_plot_sample_max_rows", 25000),
@@ -2987,6 +3065,8 @@ def main() -> int:
             collected,
             cfg_12=cfg_12,
             feature_space_cfg=feature_space_cfg,
+            feature_manifest=feature_manifest,
+            selected_feature_columns=selected_feature_cols,
             identity_column=step41_row_id_col,
         )
     except ValueError as exc:
@@ -3013,6 +3093,16 @@ def main() -> int:
     if collected.empty:
         log.error("No real rows left after STEP 1.2 feature-space transformation in STEP 4.1.")
         return 1
+    estimation_feature_space_completeness = dict(
+        step12_transform_info.get("estimation_feature_space_completeness", {})
+    )
+    if int(estimation_feature_space_completeness.get("rows_removed", 0)) > 0:
+        log.info(
+            "Dropped %d real row(s) with incomplete estimation feature space; kept %d/%d rows.",
+            int(estimation_feature_space_completeness.get("rows_removed", 0)),
+            int(estimation_feature_space_completeness.get("rows_kept", 0)),
+            int(estimation_feature_space_completeness.get("input_rows", rows_after_step12_transform)),
+        )
     log.info(
         "Applied STEP 1.2 feature-space transform in STEP 4.1: rows %d -> %d, columns=%d.",
         rows_before_step12_transform,
@@ -3057,6 +3147,7 @@ def main() -> int:
         collected,
         dict_df,
         selected_features_path=selected_features_path,
+        feature_manifest=feature_manifest,
         sample_max_rows=matrix_sample_max_rows,
         random_seed=matrix_random_seed,
         include_rate_histogram=matrix_include_rate_histogram,
@@ -3107,6 +3198,8 @@ def main() -> int:
         "timestamp_column": timestamp_col,
         "feature_space_config_path": str(feature_space_config_path),
         "feature_space_config_loaded": bool(feature_space_cfg),
+        "feature_space_manifest_json": str(feature_manifest_path),
+        "feature_space_manifest_loaded": bool(feature_manifest),
         "date_from": str(date_from) if date_from is not None else None,
         "date_to": str(date_to) if date_to is not None else None,
         "date_filter_source": "file_timestamp_utc_from_filename_base",
@@ -3128,6 +3221,7 @@ def main() -> int:
         "global_rate_column_preference": global_rate_col_pref,
         "dictionary_for_comparison_preview": str(dict_path),
         "selected_feature_columns_json": str(selected_features_path),
+        "selected_feature_columns_loaded_count": int(len(selected_feature_cols)),
         "feature_matrix_plot": feature_matrix_info,
         "step13_polynomial_efficiency_correction": step13_poly_correction_info,
         "tt_breakdown_panels": int(n_tt_breakdown),
@@ -3143,6 +3237,7 @@ def main() -> int:
         "rows_after_step12_transform": rows_after_step12_transform,
         "step12_transform_applied": True,
         "step12_transform": step12_transform_info,
+        "estimation_feature_space_completeness": estimation_feature_space_completeness,
         "rows_with_valid_file_timestamp": int(
             pd.to_datetime(collected.get("file_timestamp_utc"), errors="coerce", utc=True).notna().sum()
         )

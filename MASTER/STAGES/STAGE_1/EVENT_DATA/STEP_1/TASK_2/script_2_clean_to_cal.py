@@ -146,6 +146,7 @@ from MASTER.common.step1_shared import (
     normalize_tt_label,
     prune_redundant_count_metadata,
     save_metadata,
+    select_exact_minimum_vertex_cover,
     set_global_rate_from_tt_rates,
     load_step1_task_plot_catalog,
     resolve_step1_plot_options,
@@ -1336,6 +1337,8 @@ def refresh_global_count_metadata(df: pd.DataFrame, column_names: Iterable[str])
             tt_label = normalize_tt_label(tt_value)
             global_variables[f"{column_name}_{tt_label}_count"] = int(count)
 
+TASK2_SELECTED_OFFENDER_CARDINALITY_VALUES: tuple[int, ...] = tuple(range(1, 17))
+
 FILTER_METRIC_NAMES: tuple[str, ...] = (
     "clean_tt_nan_rows_removed_pct",
     "strip_zeroing_stage1_rows_affected_pct",
@@ -1391,6 +1394,10 @@ FILTER_METRIC_NAMES: tuple[str, ...] = (
     "strip_combination_filter_t_sum_dif_failed_pct",
     "strip_combination_filter_t_dif_sum_failed_pct",
     "strip_combination_filter_t_dif_dif_failed_pct",
+    *tuple(
+        f"strip_combination_filter_rows_with_{selected_count}_selected_offenders_pct"
+        for selected_count in TASK2_SELECTED_OFFENDER_CARDINALITY_VALUES
+    ),
     "q_sum_all_zero_rows_removed_pct",
     "data_purity_percentage",
     "all_components_zero_rows_removed_pct",
@@ -1847,6 +1854,14 @@ def _task2_strip_offender_metric_key(strip_key: tuple[int, int]) -> str:
     return f"strip_combination_filter_offender_count_P{plane}s{strip}"
 
 
+def _task2_selected_offender_cardinality_metric_key(selected_count: int) -> str:
+    return f"strip_combination_filter_rows_with_{selected_count}_selected_offenders"
+
+
+def _task2_selected_offender_cardinality_pct_metric_key(selected_count: int) -> str:
+    return f"{_task2_selected_offender_cardinality_metric_key(selected_count)}_pct"
+
+
 def apply_task2_strip_combination_filter(
     df_input: pd.DataFrame,
     *,
@@ -1867,7 +1882,7 @@ def apply_task2_strip_combination_filter(
 
     Distinct strip pairs are evaluated only when both strips carry non-zero
     `Q_sum`, `Q_dif`, `T_sum`, and `T_dif`. Failed strip pairs are flagged
-    first. Then, per event, only the smallest high-impact set of offending
+    first. Then, per event, the exact minimum-cardinality set of offending
     strips is zeroed so the full set of flagged strip pairs is covered.
     """
     strip_map = _task2_strip_component_columns_map(df_input)
@@ -1891,6 +1906,10 @@ def apply_task2_strip_combination_filter(
             "rows_with_multiple_offenders": 0,
             "max_failed_pairs_in_row": 0,
             "max_selected_offenders_in_row": 0,
+            "selected_offender_cardinality_counts": {
+                selected_count: 0
+                for selected_count in TASK2_SELECTED_OFFENDER_CARDINALITY_VALUES
+            },
             "selected_offender_counts": {
                 strip_key: 0 for strip_key in TASK2_STRIP_KEYS
             },
@@ -1919,6 +1938,10 @@ def apply_task2_strip_combination_filter(
         "rows_with_multiple_offenders": 0,
         "max_failed_pairs_in_row": 0,
         "max_selected_offenders_in_row": 0,
+        "selected_offender_cardinality_counts": {
+            selected_count: 0
+            for selected_count in TASK2_SELECTED_OFFENDER_CARDINALITY_VALUES
+        },
     }
     row_failed_edges: dict[int, list[tuple[tuple[int, int], tuple[int, int], float]]] = {}
     offender_hit_counts = {
@@ -2081,29 +2104,10 @@ def apply_task2_strip_combination_filter(
 
     summary["flagged_rows"] = len(row_failed_edges)
     for row_pos, edge_list in row_failed_edges.items():
-        uncovered_edges = list(edge_list)
-        selected_strips: list[tuple[int, int]] = []
-        while uncovered_edges:
-            candidate_scores: dict[tuple[int, int], tuple[int, float]] = {}
-            for strip_a, strip_b, severity in uncovered_edges:
-                count_a, score_a = candidate_scores.get(strip_a, (0, 0.0))
-                candidate_scores[strip_a] = (count_a + 1, score_a + severity)
-                count_b, score_b = candidate_scores.get(strip_b, (0, 0.0))
-                candidate_scores[strip_b] = (count_b + 1, score_b + severity)
-
-            best_strip = min(
-                candidate_scores,
-                key=lambda strip_key: (
-                    -candidate_scores[strip_key][0],
-                    -candidate_scores[strip_key][1],
-                    *_task2_strip_order_key(strip_key),
-                ),
-            )
-            selected_strips.append(best_strip)
-            uncovered_edges = [
-                edge for edge in uncovered_edges
-                if best_strip not in edge[:2]
-            ]
+        selected_strips = select_exact_minimum_vertex_cover(
+            edge_list,
+            _task2_strip_order_key,
+        )
 
         summary["max_failed_pairs_in_row"] = max(
             summary["max_failed_pairs_in_row"],
@@ -2116,6 +2120,9 @@ def apply_task2_strip_combination_filter(
         summary["selected_offender_strips"] += len(selected_strips)
         if len(selected_strips) > 1:
             summary["rows_with_multiple_offenders"] += 1
+        summary["selected_offender_cardinality_counts"][len(selected_strips)] = (
+            int(summary["selected_offender_cardinality_counts"].get(len(selected_strips), 0)) + 1
+        )
         for strip_key in selected_strips:
             strip_fail_masks[strip_key][row_pos] = True
             offender_hit_counts[strip_key] += 1
@@ -7999,6 +8006,17 @@ global_variables["strip_combination_filter_max_failed_pairs_in_row"] = int(
 global_variables["strip_combination_filter_max_selected_offenders_in_row"] = int(
     strip_combination_summary["max_selected_offenders_in_row"]
 )
+for selected_count in TASK2_SELECTED_OFFENDER_CARDINALITY_VALUES:
+    selected_rows = int(
+        strip_combination_summary["selected_offender_cardinality_counts"].get(selected_count, 0)
+    )
+    global_variables[_task2_selected_offender_cardinality_metric_key(selected_count)] = selected_rows
+    record_activity_metric(
+        _task2_selected_offender_cardinality_pct_metric_key(selected_count),
+        selected_rows,
+        strip_combination_summary["flagged_rows"],
+        label=f"flagged rows solved by selecting exactly {selected_count} offending strips",
+    )
 for strip_key, offender_count in strip_combination_summary["selected_offender_counts"].items():
     global_variables[_task2_strip_offender_metric_key(strip_key)] = int(offender_count)
 if _plot_strip_combination_filter_by_tt:

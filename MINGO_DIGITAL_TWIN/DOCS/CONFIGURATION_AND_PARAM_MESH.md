@@ -86,6 +86,7 @@ Physics:
 
 ### STEP_5 (signal observables)
 Physics:
+- `qdiff_width` (preferred constant sigma for `q_diff`)
 - `qdiff_frac`
 - `c_mm_per_ns` (optional override)
 

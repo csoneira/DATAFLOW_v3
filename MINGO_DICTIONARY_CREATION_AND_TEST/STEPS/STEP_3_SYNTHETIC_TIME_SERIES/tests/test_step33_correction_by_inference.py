@@ -14,6 +14,7 @@ sys.path.insert(0, str(_STEP33_DIR))
 from correction_by_inference import (
     _build_parameter_diagnostic_panels,
     _resolve_estimation_parameter_columns,
+    _resolve_selected_step12_feature_columns_strict,
     _resolve_tt_rate_breakdown_entries,
 )
 
@@ -101,3 +102,20 @@ def test_build_parameter_diagnostic_panels_supports_generic_parameter_names() ->
 
     panel_names = [name for name, *_rest in panels]
     assert panel_names == ["cos_n", "flux_only"]
+
+
+def test_resolve_selected_step12_feature_columns_strict_rejects_feature_drift() -> None:
+    dict_df = pd.DataFrame({"feature_a": [1.0], "feature_b": [2.0]})
+    data_df = pd.DataFrame({"feature_a": [1.5]})
+
+    try:
+        _resolve_selected_step12_feature_columns_strict(
+            ["feature_a", "feature_b"],
+            dict_df=dict_df,
+            data_df=data_df,
+        )
+    except ValueError as exc:
+        assert "missing in dataset" in str(exc)
+        assert "feature_b" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for selected-feature drift")

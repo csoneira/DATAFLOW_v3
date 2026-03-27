@@ -6,8 +6,10 @@ if str(MODULES_DIR) not in sys.path:
     sys.path.insert(0, str(MODULES_DIR))
 
 from feature_space_config import (
+    extract_ancillary_columns,
     extract_feature_dimensions,
     load_feature_space_config,
+    resolve_ancillary_feature_space_columns,
     resolve_feature_group_config_path,
     resolve_feature_space_config_path,
     resolve_feature_space_group_definitions,
@@ -94,6 +96,41 @@ def test_extract_feature_dimensions_includes_new_dimensions():
         "post_tt_two_plane_total_rate_hz",
         "post_tt_four_plane_rate_hz",
     ]
+
+
+def test_ancillary_columns_resolve_explicit_columns_and_patterns():
+    cols = [
+        "events_per_second_global_rate",
+        "eff_empirical_1",
+        "post_tt_two_plane_total_rate_hz",
+        "efficiency_vector_p1_x_bin_000_eff",
+    ]
+    cfg = {
+        "ancillary_columns": {
+            "rate": ["events_per_second_global_rate"],
+            "efficiency_scalars": ["eff_empirical_*"],
+            "post_tt_totals": ["post_tt_two_plane_total_rate_hz"],
+        }
+    }
+
+    assert extract_ancillary_columns(cfg) == [
+        "events_per_second_global_rate",
+        "eff_empirical_*",
+        "post_tt_two_plane_total_rate_hz",
+    ]
+
+    resolved, info = resolve_ancillary_feature_space_columns(
+        available_columns=cols,
+        feature_space_cfg=cfg,
+    )
+
+    assert resolved == [
+        "events_per_second_global_rate",
+        "eff_empirical_1",
+        "post_tt_two_plane_total_rate_hz",
+    ]
+    assert info["used_feature_space_config"] is True
+    assert info["unmatched_include_patterns"] == []
 
 
 def test_transform_options_override_defaults():

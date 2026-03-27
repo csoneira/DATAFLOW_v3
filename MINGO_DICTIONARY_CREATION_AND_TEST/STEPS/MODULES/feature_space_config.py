@@ -15,6 +15,25 @@ DEFAULT_FEATURE_SPACE_CONFIG_NAME = "config_step_1.2_feature_space.json"
 LEGACY_FEATURE_SPACE_CONFIG_NAME = "config_feature_space.json"
 DEFAULT_FEATURE_GROUP_CONFIG_NAME = "config_step_1.5_feature_groups.json"
 LEGACY_FEATURE_GROUP_CONFIG_NAME = "config_feature_groups.json"
+DEFAULT_FEATURE_SPACE_CONFIG_RELATIVE = (
+    Path("STEP_1_SETUP")
+    / "STEP_1_2_TRANSFORM_FEATURE_SPACE"
+    / "INPUTS"
+    / DEFAULT_FEATURE_SPACE_CONFIG_NAME
+)
+DEFAULT_FEATURE_GROUP_CONFIG_RELATIVE = (
+    Path("STEP_1_SETUP")
+    / "STEP_1_5_TUNE_DISTANCE_DEFINITION"
+    / "INPUTS"
+    / DEFAULT_FEATURE_GROUP_CONFIG_NAME
+)
+
+
+def _resolve_step_root(pipeline_dir: Path) -> Path:
+    pipeline_dir = Path(pipeline_dir)
+    if (pipeline_dir / "STEP_1_SETUP").exists():
+        return pipeline_dir
+    return pipeline_dir / "STEPS"
 
 
 def _as_bool(value: object, default: bool = False) -> bool:
@@ -57,7 +76,9 @@ def _normalize_column_list(raw: object) -> list[str]:
         return [text] if text else []
     if isinstance(raw, Mapping):
         out: list[str] = []
-        for value in raw.values():
+        for key, value in raw.items():
+            if str(key).strip().startswith("_"):
+                continue
             out.extend(_normalize_column_list(value))
         return out
     if isinstance(raw, Sequence):
@@ -69,6 +90,26 @@ def _normalize_column_list(raw: object) -> list[str]:
         return out
     text = str(raw).strip()
     return [text] if text else []
+
+
+def _extract_ancillary_columns(feature_space_cfg: Mapping[str, object] | None) -> list[str]:
+    """Return ancillary column patterns/names from feature-space config.
+
+    Ancillary columns are not intended to be used as primary feature-space
+    dimensions for estimation but may be kept as passthroughs for
+    diagnostics/plots. This helper normalizes that config entry.
+    """
+    if not isinstance(feature_space_cfg, Mapping):
+        return []
+    raw = feature_space_cfg.get("ancillary_columns")
+    # legacy key fallback
+    if raw is None:
+        raw = feature_space_cfg.get("ancillary", feature_space_cfg.get("passthrough_auxiliary"))
+    return _normalize_column_list(raw)
+
+
+def extract_ancillary_columns(feature_space_cfg: Mapping[str, object] | None) -> list[str]:
+    return _extract_ancillary_columns(feature_space_cfg)
 
 
 def _extract_keep_dimensions(feature_space_cfg: Mapping[str, object] | None) -> list[str]:
@@ -173,10 +214,14 @@ def resolve_feature_space_config_path(
         raw = step_cfg.get("feature_space_config_json")
     if raw in (None, "", "null", "None") and isinstance(config, Mapping):
         raw = config.get("feature_space_config_json")
+    step_root = _resolve_step_root(pipeline_dir)
     if raw in (None, "", "null", "None"):
-        primary = pipeline_dir / DEFAULT_FEATURE_SPACE_CONFIG_NAME
+        primary = step_root / DEFAULT_FEATURE_SPACE_CONFIG_RELATIVE
         if primary.exists():
             return primary
+        legacy_primary = pipeline_dir / DEFAULT_FEATURE_SPACE_CONFIG_NAME
+        if legacy_primary.exists():
+            return legacy_primary
         legacy = pipeline_dir / LEGACY_FEATURE_SPACE_CONFIG_NAME
         if legacy.exists():
             return legacy
@@ -198,17 +243,24 @@ def resolve_feature_group_config_path(
         raw = step_cfg.get("feature_group_config_json", step_cfg.get("feature_groups_config_json"))
     if raw in (None, "", "null", "None") and isinstance(config, Mapping):
         raw = config.get("feature_group_config_json", config.get("feature_groups_config_json"))
+    step_root = _resolve_step_root(pipeline_dir)
     if raw in (None, "", "null", "None"):
-        primary = pipeline_dir / DEFAULT_FEATURE_GROUP_CONFIG_NAME
+        primary = step_root / DEFAULT_FEATURE_GROUP_CONFIG_RELATIVE
         if primary.exists():
             return primary
+        legacy_primary = pipeline_dir / DEFAULT_FEATURE_GROUP_CONFIG_NAME
+        if legacy_primary.exists():
+            return legacy_primary
         legacy_groups = pipeline_dir / LEGACY_FEATURE_GROUP_CONFIG_NAME
         if legacy_groups.exists():
             return legacy_groups
         # Fallback to feature-space config for backward compatibility.
-        primary_space = pipeline_dir / DEFAULT_FEATURE_SPACE_CONFIG_NAME
+        primary_space = step_root / DEFAULT_FEATURE_SPACE_CONFIG_RELATIVE
         if primary_space.exists():
             return primary_space
+        legacy_primary_space = pipeline_dir / DEFAULT_FEATURE_SPACE_CONFIG_NAME
+        if legacy_primary_space.exists():
+            return legacy_primary_space
         legacy_space = pipeline_dir / LEGACY_FEATURE_SPACE_CONFIG_NAME
         if legacy_space.exists():
             return legacy_space
@@ -390,6 +442,21 @@ def resolve_selected_feature_space_columns(
             exclude_patterns=exclude_patterns,
             include_all_if_omitted=include_all_if_omitted,
         )
+        # remove ancillary columns if requested in config
+        ancillary = _extract_ancillary_columns(feature_space_cfg)
+        anc_excluded: list[str] = []
+        if ancillary:
+            for pat in ancillary:
+                if any(ch in pat for ch in ("*", "?", "[")):
+                    matches = [c for c in resolved if fnmatch.fnmatchcase(c, pat)]
+                else:
+                    matches = [c for c in resolved if c == pat]
+                for m in matches:
+                    if m not in anc_excluded:
+                        anc_excluded.append(m)
+            if anc_excluded:
+                resolved = [c for c in resolved if c not in set(anc_excluded)]
+
         info = {
             "source": "feature_space_config.selected_feature_columns",
             "used_feature_space_config": True,
@@ -399,10 +466,31 @@ def resolve_selected_feature_space_columns(
             "unmatched_include_patterns": unmatched_include,
             "unmatched_exclude_patterns": unmatched_exclude,
             "excluded_columns": excluded_cols,
+            "ancillary_patterns": ancillary,
+            "excluded_ancillary_columns": anc_excluded,
         }
         return resolved, info
 
     fallback = [str(c) for c in (fallback_columns or []) if str(c).strip()]
+    # also remove ancillary columns from fallback
+    ancillary = _extract_ancillary_columns(feature_space_cfg)
+    if ancillary and fallback:
+        filtered: list[str] = []
+        for c in fallback:
+            skip = False
+            for pat in ancillary:
+                if any(ch in pat for ch in ("*", "?", "[")):
+                    if fnmatch.fnmatchcase(c, pat):
+                        skip = True
+                        break
+                else:
+                    if c == pat:
+                        skip = True
+                        break
+            if not skip:
+                filtered.append(c)
+        fallback = filtered
+
     info = {
         "source": "fallback_columns",
         "used_feature_space_config": False,
@@ -412,8 +500,46 @@ def resolve_selected_feature_space_columns(
         "unmatched_include_patterns": [],
         "unmatched_exclude_patterns": [],
         "excluded_columns": [],
+        "ancillary_patterns": ancillary,
+        "excluded_ancillary_columns": [],
     }
     return fallback, info
+
+
+def resolve_ancillary_feature_space_columns(
+    *,
+    available_columns: Sequence[str],
+    feature_space_cfg: Mapping[str, object] | None,
+) -> tuple[list[str], dict]:
+    patterns = _extract_ancillary_columns(feature_space_cfg)
+    if not patterns:
+        return [], {
+            "source": "feature_space_config.ancillary_columns",
+            "used_feature_space_config": False,
+            "include_patterns": [],
+            "exclude_patterns": [],
+            "include_all_if_omitted": False,
+            "unmatched_include_patterns": [],
+            "unmatched_exclude_patterns": [],
+            "excluded_columns": [],
+        }
+
+    resolved, unmatched_include, unmatched_exclude, excluded_cols = _resolve_glob_patterns(
+        available_columns,
+        include_patterns=patterns,
+        exclude_patterns=[],
+        include_all_if_omitted=False,
+    )
+    return resolved, {
+        "source": "feature_space_config.ancillary_columns",
+        "used_feature_space_config": True,
+        "include_patterns": list(patterns),
+        "exclude_patterns": [],
+        "include_all_if_omitted": False,
+        "unmatched_include_patterns": unmatched_include,
+        "unmatched_exclude_patterns": unmatched_exclude,
+        "excluded_columns": excluded_cols,
+    }
 
 
 def resolve_feature_space_group_definitions(

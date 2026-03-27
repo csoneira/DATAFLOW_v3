@@ -26,7 +26,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG="${SCRIPT_DIR}/config_step_1.1_method.json"
 
 # Preferred layout: STEP_* directories directly under SCRIPT_DIR.
 # Legacy layout fallback: SCRIPT_DIR/STEPS/STEP_*.
@@ -38,6 +37,8 @@ else
     echo "ERROR: Could not locate STEP directories under ${SCRIPT_DIR} or ${SCRIPT_DIR}/STEPS" >&2
     exit 1
 fi
+
+CONFIG="${STEP_ROOT}/STEP_1_SETUP/STEP_1_1_COLLECT_DATA/INPUTS/config_step_1.1_method.json"
 
 # Step definitions: label → script
 declare -A STEP_SCRIPTS

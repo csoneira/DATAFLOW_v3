@@ -33,8 +33,12 @@ STEP_DIR = Path(__file__).resolve().parent
 SYNTHETIC_DIR = STEP_DIR.parent
 PIPELINE_DIR = SYNTHETIC_DIR.parent
 PROJECT_DIR = PIPELINE_DIR.parent
-DEFAULT_CONFIG = PROJECT_DIR / "config_step_1.1_method.json"
-CONFIG_COLUMNS_PATH = PROJECT_DIR / "config_step_2.1_columns.json"
+DEFAULT_CONFIG = (
+    PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_1_COLLECT_DATA" / "INPUTS" / "config_step_1.1_method.json"
+)
+CONFIG_COLUMNS_PATH = (
+    PIPELINE_DIR / "STEP_2_INFERENCE" / "STEP_2_1_ESTIMATE_PARAMS" / "INPUTS" / "config_step_2.1_columns.json"
+)
 
 DEFAULT_SYNTHETIC_DATASET = (
     SYNTHETIC_DIR / "STEP_3_2_SYNTHETIC_TIME_SERIES" / "OUTPUTS" / "FILES" / "synthetic_dataset.csv"
@@ -136,6 +140,11 @@ try:
         append_polynomial_corrected_efficiency_columns,
         load_efficiency_fit_models,
     )
+    from uncertainty_lut import (  # noqa: E402
+        detect_uncertainty_lut_param_names,
+        interpolate_uncertainty_columns,
+        load_uncertainty_lut_table,
+    )
 except Exception as exc:
     log.error("Failed to import efficiency_fit_utils from %s: %s", MODULES_DIR, exc)
     raise
@@ -145,6 +154,13 @@ INFERENCE_DIR = PIPELINE_DIR / "STEP_2_INFERENCE"
 if str(INFERENCE_DIR) not in sys.path:
     sys.path.insert(0, str(INFERENCE_DIR))
 try:
+    from inference_runtime import (  # noqa: E402
+        log_runtime_inverse_mapping_summary,
+        parse_column_spec as _shared_parse_column_spec,
+        require_selected_feature_columns_present as _shared_require_selected_feature_columns_present,
+        resolve_estimation_parameter_columns as _shared_resolve_estimation_parameter_columns,
+        resolve_runtime_distance_and_inverse_mapping,
+    )
     from estimate_parameters import (  # noqa: E402
         PHYSICAL_TT_RATE_LABELS,
         _append_derived_physics_feature_columns,
@@ -153,9 +169,8 @@ try:
         _derived_feature_columns as _shared_derived_feature_columns,
         _normalize_derived_physics_features,
         resolve_physical_tt_rate_columns,
-        build_step15_runtime_inverse_mapping_cfg,
         estimate_from_dataframes,
-        load_distance_definition,
+        require_explicit_columns_present_in_both_frames,
     )
     from feature_columns_config import (  # noqa: E402
         parse_explicit_feature_columns,
@@ -289,6 +304,21 @@ def _load_step12_selected_feature_columns(path: Path) -> tuple[list[str], dict]:
     info["selected_count"] = int(len(selected))
     info["selection_strategy"] = payload.get("selection_strategy", None)
     return selected, info
+
+
+def _resolve_selected_step12_feature_columns_strict(
+    selected_feature_columns: list[str],
+    *,
+    dict_df: pd.DataFrame,
+    data_df: pd.DataFrame,
+) -> list[str]:
+    return _shared_require_selected_feature_columns_present(
+        selected_feature_columns,
+        dict_df=dict_df,
+        data_df=data_df,
+        context_label="STEP 3.3",
+        right_label="dataset",
+    )
 
 
 def _load_step13_efficiency_fit(path: Path) -> tuple[dict[int, dict[str, object]], dict]:
@@ -462,24 +492,7 @@ def _is_parameter_space_column(name: str) -> bool:
 
 def _parse_column_spec(value: object) -> list[str]:
     """Parse list-like config values accepting arrays or comma-separated text."""
-    if value is None:
-        return []
-    if isinstance(value, str):
-        text = value.strip()
-        if not text or text.lower() == "auto":
-            return []
-        if text.startswith("[") and text.endswith("]"):
-            try:
-                parsed = json.loads(text)
-                if isinstance(parsed, list):
-                    return [str(x).strip() for x in parsed if str(x).strip()]
-            except json.JSONDecodeError:
-                pass
-        return [part.strip() for part in text.split(",") if part.strip()]
-    if isinstance(value, (list, tuple, set)):
-        return [str(x).strip() for x in value if str(x).strip()]
-    text = str(value).strip()
-    return [text] if text and text.lower() != "auto" else []
+    return _shared_parse_column_spec(value)
 
 
 def _resolve_parameter_space_columns_from_cfg(
@@ -552,32 +565,14 @@ def _resolve_estimation_parameter_columns(
     configured_columns: object = None,
     default_columns: list[str] | None = None,
 ) -> list[str]:
-    requested = _parse_column_spec(configured_columns)
-    if not requested and isinstance(default_columns, list):
-        requested = [str(c).strip() for c in default_columns if str(c).strip()]
-    if not requested:
-        requested = list(DEFAULT_PARAMETER_SPACE_PRIORITY)
-
-    resolved: list[str] = []
-    missing: list[str] = []
-    for col in requested:
-        if col in dictionary_df.columns and col not in resolved:
-            resolved.append(col)
-        elif col not in missing:
-            missing.append(col)
-    if missing:
-        log.warning(
-            "Ignoring estimated-parameter columns not present in the dictionary: %s",
-            missing,
-        )
-    if resolved:
-        return resolved
-
-    fallback: list[str] = []
-    for col in sorted(dictionary_df.columns):
-        if _is_parameter_space_column(col) and col not in fallback:
-            fallback.append(col)
-    return fallback
+    return _shared_resolve_estimation_parameter_columns(
+        dictionary_df=dictionary_df,
+        configured_columns=configured_columns,
+        default_columns=default_columns,
+        default_priority=DEFAULT_PARAMETER_SPACE_PRIORITY,
+        parameter_predicate=_is_parameter_space_column,
+        logger=log,
+    )
 
 
 def _find_true_parameter_column(df: pd.DataFrame, pname: str) -> str | None:
@@ -808,24 +803,25 @@ def _resolve_inference_feature_columns(
             )
             selected_from_step12, selected_info = _load_step12_selected_feature_columns(selected_path)
             dict_selected, data_selected, _, _, _ = _materialize_derived_space(dict_df, data_df)
-            selected = [
-                c
-                for c in selected_from_step12
-                if c in dict_selected.columns and c in data_selected.columns
-            ]
-            if selected:
-                log.info(
-                    "Using STEP 1.2 selected features (%d) from %s.",
-                    len(selected),
-                    selected_path,
+            try:
+                selected = _resolve_selected_step12_feature_columns_strict(
+                    selected_from_step12,
+                    dict_df=dict_selected,
+                    data_df=data_selected,
                 )
-                return dict_selected, data_selected, selected, "step12_selected"
-            log.warning(
-                "STEP 1.2 selected features unavailable/empty at %s (%s); falling back to derived mode.",
+            except ValueError as exc:
+                if selected_info.get("error"):
+                    raise ValueError(
+                        f"STEP 1.2 selected features at {selected_path} are invalid "
+                        f"({selected_info.get('error')}): {exc}"
+                    ) from exc
+                raise
+            log.info(
+                "Using STEP 1.2 selected features (%d) from %s.",
+                len(selected),
                 selected_path,
-                selected_info.get("error", "no_selected_columns"),
             )
-            mode = "derived"
+            return dict_selected, data_selected, selected, "step12_selected"
         if mode == "auto":
             return dict_df, data_df, auto_feature_cols, "auto"
         if mode == "derived":
@@ -900,153 +896,21 @@ def _resolve_inference_feature_columns(
                 )
             if selected:
                 return dict_df, data_df, selected, "config_columns"
-            if auto_feature_cols:
-                log.warning(
-                    "No features selected by config_columns catalog; falling back to auto (%d columns).",
-                    len(auto_feature_cols),
-                )
-                return dict_df, data_df, auto_feature_cols, "auto_fallback_from_config_columns"
-            raise ValueError("No features selected by config_columns catalog and no auto fallback available.")
-
-    requested = parse_explicit_feature_columns(feature_cfg)
-    selected = [
-        c for c in requested
-        if c in dict_df.columns and c in data_df.columns
-    ]
-    if not selected:
-        raise ValueError(
-            "No explicit feature columns found in dictionary/dataset intersection. "
-            f"Requested={requested!r}"
-        )
-    return dict_df, data_df, selected, "explicit"
-
-
-def _load_lut(lut_path: Path) -> pd.DataFrame:
-    """Load LUT CSV allowing comment-prefixed metadata header."""
-    return pd.read_csv(lut_path, comment="#", low_memory=False)
-
-
-def _lut_param_names(
-    lut_df: pd.DataFrame,
-    lut_meta_path: Path | None = None,
-) -> list[str]:
-    """Extract LUT parameter names from metadata JSON or LUT columns."""
-    if lut_meta_path is not None and lut_meta_path.exists():
-        try:
-            meta = json.loads(lut_meta_path.read_text(encoding="utf-8"))
-            params = meta.get("param_names", [])
-            if isinstance(params, list):
-                cleaned = [str(p) for p in params if str(p)]
-                if cleaned:
-                    return cleaned
-        except Exception as exc:
-            log.warning(
-                "Could not parse LUT metadata at %s (%s). Falling back to LUT column scan.",
-                lut_meta_path,
-                exc,
+            raise ValueError(
+                "No features selected by config_columns catalog. "
+                "Refusing to fall back to auto, because that would silently change the STEP 3.3 feature space."
             )
 
-    params: list[str] = []
-    for c in lut_df.columns:
-        if not c.startswith("sigma_"):
-            continue
-        if "_p" in c:
-            pname = c[len("sigma_"):].split("_p", 1)[0]
-        elif c.endswith("_std"):
-            pname = c[len("sigma_"):-len("_std")]
-        else:
-            continue
-        if pname and pname not in params:
-            params.append(pname)
-    return params
-
-
-def _interpolate_uncertainties(
-    query_df: pd.DataFrame,
-    lut_df: pd.DataFrame,
-    param_names: list[str],
-    quantile: float,
-) -> pd.DataFrame:
-    """Nearest-centre LUT interpolation with finite-value fallback per parameter.
-
-    For each parameter and query row, select the nearest LUT row with finite
-    sigma value for that parameter. If no finite sigma exists, return NaN.
-    """
-    if lut_df.empty or query_df.empty:
-        return pd.DataFrame(index=query_df.index)
-
-    q_label = str(int(round(float(quantile) * 100.0)))
-    centre_cols = [c for c in lut_df.columns if c.endswith("_centre")]
-    if not centre_cols:
-        return pd.DataFrame(index=query_df.index)
-
-    lut_centres_df = lut_df[centre_cols].apply(pd.to_numeric, errors="coerce")
-    lut_centres = lut_centres_df.to_numpy(dtype=float)
-    valid_centres = np.all(np.isfinite(lut_centres), axis=1)
-    if not np.any(valid_centres):
-        return pd.DataFrame(index=query_df.index)
-
-    # Dimension scales for normalized distance.
-    mins = np.nanmin(lut_centres[valid_centres], axis=0)
-    maxs = np.nanmax(lut_centres[valid_centres], axis=0)
-    ranges = maxs - mins
-    ranges[~np.isfinite(ranges) | (ranges <= 0.0)] = 1.0
-    dim_fallbacks = np.nanmedian(lut_centres[valid_centres], axis=0)
-
-    n_rows = len(query_df)
-    n_dims = len(centre_cols)
-    query_vals = np.zeros((n_rows, n_dims), dtype=float)
-    for j, cc in enumerate(centre_cols):
-        dim = cc.replace("_centre", "")
-        if dim in query_df.columns:
-            qv = pd.to_numeric(query_df[dim], errors="coerce").to_numpy(dtype=float)
-        elif dim == "n_events":
-            if "n_events" in query_df.columns:
-                qv = pd.to_numeric(query_df["n_events"], errors="coerce").to_numpy(dtype=float)
-            elif "true_n_events" in query_df.columns:
-                qv = pd.to_numeric(query_df["true_n_events"], errors="coerce").to_numpy(dtype=float)
-            else:
-                qv = np.full(n_rows, np.nan, dtype=float)
-        else:
-            qv = np.full(n_rows, np.nan, dtype=float)
-        qv = np.where(np.isfinite(qv), qv, dim_fallbacks[j])
-        query_vals[:, j] = qv
-
-    d = (lut_centres[np.newaxis, :, :] - query_vals[:, np.newaxis, :]) / ranges[np.newaxis, np.newaxis, :]
-    dist = np.sqrt(np.sum(d * d, axis=2))
-    dist = np.where(valid_centres[np.newaxis, :], dist, np.inf)
-
-    out = pd.DataFrame(index=query_df.index)
-    for pname in param_names:
-        pref_col = f"sigma_{pname}_p{q_label}"
-        sigma_col = pref_col if pref_col in lut_df.columns else None
-        if sigma_col is None:
-            alt = f"sigma_{pname}_std"
-            sigma_col = alt if alt in lut_df.columns else None
-        if sigma_col is None:
-            out[f"unc_{pname}_pct_raw"] = np.nan
-            out[f"unc_{pname}_pct"] = np.nan
-            continue
-
-        sigma_vals = pd.to_numeric(lut_df[sigma_col], errors="coerce").to_numpy(dtype=float)
-        valid_sigma = valid_centres & np.isfinite(sigma_vals)
-        if not np.any(valid_sigma):
-            out[f"unc_{pname}_pct_raw"] = np.nan
-            out[f"unc_{pname}_pct"] = np.nan
-            continue
-
-        masked_dist = np.where(valid_sigma[np.newaxis, :], dist, np.inf)
-        nearest_idx = np.argmin(masked_dist, axis=1)
-        nearest_dist = masked_dist[np.arange(n_rows), nearest_idx]
-        raw = sigma_vals[nearest_idx]
-        raw = np.where(np.isfinite(nearest_dist), raw, np.nan)
-
-        # Fallback to median finite sigma if a row has no finite nearest.
-        sigma_median = float(np.nanmedian(sigma_vals[valid_sigma]))
-        raw = np.where(np.isfinite(raw), raw, sigma_median)
-        out[f"unc_{pname}_pct_raw"] = raw
-        out[f"unc_{pname}_pct"] = np.abs(raw)
-    return out
+    requested = parse_explicit_feature_columns(feature_cfg)
+    selected = require_explicit_columns_present_in_both_frames(
+        requested,
+        left_columns=dict_df.columns,
+        right_columns=data_df.columns,
+        left_label="dictionary",
+        right_label="dataset",
+        context_label="STEP 3.3",
+    )
+    return dict_df, data_df, selected, "explicit"
 
 
 def _compute_density_center_series(
@@ -2618,42 +2482,24 @@ def main() -> int:
                 time_df[eff_col_time] = pd.to_numeric(synthetic_df.get(eff_col), errors="coerce")
 
     # ── Load STEP 1.5 distance definition ───────────────────────────
-    dd = load_distance_definition(resolved_feature_columns)
-    if dd.get("available"):
-        n_active_groups = int(
-            sum(float(v) > 0.0 for v in (dd.get("group_weights", {}) or {}).values())
+    try:
+        dd, inverse_mapping_cfg, interpolation_k = resolve_runtime_distance_and_inverse_mapping(
+            feature_columns=resolved_feature_columns,
+            inverse_mapping_cfg=inverse_mapping_cfg_requested,
+            interpolation_k=interpolation_k,
+            context_label="STEP 3.3",
+            distance_definition_path=PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_5_TUNE_DISTANCE_DEFINITION" / "OUTPUTS" / "FILES" / "distance_definition.json",
+            logger=log,
         )
-        log.info(
-            "Distance definition loaded: %s (p=%.1f, k=%d, λ=%.2g, scalar_active=%d/%d, grouped_active=%d)",
-            dd.get("selected_mode"), dd["p_norm"], dd["optimal_k"],
-            dd["optimal_lambda"],
-            int(np.sum(dd["weights"] > 0)), len(resolved_feature_columns), n_active_groups,
-        )
-        if interpolation_k is None or interpolation_k != dd["optimal_k"]:
-            log.info("Overriding interpolation_k %s → %d from distance definition.", interpolation_k, dd["optimal_k"])
-            interpolation_k = dd["optimal_k"]
-    else:
-        log.warning("Distance definition not available: %s", dd.get("reason"))
-        dd = None
-
-    inverse_mapping_cfg = build_step15_runtime_inverse_mapping_cfg(
-        inverse_mapping_cfg=inverse_mapping_cfg_requested,
-        interpolation_k=interpolation_k,
-        distance_definition=dd,
-    )
+    except ValueError as exc:
+        log.error("%s", exc)
+        return 1
     if exclude_same_file_cfg:
         log.info(
             "Ignoring step_3_3.exclude_same_file=%s; using STEP 2.1 runtime behavior (exclude_same_file=false).",
             exclude_same_file_cfg,
         )
-    log.info(
-        "STEP 1.5 runtime inverse mapping: selection=%s k=%d weighting=%s idw_power=%.1f aggregation=%s",
-        inverse_mapping_cfg["neighbor_selection"],
-        int(inverse_mapping_cfg["neighbor_count"]),
-        inverse_mapping_cfg["weighting"],
-        float(inverse_mapping_cfg["inverse_distance_power"]),
-        inverse_mapping_cfg["aggregation"],
-    )
+    log_runtime_inverse_mapping_summary(log, inverse_mapping_cfg)
 
     # ── 1) Inference over synthetic dataset ─────────────────────────
     parameter_space_cfg = cfg_33.get("parameter_space_columns", None)
@@ -2723,13 +2569,16 @@ def main() -> int:
         log.info("Correction dimensions (estimated parameters): %s", estimated_param_names)
 
     # ── 2) LUT uncertainty interpolation ────────────────────────────
-    lut_df = _load_lut(lut_path)
-    lut_params = _lut_param_names(lut_df, lut_meta_path if lut_meta_path.exists() else None)
+    lut_df = load_uncertainty_lut_table(lut_path)
+    lut_params = detect_uncertainty_lut_param_names(
+        lut_df,
+        lut_meta_path if lut_meta_path.exists() else None,
+    )
     lut_params = [p for p in lut_params if f"est_{p}" in merged.columns]
     if not lut_params:
         log.warning("No LUT parameter matches found in estimation output. Uncertainty columns will be NaN.")
 
-    unc_df = _interpolate_uncertainties(
+    unc_df = interpolate_uncertainty_columns(
         query_df=merged,
         lut_df=lut_df,
         param_names=lut_params,

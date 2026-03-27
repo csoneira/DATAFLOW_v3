@@ -39,7 +39,10 @@ if STEP_DIR.parents[1].name == "STEPS":
     PIPELINE_DIR = STEP_DIR.parents[2]
 else:
     PIPELINE_DIR = STEP_DIR.parents[1]
-DEFAULT_CONFIG = PIPELINE_DIR / "config_step_1.1_method.json"
+STEP_ROOT = PIPELINE_DIR if (PIPELINE_DIR / "STEP_1_SETUP").exists() else PIPELINE_DIR / "STEPS"
+DEFAULT_CONFIG = (
+    STEP_ROOT / "STEP_1_SETUP" / "STEP_1_1_COLLECT_DATA" / "INPUTS" / "config_step_1.1_method.json"
+)
 MODULES_DIR = PIPELINE_DIR / "STEPS" / "MODULES" if (PIPELINE_DIR / "STEPS" / "MODULES").exists() else PIPELINE_DIR / "MODULES"
 DEFAULT_INPUT = (
     STEP_DIR.parent / "STEP_1_1_COLLECT_DATA" / "OUTPUTS" / "FILES" / "collected_data.csv"
@@ -133,6 +136,7 @@ try:
     from feature_space_config import (  # noqa: E402
         extract_feature_dimensions,
         load_feature_space_config,
+        resolve_ancillary_feature_space_columns,
         resolve_feature_space_config_path,
         resolve_feature_space_transform_options,
         resolve_materialized_feature_space_columns,
@@ -140,6 +144,18 @@ try:
     )
 except Exception as exc:  # pragma: no cover - import failure is fatal
     raise RuntimeError(f"Could not import feature_space_config from {MODULES_DIR}: {exc}") from exc
+try:
+    import feature_space_transform_engine  # noqa: E402
+except Exception as exc:  # pragma: no cover - import failure is fatal
+    raise RuntimeError(f"Could not import feature_space_transform_engine from {MODULES_DIR}: {exc}") from exc
+try:
+    from step1_manifest import (  # noqa: E402
+        STEP1_FEATURE_MANIFEST_FILENAME,
+        build_step1_feature_manifest,
+        write_step1_feature_manifest,
+    )
+except Exception as exc:  # pragma: no cover - import failure is fatal
+    raise RuntimeError(f"Could not import step1_manifest from {MODULES_DIR}: {exc}") from exc
 try:
     from estimate_parameters import (  # noqa: E402
         _filter_efficiency_vector_payloads,
@@ -276,6 +292,12 @@ def _load_config(path: Path) -> dict:
         cfg = json.loads(path.read_text(encoding="utf-8"))
     else:
         log.warning("Config file not found: %s", path)
+
+    columns_path = path.with_name("config_step_1.1_columns.json")
+    if columns_path != path and columns_path.exists():
+        columns_cfg = json.loads(columns_path.read_text(encoding="utf-8"))
+        cfg = _merge_dicts(cfg, columns_cfg)
+        log.info("Loaded column-role config: %s", columns_path)
 
     plots_path = path.with_name("config_step_1.1_plots.json")
     if plots_path != path and plots_path.exists():
@@ -732,11 +754,35 @@ def _resolve_feature_space_plot_suppression_patterns(
             "feature_space_lower_triangle_suppressed_patterns",
             step_cfg.get("feature_matrix_suppressed_patterns"),
         )
+        # support simpler "prefixes" config keys that user may set
+        if raw is None:
+            prefixes = step_cfg.get(
+                "feature_space_lower_triangle_suppressed_prefixes",
+                step_cfg.get("feature_matrix_suppressed_prefixes"),
+            )
+            if prefixes is not None:
+                # convert prefixes to glob patterns
+                if isinstance(prefixes, (list, tuple)):
+                    raw = [str(p).strip() + "*" if isinstance(p, (str,)) and not any(ch in str(p) for ch in ("*", "?", "[")) else str(p) for p in prefixes]
+                else:
+                    p = str(prefixes).strip()
+                    raw = [p + "*" if p and not any(ch in p for ch in ("*", "?", "[")) else p]
     if raw is None and isinstance(config, Mapping):
         raw = config.get(
             "feature_space_lower_triangle_suppressed_patterns",
             config.get("feature_matrix_suppressed_patterns"),
         )
+        if raw is None:
+            prefixes = config.get(
+                "feature_space_lower_triangle_suppressed_prefixes",
+                config.get("feature_matrix_suppressed_prefixes"),
+            )
+            if prefixes is not None:
+                if isinstance(prefixes, (list, tuple)):
+                    raw = [str(p).strip() + "*" if isinstance(p, (str,)) and not any(ch in str(p) for ch in ("*", "?", "[")) else str(p) for p in prefixes]
+                else:
+                    p = str(prefixes).strip()
+                    raw = [p + "*" if p and not any(ch in p for ch in ("*", "?", "[")) else p]
     patterns = _normalize_requested_columns(raw)
     if not patterns:
         patterns = list(DEFAULT_FEATURE_SPACE_LOWER_TRIANGLE_SUPPRESSED_PATTERNS)
@@ -776,6 +822,7 @@ def _normalize_explicit_column_list(raw: object) -> list[str]:
 def _resolve_required_passthrough_columns(
     cfg_12: Mapping[str, object] | None,
 ) -> list[str]:
+    """Legacy STEP 1.2 explicit passthrough override."""
     if not isinstance(cfg_12, Mapping):
         return []
     raw = cfg_12.get("required_passthrough_columns")
@@ -791,6 +838,101 @@ def _resolve_required_passthrough_columns(
         seen.add(name)
         out.append(name)
     return out
+
+
+def _resolve_step11_general_columns(
+    config: Mapping[str, object] | None,
+) -> list[str]:
+    if not isinstance(config, Mapping):
+        return []
+    step11_cfg = config.get("step_1_1", {})
+    if not isinstance(step11_cfg, Mapping):
+        return []
+    raw = step11_cfg.get("general_columns", step11_cfg.get("general_info_columns"))
+    cols = _normalize_explicit_column_list(raw)
+    out: list[str] = []
+    seen: set[str] = set()
+    for col in cols:
+        name = str(col).strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
+
+
+def _load_parameter_space_payload(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _resolve_parameter_passthrough_columns(
+    path: Path,
+) -> tuple[list[str], dict[str, object]]:
+    payload = _load_parameter_space_payload(path)
+    if not payload:
+        return [], {
+            "source": str(path),
+            "exists": False,
+            "selected_columns": [],
+            "downstream_preferred_columns": [],
+        }
+
+    selected = _normalize_explicit_column_list(
+        payload.get(
+            "selected_parameter_space_columns",
+            payload.get("parameter_space_columns", []),
+        )
+    )
+    downstream_preferred = _normalize_explicit_column_list(
+        payload.get("parameter_space_columns_downstream_preferred", [])
+    )
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for col in [*selected, *downstream_preferred]:
+        name = str(col).strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        ordered.append(name)
+    return ordered, {
+        "source": str(path),
+        "exists": True,
+        "selected_columns": selected,
+        "downstream_preferred_columns": downstream_preferred,
+    }
+
+
+def _build_required_passthrough_columns(
+    *,
+    config: Mapping[str, object] | None,
+    cfg_12: Mapping[str, object] | None,
+    parameter_space_path: Path,
+) -> tuple[list[str], dict[str, object]]:
+    general_columns = _resolve_step11_general_columns(config)
+    parameter_columns, parameter_info = _resolve_parameter_passthrough_columns(parameter_space_path)
+    legacy_columns = _resolve_required_passthrough_columns(cfg_12)
+
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for col in [*general_columns, *parameter_columns, *legacy_columns]:
+        name = str(col).strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        ordered.append(name)
+
+    return ordered, {
+        "general_columns": general_columns,
+        "parameter_columns": parameter_columns,
+        "legacy_columns": legacy_columns,
+        "parameter_space_source": parameter_info,
+    }
 
 
 def _merge_materialized_with_required_columns(
@@ -814,6 +956,138 @@ def _merge_materialized_with_required_columns(
         if str(col).strip() and str(col).strip() not in available
     ]
     return merged, missing_required
+
+
+ANCILLARY_CONTEXT_PRIORITY = (
+    "dataset_index",
+    "param_hash_x",
+    "param_set_id",
+    "filename_base",
+    "task_id",
+)
+
+
+def _partition_materialized_columns(
+    *,
+    materialized_columns: Sequence[str],
+    ancillary_columns: Sequence[str],
+    required_columns: Sequence[str],
+) -> tuple[list[str], list[str], list[str], list[str]]:
+    ancillary_set = {str(col).strip() for col in ancillary_columns if str(col).strip()}
+    required_set = {str(col).strip() for col in required_columns if str(col).strip()}
+    primary_feature_columns: list[str] = []
+    ancillary_materialized_columns: list[str] = []
+    runtime_materialized_columns: list[str] = []
+
+    for raw_col in materialized_columns:
+        col = str(raw_col).strip()
+        if not col:
+            continue
+        if col in ancillary_set:
+            ancillary_materialized_columns.append(col)
+        elif col in required_set:
+            runtime_materialized_columns.append(col)
+        else:
+            primary_feature_columns.append(col)
+
+    ordered_columns = (
+        list(primary_feature_columns)
+        + list(ancillary_materialized_columns)
+        + list(runtime_materialized_columns)
+    )
+    return (
+        primary_feature_columns,
+        ancillary_materialized_columns,
+        runtime_materialized_columns,
+        ordered_columns,
+    )
+
+
+def _build_ancillary_csv_columns(
+    *,
+    available_columns: Sequence[str],
+    ancillary_columns: Sequence[str],
+) -> list[str]:
+    available = {str(col).strip() for col in available_columns if str(col).strip()}
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw_col in list(ANCILLARY_CONTEXT_PRIORITY) + [str(col) for col in ancillary_columns]:
+        col = str(raw_col).strip()
+        if not col or col in seen or col not in available:
+            continue
+        seen.add(col)
+        out.append(col)
+    return out
+
+
+def _filter_rows_with_complete_primary_feature_space(
+    df: pd.DataFrame,
+    *,
+    primary_feature_columns: Sequence[str],
+) -> tuple[pd.DataFrame, dict[str, object]]:
+    resolved_primary = [
+        str(col).strip()
+        for col in primary_feature_columns
+        if str(col).strip() and str(col).strip() in df.columns
+    ]
+    if not resolved_primary:
+        return df.reset_index(drop=True), {
+            "enabled": False,
+            "input_rows": int(len(df)),
+            "rows_kept": int(len(df)),
+            "rows_removed": 0,
+            "rows_removed_fraction": 0.0,
+            "primary_feature_columns_checked": [],
+            "primary_feature_columns_checked_count": 0,
+            "row_missing_primary_feature_count_distribution": {"0": int(len(df))},
+            "top_missing_primary_feature_columns": [],
+        }
+
+    feature_frame = (
+        df[resolved_primary]
+        .apply(pd.to_numeric, errors="coerce")
+        .replace([np.inf, -np.inf], np.nan)
+    )
+    missing_by_row = feature_frame.isna().sum(axis=1)
+    valid_mask = missing_by_row.eq(0)
+    filtered = df.loc[valid_mask].copy().reset_index(drop=True)
+
+    missing_distribution = (
+        missing_by_row.value_counts(dropna=False)
+        .sort_index()
+        .astype(int)
+        .to_dict()
+    )
+    missing_by_column = feature_frame.isna().sum(axis=0)
+    missing_by_column_df = pd.DataFrame(
+        {
+            "column": [str(col) for col in missing_by_column.index],
+            "missing_rows": [int(count) for count in missing_by_column.to_numpy()],
+        }
+    )
+    missing_by_column_df = missing_by_column_df.loc[
+        missing_by_column_df["missing_rows"] > 0
+    ].sort_values(
+        by=["missing_rows", "column"],
+        ascending=[False, True],
+        kind="mergesort",
+    )
+    top_missing_columns = missing_by_column_df.head(20).to_dict(orient="records")
+    rows_removed = int((~valid_mask).sum())
+    rows_kept = int(valid_mask.sum())
+    return filtered, {
+        "enabled": True,
+        "input_rows": int(len(df)),
+        "rows_kept": rows_kept,
+        "rows_removed": rows_removed,
+        "rows_removed_fraction": float(rows_removed / max(1, len(df))),
+        "primary_feature_columns_checked": resolved_primary,
+        "primary_feature_columns_checked_count": int(len(resolved_primary)),
+        "row_missing_primary_feature_count_distribution": {
+            str(int(k)): int(v) for k, v in missing_distribution.items()
+        },
+        "top_missing_primary_feature_columns": top_missing_columns,
+    }
 
 
 def _coerce_bool(value: object, default: bool = False) -> bool:
@@ -2632,8 +2906,10 @@ def main() -> int:
     requested_keep_patterns = _normalize_requested_columns(
         cfg_12.get("transform_keep_columns")
     )
-    required_passthrough_cols = _resolve_required_passthrough_columns(
-        cfg_12 if isinstance(cfg_12, Mapping) else {},
+    required_passthrough_cols, required_passthrough_info = _build_required_passthrough_columns(
+        config=config if isinstance(config, Mapping) else {},
+        cfg_12=cfg_12 if isinstance(cfg_12, Mapping) else {},
+        parameter_space_path=DEFAULT_STEP11_PARAMETER_SPACE,
     )
     if (
         not requested_keep_patterns
@@ -2689,6 +2965,7 @@ def main() -> int:
     log.info("Loading expanded feature-space data: %s", input_path)
     df = pd.read_csv(input_path, low_memory=False)
     df = _ensure_efficiency_columns(df)
+    input_columns = list(df.columns)
     log.info("  Rows loaded: %d, columns=%d", len(df), len(df.columns))
     if feature_space_cfg:
         log.info("Feature-space config: %s", feature_space_config_path)
@@ -2701,103 +2978,96 @@ def main() -> int:
             else:
                 log.info("  %s", entry["column_pattern"])
 
-    try:
-        min_eff_sim = float(cfg_12.get("min_simulated_efficiency", 0.5))
-    except (TypeError, ValueError):
-        min_eff_sim = 0.5
-
-    out, rate_col_by_prefix, tt_cols_by_prefix = _build_prefix_global_rate_columns(df)
-    out, added_standard_rate_cols = _ensure_standard_task_prefix_rate_columns(
-        out,
-        rate_col_by_prefix=rate_col_by_prefix,
+    out, transform_engine_info = feature_space_transform_engine.apply_feature_space_transform(
+        df,
+        cfg_12=cfg_12 if isinstance(cfg_12, Mapping) else {},
+        feature_space_cfg=feature_space_cfg if isinstance(feature_space_cfg, Mapping) else {},
+        default_tt_prefix_priority=CANONICAL_PREFIX_PRIORITY,
+        logger=log,
     )
-    canonical_source_counts: dict[str, int] = {}
-    if transform_options["derive_canonical_global_rate"]:
-        out, canonical_source_counts = _select_canonical_global_rate(
-            out,
-            rate_col_by_prefix=rate_col_by_prefix,
-            preferred_prefixes=preferred_prefixes_t,
-        )
-    empirical_selected_prefix = None
-    empirical_used_prefixes: list[str] = []
-    if transform_options["derive_empirical_efficiencies"]:
-        out, empirical_selected_prefix, empirical_used_prefixes = _compute_empirical_efficiencies(
-            out,
-            preferred_prefixes=preferred_prefixes_t,
-        )
-    helper_count = 0
-    if transform_options["derive_physics_helpers"]:
-        out, helper_count = _add_derived_physics_helper_columns(
-            out,
-        )
-    post_tt_plane_aggregates_info: dict[str, object] = {
-        "enabled": False,
-        "source_prefix": str(post_tt_aggregate_cfg.get("source_prefix", "post_tt")),
-        "columns": {},
+    transform_options = dict(transform_engine_info.get("transform_options", transform_options))
+    column_transform_cfg = dict(transform_engine_info.get("column_transform_cfg", column_transform_cfg))
+    preferred_prefixes_t = tuple(transform_engine_info.get("preferred_prefixes", preferred_prefixes_t))
+    rate_col_by_prefix = {
+        str(key): str(value)
+        for key, value in dict(transform_engine_info.get("rate_col_by_prefix", {})).items()
     }
-    if (
-        bool(transform_options.get("derive_post_tt_plane_aggregates", False))
-        and bool(post_tt_aggregate_cfg.get("enabled", True))
-    ):
-        out, post_tt_plane_aggregates_info = _add_post_tt_plane_aggregate_columns(
-            out,
-            aggregate_cfg=post_tt_aggregate_cfg,
+    tt_cols_by_prefix = {
+        str(key): [str(col) for col in value]
+        for key, value in dict(transform_engine_info.get("tt_cols_by_prefix", {})).items()
+    }
+    added_standard_rate_cols = list(transform_engine_info.get("added_standard_rate_cols", []))
+    canonical_source_counts = dict(transform_engine_info.get("canonical_source_counts", {}))
+    empirical_selected_prefix = transform_engine_info.get("empirical_selected_prefix")
+    empirical_used_prefixes = list(transform_engine_info.get("empirical_used_prefixes", []))
+    helper_count = int(transform_engine_info.get("helper_count", 0))
+    post_tt_plane_aggregates_info = dict(
+        transform_engine_info.get(
+            "post_tt_plane_aggregates_info",
+            {
+                "enabled": False,
+                "source_prefix": str(post_tt_aggregate_cfg.get("source_prefix", "post_tt")),
+                "columns": {},
+            },
         )
+    )
+    min_eff_sim = float(transform_engine_info.get("min_simulated_efficiency", cfg_12.get("min_simulated_efficiency", 0.5)))
+    max_eff_spread = float(
+        transform_engine_info.get(
+            "max_simulated_efficiency_spread",
+            cfg_12.get("max_simulated_efficiency_spread", 0.15),
+        )
+    )
+    eff_sim_cols = list(transform_engine_info.get("eff_sim_cols", []))
+    if (
+        bool(post_tt_plane_aggregates_info.get("enabled", False))
+        and bool(transform_options.get("derive_post_tt_plane_aggregates", False))
+    ):
         n_targets = int(len(post_tt_plane_aggregates_info.get("columns", {})))
         log.info(
             "Derived post_tt aggregate features: %d column(s) from prefix '%s'.",
             n_targets,
             post_tt_plane_aggregates_info.get("source_prefix", "post_tt"),
         )
-    # Filter: keep only rows where all simulated efficiencies exceed a threshold.
-    eff_sim_cols = [c for c in ("eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4") if c in out.columns]
+    rows_before_min_eff_filter = int(transform_engine_info.get("rows_before_min_eff_filter", len(out)))
+    rows_removed_min_eff_filter = int(transform_engine_info.get("rows_removed_min_eff_filter", 0))
     if eff_sim_cols and min_eff_sim > 0.0:
-        eff_vals = out[eff_sim_cols].apply(pd.to_numeric, errors="coerce")
-        keep_mask = (eff_vals >= min_eff_sim).all(axis=1)
-        n_before = len(out)
-        out = out.loc[keep_mask].reset_index(drop=True)
         log.info(
             "Simulated-efficiency filter (>= %.2f on %s): kept %d / %d rows (removed %d).",
-            min_eff_sim, eff_sim_cols, len(out), n_before, n_before - len(out),
+            min_eff_sim,
+            eff_sim_cols,
+            rows_before_min_eff_filter - rows_removed_min_eff_filter,
+            rows_before_min_eff_filter,
+            rows_removed_min_eff_filter,
         )
-
-    # Filter: keep only rows where the spread (max - min) of eff_sim is below a threshold.
-    try:
-        max_eff_spread = float(cfg_12.get("max_simulated_efficiency_spread", 0.15))
-    except (TypeError, ValueError):
-        max_eff_spread = 0.15
+    rows_before_spread_filter = int(transform_engine_info.get("rows_before_spread_filter", len(out)))
+    rows_removed_spread_filter = int(transform_engine_info.get("rows_removed_spread_filter", 0))
     if eff_sim_cols and max_eff_spread > 0.0:
-        eff_vals = out[eff_sim_cols].apply(pd.to_numeric, errors="coerce")
-        spread = eff_vals.max(axis=1) - eff_vals.min(axis=1)
-        keep_mask = spread <= max_eff_spread
-        n_before = len(out)
-        out = out.loc[keep_mask].reset_index(drop=True)
         log.info(
             "Simulated-efficiency spread filter (<= %.2f on %s): kept %d / %d rows (removed %d).",
-            max_eff_spread, eff_sim_cols, len(out), n_before, n_before - len(out),
+            max_eff_spread,
+            eff_sim_cols,
+            len(out),
+            rows_before_spread_filter,
+            rows_removed_spread_filter,
         )
 
-    efficiency_scalar_control_info = _plot_efficiency_scalar_controls(
-        out,
-        sample_max_rows=sample_max_rows,
-        random_seed=plot_seed,
-    )
-    task4_efficiency_scalar_control_info = _plot_task4_efficiency_scalar_vs_sim_controls(
-        out,
-        sample_max_rows=sample_max_rows,
-        random_seed=plot_seed,
-    )
+    grouped_feature_summary_info: dict[str, object] = {
+        "status": "pending",
+        "reason": "feature_matrix_columns_not_resolved_yet",
+    }
+    efficiency_scalar_control_info: dict[str, object] = {
+        "status": "disabled_removed_from_active_flow",
+        "reason": "replaced_by_grouped_feature_space_summary_plot",
+    }
+    task4_efficiency_scalar_control_info: dict[str, object] = {
+        "status": "pending",
+        "reason": "called_after_grouped_feature_space_summary",
+    }
 
-    column_transform_info: dict[str, object] = {"enabled": False}
+    column_transform_info = dict(transform_engine_info.get("column_transform_info", {"enabled": False}))
     if column_transform_cfg.get("enabled", False):
-        try:
-            out, column_transform_info, missing_keep = _apply_column_transformations(
-                out,
-                transform_cfg=column_transform_cfg,
-            )
-        except Exception as exc:
-            log.error("STEP 1.2 column transformations failed: %s", exc)
-            return 1
+        missing_keep = list(transform_engine_info.get("missing_keep_dimensions", []))
         if missing_keep:
             log.error(
                 "STEP 1.2 keep_dimensions missing from dataset after transformations: %s",
@@ -2825,6 +3095,11 @@ def main() -> int:
             derived_catalog_pre_curation_unmatched,
         )
 
+    ancillary_requested_cols, ancillary_requested_info = resolve_ancillary_feature_space_columns(
+        available_columns=list(out.columns),
+        feature_space_cfg=feature_space_cfg,
+    )
+
     materialized_cols_info: dict[str, object]
     unmatched_keep_patterns: list[str]
     unmatched_keep_exclude_patterns: list[str]
@@ -2835,11 +3110,17 @@ def main() -> int:
             required_columns=required_passthrough_cols,
             available_columns=list(out.columns),
         )
+        curated_cols, _ = _merge_materialized_with_required_columns(
+            materialized_columns=curated_cols,
+            required_columns=ancillary_requested_cols,
+            available_columns=list(out.columns),
+        )
         materialized_cols_info = {
             "source": "step_1_2.column_transformations.keep_dimensions_plus_runtime_passthrough",
             "include_patterns": list(column_transform_info.get("final_keep_dimensions", [])),
             "exclude_patterns": [],
             "required_passthrough_columns": list(required_passthrough_cols),
+            "ancillary_columns": list(ancillary_requested_cols),
             "final_materialized_columns": list(curated_cols),
         }
         unmatched_keep_patterns = []
@@ -2867,10 +3148,16 @@ def main() -> int:
             required_columns=required_passthrough_cols,
             available_columns=list(out.columns),
         )
+        curated_cols, _ = _merge_materialized_with_required_columns(
+            materialized_columns=curated_cols,
+            required_columns=ancillary_requested_cols,
+            available_columns=list(out.columns),
+        )
         unmatched_keep_patterns = list(materialized_cols_info.get("unmatched_include_patterns", []))
         unmatched_keep_exclude_patterns = list(materialized_cols_info.get("unmatched_exclude_patterns", []))
         materialized_cols_info = dict(materialized_cols_info)
         materialized_cols_info["required_passthrough_columns"] = list(required_passthrough_cols)
+        materialized_cols_info["ancillary_columns"] = list(ancillary_requested_cols)
         materialized_cols_info["final_materialized_columns"] = list(curated_cols)
         if unmatched_keep_patterns:
             log.warning(
@@ -2933,6 +3220,61 @@ def main() -> int:
                 " ..." if len(dropped_tt_cols) > 8 else "",
             )
 
+    ancillary_cols_resolved, ancillary_cols_info = resolve_ancillary_feature_space_columns(
+        available_columns=list(out.columns),
+        feature_space_cfg=feature_space_cfg,
+    )
+    (
+        primary_feature_columns,
+        ancillary_materialized_columns,
+        runtime_materialized_columns,
+        ordered_materialized_columns,
+    ) = _partition_materialized_columns(
+        materialized_columns=list(out.columns),
+        ancillary_columns=ancillary_cols_resolved,
+        required_columns=required_passthrough_cols,
+    )
+    if ordered_materialized_columns:
+        out = out[ordered_materialized_columns].copy()
+        materialized_cols_info = dict(materialized_cols_info)
+        materialized_cols_info["final_materialized_columns"] = list(ordered_materialized_columns)
+        if column_transform_cfg.get("enabled", False):
+            column_transform_info["final_materialized_columns"] = list(ordered_materialized_columns)
+
+    rows_before_primary_feature_filter = int(len(out))
+    out, primary_feature_space_completeness = _filter_rows_with_complete_primary_feature_space(
+        out,
+        primary_feature_columns=primary_feature_columns,
+    )
+    if int(primary_feature_space_completeness.get("rows_removed", 0)) > 0:
+        log.info(
+            "Dropped %d row(s) with incomplete primary feature space; kept %d/%d rows.",
+            int(primary_feature_space_completeness.get("rows_removed", 0)),
+            int(primary_feature_space_completeness.get("rows_kept", 0)),
+            rows_before_primary_feature_filter,
+        )
+    if out.empty:
+        log.error("No rows remain after requiring complete primary feature-space coverage.")
+        return 1
+
+    ancillary_csv = FILES_DIR / "transformed_feature_space_ancillary.csv"
+    ancillary_csv_columns = _build_ancillary_csv_columns(
+        available_columns=list(out.columns),
+        ancillary_columns=ancillary_materialized_columns,
+    )
+    ancillary_csv_written = False
+    if ancillary_materialized_columns and ancillary_csv_columns:
+        out[ancillary_csv_columns].to_csv(ancillary_csv, index=False)
+        ancillary_csv_written = True
+        log.info(
+            "Wrote STEP 1.2 ancillary columns: %s (%d rows, %d columns)",
+            ancillary_csv,
+            len(out),
+            len(ancillary_csv_columns),
+        )
+    elif ancillary_csv.exists():
+        ancillary_csv.unlink()
+
     # Persist the curated transformed table before the expensive plot phase so
     # downstream steps can consume the rebuilt feature space even when matrix
     # plotting is slow for very wide vector-only experiments.
@@ -2981,6 +3323,16 @@ def main() -> int:
             unmatched_feature_matrix_patterns,
         )
 
+    grouped_feature_summary_info = _make_grouped_feature_space_summary_plot(
+        out,
+        selected_feature_cols=feature_matrix_cols,
+    )
+    task4_efficiency_scalar_control_info = _plot_task4_efficiency_scalar_vs_sim_controls(
+        out,
+        sample_max_rows=sample_max_rows,
+        random_seed=plot_seed,
+    )
+
     _plot_parameter_scatter_matrix(
         out,
         parameter_cols=parameter_matrix_cols,
@@ -2996,10 +3348,7 @@ def main() -> int:
         if c not in (RATE_HIST_PLACEHOLDER_COL, EFF_PLACEHOLDER_COL) and c in out.columns
     ]
     if len(feature_matrix_cols_plot) < 2 or len(plotted_scalar_cols) < 2:
-        feature_matrix_grouped_fallback = _make_grouped_feature_space_summary_plot(
-            out,
-            selected_feature_cols=feature_matrix_cols,
-        )
+        feature_matrix_grouped_fallback = grouped_feature_summary_info
         grouped_feature_multicase = _make_grouped_feature_space_multicase_plot(
             out,
             selected_feature_cols=feature_matrix_cols,
@@ -3013,8 +3362,12 @@ def main() -> int:
             feature_cols=feature_matrix_cols_plot,
             sample_max_rows=sample_max_rows,
             random_seed=plot_seed,
-            rate_hist_suppressed_count=(0 if include_rate_histogram_in_feature_matrix else len(feature_matrix_rate_hist_cols)),
-            eff_suppressed_count=(0 if include_efficiency_vectors_in_feature_matrix else len(feature_matrix_eff_cols)),
+            rate_hist_suppressed_count=(
+                len(feature_matrix_rate_hist_cols) if feature_matrix_rate_hist_placeholder_added else 0
+            ),
+            eff_suppressed_count=(
+                len(feature_matrix_eff_cols) if feature_matrix_eff_placeholder_added else 0
+            ),
             max_side=feature_scatter_matrix_max_side,
         )
 
@@ -3024,6 +3377,7 @@ def main() -> int:
     summary = {
         "input_csv": str(input_path),
         "output_csv": str(out_csv),
+        "n_rows_before_primary_feature_space_filter": rows_before_primary_feature_filter,
         "n_rows": int(len(out)),
         "n_columns": int(len(out.columns)),
         "min_simulated_efficiency": float(min_eff_sim),
@@ -3061,6 +3415,10 @@ def main() -> int:
         "transform_keep_columns_requested": requested_keep_patterns,
         "transform_keep_columns_unmatched": unmatched_keep_patterns,
         "required_passthrough_columns": required_passthrough_cols,
+        "required_passthrough_general_columns": required_passthrough_info.get("general_columns", []),
+        "required_passthrough_parameter_columns": required_passthrough_info.get("parameter_columns", []),
+        "required_passthrough_legacy_columns": required_passthrough_info.get("legacy_columns", []),
+        "required_passthrough_parameter_space_source": required_passthrough_info.get("parameter_space_source", {}),
         "required_passthrough_columns_missing": missing_required_passthrough_cols,
         "materialized_columns_source": materialized_cols_info.get("source"),
         "materialized_columns_include_patterns": materialized_cols_info.get("include_patterns"),
@@ -3068,6 +3426,16 @@ def main() -> int:
         "materialized_columns_required_passthrough": materialized_cols_info.get("required_passthrough_columns"),
         "materialized_columns_final": materialized_cols_info.get("final_materialized_columns"),
         "materialized_columns_unmatched_exclude_patterns": unmatched_keep_exclude_patterns,
+        "ancillary_columns_patterns": ancillary_cols_info.get("include_patterns", []),
+        "ancillary_columns_unmatched": ancillary_cols_info.get("unmatched_include_patterns", []),
+        "ancillary_columns_resolved": ancillary_cols_resolved,
+        "ancillary_columns_materialized": ancillary_materialized_columns,
+        "ancillary_columns_csv": str(ancillary_csv) if ancillary_csv_written else None,
+        "ancillary_columns_csv_columns": ancillary_csv_columns,
+        "primary_feature_space_completeness": primary_feature_space_completeness,
+        "primary_feature_columns": primary_feature_columns,
+        "primary_feature_count": int(len(primary_feature_columns)),
+        "runtime_materialized_columns": runtime_materialized_columns,
         "parameter_matrix_columns_used": parameter_matrix_cols,
         "parameter_matrix_columns_unmatched": unmatched_matrix_patterns,
         "parameter_matrix_columns_source": parameter_matrix_source,
@@ -3090,6 +3458,7 @@ def main() -> int:
         "feature_matrix_rate_histogram_placeholder_added": bool(feature_matrix_rate_hist_placeholder_added),
         "feature_matrix_efficiency_vector_placeholder_added": bool(feature_matrix_eff_placeholder_added),
         "feature_matrix_plot_status": feature_matrix_plot_status,
+        "grouped_feature_space_summary": grouped_feature_summary_info,
         "feature_matrix_grouped_fallback": feature_matrix_grouped_fallback,
         "grouped_feature_multicase": grouped_feature_multicase,
         "parameter_matrix_plot_sample_max_rows": int(sample_max_rows),
@@ -3100,8 +3469,29 @@ def main() -> int:
         "curated_feature_count": int(len(curated_cols)),
     }
     summary_path = FILES_DIR / "transform_summary.json"
+    manifest_path = FILES_DIR / STEP1_FEATURE_MANIFEST_FILENAME
+    manifest_payload = build_step1_feature_manifest(
+        input_csv=str(input_path),
+        output_csv=str(out_csv),
+        ancillary_csv=(str(ancillary_csv) if ancillary_csv_written else None),
+        feature_space_config_path=str(feature_space_config_path),
+        feature_space_config_loaded=bool(feature_space_cfg),
+        input_columns=input_columns,
+        output_columns=list(out.columns),
+        primary_feature_columns=primary_feature_columns,
+        ancillary_columns=ancillary_materialized_columns,
+        general_passthrough_columns=required_passthrough_info.get("general_columns", []),
+        parameter_passthrough_columns=required_passthrough_info.get("parameter_columns", []),
+        legacy_passthrough_columns=required_passthrough_info.get("legacy_columns", []),
+        declared_feature_dimensions=extract_feature_dimensions(feature_space_cfg),
+        declared_new_dimensions=list(column_transform_info.get("new_dimensions", {}).keys()),
+    )
+    write_step1_feature_manifest(manifest_path, manifest_payload)
+    summary["feature_space_manifest_json"] = str(manifest_path)
+    summary["feature_space_manifest_counts"] = manifest_payload.get("counts", {})
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     log.info("Wrote transform summary: %s", summary_path)
+    log.info("Wrote feature-space manifest: %s", manifest_path)
     return 0
 
 

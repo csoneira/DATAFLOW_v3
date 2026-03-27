@@ -8,9 +8,13 @@ status: active
 # Inference Dictionary Documentation
 
 ## Table of contents
+- [Core method](#core-method)
 - [Roadmap and backlog](#roadmap-and-backlog)
 - [Troubleshooting and bias notes](#troubleshooting-and-bias-notes)
 - [Scope](#scope)
+
+## Core method
+- [CORE_METHOD.md](CORE_METHOD.md)
 
 ## Roadmap and backlog
 - [ROADMAP_AND_BACKLOG.md](ROADMAP_AND_BACKLOG.md)

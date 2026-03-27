@@ -16,6 +16,7 @@ Notes: Keep behavior configuration-driven and reproducible.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import logging
 from pathlib import Path
@@ -43,8 +44,12 @@ if (PIPELINE_DIR / "STEP_1_SETUP").exists() and (PIPELINE_DIR / "STEP_2_INFERENC
 else:
     STEP_ROOT = PIPELINE_DIR / "STEPS"
 SYNTHETIC_DIR = STEP_DIR.parent      # STEP_3_SYNTHETIC_TIME_SERIES
-DEFAULT_CONFIG = PIPELINE_DIR / "config_step_1.1_method.json"
-CONFIG_COLUMNS_PATH = PIPELINE_DIR / "config_step_2.1_columns.json"
+DEFAULT_CONFIG = (
+    STEP_ROOT / "STEP_1_SETUP" / "STEP_1_1_COLLECT_DATA" / "INPUTS" / "config_step_1.1_method.json"
+)
+CONFIG_COLUMNS_PATH = (
+    STEP_ROOT / "STEP_2_INFERENCE" / "STEP_2_1_ESTIMATE_PARAMS" / "INPUTS" / "config_step_2.1_columns.json"
+)
 
 DEFAULT_TIME_SERIES = (
     SYNTHETIC_DIR / "STEP_3_1_TIME_SERIES_CREATION" / "OUTPUTS" / "FILES" / "time_series.csv"
@@ -57,6 +62,9 @@ DEFAULT_DICTIONARY = (
 )
 DEFAULT_DATASET_TEMPLATE = (
     STEP_ROOT / "STEP_1_SETUP" / "STEP_1_4_ENSURE_CONTINUITY_DICTIONARY" / "OUTPUTS" / "FILES" / "dataset.csv"
+)
+DEFAULT_STEP14_SELECTED_FEATURES = (
+    STEP_ROOT / "STEP_1_SETUP" / "STEP_1_4_ENSURE_CONTINUITY_DICTIONARY" / "OUTPUTS" / "FILES" / "selected_feature_columns.json"
 )
 DEFAULT_PARAMETER_SPACE_SPEC = (
     STEP_ROOT
@@ -84,17 +92,33 @@ except Exception as exc:
         f"Failed to import STEP 2 inference helpers from {STEP2_INFERENCE_DIR}: {exc}"
     ) from exc
 
+STEP12_TRANSFORM_DIR = STEP_ROOT / "STEP_1_SETUP" / "STEP_1_2_TRANSFORM_FEATURE_SPACE"
+sys.path.insert(0, str(STEP12_TRANSFORM_DIR))
+try:
+    from transform_feature_space import (
+        EFF_PLACEHOLDER_COL as STEP12_EFF_PLACEHOLDER_COL,
+        EFF_PLACEHOLDER_LABEL as STEP12_EFF_PLACEHOLDER_LABEL,
+        RATE_HIST_PLACEHOLDER_COL as STEP12_RATE_HIST_PLACEHOLDER_COL,
+        RATE_HIST_PLACEHOLDER_LABEL as STEP12_RATE_HIST_PLACEHOLDER_LABEL,
+        _resolve_feature_space_plot_suppression_patterns as _step12_resolve_feature_space_plot_suppression_patterns,
+    )
+except Exception as exc:
+    raise RuntimeError(
+        f"Failed to import STEP 1.2 plotting helpers from {STEP12_TRANSFORM_DIR}: {exc}"
+    ) from exc
+
 _FIGURE_COUNTER = 0
 FIGURE_STEP_PREFIX = "3_2"
 
 
-def _save_figure(fig: plt.Figure, path: Path, **kwargs) -> None:
+def _save_figure(fig: plt.Figure, path: Path, **kwargs) -> Path:
     """Save figure with a per-script sequential numeric prefix."""
     global _FIGURE_COUNTER
     _FIGURE_COUNTER += 1
     out_path = Path(path)
     out_path = out_path.with_name(f"{FIGURE_STEP_PREFIX}_{_FIGURE_COUNTER}_{out_path.name}")
     fig.savefig(out_path, **kwargs)
+    return out_path
 
 
 _PLOT_EXTENSIONS = {
@@ -125,7 +149,7 @@ def _clear_plots_dir() -> None:
     log.info("Cleared %d plot file(s) from %s", removed, PLOTS_DIR)
 
 logging.basicConfig(
-    format="[%(levelname)s] STEP_3.2 — %(message)s", level=logging.INFO
+    format="[%(levelname)s] STEP_3.2 — %(message)s", level=logging.INFO, force=True
 )
 log = logging.getLogger("STEP_3.2")
 
@@ -143,6 +167,9 @@ CANONICAL_HIST_RATE_MEAN_CONSISTENCY_BLEND = 0.0
 
 TT_RATE_COLUMN_RE = re.compile(r"^(?P<prefix>[A-Za-z0-9]+)_tt_(?P<trigger>[0-9]+)_rate_hz$")
 HIST_RATE_COLUMN_RE = re.compile(r"^events_per_second_(?P<bin>\d+)_rate_hz$")
+EFF_VECTOR_COL_RE = re.compile(
+    r"^efficiency_vector_p(?P<plane>[1-4])_(?P<axis>x|y|theta)_bin_(?P<bin>\d+)_eff$"
+)
 
 
 STEP32_WEIGHTING_KEYS = {
@@ -2447,6 +2474,442 @@ def _plot_time_series_overview(
     plt.close(fig)
 
 
+def _load_selected_feature_columns(path: Path) -> list[str]:
+    """Load ordered STEP 1.4 feature columns from JSON."""
+    if not path.exists():
+        log.warning("Selected feature-columns JSON not found: %s", path)
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        log.warning("Could not parse selected feature-columns JSON %s: %s", path, exc)
+        return []
+
+    if isinstance(raw, dict):
+        values = raw.get("selected_feature_columns", [])
+    elif isinstance(raw, list):
+        values = raw
+    else:
+        values = []
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        text = str(item).strip()
+        if not text or text in seen:
+            continue
+        out.append(text)
+        seen.add(text)
+    return out
+
+
+def _feature_placeholder_label(col: str) -> str | None:
+    if col == STEP12_RATE_HIST_PLACEHOLDER_COL:
+        return STEP12_RATE_HIST_PLACEHOLDER_LABEL
+    if col == STEP12_EFF_PLACEHOLDER_COL:
+        return STEP12_EFF_PLACEHOLDER_LABEL
+    return None
+
+
+def _feature_placeholder_message(
+    *,
+    x_col: str,
+    y_col: str,
+    rate_hist_count: int,
+    efficiency_vector_count: int,
+) -> str:
+    has_rate = x_col == STEP12_RATE_HIST_PLACEHOLDER_COL or y_col == STEP12_RATE_HIST_PLACEHOLDER_COL
+    has_eff = x_col == STEP12_EFF_PLACEHOLDER_COL or y_col == STEP12_EFF_PLACEHOLDER_COL
+    if has_rate and has_eff:
+        return (
+            "Suppressed grouped blocks\n"
+            f"(rate histogram: {rate_hist_count}, efficiency vectors: {efficiency_vector_count})"
+        )
+    if has_rate:
+        if rate_hist_count > 0:
+            return f"Rate-histogram block suppressed\n({rate_hist_count} columns)"
+        return "Rate-histogram block\nsuppressed for display"
+    if has_eff:
+        if efficiency_vector_count > 0:
+            return f"Efficiency-vector block suppressed\n({efficiency_vector_count} columns)"
+        return "Efficiency-vector block\nsuppressed for display"
+    return "Suppressed grouped block"
+
+
+def _dedupe_preserve_order(values: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        text = str(item).strip()
+        if not text or text in seen:
+            continue
+        out.append(text)
+        seen.add(text)
+    return out
+
+
+def _pick_evenly_spaced_columns(columns: list[str], count: int) -> list[str]:
+    items = [str(col).strip() for col in columns if str(col).strip()]
+    if count <= 0 or not items:
+        return []
+    if len(items) <= count:
+        return items
+    picks = np.linspace(0, len(items) - 1, num=count)
+    indices = sorted({int(round(value)) for value in picks})
+    return [items[idx] for idx in indices]
+
+
+def _ordered_histogram_columns(columns: list[str]) -> list[str]:
+    pairs: list[tuple[int, str]] = []
+    for col in columns:
+        match = HIST_RATE_COLUMN_RE.match(str(col))
+        if match is None:
+            continue
+        pairs.append((int(match.group("bin")), str(col)))
+    return [col for _, col in sorted(pairs)]
+
+
+def _representative_efficiency_vector_columns(
+    columns: list[str],
+    *,
+    max_groups: int,
+) -> list[str]:
+    grouped: dict[tuple[int, str], list[tuple[int, str]]] = {}
+    for col in columns:
+        match = EFF_VECTOR_COL_RE.match(str(col))
+        if match is None:
+            continue
+        key = (int(match.group("plane")), str(match.group("axis")))
+        grouped.setdefault(key, []).append((int(match.group("bin")), str(col)))
+
+    representatives: list[str] = []
+    ordered_keys = sorted(grouped)
+    if max_groups > 0 and len(ordered_keys) > max_groups:
+        keep_keys = _pick_evenly_spaced_columns(
+            [f"{plane}:{axis}" for plane, axis in ordered_keys],
+            max_groups,
+        )
+        keep_key_set = {
+            tuple(item.split(":", 1)) for item in keep_keys
+        }
+        ordered_keys = [
+            key for key in ordered_keys
+            if (str(key[0]), str(key[1])) in keep_key_set
+        ]
+
+    for key in ordered_keys:
+        bins = sorted(grouped[key])
+        if not bins:
+            continue
+        representatives.append(bins[len(bins) // 2][1])
+    return representatives
+
+
+def _feature_space_axis_label(col: str) -> str:
+    placeholder = _feature_placeholder_label(str(col))
+    if placeholder is not None:
+        return placeholder
+    text = str(col)
+    hist_match = HIST_RATE_COLUMN_RE.match(text)
+    if hist_match is not None:
+        return f"rate bin {int(hist_match.group('bin'))}"
+    eff_match = EFF_VECTOR_COL_RE.match(text)
+    if eff_match is not None:
+        return (
+            f"eff p{eff_match.group('plane')} "
+            f"{eff_match.group('axis')} "
+            f"bin {int(eff_match.group('bin'))}"
+        )
+    pretty_map = {
+        "post_tt_two_plane_total_rate_hz": "post_tt 2-plane",
+        "post_tt_three_plane_total_rate_hz": "post_tt 3-plane",
+        "post_tt_four_plane_rate_hz": "post_tt 4-plane",
+    }
+    return pretty_map.get(text, text)
+
+
+def _resolve_feature_space_plot_columns(
+    dictionary_df: pd.DataFrame,
+    synthetic_df: pd.DataFrame,
+    *,
+    selected_features_path: Path,
+    suppressed_patterns: list[str] | None = None,
+    histogram_sample_count: int = 3,
+    max_efficiency_groups: int = 6,
+    max_other_columns: int = 2,
+) -> dict[str, object]:
+    selected_feature_cols = _load_selected_feature_columns(selected_features_path)
+    common_cols = set(dictionary_df.columns) & set(synthetic_df.columns)
+    available_selected = [col for col in selected_feature_cols if col in common_cols]
+
+    hist_cols = _ordered_histogram_columns(available_selected)
+    eff_cols = [
+        col for col in available_selected
+        if EFF_VECTOR_COL_RE.match(str(col)) is not None
+    ]
+    other_selected = [
+        col for col in available_selected
+        if col not in set(hist_cols) and col not in set(eff_cols)
+    ]
+
+    hist_representatives = _pick_evenly_spaced_columns(hist_cols, histogram_sample_count)
+    eff_representatives = _representative_efficiency_vector_columns(
+        eff_cols,
+        max_groups=max_efficiency_groups,
+    )
+    patterns = [str(pattern).strip() for pattern in (suppressed_patterns or []) if str(pattern).strip()]
+    suppress_hist = any(
+        fnmatch.fnmatchcase(col, pattern)
+        for pattern in patterns
+        for col in hist_cols
+    )
+    suppress_eff = any(
+        fnmatch.fnmatchcase(col, pattern)
+        for pattern in patterns
+        for col in eff_cols
+    )
+
+    post_tt_candidates = [
+        "post_tt_two_plane_total_rate_hz",
+        "post_tt_three_plane_total_rate_hz",
+        "post_tt_four_plane_rate_hz",
+    ]
+    # Only show these totals when they are part of the selected feature space.
+    # They are ancillary in the current STEP 1.2 config and should not be
+    # injected into the feature-space plot just because they exist in the table.
+    post_tt_cols = [col for col in post_tt_candidates if col in available_selected]
+
+    # Keep a compact feature-space slice that still shows the grouped curve.
+    columns_used = _dedupe_preserve_order(
+        post_tt_cols
+        + ([STEP12_RATE_HIST_PLACEHOLDER_COL] if suppress_hist and hist_cols else hist_representatives)
+        + ([STEP12_EFF_PLACEHOLDER_COL] if suppress_eff and eff_cols else eff_representatives)
+        + other_selected[:max_other_columns]
+    )
+    display_labels = {col: _feature_space_axis_label(col) for col in columns_used}
+
+    return {
+        "selected_features_path": str(selected_features_path),
+        "feature_space_lower_triangle_suppressed_patterns": patterns,
+        "selected_features_requested_count": int(len(selected_feature_cols)),
+        "selected_features_available_count": int(len(available_selected)),
+        "histogram_columns_available_count": int(len(hist_cols)),
+        "histogram_columns_representative": hist_representatives,
+        "rate_hist_block_suppressed": bool(suppress_hist and hist_cols),
+        "efficiency_vector_columns_available_count": int(len(eff_cols)),
+        "efficiency_vector_columns_representative": eff_representatives,
+        "efficiency_vector_block_suppressed": bool(suppress_eff and eff_cols),
+        "post_tt_columns_included": post_tt_cols,
+        "other_selected_columns_included": other_selected[:max_other_columns],
+        "columns_used": columns_used,
+        "column_display_labels": display_labels,
+    }
+
+
+def _plot_feature_space_lower_triangle(
+    basis_df: pd.DataFrame,
+    synthetic_df: pd.DataFrame,
+    *,
+    feature_cols: list[str],
+    feature_labels: dict[str, str],
+    rate_hist_count: int,
+    efficiency_vector_count: int,
+    path: Path,
+) -> Path | None:
+    """Plot a compact feature-space lower triangle: dictionary cloud + synthetic curve."""
+    n = len(feature_cols)
+    if n <= 0:
+        return None
+
+    basis_plot_df = basis_df
+    if len(basis_plot_df) > 3500:
+        basis_plot_df = basis_plot_df.sample(n=3500, random_state=0)
+
+    plot_data_cols = [
+        col for col in feature_cols
+        if _feature_placeholder_label(col) is None
+    ]
+    basis_numeric = {
+        col: pd.to_numeric(basis_plot_df[col], errors="coerce")
+        for col in plot_data_cols
+        if col in basis_plot_df.columns
+    }
+    synthetic_numeric = {
+        col: pd.to_numeric(synthetic_df[col], errors="coerce")
+        for col in plot_data_cols
+        if col in synthetic_df.columns
+    }
+    feature_axis_limits: dict[str, tuple[float, float]] = {}
+    for col in plot_data_cols:
+        combined = pd.concat([basis_numeric[col], synthetic_numeric[col]], ignore_index=True).to_numpy(dtype=float)
+        finite = combined[np.isfinite(combined)]
+        if finite.size == 0:
+            continue
+        lower = float(np.min(finite))
+        upper = float(np.max(finite))
+        if np.isclose(lower, upper):
+            pad = max(abs(lower) * 0.05, 1e-6)
+            feature_axis_limits[col] = (lower - pad, upper + pad)
+        else:
+            feature_axis_limits[col] = (lower, upper)
+
+    synthetic_order = np.arange(len(synthetic_df), dtype=int)
+    if "elapsed_hours" in synthetic_df.columns:
+        elapsed = pd.to_numeric(synthetic_df.get("elapsed_hours"), errors="coerce").to_numpy(dtype=float)
+        if np.isfinite(elapsed).any():
+            finite_elapsed = np.where(np.isfinite(elapsed), elapsed, np.inf)
+            synthetic_order = np.argsort(finite_elapsed, kind="mergesort")
+
+    fig, axes = plt.subplots(n, n, figsize=(2.8 * n, 2.8 * n), squeeze=False)
+
+    for i, y_col in enumerate(feature_cols):
+        for j, x_col in enumerate(feature_cols):
+            ax = axes[i, j]
+            if i < j:
+                ax.axis("off")
+                continue
+            x_label = _feature_placeholder_label(x_col)
+            y_label = _feature_placeholder_label(y_col)
+            x_is_placeholder = x_label is not None
+            y_is_placeholder = y_label is not None
+
+            if i == j:
+                if x_is_placeholder:
+                    ax.set_facecolor("#F2F2F2")
+                    ax.text(
+                        0.5,
+                        0.5,
+                        _feature_placeholder_message(
+                            x_col=x_col,
+                            y_col=y_col,
+                            rate_hist_count=rate_hist_count,
+                            efficiency_vector_count=efficiency_vector_count,
+                        ),
+                        ha="center",
+                        va="center",
+                        fontsize=5.8,
+                        transform=ax.transAxes,
+                    )
+                    if i == n - 1:
+                        ax.set_xlabel(x_label, fontsize=5.3)
+                    else:
+                        ax.set_xticklabels([])
+                    if j == 0:
+                        ax.set_ylabel("count", fontsize=5.3)
+                    else:
+                        ax.set_yticklabels([])
+                    ax.tick_params(labelsize=4.8, length=1.5)
+                    ax.grid(True, alpha=0.12)
+                    continue
+
+                bx = basis_numeric[x_col]
+                sx = synthetic_numeric[x_col]
+                basis_series = bx.dropna()
+                synthetic_series = sx.dropna()
+                if not basis_series.empty:
+                    ax.hist(basis_series, bins=30, color="#7a7a7a", alpha=0.33, label="Dictionary")
+                if not synthetic_series.empty:
+                    ax.hist(
+                        synthetic_series,
+                        bins=30,
+                        histtype="step",
+                        color="#d62728",
+                        linewidth=1.5,
+                        label="Synthetic curve",
+                    )
+                if i == 0 and j == 0:
+                    ax.legend(loc="best", fontsize=7, framealpha=0.92, facecolor="white")
+                ax.set_ylabel("count")
+            else:
+                if x_is_placeholder or y_is_placeholder:
+                    ax.set_facecolor("#F7F7F7")
+                    if not x_is_placeholder:
+                        x_limits = feature_axis_limits.get(x_col)
+                        if x_limits is not None:
+                            ax.set_xlim(x_limits)
+                    if not y_is_placeholder:
+                        y_limits = feature_axis_limits.get(y_col)
+                        if y_limits is not None:
+                            ax.set_ylim(y_limits)
+                    if i == n - 1:
+                        ax.set_xlabel(x_label or feature_labels.get(x_col, x_col), fontsize=5.3)
+                    else:
+                        ax.set_xticklabels([])
+                    if j == 0:
+                        ax.set_ylabel(y_label or feature_labels.get(y_col, y_col), fontsize=5.3)
+                    else:
+                        ax.set_yticklabels([])
+                    ax.tick_params(labelsize=4.8, length=1.5)
+                    ax.grid(True, alpha=0.10)
+                    continue
+
+                bx = basis_numeric[x_col]
+                by = basis_numeric[y_col]
+                sx = synthetic_numeric[x_col]
+                sy = synthetic_numeric[y_col]
+                basis_mask = bx.notna() & by.notna()
+                if basis_mask.any():
+                    ax.scatter(
+                        bx[basis_mask],
+                        by[basis_mask],
+                        s=6,
+                        color="#7a7a7a",
+                        alpha=0.14,
+                        linewidths=0,
+                        zorder=1,
+                    )
+
+                sx_ordered = sx.iloc[synthetic_order]
+                sy_ordered = sy.iloc[synthetic_order]
+                synthetic_mask = sx_ordered.notna() & sy_ordered.notna()
+                if synthetic_mask.any():
+                    ax.plot(
+                        sx_ordered[synthetic_mask],
+                        sy_ordered[synthetic_mask],
+                        color="#d62728",
+                        lw=1.1,
+                        alpha=0.9,
+                        zorder=3,
+                    )
+                    ax.scatter(
+                        sx_ordered[synthetic_mask],
+                        sy_ordered[synthetic_mask],
+                        s=8,
+                        color="#d62728",
+                        alpha=0.45,
+                        linewidths=0,
+                        zorder=4,
+                    )
+
+            if not x_is_placeholder:
+                x_limits = feature_axis_limits.get(x_col)
+                if x_limits is not None:
+                    ax.set_xlim(x_limits)
+            if i > j and not y_is_placeholder:
+                y_limits = feature_axis_limits.get(y_col)
+                if y_limits is not None:
+                    ax.set_ylim(y_limits)
+            ax.grid(True, alpha=0.20)
+            if i == n - 1:
+                ax.set_xlabel(x_label or feature_labels.get(x_col, x_col))
+            else:
+                ax.set_xticklabels([])
+            if j == 0 and i > 0:
+                ax.set_ylabel(y_label or feature_labels.get(y_col, y_col))
+            elif j != 0:
+                ax.set_yticklabels([])
+            ax.tick_params(labelsize=4.8, length=1.5)
+
+    fig.suptitle(
+        "STEP 3.2 feature-space lower triangle: dictionary cloud + synthetic curve",
+        fontsize=12,
+    )
+    fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.98])
+    out_path = _save_figure(fig, path, dpi=170)
+    plt.close(fig)
+    return out_path
+
+
 def _plot_parameter_space_lower_triangle(
     basis_df: pd.DataFrame,
     time_df: pd.DataFrame,
@@ -2661,6 +3124,31 @@ def main() -> int:
         template_path = _resolve_input_path(str(cfg_32.get("dataset_template_csv")))
     else:
         template_path = DEFAULT_DATASET_TEMPLATE
+
+    if cfg_32.get("selected_feature_columns_json"):
+        selected_features_path = _resolve_input_path(str(cfg_32.get("selected_feature_columns_json")))
+    else:
+        selected_features_path = DEFAULT_STEP14_SELECTED_FEATURES
+
+    feature_plot_histogram_sample_count = _safe_int(
+        cfg_32.get("feature_space_plot_histogram_sample_count", 3),
+        3,
+        minimum=1,
+    )
+    feature_plot_max_efficiency_groups = _safe_int(
+        cfg_32.get("feature_space_plot_max_efficiency_groups", 6),
+        6,
+        minimum=1,
+    )
+    feature_plot_max_other_columns = _safe_int(
+        cfg_32.get("feature_space_plot_max_other_columns", 2),
+        2,
+        minimum=0,
+    )
+    feature_space_plot_suppressed_patterns = _step12_resolve_feature_space_plot_suppression_patterns(
+        config,
+        step_cfg=cfg_32,
+    )
 
     required_paths = [
         ("Time series", time_series_path),
@@ -3401,6 +3889,41 @@ def main() -> int:
     )
     log.info("Wrote plot: %s", out_plot_events_hist)
 
+    feature_space_plot_info = _resolve_feature_space_plot_columns(
+        dictionary_work,
+        synthetic_df,
+        selected_features_path=selected_features_path,
+        suppressed_patterns=feature_space_plot_suppressed_patterns,
+        histogram_sample_count=feature_plot_histogram_sample_count,
+        max_efficiency_groups=feature_plot_max_efficiency_groups,
+        max_other_columns=feature_plot_max_other_columns,
+    )
+    out_plot_feature_space = PLOTS_DIR / "feature_space_lower_triangle.png"
+    if feature_space_plot_info["columns_used"]:
+        saved_feature_space_plot_path = _plot_feature_space_lower_triangle(
+            basis_df=dictionary_work,
+            synthetic_df=synthetic_df,
+            feature_cols=list(feature_space_plot_info["columns_used"]),
+            feature_labels=dict(feature_space_plot_info["column_display_labels"]),
+            rate_hist_count=int(feature_space_plot_info["histogram_columns_available_count"]),
+            efficiency_vector_count=int(feature_space_plot_info["efficiency_vector_columns_available_count"]),
+            path=out_plot_feature_space,
+        )
+        feature_space_plot_info["path"] = str(saved_feature_space_plot_path or out_plot_feature_space)
+        feature_space_plot_info["status"] = "ok"
+        log.info(
+            "Wrote plot: %s (feature-space representative columns=%d)",
+            feature_space_plot_info["path"],
+            int(len(feature_space_plot_info["columns_used"])),
+        )
+    else:
+        feature_space_plot_info["path"] = str(out_plot_feature_space)
+        feature_space_plot_info["status"] = "skipped_no_common_feature_columns"
+        log.warning(
+            "Skipped STEP 3.2 feature-space lower triangle: no common selected feature columns found "
+            "between dictionary and synthetic dataset."
+        )
+
     # Summary
     effective_n = 1.0 / np.sum(weights * weights, axis=1)
     summary = {
@@ -3415,6 +3938,7 @@ def main() -> int:
         "parameter_space_alias_columns_added_complete_curve": complete_alias_cols,
         "basis_source": basis_source,
         "basis_csv": str(basis_path),
+        "selected_feature_columns_json": str(selected_features_path),
         "flux_column_used": flux_col,
         "efficiency_column_requested": eff_pref,
         "efficiency_column_used_time": eff_col_time,
@@ -3523,6 +4047,7 @@ def main() -> int:
             float(pd.to_numeric(synthetic_df.get("events_per_second_global_rate"), errors="coerce").min()),
             float(pd.to_numeric(synthetic_df.get("events_per_second_global_rate"), errors="coerce").max()),
         ],
+        "feature_space_lower_triangle_plot": feature_space_plot_info,
         "weighted_helper_rebuild": helper_rebuild_info,
         "rate_consistency_constraints": rate_consistency_info,
         "diagnostic_center_series_csv": str(out_center),

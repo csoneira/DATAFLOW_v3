@@ -10,6 +10,7 @@ runtime role, based on the current scripts in `STEPS/`.
   `STEPS/STEP_1_SETUP/STEP_1_1_COLLECT_DATA/collect_data.py`
 - Main inputs:
   station/task metadata CSVs + simulation-parameter CSV
+  - `STEP_1_1_COLLECT_DATA/INPUTS/config_step_1.1_columns.json` for explicit `parameter_columns` and `general_columns`
 - Main outputs:
   - `.../STEP_1_1_COLLECT_DATA/OUTPUTS/FILES/collected_data.csv`
   - `.../STEP_1_1_COLLECT_DATA/OUTPUTS/FILES/parameter_space_columns.json`
@@ -24,21 +25,27 @@ runtime role, based on the current scripts in `STEPS/`.
   - STEP 1.1 `collected_data.csv`
 - Main outputs:
   - `.../STEP_1_2_TRANSFORM_FEATURE_SPACE/OUTPUTS/FILES/transformed_feature_space.csv`
+  - `.../STEP_1_2_TRANSFORM_FEATURE_SPACE/OUTPUTS/FILES/feature_space_manifest.json`
   - step summary JSON + feature-space diagnostic plots
 - Role:
-  generate the model feature space used for nearest-neighbor inverse mapping.
+  generate the model feature space used for nearest-neighbor inverse mapping,
+  using only the STEP 1.2 feature-space config for kept/new/ancillary columns
+  and reusing STEP 1.1 column roles for passthrough bookkeeping. The emitted
+  manifest is the authoritative downstream column partition.
 
 ### STEP 1.3 - Build dictionary + holdout dataset
 - Script:
   `STEPS/STEP_1_SETUP/STEP_1_3_BUILD_DICTIONARY/build_dictionary.py`
 - Main input:
   - STEP 1.2 `transformed_feature_space.csv`
+  - STEP 1.2 `feature_space_manifest.json`
 - Main outputs:
   - `.../STEP_1_3_BUILD_DICTIONARY/OUTPUTS/FILES/dictionary.csv`
   - `.../STEP_1_3_BUILD_DICTIONARY/OUTPUTS/FILES/dataset.csv`
   - `.../STEP_1_3_BUILD_DICTIONARY/OUTPUTS/FILES/selected_feature_columns.json`
 - Role:
-  split/filter data into dictionary support and evaluation dataset.
+  split/filter data into dictionary support and evaluation dataset, using the
+  STEP 1.2 manifest as the authoritative source of primary feature columns.
 
 ### STEP 1.4 - Continuity filtering
 - Script:
@@ -144,11 +151,13 @@ runtime role, based on the current scripts in `STEPS/`.
 - Main inputs:
   - station/task metadata in configured real-data window
   - STEP 1.4 selected features / dictionary context
+  - STEP 1.2 `feature_space_manifest.json`
 - Main outputs:
   - `real_collected_data.csv`
   - collection summary + coverage plots
 - Role:
-  produce real-data table aligned with inference feature requirements.
+  produce real-data table aligned with inference feature requirements by
+  applying the same STEP 1.2 transform contract used for the simulation table.
 
 ### STEP 4.2 - Infer real parameters
 - Script:

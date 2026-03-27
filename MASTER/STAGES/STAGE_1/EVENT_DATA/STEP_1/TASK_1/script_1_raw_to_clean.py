@@ -142,6 +142,7 @@ from MASTER.common.step1_shared import (
     normalize_tt_label,
     prune_redundant_count_metadata,
     save_metadata,
+    select_exact_minimum_vertex_cover,
     set_global_rate_from_tt_rates,
     load_step1_task_plot_catalog,
     resolve_step1_plot_options,
@@ -1389,6 +1390,8 @@ def _plot_channel_contagion_by_tt(
     return fig_idx_val
 
 
+TASK1_SELECTED_OFFENDER_CARDINALITY_VALUES: tuple[int, ...] = tuple(range(1, 33))
+
 FILTER_METRIC_NAMES: tuple[str, ...] = (
     "channel_qt_mismatch_rows_affected_pct",
     "channel_qt_mismatch_values_zeroed_pct",
@@ -1407,6 +1410,10 @@ FILTER_METRIC_NAMES: tuple[str, ...] = (
     "plane_combination_filter_flagged_rows_pct",
     "plane_combination_filter_selected_offender_channels_pct",
     "plane_combination_filter_multi_offender_rows_pct",
+    *tuple(
+        f"plane_combination_filter_rows_with_{selected_count}_selected_offenders_pct"
+        for selected_count in TASK1_SELECTED_OFFENDER_CARDINALITY_VALUES
+    ),
     "plane_combination_filter_mean_failed_pairs_per_flagged_row",
     "plane_combination_filter_mean_selected_offenders_per_flagged_row",
     "plane_combination_filter_max_failed_pairs_in_row",
@@ -1463,6 +1470,14 @@ def _task1_channel_offender_metric_key(channel_key: tuple[int, str, int]) -> str
     return f"plane_combination_filter_offender_count_P{plane}{side}{strip}"
 
 
+def _task1_selected_offender_cardinality_metric_key(selected_count: int) -> str:
+    return f"plane_combination_filter_rows_with_{selected_count}_selected_offenders"
+
+
+def _task1_selected_offender_cardinality_pct_metric_key(selected_count: int) -> str:
+    return f"{_task1_selected_offender_cardinality_metric_key(selected_count)}_pct"
+
+
 def apply_task1_plane_combination_filter(
     df_input: pd.DataFrame,
     *,
@@ -1479,7 +1494,7 @@ def apply_task1_plane_combination_filter(
 
     Only cross-plane channel pairs are considered. A pair is evaluated only when both
     channels carry non-zero Q and T. Failed pairs are flagged first. Then, per event,
-    only the smallest high-impact set of offending channels is zeroed so all flagged
+    the exact minimum-cardinality set of offending channels is zeroed so all flagged
     pairs are covered, instead of zeroing both endpoints of every failed pair.
     """
     channel_map = collect_task1_channel_qt_map(df_input)
@@ -1499,6 +1514,10 @@ def apply_task1_plane_combination_filter(
             "rows_with_multiple_offenders": 0,
             "max_failed_pairs_in_row": 0,
             "max_selected_offenders_in_row": 0,
+            "selected_offender_cardinality_counts": {
+                selected_count: 0
+                for selected_count in TASK1_SELECTED_OFFENDER_CARDINALITY_VALUES
+            },
             "selected_offender_counts": {
                 channel_key: 0 for channel_key in TASK1_CHANNEL_KEYS
             },
@@ -1520,6 +1539,10 @@ def apply_task1_plane_combination_filter(
         "rows_with_multiple_offenders": 0,
         "max_failed_pairs_in_row": 0,
         "max_selected_offenders_in_row": 0,
+        "selected_offender_cardinality_counts": {
+            selected_count: 0
+            for selected_count in TASK1_SELECTED_OFFENDER_CARDINALITY_VALUES
+        },
     }
     row_failed_edges: dict[int, list[tuple[tuple[int, str, int], tuple[int, str, int], float]]] = {}
     channel_fail_masks = {
@@ -1610,29 +1633,10 @@ def apply_task1_plane_combination_filter(
 
     summary["flagged_rows"] = len(row_failed_edges)
     for row_pos, edge_list in row_failed_edges.items():
-        uncovered_edges = list(edge_list)
-        selected_channels: list[tuple[int, str, int]] = []
-        while uncovered_edges:
-            candidate_scores: dict[tuple[int, str, int], tuple[int, float]] = {}
-            for channel_a, channel_b, severity in uncovered_edges:
-                count_a, score_a = candidate_scores.get(channel_a, (0, 0.0))
-                candidate_scores[channel_a] = (count_a + 1, score_a + severity)
-                count_b, score_b = candidate_scores.get(channel_b, (0, 0.0))
-                candidate_scores[channel_b] = (count_b + 1, score_b + severity)
-
-            best_channel = min(
-                candidate_scores,
-                key=lambda channel_key: (
-                    -candidate_scores[channel_key][0],
-                    -candidate_scores[channel_key][1],
-                    *_task1_channel_order_key(channel_key),
-                ),
-            )
-            selected_channels.append(best_channel)
-            uncovered_edges = [
-                edge for edge in uncovered_edges
-                if best_channel not in edge[:2]
-            ]
+        selected_channels = select_exact_minimum_vertex_cover(
+            edge_list,
+            _task1_channel_order_key,
+        )
 
         summary["max_failed_pairs_in_row"] = max(
             summary["max_failed_pairs_in_row"],
@@ -1645,6 +1649,9 @@ def apply_task1_plane_combination_filter(
         summary["selected_offender_channels"] += len(selected_channels)
         if len(selected_channels) > 1:
             summary["rows_with_multiple_offenders"] += 1
+        summary["selected_offender_cardinality_counts"][len(selected_channels)] = (
+            int(summary["selected_offender_cardinality_counts"].get(len(selected_channels), 0)) + 1
+        )
         for channel_key in selected_channels:
             channel_fail_masks[channel_key][row_pos] = True
             offender_hit_counts[channel_key] += 1
@@ -1751,6 +1758,29 @@ def _task1_hist_range(
         low, high = center - 1.0, center + 1.0
     span = high - low
     padding = 0.08 * span if span > 0 else 1.0
+    return low - padding, high + padding
+
+
+def _task1_full_data_range(
+    values: np.ndarray,
+    limits: tuple[float | None, float | None],
+) -> tuple[float, float]:
+    finite_values = values[np.isfinite(values)]
+    lower_limit, upper_limit = limits
+    if finite_values.size:
+        low = float(np.nanmin(finite_values))
+        high = float(np.nanmax(finite_values))
+    else:
+        low, high = -1.0, 1.0
+    if lower_limit is not None:
+        low = min(low, float(lower_limit))
+    if upper_limit is not None:
+        high = max(high, float(upper_limit))
+    if not np.isfinite(low) or not np.isfinite(high) or low == high:
+        center = float(low if np.isfinite(low) else 0.0)
+        low, high = center - 1.0, center + 1.0
+    span = high - low
+    padding = 0.05 * span if span > 0 else max(1.0, 0.05 * max(abs(low), abs(high), 1.0))
     return low - padding, high + padding
 
 
@@ -4554,6 +4584,10 @@ if task1_plot_enabled("channel_tq_matrix_by_planepair"):
     # Improve image definition and aesthetics: larger DPI, larger markers, color per plane-pair,
     # histogram drawn with histtype='step' and log-counts.
     _MM1 = 1000
+    raw_var_limits: dict[int, tuple[float | None, float | None]] = {
+        0: (float(Q_F_left_pre_cal), float(Q_F_right_pre_cal)),
+        1: (float(T_F_left_pre_cal), float(T_F_right_pre_cal)),
+    }
 
     pair_list = [(1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]
     CHANNEL_PAIR_FIGSIZE = (7, 7)
@@ -4642,11 +4676,7 @@ if task1_plot_enabled("channel_tq_matrix_by_planepair"):
             for var_idx, col in enumerate((q_col, t_col)):
                 if col in _df_s1.columns:
                     arr = _df_s1[col].fillna(0).to_numpy(dtype=float)
-                    if arr.size > 0:
-                        qlo, qhi = np.nanpercentile(arr, 1), np.nanpercentile(arr, 99)
-                        _chan_var_arr[(ch_idx, var_idx)] = np.clip(arr, qlo, qhi)
-                    else:
-                        _chan_var_arr[(ch_idx, var_idx)] = np.zeros(0, dtype=float)
+                    _chan_var_arr[(ch_idx, var_idx)] = arr
                 else:
                     _chan_var_arr[(ch_idx, var_idx)] = np.zeros(len(_df_s1), dtype=float)
                 if col in _df_removed_pp1.columns:
@@ -4655,8 +4685,8 @@ if task1_plot_enabled("channel_tq_matrix_by_planepair"):
                 else:
                     _removed_chan_var_arr[(ch_idx, var_idx)] = np.zeros(len(_df_removed_pp1), dtype=float)
 
-        # Compute per-variable ranges (use non-zero values across channels, robust percentiles)
-        # and ensure they include configured defaults (Q/T side left/right defaults).
+        # Compute per-variable ranges from the full retained+removed raw values and
+        # ensure they always include the active configured Q/T limits.
         col_ranges: dict[int, tuple[float, float]] = {}
         for var_idx in (0, 1):
             retained_vals = [
@@ -4669,39 +4699,10 @@ if task1_plot_enabled("channel_tq_matrix_by_planepair"):
             ]
             all_vals = np.concatenate([*retained_vals, *removed_vals])
             nonzero = all_vals[all_vals != 0]
-            if nonzero.size > 1:
-                lo, hi = np.nanpercentile(nonzero, [1.0, 99.0])
-                if lo == hi:
-                    lo -= abs(lo) * 0.05 + 1e-6
-                    hi += abs(hi) * 0.05 + 1e-6
-            elif nonzero.size == 1:
-                lo = nonzero[0] - 1.0
-                hi = nonzero[0] + 1.0
-            else:
-                lo, hi = (0.0, 1.0)
-
-            # Incorporate configured defaults: use union of data range and default limits
-            if var_idx == 1:
-                # T variable: use T_side_left_pre_cal_default and T_side_right_pre_cal_default
-                try:
-                    default_lo = float(T_side_left_pre_cal_default)
-                    default_hi = float(T_side_right_pre_cal_default)
-                except Exception:
-                    default_lo, default_hi = lo, hi
-            else:
-                # Q variable: use Q_side_left_pre_cal_default and Q_side_right_pre_cal_default
-                try:
-                    default_lo = float(Q_side_left_pre_cal_default)
-                    default_hi = float(Q_side_right_pre_cal_default)
-                except Exception:
-                    default_lo, default_hi = lo, hi
-
-            lo = min(lo, default_lo)
-            hi = max(hi, default_hi)
-
-            # Add small padding
-            pad = max(1e-3, 0.03 * (hi - lo))
-            col_ranges[var_idx] = (lo - pad, hi + pad)
+            col_ranges[var_idx] = _task1_full_data_range(
+                nonzero if nonzero.size else all_vals,
+                raw_var_limits.get(var_idx, (None, None)),
+            )
 
         # For each unordered pair of channels build a 2x2 matrix: cols = (Q,T) of channel A, rows = (Q,T) of channel B
         for ai in range(len(channels)):
@@ -4722,8 +4723,6 @@ if task1_plot_enabled("channel_tq_matrix_by_planepair"):
                         if same_channel and c > r:
                             ax.set_visible(False)
                             continue
-                        ax.set_xticks([])
-                        ax.set_yticks([])
                         for sp in ax.spines.values():
                             sp.set_linewidth(0.4)
 
@@ -4796,17 +4795,12 @@ if task1_plot_enabled("channel_tq_matrix_by_planepair"):
                                     ax.set_ylim(col_ranges[c])
                                     # Draw configured T limits as horizontal dashed lines
                                     try:
-                                        tl_lo = float(T_side_left_pre_cal_default)
-                                        tl_hi = float(T_side_right_pre_cal_default)
+                                        tl_lo = float(raw_var_limits[1][0])
+                                        tl_hi = float(raw_var_limits[1][1])
                                         ax.axhline(tl_lo, color='lightgrey', linestyle='--', linewidth=0.8)
                                         ax.axhline(tl_hi, color='lightgrey', linestyle='--', linewidth=0.8)
                                     except Exception:
                                         pass
-                                    # Remove ticks and ticklabels so diagonal panels match others
-                                    ax.set_xticks([])
-                                    ax.set_yticks([])
-                                    ax.set_xticklabels([])
-                                    ax.set_yticklabels([])
                                 else:
                                     ax.set_xlabel('Q (ns)', fontsize=7)
                                     # Set Q axis range (horizontal axis holds Q for vertical hist)
@@ -4814,22 +4808,12 @@ if task1_plot_enabled("channel_tq_matrix_by_planepair"):
                                     ax.set_xlim(col_ranges[c])
                                     # Draw configured Q limits as vertical dashed lines
                                     try:
-                                        ql_lo = float(Q_side_left_pre_cal_default)
-                                        ql_hi = float(Q_side_right_pre_cal_default)
+                                        ql_lo = float(raw_var_limits[0][0])
+                                        ql_hi = float(raw_var_limits[0][1])
                                         ax.axvline(ql_lo, color='lightgrey', linestyle='--', linewidth=0.8)
                                         ax.axvline(ql_hi, color='lightgrey', linestyle='--', linewidth=0.8)
                                     except Exception:
                                         pass
-                                    # Remove ticks and ticklabels so diagonal panels match others
-                                    ax.set_xticks([])
-                                    ax.set_yticks([])
-                                    ax.set_xticklabels([])
-                                    ax.set_yticklabels([])
-                                # Remove ticks and ticklabels so diagonal panels match others
-                                ax.set_xticks([])
-                                ax.set_yticks([])
-                                ax.set_xticklabels([])
-                                ax.set_yticklabels([])
                         else:
                             # Scatter: include only points where BOTH variables != 0 (filter applied per plot)
                             if col_x.size and col_y.size:
@@ -4863,21 +4847,30 @@ if task1_plot_enabled("channel_tq_matrix_by_planepair"):
                             ax.set_ylim(col_ranges[r])
                             # Draw configured default limits as dashed light-grey lines
                             try:
-                                ql_lo = float(Q_side_left_pre_cal_default)
-                                ql_hi = float(Q_side_right_pre_cal_default)
+                                ql_lo = float(raw_var_limits[0][0])
+                                ql_hi = float(raw_var_limits[0][1])
                                 ax.axvline(ql_lo, color='lightgrey', linestyle='--', linewidth=0.8)
                                 ax.axvline(ql_hi, color='lightgrey', linestyle='--', linewidth=0.8)
                             except Exception:
                                 pass
                             try:
-                                tl_lo = float(T_side_left_pre_cal_default)
-                                tl_hi = float(T_side_right_pre_cal_default)
+                                tl_lo = float(raw_var_limits[1][0])
+                                tl_hi = float(raw_var_limits[1][1])
                                 ax.axhline(tl_lo, color='lightgrey', linestyle='--', linewidth=0.8)
                                 ax.axhline(tl_hi, color='lightgrey', linestyle='--', linewidth=0.8)
                             except Exception:
                                 pass
-                            ax.set_xlabel("Q" if c == 0 else "T", fontsize=7)
-                            ax.set_ylabel("Q" if r == 0 else "T", fontsize=7)
+                            if r == 1:
+                                ax.set_xlabel("Q" if c == 0 else "T", fontsize=7)
+                            else:
+                                ax.set_xlabel("")
+                            if c == 0:
+                                ax.set_ylabel("Q" if r == 0 else "T", fontsize=7)
+                            else:
+                                ax.set_ylabel("")
+
+                        ax.tick_params(axis="x", labelsize=6, labelbottom=(r == 1))
+                        ax.tick_params(axis="y", labelsize=6, labelleft=(c == 0))
 
                 plt.subplots_adjust(wspace=0.08, hspace=0.08, left=0.08, right=0.98, top=0.95, bottom=0.08)
                 # Build human-friendly channel address strings, e.g. "P1S1F" or "P2S3B"
@@ -5110,6 +5103,17 @@ global_variables["plane_combination_filter_max_failed_pairs_in_row"] = int(
 global_variables["plane_combination_filter_max_selected_offenders_in_row"] = int(
     plane_combination_summary["max_selected_offenders_in_row"]
 )
+for selected_count in TASK1_SELECTED_OFFENDER_CARDINALITY_VALUES:
+    selected_rows = int(
+        plane_combination_summary["selected_offender_cardinality_counts"].get(selected_count, 0)
+    )
+    global_variables[_task1_selected_offender_cardinality_metric_key(selected_count)] = selected_rows
+    record_activity_metric(
+        _task1_selected_offender_cardinality_pct_metric_key(selected_count),
+        selected_rows,
+        plane_combination_summary["flagged_rows"],
+        label=f"flagged rows solved by selecting exactly {selected_count} offending channels",
+    )
 for channel_key, offender_count in plane_combination_summary["selected_offender_counts"].items():
     global_variables[_task1_channel_offender_metric_key(channel_key)] = int(offender_count)
 filter_metrics["plane_combination_filter_mean_failed_pairs_per_flagged_row"] = round(

@@ -79,7 +79,8 @@ Out-of-bounds crossings are NaN; times are normalized so earliest valid plane pe
 
 ### STEP_5: difference observables
 - `T_diff = X_mea * (3 / (2 * c_mm_per_ns))`
-- `q_diff ~ Normal(0, qdiff_frac * Y_mea)`
+- preferred: `q_diff ~ Normal(0, qdiff_width)`
+- legacy fallback: `q_diff ~ Normal(0, qdiff_frac * Y_mea)`
 
 ### STEP_6: front/back conversion
 - `T_front = T_sum_meas - T_diff`

@@ -35,7 +35,9 @@ STEP_DIR = Path(__file__).resolve().parent
 INFERENCE_DIR = STEP_DIR.parent
 PIPELINE_DIR = INFERENCE_DIR.parent               # .../STEPS
 PROJECT_DIR = PIPELINE_DIR.parent                 # .../MINGO_DICTIONARY_CREATION_AND_TEST
-DEFAULT_CONFIG = PROJECT_DIR / "config_step_1.1_method.json"
+DEFAULT_CONFIG = (
+    PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_1_COLLECT_DATA" / "INPUTS" / "config_step_1.1_method.json"
+)
 
 DEFAULT_ESTIMATED = (
     INFERENCE_DIR / "STEP_2_1_ESTIMATE_PARAMS"
@@ -174,10 +176,10 @@ def _rows_with_dictionary_parameter_set(
     dict_df: pd.DataFrame,
     data_df: pd.DataFrame,
 ) -> pd.Series:
-    """Flag validation rows whose parameter set exists in dictionary."""
-    mask = pd.Series(False, index=val.index, dtype=bool)
+    """Flag validation rows whose physical parameter vector exists in dictionary."""
+    mask_hash = pd.Series(False, index=val.index, dtype=bool)
 
-    # Preferred: exact identifier mapped from dataset via dataset_index.
+    # Preferred exact identifier mapped from dataset via dataset_index.
     if (
         "dataset_index" in val.columns
         and "param_hash_x" in data_df.columns
@@ -190,9 +192,11 @@ def _rows_with_dictionary_parameter_set(
             mapped = data_df.iloc[idx[idx_ok].astype(int).to_numpy()]["param_hash_x"].astype(str).to_numpy()
             row_keys.loc[idx_ok] = mapped
             dict_keys = set(dict_df["param_hash_x"].astype(str).dropna().tolist())
-            return row_keys.isin(dict_keys).fillna(False)
+            mask_hash = row_keys.isin(dict_keys).fillna(False)
 
-    # Fallback: tuple over true physical params (and z planes when available).
+    # Physical-parameter tuple match. This must remain active even if the hash path
+    # found no matches, because param_hash_x is not guaranteed to encode the exact
+    # same physical-equivalence relation used by STEP 2.2 validation.
     base_cols = [
         "flux_cm2_min", "cos_n",
         "eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4",
@@ -200,7 +204,7 @@ def _rows_with_dictionary_parameter_set(
     ]
     dict_cols = [c for c in base_cols if c in dict_df.columns and f"true_{c}" in val.columns]
     if not dict_cols:
-        return mask
+        return mask_hash
 
     dict_num = dict_df[dict_cols].apply(pd.to_numeric, errors="coerce")
     val_num = val[[f"true_{c}" for c in dict_cols]].apply(pd.to_numeric, errors="coerce")
@@ -210,13 +214,17 @@ def _rows_with_dictionary_parameter_set(
         if np.all(np.isfinite(r))
     }
     if not dict_keys:
-        return mask
+        return mask_hash
 
     val_keys = [
         tuple(np.round(r, 12)) if np.all(np.isfinite(r)) else None
         for r in val_num.to_numpy(dtype=float)
     ]
-    return pd.Series([k in dict_keys if k is not None else False for k in val_keys], index=val.index)
+    mask_tuple = pd.Series(
+        [k in dict_keys if k is not None else False for k in val_keys],
+        index=val.index,
+    )
+    return (mask_hash | mask_tuple).fillna(False)
 
 
 def main() -> int:
@@ -243,6 +251,10 @@ def main() -> int:
         dataset_mode = "step_1_2_original"
 
     relerr_clip = float(cfg_22.get("relerr_threshold_pct", 50.0))
+    error_vs_events_enabled = _as_bool(
+        cfg_22.get("error_vs_events_enabled", False),
+        default=False,
+    )
 
     # Plot parameters: use top-level shared source across steps.
     # Keep step-local keys only as deprecated compatibility fallback.
@@ -340,6 +352,13 @@ def main() -> int:
     elif "selected_rows" in data_df.columns:
         val["n_events"] = pd.to_numeric(data_df["selected_rows"].values[:len(val)], errors="coerce")
 
+    dict_paramset_matches = _rows_with_dictionary_parameter_set(val, dict_df, data_df)
+    val["dict_paramset_matches"] = dict_paramset_matches.astype(bool)
+    if "in_coverage" in val.columns:
+        val["coverage_in_dictionary_hull"] = val["in_coverage"].astype(str).str.lower().isin(
+            ("true", "1", "yes")
+        )
+
     # Optionally exclude dictionary-like rows from reported validation.
     exclude_dict_rows = _as_bool(cfg_22.get("exclude_dictionary_entries", True), True)
     exclude_dict_paramset = _as_bool(
@@ -347,10 +366,12 @@ def main() -> int:
         True,
     )
     exclusion_mask = pd.Series(False, index=val.index, dtype=bool)
+    dictlike_mask = pd.Series(False, index=val.index, dtype=bool)
     if exclude_dict_rows:
-        exclusion_mask |= _parse_true_is_dictionary_entry_mask(val)
+        dictlike_mask |= _parse_true_is_dictionary_entry_mask(val)
     if exclude_dict_paramset:
-        exclusion_mask |= _rows_with_dictionary_parameter_set(val, dict_df, data_df)
+        dictlike_mask |= dict_paramset_matches
+    exclusion_mask |= dictlike_mask
 
     # Exclude out-of-coverage entries (flagged by step 2.1)
     exclude_out_of_coverage = _as_bool(
@@ -369,6 +390,7 @@ def main() -> int:
                 n_out_of_coverage,
             )
 
+    n_excluded_dictlike = int(dictlike_mask.sum())
     n_excluded = int(exclusion_mask.sum())
     val_all = val.copy()
     val_report = val.loc[~exclusion_mask].copy() if n_excluded > 0 else val.copy()
@@ -384,12 +406,15 @@ def main() -> int:
         n_excluded = 0
     elif n_excluded > 0:
         log.info(
-            "Validation: excluded %d dictionary-like row(s) "
-            "(dict_entries=%s, dict_paramset_matches=%s). Remaining=%d.",
-            n_excluded,
+            "Validation: excluded %d dictionary-like row(s) and %d out-of-coverage row(s). Remaining=%d.",
+            n_excluded_dictlike,
+            int(coverage_mask.sum()),
+            len(val_report),
+        )
+        log.info(
+            "Validation exclusion switches: dict_entries=%s, dict_paramset_matches=%s.",
             exclude_dict_rows,
             exclude_dict_paramset,
-            len(val_report),
         )
 
     plot_population = str(cfg_22.get("plot_population", "off_dict_strict")).strip().lower()
@@ -424,7 +449,9 @@ def main() -> int:
         "total_points_all": len(val_all),
         "total_points_off_dict_strict": len(val_report),
         "total_points_in_dict": len(val_in_dict),
-        "excluded_dictionary_like_points": int(n_excluded),
+        "excluded_dictionary_like_points": int(n_excluded_dictlike),
+        "excluded_out_of_coverage_points": int(coverage_mask.sum()),
+        "excluded_total_points": int(n_excluded),
         "exclude_dictionary_entries": bool(exclude_dict_rows),
         "exclude_dictionary_paramset_matches": bool(exclude_dict_paramset),
         "plot_population": plot_population_resolved,
@@ -470,6 +497,7 @@ def main() -> int:
         plot_params,
         relerr_plot_limits,
         signed_relerr_cmap_name,
+        error_vs_events_enabled,
     )
 
     log.info("Done.")
@@ -485,6 +513,7 @@ def _make_plots(
     plot_params: list[str] | None = None,
     relerr_plot_limits: tuple[float, float] = (-5.0, 5.0),
     signed_relerr_cmap_name: str = "PiYG",
+    error_vs_events_enabled: bool = False,
 ) -> None:
     """Generate validation plots."""
     plt.rcParams.update({
@@ -536,54 +565,9 @@ def _make_plots(
     relerr_clip = abs(float(relerr_clip)) if np.isfinite(relerr_clip) else 50.0
 
     def _rows_with_dictionary_parameter_set() -> pd.Series:
-        """Flag validation rows whose parameter set exists in dictionary.
-
-        Priority:
-        1. `param_hash_x` mapped from dataset via `dataset_index` (robust and exact).
-        2. Fallback tuple match on true parameter columns.
-        """
-        mask = pd.Series(False, index=val.index, dtype=bool)
-
-        # Preferred: exact identifier from dataset row.
-        if (
-            "dataset_index" in val.columns
-            and "param_hash_x" in data_df.columns
-            and "param_hash_x" in dict_df.columns
-        ):
-            idx = pd.to_numeric(val["dataset_index"], errors="coerce")
-            idx_ok = idx.notna() & (idx >= 0) & (idx < len(data_df))
-            if idx_ok.any():
-                row_keys = pd.Series(index=val.index, dtype=object)
-                mapped = data_df.iloc[idx[idx_ok].astype(int).to_numpy()]["param_hash_x"].astype(str).to_numpy()
-                row_keys.loc[idx_ok] = mapped
-                dict_keys = set(dict_df["param_hash_x"].astype(str).dropna().tolist())
-                return row_keys.isin(dict_keys).fillna(False)
-
-        # Fallback: tuple over true physical params (and z planes when available).
-        base_cols = [
-            "flux_cm2_min", "cos_n",
-            "eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4",
-            "z_plane_1", "z_plane_2", "z_plane_3", "z_plane_4",
-        ]
-        dict_cols = [c for c in base_cols if c in dict_df.columns and f"true_{c}" in val.columns]
-        if not dict_cols:
-            return mask
-
-        dict_num = dict_df[dict_cols].apply(pd.to_numeric, errors="coerce")
-        val_num = val[[f"true_{c}" for c in dict_cols]].apply(pd.to_numeric, errors="coerce")
-        # Quantize to suppress tiny float noise in merges/computations.
-        dict_keys = {
-            tuple(np.round(r, 12)) for r in dict_num.to_numpy(dtype=float)
-            if np.all(np.isfinite(r))
-        }
-        if not dict_keys:
-            return mask
-
-        val_keys = [
-            tuple(np.round(r, 12)) if np.all(np.isfinite(r)) else None
-            for r in val_num.to_numpy(dtype=float)
-        ]
-        return pd.Series([k in dict_keys if k is not None else False for k in val_keys], index=val.index)
+        if "dict_paramset_matches" in val.columns:
+            return val["dict_paramset_matches"].fillna(False).astype(bool)
+        return _rows_with_dictionary_parameter_set(val, dict_df, data_df)
 
     # Remove stale per-parameter figures so outputs reflect current config only.
     for pattern in (
@@ -866,7 +850,7 @@ def _make_plots(
         plt.close(fig)
 
     # ── 3. Error vs event count ──────────────────────────────────────
-    if "n_events" in val.columns:
+    if error_vs_events_enabled and "n_events" in val.columns:
         for pname in selected_params:
             relerr_col = f"relerr_{pname}_pct"
             if relerr_col not in val.columns:
@@ -909,6 +893,8 @@ def _make_plots(
             fig.tight_layout()
             _save_figure(fig, PLOTS_DIR / f"error_vs_events_{pname}.png")
             plt.close(fig)
+    elif not error_vs_events_enabled:
+        log.info("Skipping STEP 2.2 error-vs-events plots (step_2_2.error_vs_events_enabled=false).")
 
     # Note: dict-vs-offdict histogram overlays are now embedded in validation_*.png
     # to keep one validation figure per parameter.

@@ -39,7 +39,13 @@ if STEP_DIR.parents[1].name == "STEPS":
 else:
     PIPELINE_DIR = STEP_DIR.parents[1]
 REPO_ROOT = PIPELINE_DIR.parent
-DEFAULT_CONFIG = PIPELINE_DIR / "config_step_1.1_method.json"
+STEP_ROOT = PIPELINE_DIR if (PIPELINE_DIR / "STEP_1_SETUP").exists() else PIPELINE_DIR / "STEPS"
+DEFAULT_CONFIG = (
+    STEP_ROOT / "STEP_1_SETUP" / "STEP_1_1_COLLECT_DATA" / "INPUTS" / "config_step_1.1_method.json"
+)
+DEFAULT_COLUMNS_CONFIG = (
+    STEP_ROOT / "STEP_1_SETUP" / "STEP_1_1_COLLECT_DATA" / "INPUTS" / "config_step_1.1_columns.json"
+)
 
 FILES_DIR = STEP_DIR / "OUTPUTS" / "FILES"
 PLOTS_DIR = STEP_DIR / "OUTPUTS" / "PLOTS"
@@ -161,6 +167,12 @@ def _load_config(path: Path) -> dict:
     else:
         log.warning("Config file not found: %s", path)
 
+    columns_path = path.with_name("config_step_1.1_columns.json")
+    if columns_path != path and columns_path.exists():
+        columns_cfg = json.loads(columns_path.read_text(encoding="utf-8"))
+        cfg = _merge_dicts(cfg, columns_cfg)
+        log.info("Loaded column-role config: %s", columns_path)
+
     plots_path = path.with_name("config_step_1.1_plots.json")
     if plots_path != path and plots_path.exists():
         plots_cfg = json.loads(plots_path.read_text(encoding="utf-8"))
@@ -265,7 +277,7 @@ def _resolve_parameter_space_selection(
     available_set = set(available)
     auto_candidates = [c for c in DEFAULT_PARAMETER_SPACE_COLUMNS if c in available_set]
 
-    raw_selected = cfg_11.get("parameter_space_columns", "auto")
+    raw_selected = cfg_11.get("parameter_columns", cfg_11.get("parameter_space_columns", "auto"))
     requested: list[str]
     requested_unmatched: list[str] = []
     selection_mode = "auto_default"

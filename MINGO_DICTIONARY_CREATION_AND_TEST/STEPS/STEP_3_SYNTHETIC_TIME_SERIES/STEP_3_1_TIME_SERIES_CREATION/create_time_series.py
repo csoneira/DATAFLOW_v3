@@ -37,7 +37,9 @@ if (PIPELINE_DIR / "STEP_1_SETUP").exists() and (PIPELINE_DIR / "STEP_2_INFERENC
 else:
     STEP_ROOT = PIPELINE_DIR / "STEPS"
 
-DEFAULT_CONFIG = PIPELINE_DIR / "config_step_1.1_method.json"
+DEFAULT_CONFIG = (
+    STEP_ROOT / "STEP_1_SETUP" / "STEP_1_1_COLLECT_DATA" / "INPUTS" / "config_step_1.1_method.json"
+)
 DEFAULT_DATASET = (
     STEP_ROOT
     / "STEP_1_SETUP"

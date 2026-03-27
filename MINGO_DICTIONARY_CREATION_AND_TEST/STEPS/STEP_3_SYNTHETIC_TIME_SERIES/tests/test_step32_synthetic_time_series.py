@@ -13,11 +13,14 @@ _STEP32_DIR = (
 sys.path.insert(0, str(_STEP32_DIR))
 
 from synthetic_time_series import (
+    STEP12_EFF_PLACEHOLDER_COL,
+    STEP12_RATE_HIST_PLACEHOLDER_COL,
     _apply_parameter_space_aliases,
     _build_event_mask,
     _build_weights,
     _enforce_rate_consistency_constraints,
     _make_synthetic_dataset,
+    _resolve_feature_space_plot_columns,
     _rebuild_weighted_step12_helper_columns,
     _resolve_basis_source,
     _resolve_parameter_space_columns_from_cfg,
@@ -277,6 +280,131 @@ def test_step31_curve_data_mode_is_read_from_time_series() -> None:
 
     assert explicit is True
     assert mode == "dataset_data_curve"
+
+
+def test_feature_space_plot_columns_include_histogram_efficiency_and_post_tt(
+    tmp_path: Path,
+) -> None:
+    selected_path = tmp_path / "selected_feature_columns.json"
+    selected_path.write_text(
+        """
+        {
+          "selected_feature_columns": [
+            "events_per_second_0_rate_hz",
+            "events_per_second_10_rate_hz",
+            "events_per_second_20_rate_hz",
+            "events_per_second_30_rate_hz",
+            "events_per_second_40_rate_hz",
+            "efficiency_vector_p1_x_bin_000_eff",
+            "efficiency_vector_p1_x_bin_007_eff",
+            "efficiency_vector_p1_x_bin_014_eff",
+            "efficiency_vector_p2_x_bin_000_eff",
+            "efficiency_vector_p2_x_bin_007_eff",
+            "efficiency_vector_p2_x_bin_014_eff"
+          ]
+        }
+        """,
+        encoding="utf-8",
+    )
+    dictionary_df = pd.DataFrame(
+        {
+            "events_per_second_0_rate_hz": [1.0, 2.0],
+            "events_per_second_10_rate_hz": [2.0, 3.0],
+            "events_per_second_20_rate_hz": [3.0, 4.0],
+            "events_per_second_30_rate_hz": [4.0, 5.0],
+            "events_per_second_40_rate_hz": [5.0, 6.0],
+            "efficiency_vector_p1_x_bin_000_eff": [0.60, 0.61],
+            "efficiency_vector_p1_x_bin_007_eff": [0.70, 0.71],
+            "efficiency_vector_p1_x_bin_014_eff": [0.80, 0.81],
+            "efficiency_vector_p2_x_bin_000_eff": [0.62, 0.63],
+            "efficiency_vector_p2_x_bin_007_eff": [0.72, 0.73],
+            "efficiency_vector_p2_x_bin_014_eff": [0.82, 0.83],
+            "post_tt_two_plane_total_rate_hz": [10.0, 11.0],
+            "post_tt_three_plane_total_rate_hz": [4.0, 5.0],
+            "post_tt_four_plane_rate_hz": [1.0, 2.0],
+        }
+    )
+    synthetic_df = dictionary_df.copy()
+
+    info = _resolve_feature_space_plot_columns(
+        dictionary_df,
+        synthetic_df,
+        selected_features_path=selected_path,
+        histogram_sample_count=3,
+        max_efficiency_groups=4,
+        max_other_columns=0,
+    )
+
+    assert info["selected_features_requested_count"] == 11
+    assert info["histogram_columns_representative"] == [
+        "events_per_second_0_rate_hz",
+        "events_per_second_20_rate_hz",
+        "events_per_second_40_rate_hz",
+    ]
+    assert info["efficiency_vector_columns_representative"] == [
+        "efficiency_vector_p1_x_bin_007_eff",
+        "efficiency_vector_p2_x_bin_007_eff",
+    ]
+    assert info["post_tt_columns_included"] == []
+    assert info["columns_used"] == [
+        "events_per_second_0_rate_hz",
+        "events_per_second_20_rate_hz",
+        "events_per_second_40_rate_hz",
+        "efficiency_vector_p1_x_bin_007_eff",
+        "efficiency_vector_p2_x_bin_007_eff",
+    ]
+
+
+def test_feature_space_plot_columns_respect_suppressed_patterns(
+    tmp_path: Path,
+) -> None:
+    selected_path = tmp_path / "selected_feature_columns.json"
+    selected_path.write_text(
+        """
+        {
+          "selected_feature_columns": [
+            "events_per_second_0_rate_hz",
+            "events_per_second_10_rate_hz",
+            "events_per_second_20_rate_hz",
+            "efficiency_vector_p1_x_bin_000_eff",
+            "efficiency_vector_p1_x_bin_007_eff",
+            "efficiency_vector_p1_x_bin_014_eff"
+          ]
+        }
+        """,
+        encoding="utf-8",
+    )
+    dictionary_df = pd.DataFrame(
+        {
+            "events_per_second_0_rate_hz": [1.0, 2.0],
+            "events_per_second_10_rate_hz": [2.0, 3.0],
+            "events_per_second_20_rate_hz": [3.0, 4.0],
+            "efficiency_vector_p1_x_bin_000_eff": [0.60, 0.61],
+            "efficiency_vector_p1_x_bin_007_eff": [0.70, 0.71],
+            "efficiency_vector_p1_x_bin_014_eff": [0.80, 0.81],
+            "post_tt_two_plane_total_rate_hz": [10.0, 11.0],
+            "post_tt_three_plane_total_rate_hz": [4.0, 5.0],
+            "post_tt_four_plane_rate_hz": [1.0, 2.0],
+        }
+    )
+    synthetic_df = dictionary_df.copy()
+
+    info = _resolve_feature_space_plot_columns(
+        dictionary_df,
+        synthetic_df,
+        selected_features_path=selected_path,
+        suppressed_patterns=["events_per_second_*", "efficiency_vector_*"],
+        histogram_sample_count=3,
+        max_efficiency_groups=4,
+        max_other_columns=0,
+    )
+
+    assert info["rate_hist_block_suppressed"] is True
+    assert info["efficiency_vector_block_suppressed"] is True
+    assert info["columns_used"] == [
+        STEP12_RATE_HIST_PLACEHOLDER_COL,
+        STEP12_EFF_PLACEHOLDER_COL,
+    ]
 
 
 def test_dataset_data_curve_mode_copies_exact_basis_row() -> None:

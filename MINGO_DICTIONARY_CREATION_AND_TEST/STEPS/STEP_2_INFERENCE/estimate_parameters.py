@@ -20,6 +20,7 @@ import json
 import logging
 from pathlib import Path
 import re
+import sys
 from typing import Mapping, Sequence
 
 import numpy as np
@@ -33,6 +34,12 @@ log = logging.getLogger("estimate_parameters")
 # relative to the STEP_2_INFERENCE directory (i.e. this file's parent).
 _INFERENCE_DIR = Path(__file__).resolve().parent
 _PIPELINE_DIR = _INFERENCE_DIR.parent
+MODULES_DIR = _PIPELINE_DIR / "MODULES"
+if MODULES_DIR.exists() and str(MODULES_DIR) not in sys.path:
+    sys.path.insert(0, str(MODULES_DIR))
+
+from feature_space_transform_engine import filter_rows_with_complete_numeric_columns
+
 DEFAULT_DISTANCE_DEFINITION_PATH = (
     _PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_5_TUNE_DISTANCE_DEFINITION"
     / "OUTPUTS" / "FILES" / "distance_definition.json"
@@ -234,6 +241,140 @@ def active_feature_columns_from_distance_definition(
     info["n_active_features"] = int(len(active))
     info["used_active_weights"] = True
     return active, info
+
+
+def require_runtime_distance_definition(
+    distance_definition: Mapping[str, object] | None,
+    *,
+    context_label: str,
+    require_exact_alignment: bool = True,
+) -> dict[str, object]:
+    """Require a usable STEP 1.5 artifact for runtime estimation.
+
+    The pipeline should not silently swap to a different distance definition
+    at inference time. Callers must fail if STEP 1.5 is missing or if the
+    tuned feature space no longer matches the requested runtime feature space.
+    """
+    dd = dict(distance_definition or {})
+    if not bool(dd.get("available")):
+        reason = str(dd.get("reason", "unknown"))
+        raise ValueError(
+            f"{context_label} requires a valid STEP 1.5 distance definition, "
+            f"but it is unavailable: {reason}"
+        )
+    alignment_mode = str(dd.get("alignment_mode", "exact")).strip().lower() or "exact"
+    if require_exact_alignment and alignment_mode != "exact":
+        artifact_count = int(dd.get("artifact_feature_columns_count", 0))
+        requested_count = int(dd.get("requested_feature_columns_count", 0))
+        raise ValueError(
+            f"{context_label} requires an exact STEP 1.5 feature-space match, "
+            f"but got alignment_mode={alignment_mode} "
+            f"(artifact_features={artifact_count}, requested_features={requested_count})"
+        )
+    return dd
+
+
+def require_explicit_columns_present_in_both_frames(
+    requested_columns: Sequence[object],
+    *,
+    left_columns: Sequence[object],
+    right_columns: Sequence[object],
+    left_label: str,
+    right_label: str,
+    context_label: str,
+) -> list[str]:
+    """Require explicit configured columns to exist in both compared tables."""
+    requested = [str(col).strip() for col in requested_columns if str(col).strip()]
+    if not requested:
+        raise ValueError(f"{context_label} explicit feature column list is empty.")
+    left = {str(col).strip() for col in left_columns if str(col).strip()}
+    right = {str(col).strip() for col in right_columns if str(col).strip()}
+    missing_left = [col for col in requested if col not in left]
+    missing_right = [col for col in requested if col not in right]
+    if missing_left or missing_right:
+        details: list[str] = []
+        if missing_left:
+            details.append(
+                f"missing in {left_label}: "
+                + ", ".join(missing_left[:50])
+                + (" ..." if len(missing_left) > 50 else "")
+            )
+        if missing_right:
+            details.append(
+                f"missing in {right_label}: "
+                + ", ".join(missing_right[:50])
+                + (" ..." if len(missing_right) > 50 else "")
+            )
+        raise ValueError(
+            f"{context_label} explicit feature space does not match the provided tables; "
+            + "; ".join(details)
+        )
+    return requested
+
+
+def _require_columns_present(
+    available_columns: Sequence[object],
+    required_columns: Sequence[object],
+    *,
+    frame_label: str,
+) -> list[str]:
+    resolved = [str(col).strip() for col in required_columns if str(col).strip()]
+    available = {str(col).strip() for col in available_columns if str(col).strip()}
+    missing = [col for col in resolved if col not in available]
+    if missing:
+        raise ValueError(
+            f"{frame_label} is missing required column(s): {missing}"
+        )
+    return resolved
+
+
+def _build_complete_numeric_row_mask(
+    df: pd.DataFrame,
+    *,
+    required_columns: Sequence[object],
+    label: str,
+) -> tuple[pd.DataFrame, np.ndarray, dict[str, object]]:
+    resolved_required = _require_columns_present(
+        df.columns,
+        required_columns,
+        frame_label=label,
+    )
+    if not resolved_required:
+        return pd.DataFrame(index=df.index), np.ones(len(df), dtype=bool), {
+            "enabled": False,
+            "label": str(label),
+            "input_rows": int(len(df)),
+            "rows_kept": int(len(df)),
+            "rows_removed": 0,
+            "rows_removed_fraction": 0.0,
+            "required_columns_checked": [],
+            "required_columns_checked_count": 0,
+            "row_missing_required_column_count_distribution": {"0": int(len(df))},
+            "top_missing_required_columns": [],
+        }
+
+    numeric = (
+        df[resolved_required]
+        .apply(pd.to_numeric, errors="coerce")
+        .replace([np.inf, -np.inf], np.nan)
+    )
+    _, completeness = filter_rows_with_complete_numeric_columns(
+        numeric,
+        required_columns=resolved_required,
+    )
+    valid_mask = numeric.notna().all(axis=1).to_numpy(dtype=bool)
+    completeness = dict(completeness)
+    completeness["label"] = str(label)
+    return numeric, valid_mask, completeness
+
+
+def _filter_dataframe_by_mask(
+    df: pd.DataFrame,
+    *,
+    row_mask: np.ndarray,
+) -> pd.DataFrame:
+    mask = np.asarray(row_mask, dtype=bool)
+    return df.loc[mask].copy().reset_index(drop=True)
 
 
 def _log_unified_distance_term_list(
@@ -2382,6 +2523,9 @@ def _local_linear_estimate(
     if not np.isfinite(w_sum) or w_sum <= 0.0:
         return float(np.sum(w * np.nan_to_num(vals)))
     w_use = w_use / w_sum
+    weighted_mean_local = float(np.sum(w_use * y_use))
+    if not np.isfinite(weighted_mean_local):
+        weighted_mean_local = float(np.sum(w * np.nan_to_num(vals)))
 
     centered = X_use - x0[None, :]
     A = np.hstack([np.ones((centered.shape[0], 1), dtype=float), centered])
@@ -2427,6 +2571,18 @@ def _local_linear_estimate(
     if is_eff_param:
         # inverse-logit with numerical stability
         pred = float(1.0 / (1.0 + np.exp(-np.clip(pred, -40.0, 40.0))))
+        y_min = float(np.nanmin(y_use))
+        y_max = float(np.nanmax(y_use))
+        if np.isfinite(y_min) and np.isfinite(y_max):
+            # When the bounded local-linear fit extrapolates beyond the local
+            # efficiency envelope, hard-clipping to the edge creates visible
+            # plateaus in real-data estimates. Prefer the robust weighted
+            # local mean in those cases.
+            pred_clipped = float(np.clip(pred, y_min, y_max))
+            if abs(pred - pred_clipped) > 1e-12 and np.isfinite(weighted_mean_local):
+                pred = float(np.clip(weighted_mean_local, y_min, y_max))
+            else:
+                pred = pred_clipped
         pred = float(np.clip(pred, 1e-6, 1.0 - 1e-6))
     else:
         y_min = float(np.nanmin(y_use))
@@ -4171,22 +4327,23 @@ def estimate_from_dataframes(
             )
     else:
         requested_feature_cols = parse_explicit_feature_columns(feature_columns)
-        feature_cols = [
-            c for c in requested_feature_cols
-            if c in dict_df.columns and c in data_df.columns
-        ]
-        if not feature_cols:
+        if not requested_feature_cols:
             raise ValueError(
-                "No explicit feature columns found in both dictionary and dataset. "
-                f"Requested={requested_feature_cols!r}"
+                "No explicit feature columns were provided."
             )
-        missing = [c for c in requested_feature_cols if c not in feature_cols]
-        if missing:
-            log.warning(
-                "Ignoring %d explicit feature column(s) missing in dictionary/dataset intersection: %s",
-                len(missing),
-                missing,
+        missing_in_dict = [c for c in requested_feature_cols if c not in dict_df.columns]
+        missing_in_data = [c for c in requested_feature_cols if c not in data_df.columns]
+        if missing_in_dict or missing_in_data:
+            parts: list[str] = []
+            if missing_in_dict:
+                parts.append(f"missing in dictionary: {missing_in_dict}")
+            if missing_in_data:
+                parts.append(f"missing in dataset: {missing_in_data}")
+            raise ValueError(
+                "Explicit feature columns must be present in both dictionary and dataset; "
+                + "; ".join(parts)
             )
+        feature_cols = list(requested_feature_cols)
 
     # ── Auto-detect parameter columns ────────────────────────────────
     feature_col_set = set(feature_cols)
@@ -4199,6 +4356,12 @@ def estimate_from_dataframes(
                 param_columns.append(c)
         if not param_columns:
             raise ValueError("No parameter columns found in dictionary.")
+    param_columns = [str(col).strip() for col in param_columns if str(col).strip()]
+    missing_param_columns = [col for col in param_columns if col not in dict_df.columns]
+    if missing_param_columns:
+        raise ValueError(
+            f"Dictionary is missing required parameter column(s): {missing_param_columns}"
+        )
     log.info("Parameter columns to estimate: %s", param_columns)
 
     # ── Coerce feature columns to numeric ────────────────────────────
@@ -4226,6 +4389,61 @@ def estimate_from_dataframes(
         )
     else:
         log.info("Feature columns (%d): %s", len(feature_cols), feature_cols)
+
+    dict_completeness_frame = dict_features.copy()
+    for pc in param_columns:
+        dict_completeness_frame[pc] = pd.to_numeric(dict_df[pc], errors="coerce")
+    (
+        _dict_completeness_numeric,
+        dict_complete_mask,
+        dictionary_feature_space_completeness,
+    ) = _build_complete_numeric_row_mask(
+        dict_completeness_frame,
+        required_columns=[*feature_cols, *param_columns],
+        label="dictionary_feature_and_parameter_space",
+    )
+    if not np.any(dict_complete_mask):
+        raise ValueError(
+            "Dictionary has no rows with complete feature and parameter space for estimation."
+        )
+    if not np.all(dict_complete_mask):
+        log.warning(
+            "Estimator dictionary completeness: removing %d incomplete row(s), keeping %d/%d complete rows.",
+            int(np.size(dict_complete_mask) - np.sum(dict_complete_mask)),
+            int(np.sum(dict_complete_mask)),
+            int(len(dict_complete_mask)),
+        )
+        dict_df = _filter_dataframe_by_mask(dict_df, row_mask=dict_complete_mask)
+        dict_feature_source = _filter_dataframe_by_mask(
+            dict_feature_source,
+            row_mask=dict_complete_mask,
+        )
+        dict_features = _filter_dataframe_by_mask(
+            dict_features,
+            row_mask=dict_complete_mask,
+        )
+    else:
+        dict_df = dict_df.reset_index(drop=True)
+        dict_feature_source = dict_feature_source.reset_index(drop=True)
+        dict_features = dict_features.reset_index(drop=True)
+
+    (
+        _data_completeness_numeric,
+        data_complete_mask,
+        dataset_feature_space_completeness,
+    ) = _build_complete_numeric_row_mask(
+        data_features,
+        required_columns=feature_cols,
+        label="dataset_feature_space",
+    )
+    if not np.all(data_complete_mask):
+        log.warning(
+            "Estimator dataset completeness: %d incomplete row(s) will be kept in the output but skipped for estimation.",
+            int(np.size(data_complete_mask) - np.sum(data_complete_mask)),
+        )
+    data_df = data_df.reset_index(drop=True)
+    data_feature_source = data_feature_source.reset_index(drop=True)
+    data_features = data_features.reset_index(drop=True)
 
     inverse_cfg = resolve_inverse_mapping_cfg(
         inverse_mapping_cfg=inverse_mapping_cfg,
@@ -5262,6 +5480,8 @@ def estimate_from_dataframes(
         row_result: dict = {"dataset_index": i}
         if join_col and data_ids:
             row_result["filename_base"] = data_ids[i]
+        row_result["feature_space_complete"] = bool(data_complete_mask[i]) if i < len(data_complete_mask) else False
+        row_result["estimation_failure_reason"] = None
         row_result["estimation_mode_used"] = "single_stage"
         row_result["stage1_best_distance_eff"] = np.nan
         row_result["stage2_best_distance_rate"] = np.nan
@@ -5296,6 +5516,16 @@ def estimate_from_dataframes(
             n_eff_masked = int(np.sum(out_of_support_eff_mask_non_hist[i]))
         row_result["n_eff_features_masked_out_of_support"] = n_eff_masked
         row_result["any_eff_feature_masked_out_of_support"] = bool(n_eff_masked > 0)
+
+        if not row_result["feature_space_complete"]:
+            row_result["n_candidates"] = 0
+            row_result["n_neighbors_used"] = 0
+            row_result["best_distance"] = np.nan
+            row_result["estimation_failure_reason"] = "incomplete_feature_space"
+            for pc in param_columns:
+                row_result[f"est_{pc}"] = np.nan
+            results.append(row_result)
+            continue
 
         # Find z-compatible candidates
         if dict_z is not None and data_z is not None:
@@ -5374,6 +5604,7 @@ def estimate_from_dataframes(
             for pc in param_columns:
                 row_result[f"est_{pc}"] = np.nan
             row_result["best_distance"] = np.nan
+            row_result["estimation_failure_reason"] = "no_candidates"
             results.append(row_result)
             continue
 
@@ -5498,6 +5729,7 @@ def estimate_from_dataframes(
             for pc in param_columns:
                 row_result[f"est_{pc}"] = np.nan
             row_result["best_distance"] = np.nan
+            row_result["estimation_failure_reason"] = "no_finite_distances"
             results.append(row_result)
             continue
 
@@ -5709,6 +5941,7 @@ def estimate_from_dataframes(
         if len(top_indices) == 0:
             for pc in param_columns:
                 row_result[f"est_{pc}"] = np.nan
+            row_result["estimation_failure_reason"] = "no_neighbors_selected"
         elif len(top_indices) == 1 or top_distances[0] <= distance_floor:
             # Nearest-only (or exact match)
             best_j = top_indices[0]
@@ -5721,6 +5954,7 @@ def estimate_from_dataframes(
                 best_j = top_indices[0]
                 for pc in param_columns:
                     row_result[f"est_{pc}"] = float(dict_param_arrays[pc][best_j])
+                row_result["estimation_failure_reason"] = "invalid_neighbor_weights_fallback_to_nearest"
                 results.append(row_result)
                 if (i + 1) % 200 == 0 or i == n_data - 1:
                     log.info("  Estimated %d / %d", i + 1, n_data)
@@ -5905,6 +6139,18 @@ def estimate_from_dataframes(
 
     result_df = pd.DataFrame(results)
     result_df.attrs["efficiency_feature_out_of_support_masking"] = out_of_support_eff_info
+    result_df.attrs["feature_space_completeness"] = {
+        "dictionary": dictionary_feature_space_completeness,
+        "dataset": dataset_feature_space_completeness,
+    }
+
+    log.info(
+        "Estimator completeness summary: dictionary kept %d/%d complete rows; dataset incomplete rows skipped=%d/%d.",
+        int(dictionary_feature_space_completeness.get("rows_kept", len(dict_df))),
+        int(dictionary_feature_space_completeness.get("input_rows", len(dict_df))),
+        int(dataset_feature_space_completeness.get("rows_removed", 0)),
+        int(dataset_feature_space_completeness.get("input_rows", len(data_df))),
+    )
 
     if "best_distance_base_share_tt_rates" in result_df.columns:
         tt_vals = pd.to_numeric(

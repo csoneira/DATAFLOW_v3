@@ -34,7 +34,9 @@ STEP_DIR = Path(__file__).resolve().parent
 INFERENCE_DIR = STEP_DIR.parent
 PIPELINE_DIR = INFERENCE_DIR.parent
 PROJECT_DIR = PIPELINE_DIR.parent
-DEFAULT_CONFIG = PROJECT_DIR / "config_step_1.1_method.json"
+DEFAULT_CONFIG = (
+    PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_1_COLLECT_DATA" / "INPUTS" / "config_step_1.1_method.json"
+)
 
 DEFAULT_DICTIONARY = (
     PIPELINE_DIR / "STEP_1_SETUP" / "STEP_1_4_ENSURE_CONTINUITY_DICTIONARY"
@@ -68,6 +70,12 @@ log = logging.getLogger("STEP_2.1")
 # ── Import shared estimation engine ──────────────────────────────────
 sys.path.insert(0, str(INFERENCE_DIR))
 try:
+    from inference_runtime import (
+        load_selected_feature_columns_artifact,
+        log_runtime_inverse_mapping_summary,
+        require_selected_feature_columns_present,
+        resolve_runtime_distance_and_inverse_mapping,
+    )
     from estimate_parameters import (
         _combine_distance_terms_with_breakdown,
         _efficiency_vector_group_distance_many,
@@ -78,9 +86,7 @@ try:
         _resolve_efficiency_vector_distance_cfg,
         _resolve_histogram_distance_cfg,
         _weighted_lp_many,
-        build_step15_runtime_inverse_mapping_cfg,
         estimate_from_dataframes,
-        load_distance_definition,
     )
 except Exception as exc:
     log.error("Failed to import estimate_parameters from %s: %s", INFERENCE_DIR, exc)
@@ -117,11 +123,22 @@ def _clear_plots_dir() -> None:
 
 def _load_feature_columns(path: Path) -> list[str]:
     """Load feature column list from the step 1.4 artifact."""
-    data = json.loads(path.read_text(encoding="utf-8"))
-    cols = data.get("selected_feature_columns", [])
-    if not cols:
-        raise ValueError(f"No feature columns in {path}")
-    return cols
+    return load_selected_feature_columns_artifact(path)
+
+
+def _require_selected_feature_columns_present(
+    feature_cols: list[str],
+    *,
+    dict_df: pd.DataFrame,
+    data_df: pd.DataFrame,
+) -> list[str]:
+    return require_selected_feature_columns_present(
+        feature_cols,
+        dict_df=dict_df,
+        data_df=data_df,
+        context_label="STEP 2.1",
+        right_label="dataset",
+    )
 
 
 def _load_config(path: Path) -> dict:
@@ -489,12 +506,13 @@ def _build_grouped_case_payload(
     }
 
     hist_cfg = feature_groups.get("rate_histogram", {})
+    hist_weight = float(group_weights.get("rate_histogram", 0.0))
     hist_cols = [
         str(col)
         for col in (hist_cfg.get("feature_columns", []) if isinstance(hist_cfg, Mapping) else [])
         if str(col) in dict_df.columns and str(col) in data_df.columns
     ]
-    if hist_cols and float(group_weights.get("rate_histogram", 0.0)) > 0.0:
+    if hist_cols:
         hist_dist_cfg = _resolve_histogram_distance_cfg(hist_cfg if isinstance(hist_cfg, Mapping) else {})
         dict_hist = dict_df[hist_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
         sample_hist = (
@@ -503,33 +521,37 @@ def _build_grouped_case_payload(
             .to_numpy(dtype=float)
             .reshape(-1)
         )
-        hist_dist = _histogram_distance_many(
-            sample_hist,
-            dict_hist,
-            distance=str(hist_dist_cfg["distance"]),
-            normalization=str(hist_dist_cfg["normalization"]),
-            p_norm=float(hist_dist_cfg["p_norm"]),
-            amplitude_weight=float(hist_dist_cfg["amplitude_weight"]),
-            shape_weight=float(hist_dist_cfg["shape_weight"]),
-            slope_weight=float(hist_dist_cfg["slope_weight"]),
-            cdf_weight=float(hist_dist_cfg["cdf_weight"]),
-            amplitude_stat=str(hist_dist_cfg["amplitude_stat"]),
-        )
-        aux_terms.append(
-            (
-                "rate_histogram",
-                hist_dist,
-                float(group_weights.get("rate_histogram", 0.0)),
-                str(hist_cfg.get("blend_mode", "normalized")) if isinstance(hist_cfg, Mapping) else "normalized",
+        if hist_weight > 0.0:
+            hist_dist = _histogram_distance_many(
+                sample_hist,
+                dict_hist,
+                distance=str(hist_dist_cfg["distance"]),
+                normalization=str(hist_dist_cfg["normalization"]),
+                p_norm=float(hist_dist_cfg["p_norm"]),
+                amplitude_weight=float(hist_dist_cfg["amplitude_weight"]),
+                shape_weight=float(hist_dist_cfg["shape_weight"]),
+                slope_weight=float(hist_dist_cfg["slope_weight"]),
+                cdf_weight=float(hist_dist_cfg["cdf_weight"]),
+                amplitude_stat=str(hist_dist_cfg["amplitude_stat"]),
             )
-        )
+            aux_terms.append(
+                (
+                    "rate_histogram",
+                    hist_dist,
+                    hist_weight,
+                    str(hist_cfg.get("blend_mode", "normalized")) if isinstance(hist_cfg, Mapping) else "normalized",
+                )
+            )
         plot_payload["histogram"] = {
             "columns": hist_cols,
             "sample": sample_hist,
             "dict_matrix": dict_hist,
+            "weight": hist_weight,
+            "active": bool(hist_weight > 0.0),
         }
 
     eff_cfg = feature_groups.get("efficiency_vectors", {})
+    eff_weight = float(group_weights.get("efficiency_vectors", 0.0))
     eff_payloads = _prepare_efficiency_vector_group_payloads(
         dict_df=dict_df,
         data_df=data_df.iloc[[row_idx]].copy(),
@@ -539,45 +561,48 @@ def _build_grouped_case_payload(
         feature_groups_cfg=eff_cfg if isinstance(eff_cfg, Mapping) else None,
         selected_feature_columns=feature_cols,
     )
-    if eff_payloads and float(group_weights.get("efficiency_vectors", 0.0)) > 0.0:
+    if eff_payloads:
         eff_dist_cfg = _resolve_efficiency_vector_distance_cfg(eff_cfg if isinstance(eff_cfg, Mapping) else {})
-        group_distances: list[np.ndarray] = []
-        for payload in eff_payloads:
-            group_dist = _efficiency_vector_group_distance_many(
-                sample_eff=np.asarray(payload["data_eff"], dtype=float)[0],
-                candidates_eff=np.asarray(payload["dict_eff"], dtype=float),
-                sample_unc=np.asarray(payload["data_unc"], dtype=float)[0],
-                candidates_unc=np.asarray(payload["dict_unc"], dtype=float),
-                centers=np.asarray(payload["centers"], dtype=float),
-                axis_name=str(payload["axis"]),
-                fiducial=dict(eff_dist_cfg["fiducial"]),
-                uncertainty_floor=float(eff_dist_cfg["uncertainty_floor"]),
-                min_valid_bins=int(eff_dist_cfg["min_valid_bins_per_vector"]),
-                normalization=str(eff_dist_cfg["normalization"]),
-                p_norm=float(eff_dist_cfg["p_norm"]),
-                amplitude_weight=float(eff_dist_cfg["amplitude_weight"]),
-                shape_weight=float(eff_dist_cfg["shape_weight"]),
-                slope_weight=float(eff_dist_cfg["slope_weight"]),
-                cdf_weight=float(eff_dist_cfg["cdf_weight"]),
-                amplitude_stat=str(eff_dist_cfg["amplitude_stat"]),
-            )
-            group_distances.append(group_dist)
-        if group_distances:
-            aux_terms.append(
-                (
-                    "efficiency_vectors",
-                    _reduce_efficiency_vector_group_stack(
-                        np.vstack(group_distances),
-                        group_reduction=str(eff_dist_cfg["group_reduction"]),
-                    ),
-                    float(group_weights.get("efficiency_vectors", 0.0)),
-                    str(eff_cfg.get("blend_mode", "normalized")) if isinstance(eff_cfg, Mapping) else "normalized",
+        if eff_weight > 0.0:
+            group_distances: list[np.ndarray] = []
+            for payload in eff_payloads:
+                group_dist = _efficiency_vector_group_distance_many(
+                    sample_eff=np.asarray(payload["data_eff"], dtype=float)[0],
+                    candidates_eff=np.asarray(payload["dict_eff"], dtype=float),
+                    sample_unc=np.asarray(payload["data_unc"], dtype=float)[0],
+                    candidates_unc=np.asarray(payload["dict_unc"], dtype=float),
+                    centers=np.asarray(payload["centers"], dtype=float),
+                    axis_name=str(payload["axis"]),
+                    fiducial=dict(eff_dist_cfg["fiducial"]),
+                    uncertainty_floor=float(eff_dist_cfg["uncertainty_floor"]),
+                    min_valid_bins=int(eff_dist_cfg["min_valid_bins_per_vector"]),
+                    normalization=str(eff_dist_cfg["normalization"]),
+                    p_norm=float(eff_dist_cfg["p_norm"]),
+                    amplitude_weight=float(eff_dist_cfg["amplitude_weight"]),
+                    shape_weight=float(eff_dist_cfg["shape_weight"]),
+                    slope_weight=float(eff_dist_cfg["slope_weight"]),
+                    cdf_weight=float(eff_dist_cfg["cdf_weight"]),
+                    amplitude_stat=str(eff_dist_cfg["amplitude_stat"]),
                 )
-            )
-            plot_payload["efficiency_vectors"] = {
-                "payloads": eff_payloads,
-                "cfg": eff_dist_cfg,
-            }
+                group_distances.append(group_dist)
+            if group_distances:
+                aux_terms.append(
+                    (
+                        "efficiency_vectors",
+                        _reduce_efficiency_vector_group_stack(
+                            np.vstack(group_distances),
+                            group_reduction=str(eff_dist_cfg["group_reduction"]),
+                        ),
+                        eff_weight,
+                        str(eff_cfg.get("blend_mode", "normalized")) if isinstance(eff_cfg, Mapping) else "normalized",
+                    )
+                )
+        plot_payload["efficiency_vectors"] = {
+            "payloads": eff_payloads,
+            "cfg": eff_dist_cfg,
+            "weight": eff_weight,
+            "active": bool(eff_weight > 0.0),
+        }
 
     total_distances, _ = _combine_distance_terms_with_breakdown(
         base_distances=base_distances,
@@ -647,7 +672,16 @@ def _plot_grouped_case_diagnostic(
                 ax_hist.fill_between(bins, q10, q90, color="0.85", alpha=0.4, zorder=0)
         ax_hist.plot(bins, dict_hist[best_index], color="#E15759", lw=2.0, label="Best dictionary", zorder=3)
         ax_hist.plot(bins, sample_hist, color="black", lw=2.2, label="Sample row", zorder=4)
-        ax_hist.set_title("Rate histogram: sample vs best dictionary vs top-10 neighbors", fontsize=11)
+        hist_weight = float(hist_payload.get("weight", np.nan))
+        hist_status = "active" if bool(hist_payload.get("active", False)) else "inactive"
+        if np.isfinite(hist_weight):
+            hist_title_suffix = f" [{hist_status}, weight={hist_weight:.3g}]"
+        else:
+            hist_title_suffix = f" [{hist_status}]"
+        ax_hist.set_title(
+            f"Rate histogram: sample vs best dictionary vs top-10 neighbors{hist_title_suffix}",
+            fontsize=11,
+        )
         ax_hist.set_xlabel("Histogram bin", fontsize=9)
         ax_hist.set_ylabel("Rate [Hz]", fontsize=9)
         ax_hist.grid(True, alpha=0.15)
@@ -656,6 +690,12 @@ def _plot_grouped_case_diagnostic(
     eff_payload = payload.get("efficiency_vectors")
     if isinstance(eff_payload, Mapping):
         fiducial = eff_payload["cfg"].get("fiducial", {})
+        eff_weight = float(eff_payload.get("weight", np.nan))
+        eff_status = "active" if bool(eff_payload.get("active", False)) else "inactive"
+        if np.isfinite(eff_weight):
+            eff_title_suffix = f" [{eff_status}, weight={eff_weight:.3g}]"
+        else:
+            eff_title_suffix = f" [{eff_status}]"
         by_label = {
             str(item.get("label", "")): item
             for item in eff_payload["payloads"]
@@ -702,7 +742,7 @@ def _plot_grouped_case_diagnostic(
                     alpha=0.10,
                     zorder=3,
                 )
-                ax.set_title(f"Plane {plane} vs {axis_name}", fontsize=9)
+                ax.set_title(f"Plane {plane} vs {axis_name}{eff_title_suffix}", fontsize=9)
                 ax.set_ylim(0.0, 1.05)
                 ax.grid(True, alpha=0.15)
                 if plane == 4:
@@ -796,17 +836,15 @@ def main() -> int:
     if not DEFAULT_FEATURE_COLUMNS.exists():
         log.error("Feature columns artifact not found: %s", DEFAULT_FEATURE_COLUMNS)
         return 1
-    feature_cols = _load_feature_columns(DEFAULT_FEATURE_COLUMNS)
-
-    # Filter to columns present in both dictionary and dataset
-    feat_common = [c for c in feature_cols if c in dict_df.columns and c in data_df.columns]
-    dropped = [c for c in feature_cols if c not in feat_common]
-    if dropped:
-        log.warning("Dropped %d feature column(s) not in both dict/dataset: %s", len(dropped), dropped)
-    if not feat_common:
-        log.error("No common feature columns between dictionary and dataset.")
+    try:
+        feature_cols = _require_selected_feature_columns_present(
+            _load_feature_columns(DEFAULT_FEATURE_COLUMNS),
+            dict_df=dict_df,
+            data_df=data_df,
+        )
+    except ValueError as exc:
+        log.error("%s", exc)
         return 1
-    feature_cols = feat_common
 
     # Detect parameter columns
     param_cols = [c for c in PARAM_COLUMNS if c in dict_df.columns]
@@ -825,79 +863,26 @@ def main() -> int:
     # Allow overriding the distance definition from config (useful for
     # quick experiments that want to test a particular group combination,
     # e.g. rate_histogram + efficiency_vectors:x only).
-    dd = None
     cfg_dd = cfg_21.get("distance_definition") or cfg_21.get("distance_definition_path")
-    if isinstance(cfg_dd, str) and cfg_dd:
-        try:
-            dd = load_distance_definition(feature_cols, path=Path(cfg_dd))
-        except Exception:
-            log.warning("Failed to load distance_definition from path: %s", cfg_dd)
-            dd = None
-
-    if isinstance(cfg_dd, dict) and cfg_dd:
-        # The config-provided distance definition should include feature_columns
-        # that exactly match the resolved `feature_cols`. Validate and use it.
-        if list(cfg_dd.get("feature_columns", [])) == list(feature_cols):
-            dd = dict(cfg_dd)
-            dd["available"] = True
-        else:
-            log.warning(
-                "Config distance_definition.feature_columns does not match selected feature columns; ignoring override."
-            )
-    if dd is None:
-        dd = load_distance_definition(feature_cols, path=DEFAULT_DISTANCE_DEFINITION)
-    dist_mode_name: str = "l2_standard_zscore_fallback"
-
-    if dd["available"]:
-        dist_mode_name = dd.get("selected_mode", "unknown")
-        n_active = int(np.sum(dd["weights"] > 0))
-        n_active_groups = int(
-            sum(float(v) > 0.0 for v in (dd.get("group_weights", {}) or {}).values())
+    try:
+        dd, runtime_inverse_mapping_cfg, _interpolation_k = resolve_runtime_distance_and_inverse_mapping(
+            feature_columns=feature_cols,
+            inverse_mapping_cfg=inv_cfg,
+            interpolation_k=interpolation_k_requested,
+            context_label="STEP 2.1",
+            distance_definition_path=DEFAULT_DISTANCE_DEFINITION,
+            logger=log,
+            distance_definition_override=cfg_dd,
         )
-        regression_mode = (
-            "local-linear ridge"
-            if float(dd.get("optimal_lambda", 1e6)) < 1e5
-            else "IDW^2"
-        )
-        log.info(
-            "Loaded distance definition from step 1.5: %s (p=%.1f, k=%d, λ=%.0e [%s], one_feature_vectors_active=%d/%d, multi_feature_vectors_active=%d)",
-            dist_mode_name,
-            dd["p_norm"],
-            int(dd.get("optimal_k", 5)),
-            float(dd.get("optimal_lambda", 1e6)),
-            regression_mode,
-            n_active,
-            len(feature_cols),
-            n_active_groups,
-        )
-        if str(dd.get("alignment_mode", "exact")) == "projected_subset":
-            log.info(
-                "Distance-definition feature alignment: projected %d tuned feature column(s) onto %d requested feature column(s); unmatched requested one-feature vectors are treated as zero-weight.",
-                int(dd.get("artifact_feature_columns_count", 0)),
-                int(dd.get("requested_feature_columns_count", len(feature_cols))),
-            )
-    else:
-        log.warning("Distance definition not available: %s; falling back to standard z-score.", dd.get("reason"))
-        dd = None
-
-    runtime_inverse_mapping_cfg = build_step15_runtime_inverse_mapping_cfg(
-        inverse_mapping_cfg=inv_cfg,
-        interpolation_k=interpolation_k_requested,
-        distance_definition=dd,
-    )
+    except ValueError as exc:
+        log.error(str(exc))
+        return 1
 
     log.info("Dictionary: %s (%d rows)", dict_path, len(dict_df))
     log.info("Dataset:    %s (%d rows)", data_path, len(data_df))
     log.info("Feature columns: %d", len(feature_cols))
     log.info("Parameter columns: %s", param_cols)
-    log.info(
-        "STEP 1.5 runtime inverse mapping: selection=%s k=%d weighting=%s idw_power=%.1f aggregation=%s",
-        runtime_inverse_mapping_cfg["neighbor_selection"],
-        int(runtime_inverse_mapping_cfg["neighbor_count"]),
-        runtime_inverse_mapping_cfg["weighting"],
-        float(runtime_inverse_mapping_cfg["inverse_distance_power"]),
-        runtime_inverse_mapping_cfg["aggregation"],
-    )
+    log_runtime_inverse_mapping_summary(log, runtime_inverse_mapping_cfg)
 
     # ── Run estimation using the shared engine ─────────────────
     result_df = estimate_from_dataframes(
@@ -961,7 +946,7 @@ def main() -> int:
     summary = {
         "dictionary": str(dict_path),
         "dataset": str(data_path),
-        "distance_mode": dist_mode_name,
+        "distance_mode": dd.get("selected_mode", "unknown") if dd is not None else None,
         "distance_definition_used": dd is not None,
         "distance_definition_mode": dd.get("selected_mode") if dd is not None else None,
         "k": int(runtime_inverse_mapping_cfg["neighbor_count"]),

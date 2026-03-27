@@ -40,15 +40,20 @@ if STEP_DIR.parents[2].name == "STEPS":
     PIPELINE_DIR = STEP_DIR.parents[3]
 else:
     PIPELINE_DIR = STEP_DIR.parents[2]
-DEFAULT_CONFIG = PIPELINE_DIR / "config_step_1.1_method.json"
-CONFIG_COLUMNS_PATH = PIPELINE_DIR / "config_step_2.1_columns.json"
 
 if (PIPELINE_DIR / "STEP_1_SETUP").exists() and (PIPELINE_DIR / "STEP_2_INFERENCE").exists():
     STEP_ROOT = PIPELINE_DIR
 else:
     STEP_ROOT = PIPELINE_DIR / "STEPS"
+DEFAULT_CONFIG = (
+    STEP_ROOT / "STEP_1_SETUP" / "STEP_1_1_COLLECT_DATA" / "INPUTS" / "config_step_1.1_method.json"
+)
+CONFIG_COLUMNS_PATH = (
+    STEP_ROOT / "STEP_2_INFERENCE" / "STEP_2_1_ESTIMATE_PARAMS" / "INPUTS" / "config_step_2.1_columns.json"
+)
 
 INFERENCE_DIR = STEP_ROOT / "STEP_2_INFERENCE"
+STEP21_DIR = INFERENCE_DIR / "STEP_2_1_ESTIMATE_PARAMS"
 
 DEFAULT_REAL_COLLECTED = (
     STEP_DIR.parent
@@ -89,6 +94,14 @@ DEFAULT_BUILD_SUMMARY = (
     / "FILES"
     / "build_summary.json"
 )
+DEFAULT_STEP13_BUILD_SUMMARY = (
+    STEP_ROOT
+    / "STEP_1_SETUP"
+    / "STEP_1_3_BUILD_DICTIONARY"
+    / "OUTPUTS"
+    / "FILES"
+    / "build_summary.json"
+)
 DEFAULT_STEP12_SELECTED_FEATURE_COLUMNS = (
     STEP_ROOT
     / "STEP_1_SETUP"
@@ -115,6 +128,11 @@ PLOT_PARAMETER_SERIES = PLOTS_DIR / "STEP_4_2_5_parameter_estimate_series.png"
 PLOT_EST_CURVE = PLOTS_DIR / "STEP_4_2_6_estimated_curve_flux_vs_eff.png"
 PLOT_RECOVERY_STORY = PLOTS_DIR / "STEP_4_2_7_flux_recovery_vs_global_rate.png"
 PLOT_DISTANCE_DOMINANCE = PLOTS_DIR / "STEP_4_2_8_feature_distance_dominance.png"
+PLOT_GROUPED_CASE = PLOTS_DIR / "STEP_4_2_9_grouped_case_top_matches.png"
+PLOT_INVERSE_PROXY_CASE = PLOTS_DIR / "STEP_4_2_10_inverse_estimate_vs_k1_proxy.png"
+PLOT_PARAMETER_SERIES_VS_K1 = PLOTS_DIR / "STEP_4_2_11_parameter_estimate_series_vs_k1.png"
+GROUPED_CASE_NEIGHBORS_CSV = FILES_DIR / "step_4_2_grouped_case_top_neighbors.csv"
+INVERSE_PROXY_CASE_CSV = FILES_DIR / "step_4_2_inverse_estimate_vs_k1_proxy.csv"
 
 _PLOT_EXTENSIONS = {
     ".png",
@@ -135,19 +153,42 @@ log = logging.getLogger("STEP_4.2")
 
 CANONICAL_FLUX_COLUMN = "flux_cm2_min"
 
+MODULES_DIR = STEP_ROOT / "MODULES"
+if str(MODULES_DIR) not in sys.path:
+    sys.path.insert(0, str(MODULES_DIR))
+
 # Import estimator directly from STEP_2_INFERENCE.
 if str(INFERENCE_DIR) not in sys.path:
     sys.path.insert(0, str(INFERENCE_DIR))
+if str(STEP21_DIR) not in sys.path:
+    sys.path.insert(0, str(STEP21_DIR))
 try:
+    from efficiency_fit_utils import load_efficiency_fit_models  # noqa: E402
+    from inference_runtime import (  # noqa: E402
+        log_runtime_inverse_mapping_summary,
+        parse_column_spec as _shared_parse_column_spec,
+        require_selected_feature_columns_present as _shared_require_selected_feature_columns_present,
+        resolve_estimation_parameter_columns as _shared_resolve_estimation_parameter_columns,
+        resolve_runtime_distance_and_inverse_mapping,
+    )
+    from uncertainty_lut import (  # noqa: E402
+        detect_uncertainty_lut_param_names,
+        interpolate_uncertainty_columns,
+        load_uncertainty_lut_table,
+    )
     from estimate_parameters import (  # noqa: E402
         DERIVED_LOG_RATE_OVER_EFF_PRODUCT_COL,
         _append_derived_physics_feature_columns,
         _append_derived_tt_global_rate_column,
         _derived_feature_columns as _shared_derived_feature_columns,
         _normalize_derived_physics_features,
-        build_step15_runtime_inverse_mapping_cfg,
         estimate_from_dataframes,
-        load_distance_definition,
+        require_explicit_columns_present_in_both_frames,
+    )
+    from estimate_and_plot import (  # noqa: E402
+        _apply_fiducial_overlay,
+        _build_grouped_case_payload,
+        _select_grouped_diagnostic_case,
     )
     from feature_columns_config import (  # noqa: E402
         parse_explicit_feature_columns,
@@ -170,6 +211,396 @@ def _clear_plots_dir() -> None:
             except OSError as exc:
                 log.warning("Could not remove old plot file %s: %s", candidate, exc)
     log.info("Cleared %d plot file(s) from %s", removed, PLOTS_DIR)
+
+
+def _save_figure(fig: plt.Figure, path: Path, **kwargs) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, **kwargs)
+
+
+def _plot_grouped_case_diagnostic_real(
+    *,
+    dict_df: pd.DataFrame,
+    data_df: pd.DataFrame,
+    result_df: pd.DataFrame,
+    param_cols: list[str],
+    feature_cols: list[str],
+    distance_definition: dict | None,
+    case_selector: str,
+    top_k: int,
+    out_path: Path,
+    neighbors_csv_path: Path,
+) -> dict[str, object]:
+    summary: dict[str, object] = {
+        "plot_available": False,
+        "selector": str(case_selector),
+        "row_position": None,
+        "dataset_index": None,
+        "filename_base": None,
+        "top_k": int(max(top_k, 1)),
+        "top_neighbor_count": 0,
+        "best_distance": None,
+        "best_dictionary_index": None,
+        "best_dictionary_filename_base": None,
+        "histogram_plotted": False,
+        "efficiency_vectors_plotted": False,
+        "plot_path": str(out_path),
+        "neighbors_csv_path": str(neighbors_csv_path),
+    }
+    if distance_definition is None or not distance_definition.get("feature_groups"):
+        return summary
+
+    row_position = _select_grouped_diagnostic_case(
+        result_df,
+        param_cols,
+        selector=case_selector,
+    )
+    if row_position is None or row_position < 0 or row_position >= len(result_df):
+        return summary
+
+    dataset_index_value = pd.to_numeric(
+        pd.Series([result_df.iloc[row_position].get("dataset_index")]),
+        errors="coerce",
+    ).iloc[0]
+    data_row_idx = int(dataset_index_value) if pd.notna(dataset_index_value) else int(row_position)
+    if data_row_idx < 0 or data_row_idx >= len(data_df):
+        return summary
+
+    payload = _build_grouped_case_payload(
+        dict_df=dict_df,
+        data_df=data_df,
+        feature_cols=feature_cols,
+        distance_definition=distance_definition,
+        row_idx=data_row_idx,
+        top_k=max(top_k, 1),
+    )
+    if not payload:
+        return summary
+
+    top_indices = np.asarray(payload["top_indices"], dtype=int)
+    if top_indices.size == 0:
+        return summary
+    best_index = int(payload["best_index"])
+    top_distances = np.asarray(payload["top_distances"], dtype=float)
+
+    fig = plt.figure(figsize=(16, 18), constrained_layout=True)
+    gs = fig.add_gridspec(5, 3, height_ratios=[1.2, 1.0, 1.0, 1.0, 1.0], hspace=0.35, wspace=0.25)
+
+    hist_payload = payload.get("histogram")
+    if isinstance(hist_payload, dict):
+        ax_hist = fig.add_subplot(gs[0, :])
+        hist_cols = [str(col) for col in hist_payload["columns"]]
+        bins = np.asarray([int(col.split("_")[3]) for col in hist_cols], dtype=float)
+        sample_hist = np.asarray(hist_payload["sample"], dtype=float)
+        dict_hist = np.asarray(hist_payload["dict_matrix"], dtype=float)
+        top_hist = dict_hist[top_indices]
+        if top_hist.size:
+            for curve in top_hist:
+                ax_hist.plot(bins, curve, color="0.75", alpha=0.35, lw=0.8, zorder=1)
+            if np.isfinite(top_hist).any():
+                q10 = np.nanpercentile(top_hist, 10.0, axis=0)
+                q90 = np.nanpercentile(top_hist, 90.0, axis=0)
+                ax_hist.fill_between(bins, q10, q90, color="0.85", alpha=0.4, zorder=0)
+        ax_hist.plot(bins, dict_hist[best_index], color="#E15759", lw=2.0, label="Best dictionary", zorder=3)
+        ax_hist.plot(bins, sample_hist, color="black", lw=2.2, label="Real-data row", zorder=4)
+        hist_weight = float(hist_payload.get("weight", np.nan))
+        hist_status = "active" if bool(hist_payload.get("active", False)) else "inactive"
+        hist_title_suffix = (
+            f" [{hist_status}, weight={hist_weight:.3g}]"
+            if np.isfinite(hist_weight)
+            else f" [{hist_status}]"
+        )
+        ax_hist.set_title(
+            f"Rate histogram: real row vs best dictionary vs top-{len(top_indices)} neighbors{hist_title_suffix}",
+            fontsize=11,
+        )
+        ax_hist.set_xlabel("Histogram bin", fontsize=9)
+        ax_hist.set_ylabel("Rate [Hz]", fontsize=9)
+        ax_hist.grid(True, alpha=0.15)
+        ax_hist.legend(fontsize=8, loc="upper right")
+        summary["histogram_plotted"] = True
+
+    eff_payload = payload.get("efficiency_vectors")
+    if isinstance(eff_payload, dict):
+        fiducial = eff_payload["cfg"].get("fiducial", {})
+        eff_weight = float(eff_payload.get("weight", np.nan))
+        eff_status = "active" if bool(eff_payload.get("active", False)) else "inactive"
+        eff_title_suffix = (
+            f" [{eff_status}, weight={eff_weight:.3g}]"
+            if np.isfinite(eff_weight)
+            else f" [{eff_status}]"
+        )
+        by_label = {str(item.get("label", "")): item for item in eff_payload["payloads"]}
+        any_eff_panel = False
+        for plane in range(1, 5):
+            for col_idx, axis_name in enumerate(("x", "y", "theta")):
+                label = f"p{plane}_{axis_name}"
+                ax = fig.add_subplot(gs[plane, col_idx])
+                item = by_label.get(label)
+                if not item:
+                    ax.set_axis_off()
+                    continue
+                any_eff_panel = True
+                centers = np.asarray(item["centers"], dtype=float)
+                sample_eff = np.asarray(item["data_eff"], dtype=float)[0]
+                sample_unc = np.asarray(item["data_unc"], dtype=float)[0]
+                dict_eff = np.asarray(item["dict_eff"], dtype=float)[top_indices]
+                dict_unc = np.asarray(item["dict_unc"], dtype=float)[top_indices]
+                _apply_fiducial_overlay(ax, axis_name, fiducial)
+                if dict_eff.size:
+                    for curve in dict_eff:
+                        ax.plot(centers, curve, color="0.75", alpha=0.35, lw=0.8, zorder=1)
+                    if np.isfinite(dict_eff).any():
+                        q10 = np.nanpercentile(dict_eff, 10.0, axis=0)
+                        q90 = np.nanpercentile(dict_eff, 90.0, axis=0)
+                        ax.fill_between(centers, q10, q90, color="0.85", alpha=0.4, zorder=0)
+                        best_eff = dict_eff[0]
+                        best_unc = dict_unc[0] if dict_unc.ndim == 2 else None
+                        ax.plot(centers, best_eff, color="#E15759", lw=1.8, zorder=3)
+                        if best_unc is not None:
+                            ax.fill_between(
+                                centers,
+                                np.clip(best_eff - best_unc, 0.0, 1.0),
+                                np.clip(best_eff + best_unc, 0.0, 1.0),
+                                color="#E15759",
+                                alpha=0.12,
+                                zorder=2,
+                            )
+                ax.plot(centers, sample_eff, color="black", lw=2.0, zorder=4)
+                ax.fill_between(
+                    centers,
+                    np.clip(sample_eff - sample_unc, 0.0, 1.0),
+                    np.clip(sample_eff + sample_unc, 0.0, 1.0),
+                    color="black",
+                    alpha=0.10,
+                    zorder=3,
+                )
+                ax.set_title(f"Plane {plane} vs {axis_name}{eff_title_suffix}", fontsize=9)
+                ax.set_ylim(0.0, 1.05)
+                ax.grid(True, alpha=0.15)
+                if plane == 4:
+                    ax.set_xlabel("mm" if axis_name in {"x", "y"} else "deg", fontsize=8)
+                if col_idx == 0:
+                    ax.set_ylabel("Efficiency", fontsize=8)
+                ax.tick_params(labelsize=7)
+        summary["efficiency_vectors_plotted"] = any_eff_panel
+
+    result_row = result_df.iloc[row_position]
+    filename = str(result_row.get("filename_base", f"row_{data_row_idx}"))
+    best_distance = pd.to_numeric(pd.Series([result_row.get("best_distance")]), errors="coerce").iloc[0]
+    flux_est = pd.to_numeric(pd.Series([result_row.get("est_flux_cm2_min")]), errors="coerce").iloc[0]
+    flux_text = f" | flux est={float(flux_est):.4g}" if pd.notna(flux_est) else ""
+    distance_text = f"{float(top_distances[0]):.4g}" if top_distances.size else "nan"
+    fig.suptitle(
+        f"Grouped feature diagnostic case: selector={case_selector} row={row_position} dataset_index={data_row_idx} file={filename}{flux_text}\n"
+        f"Top {len(top_indices)} dictionary neighbors: best idx={best_index}, best distance={distance_text}",
+        fontsize=12,
+        y=0.995,
+    )
+    _save_figure(fig, out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    neighbor_rows = dict_df.iloc[top_indices].copy()
+    neighbor_rows.insert(0, "rank", np.arange(1, len(top_indices) + 1, dtype=int))
+    neighbor_rows.insert(1, "dictionary_index", top_indices.astype(int))
+    neighbor_rows.insert(2, "distance", top_distances)
+    keep_cols = ["rank", "dictionary_index", "distance"]
+    if "filename_base" in neighbor_rows.columns:
+        keep_cols.append("filename_base")
+    keep_cols.extend([col for col in param_cols if col in neighbor_rows.columns])
+    neighbor_rows[keep_cols].to_csv(neighbors_csv_path, index=False)
+
+    summary.update(
+        {
+            "plot_available": True,
+            "row_position": int(row_position),
+            "dataset_index": int(data_row_idx),
+            "filename_base": filename,
+            "top_neighbor_count": int(len(top_indices)),
+            "best_distance": float(best_distance) if pd.notna(best_distance) else None,
+            "best_dictionary_index": int(best_index),
+            "best_dictionary_filename_base": (
+                str(dict_df.iloc[best_index].get("filename_base"))
+                if "filename_base" in dict_df.columns
+                else None
+            ),
+        }
+    )
+    return summary
+
+
+def _plot_inverse_estimate_vs_k1_proxy_case(
+    *,
+    dict_df: pd.DataFrame,
+    result_df: pd.DataFrame,
+    param_cols: list[str],
+    grouped_case_summary: dict[str, object],
+    inverse_mapping_cfg: dict[str, object] | None,
+    out_path: Path,
+    out_csv_path: Path,
+) -> dict[str, object]:
+    summary: dict[str, object] = {
+        "plot_available": False,
+        "row_position": None,
+        "dataset_index": None,
+        "filename_base": None,
+        "best_dictionary_index": None,
+        "best_dictionary_filename_base": None,
+        "plot_path": str(out_path),
+        "csv_path": str(out_csv_path),
+        "parameter_count": 0,
+        "parameters_compared": [],
+    }
+    if not grouped_case_summary.get("plot_available", False):
+        return summary
+
+    row_position = grouped_case_summary.get("row_position")
+    best_dictionary_index = grouped_case_summary.get("best_dictionary_index")
+    if row_position is None or best_dictionary_index is None:
+        return summary
+    row_position = int(row_position)
+    best_dictionary_index = int(best_dictionary_index)
+    if row_position < 0 or row_position >= len(result_df):
+        return summary
+    if best_dictionary_index < 0 or best_dictionary_index >= len(dict_df):
+        return summary
+
+    result_row = result_df.iloc[row_position]
+    dict_row = dict_df.iloc[best_dictionary_index]
+
+    comparison_rows: list[dict[str, object]] = []
+    for param_name in param_cols:
+        est_col = f"est_{param_name}"
+        if est_col not in result_row.index or param_name not in dict_row.index:
+            continue
+        method_value = pd.to_numeric(pd.Series([result_row.get(est_col)]), errors="coerce").iloc[0]
+        k1_value = pd.to_numeric(pd.Series([dict_row.get(param_name)]), errors="coerce").iloc[0]
+        if pd.isna(method_value) and pd.isna(k1_value):
+            continue
+        abs_delta = np.nan
+        rel_delta_pct = np.nan
+        if pd.notna(method_value) and pd.notna(k1_value):
+            abs_delta = float(method_value) - float(k1_value)
+            denom = max(abs(float(k1_value)), 1e-12)
+            rel_delta_pct = 100.0 * abs_delta / denom
+        comparison_rows.append(
+            {
+                "parameter": str(param_name),
+                "method_estimate": float(method_value) if pd.notna(method_value) else np.nan,
+                "k1_nearest_dictionary_value": float(k1_value) if pd.notna(k1_value) else np.nan,
+                "abs_delta_method_minus_k1": abs_delta,
+                "rel_delta_method_minus_k1_pct": rel_delta_pct,
+            }
+        )
+
+    if not comparison_rows:
+        return summary
+
+    comparison_df = pd.DataFrame(comparison_rows)
+    comparison_df.insert(0, "dataset_index", int(grouped_case_summary.get("dataset_index", row_position)))
+    comparison_df.insert(1, "row_position", int(row_position))
+    comparison_df.insert(2, "filename_base", str(grouped_case_summary.get("filename_base", f"row_{row_position}")))
+    comparison_df.insert(3, "best_dictionary_index", int(best_dictionary_index))
+    comparison_df.insert(
+        4,
+        "best_dictionary_filename_base",
+        grouped_case_summary.get("best_dictionary_filename_base"),
+    )
+    comparison_df.insert(
+        5,
+        "best_distance",
+        float(grouped_case_summary["best_distance"])
+        if grouped_case_summary.get("best_distance") is not None
+        else np.nan,
+    )
+    comparison_df.to_csv(out_csv_path, index=False)
+
+    flux_mask = comparison_df["parameter"].astype(str).str.contains("flux", case=False, regex=False)
+    eff_mask = comparison_df["parameter"].astype(str).str.contains("eff", case=False, regex=False)
+    other_mask = ~(flux_mask | eff_mask)
+
+    panel_specs: list[tuple[str, pd.DataFrame]] = []
+    if flux_mask.any():
+        panel_specs.append(("Flux", comparison_df.loc[flux_mask].copy()))
+    if eff_mask.any():
+        panel_specs.append(("Efficiencies", comparison_df.loc[eff_mask].copy()))
+    if other_mask.any():
+        panel_specs.append(("Other Parameters", comparison_df.loc[other_mask].copy()))
+    if not panel_specs:
+        panel_specs.append(("Parameters", comparison_df.copy()))
+
+    fig_height = max(4.5, 2.2 * len(panel_specs) + 0.7 * len(comparison_df))
+    fig, axes = plt.subplots(
+        len(panel_specs),
+        1,
+        figsize=(11, fig_height),
+        constrained_layout=True,
+    )
+    axes_arr = np.atleast_1d(axes)
+
+    for ax, (title, panel_df) in zip(axes_arr, panel_specs):
+        panel_df = panel_df.reset_index(drop=True)
+        y = np.arange(len(panel_df), dtype=float)
+        method_vals = pd.to_numeric(panel_df["method_estimate"], errors="coerce").to_numpy(dtype=float)
+        k1_vals = pd.to_numeric(panel_df["k1_nearest_dictionary_value"], errors="coerce").to_numpy(dtype=float)
+        labels = panel_df["parameter"].astype(str).tolist()
+        for yi, mv, kv in zip(y, method_vals, k1_vals):
+            if np.isfinite(mv) and np.isfinite(kv):
+                ax.plot([kv, mv], [yi, yi], color="0.75", lw=1.6, zorder=1)
+        ax.scatter(k1_vals, y, color="#E15759", s=60, label="k=1 nearest dictionary", zorder=3)
+        ax.scatter(method_vals, y, color="black", s=60, label="Current inverse estimate", zorder=4)
+        for yi, (_, row) in zip(y, panel_df.iterrows()):
+            rel = pd.to_numeric(pd.Series([row.get("rel_delta_method_minus_k1_pct")]), errors="coerce").iloc[0]
+            if pd.notna(rel):
+                x_text = max(
+                    pd.to_numeric(pd.Series([row.get("method_estimate")]), errors="coerce").iloc[0],
+                    pd.to_numeric(pd.Series([row.get("k1_nearest_dictionary_value")]), errors="coerce").iloc[0],
+                )
+                ax.text(
+                    float(x_text),
+                    float(yi) + 0.12,
+                    f"Δ={float(rel):+.2f}%",
+                    fontsize=8,
+                    ha="left",
+                    va="bottom",
+                    color="0.35",
+                )
+        ax.set_yticks(y, labels)
+        ax.set_title(title, fontsize=10)
+        ax.grid(True, axis="x", alpha=0.18)
+        ax.tick_params(labelsize=8)
+        ax.invert_yaxis()
+        ax.set_xlabel("Estimated parameter value", fontsize=9)
+        if title == panel_specs[0][0]:
+            ax.legend(fontsize=8, loc="best")
+
+    agg_label = str((inverse_mapping_cfg or {}).get("aggregation", "unknown"))
+    neigh_sel = str((inverse_mapping_cfg or {}).get("neighbor_selection", "unknown"))
+    neigh_count = (inverse_mapping_cfg or {}).get("neighbor_count")
+    neigh_label = "all" if neigh_sel == "all" or neigh_count is None else str(neigh_count)
+    fig.suptitle(
+        "Inverse-estimation sanity check for grouped diagnostic case\n"
+        f"file={comparison_df['filename_base'].iloc[0]} | best dictionary idx={best_dictionary_index} | "
+        f"runtime={agg_label}, selection={neigh_sel}, k={neigh_label}",
+        fontsize=12,
+        y=1.02,
+    )
+    _save_figure(fig, out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    summary.update(
+        {
+            "plot_available": True,
+            "row_position": int(row_position),
+            "dataset_index": int(comparison_df["dataset_index"].iloc[0]),
+            "filename_base": str(comparison_df["filename_base"].iloc[0]),
+            "best_dictionary_index": int(best_dictionary_index),
+            "best_dictionary_filename_base": comparison_df["best_dictionary_filename_base"].iloc[0],
+            "parameter_count": int(len(comparison_df)),
+            "parameters_compared": comparison_df["parameter"].astype(str).tolist(),
+        }
+    )
+    return summary
 
 
 def _load_config(path: Path) -> dict:
@@ -387,6 +818,21 @@ def _load_step12_selected_feature_columns(path: Path) -> tuple[list[str], dict]:
     return selected, info
 
 
+def _resolve_selected_step12_feature_columns_strict(
+    selected_feature_columns: list[str],
+    *,
+    dict_df: pd.DataFrame,
+    real_df: pd.DataFrame,
+) -> list[str]:
+    return _shared_require_selected_feature_columns_present(
+        selected_feature_columns,
+        dict_df=dict_df,
+        data_df=real_df,
+        context_label="STEP 4.2",
+        right_label="real data",
+    )
+
+
 def _load_parameter_space_spec(path: Path) -> dict:
     if not path.exists():
         return {}
@@ -477,24 +923,7 @@ def _is_parameter_space_column(name: str) -> bool:
 
 
 def _parse_column_spec(value: object) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, str):
-        text = value.strip()
-        if not text or text.lower() == "auto":
-            return []
-        if text.startswith("[") and text.endswith("]"):
-            try:
-                parsed = json.loads(text)
-            except json.JSONDecodeError:
-                parsed = None
-            if isinstance(parsed, list):
-                return [str(x).strip() for x in parsed if str(x).strip()]
-        return [part.strip() for part in text.split(",") if part.strip()]
-    if isinstance(value, (list, tuple, set)):
-        return [str(x).strip() for x in value if str(x).strip()]
-    text = str(value).strip()
-    return [text] if text and text.lower() != "auto" else []
+    return _shared_parse_column_spec(value)
 
 
 def _resolve_estimation_parameter_columns(
@@ -503,32 +932,14 @@ def _resolve_estimation_parameter_columns(
     configured_columns: object = None,
     default_columns: list[str] | None = None,
 ) -> list[str]:
-    requested = _parse_column_spec(configured_columns)
-    if not requested and isinstance(default_columns, list):
-        requested = [str(c).strip() for c in default_columns if str(c).strip()]
-    if not requested:
-        requested = list(DEFAULT_PARAMETER_SPACE_PRIORITY)
-
-    resolved: list[str] = []
-    missing: list[str] = []
-    for col in requested:
-        if col in dictionary_df.columns and col not in resolved:
-            resolved.append(col)
-        elif col not in missing:
-            missing.append(col)
-    if missing:
-        log.warning(
-            "Ignoring estimated-parameter columns not present in the dictionary: %s",
-            missing,
-        )
-    if resolved:
-        return resolved
-
-    fallback: list[str] = []
-    for col in sorted(dictionary_df.columns):
-        if _is_parameter_space_column(col) and col not in fallback:
-            fallback.append(col)
-    return fallback
+    return _shared_resolve_estimation_parameter_columns(
+        dictionary_df=dictionary_df,
+        configured_columns=configured_columns,
+        default_columns=default_columns,
+        default_priority=DEFAULT_PARAMETER_SPACE_PRIORITY,
+        parameter_predicate=_is_parameter_space_column,
+        logger=log,
+    )
 
 
 def _find_estimated_parameter_column(df: pd.DataFrame, pname: str) -> str | None:
@@ -1011,6 +1422,37 @@ def _compute_empirical_efficiencies_from_rates(
     return (eff_by_plane, formula_by_plane, cols_by_plane, selected_prefix)
 
 
+def _compute_efficiency_vector_median_proxies(
+    df: pd.DataFrame,
+) -> tuple[dict[int, pd.Series], dict[int, dict[str, object]]]:
+    """Per-plane median over available efficiency-vector bins as a proxy only."""
+    by_plane: dict[int, list[str]] = {1: [], 2: [], 3: [], 4: []}
+    pattern = re.compile(r"^efficiency_vector_p(?P<plane>\d+)_[^_]+_bin_\d+_eff$")
+    for col in df.columns:
+        match = pattern.match(str(col))
+        if match is None:
+            continue
+        plane = int(match.group("plane"))
+        if plane in by_plane:
+            by_plane[plane].append(str(col))
+
+    proxy_by_plane: dict[int, pd.Series] = {}
+    meta_by_plane: dict[int, dict[str, object]] = {}
+    for plane in (1, 2, 3, 4):
+        cols = sorted(by_plane.get(plane, []))
+        if cols:
+            numeric = df[cols].apply(pd.to_numeric, errors="coerce")
+            proxy_by_plane[plane] = numeric.median(axis=1, skipna=True)
+        else:
+            proxy_by_plane[plane] = pd.Series(np.nan, index=df.index, dtype=float)
+        meta_by_plane[plane] = {
+            "proxy_kind": "median_over_available_efficiency_vector_bins",
+            "columns": cols,
+            "columns_count": int(len(cols)),
+        }
+    return (proxy_by_plane, meta_by_plane)
+
+
 def _format_polynomial_expr(
     coeffs: np.ndarray | list[float] | tuple[float, ...],
     *,
@@ -1109,24 +1551,11 @@ def _invert_polynomial_values(
 
 
 def _load_eff_fit_lines(summary_path: Path) -> tuple[dict[int, list[float]], str, dict]:
-    """Load fit coefficients from STEP 1.2 build_summary.json (fit_line_eff_i = coeff list)."""
-    if not summary_path.exists():
-        return ({}, f"missing:{summary_path}", {})
-    try:
-        payload = json.loads(summary_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        return ({}, f"invalid_json:{exc}", {})
-
+    """Load efficiency-fit coefficients from STEP 1.3/legacy summary structures."""
+    fit_models, fit_status, payload = load_efficiency_fit_models(summary_path)
     out: dict[int, list[float]] = {}
-    for plane in (1, 2, 3, 4):
-        raw = payload.get(f"fit_line_eff_{plane}")
-        if raw is None:
-            raw = payload.get(f"fit_poly_eff_{plane}")
-        if isinstance(raw, dict):
-            if "coefficients" in raw:
-                raw = raw.get("coefficients")
-            elif "a" in raw and "b" in raw:
-                raw = [raw.get("a"), raw.get("b")]
+    for plane, model in fit_models.items():
+        raw = model.get("coefficients_desc")
         if not isinstance(raw, (list, tuple)) or len(raw) < 2:
             continue
         coeffs: list[float] = []
@@ -1137,9 +1566,54 @@ def _load_eff_fit_lines(summary_path: Path) -> tuple[dict[int, list[float]], str
                 valid = False
                 break
             coeffs.append(float(c))
-        if valid and len(coeffs) >= 2:
-            out[plane] = coeffs
-    return (out, "ok", payload)
+        if valid:
+            out[int(plane)] = coeffs
+    status = "ok" if out else fit_status
+    return (out, status, payload if isinstance(payload, dict) else {})
+
+
+def _summary_has_efficiency_calibration(payload: dict | object) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    efficiency_fit = payload.get("efficiency_fit", {})
+    if isinstance(efficiency_fit, dict):
+        models = efficiency_fit.get("models", {})
+        if isinstance(models, dict) and any(models.get(f"plane_{plane}") for plane in (1, 2, 3, 4)):
+            return True
+    for plane in (1, 2, 3, 4):
+        if payload.get(f"fit_line_eff_{plane}") is not None:
+            return True
+        if payload.get(f"fit_poly_eff_{plane}") is not None:
+            return True
+        if payload.get(f"isotonic_calibration_eff_{plane}") is not None:
+            return True
+    return False
+
+
+def _resolve_efficiency_calibration_summary_path(
+    preferred_path: Path,
+    *,
+    fallback_path: Path | None = None,
+) -> tuple[Path, str, dict]:
+    """Choose the summary artifact that actually carries efficiency calibration metadata."""
+    candidate_paths: list[Path] = [preferred_path]
+    if fallback_path is not None and fallback_path != preferred_path:
+        candidate_paths.append(fallback_path)
+
+    last_payload: dict = {}
+    for idx, path in enumerate(candidate_paths):
+        if not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        last_payload = payload if isinstance(payload, dict) else {}
+        if _summary_has_efficiency_calibration(last_payload):
+            reason = "preferred_contains_efficiency_calibration" if idx == 0 else "fallback_contains_efficiency_calibration"
+            return path, reason, last_payload
+
+    return preferred_path, "no_summary_with_efficiency_calibration", last_payload
 
 
 def _load_isotonic_calibration(
@@ -1296,7 +1770,10 @@ def _read_fit_order_info(summary_path: Path) -> tuple[int | None, dict[str, int]
         payload = json.loads(summary_path.read_text(encoding="utf-8"))
     except Exception:
         return (None, {})
+    efficiency_fit = payload.get("efficiency_fit", {}) if isinstance(payload, dict) else {}
     requested_raw = payload.get("fit_polynomial_order_requested")
+    if requested_raw is None and isinstance(efficiency_fit, dict):
+        requested_raw = efficiency_fit.get("polynomial_order_requested")
     requested: int | None = None
     try:
         if requested_raw is not None:
@@ -1306,6 +1783,17 @@ def _read_fit_order_info(summary_path: Path) -> tuple[int | None, dict[str, int]
 
     used_by_plane: dict[str, int] = {}
     raw_used = payload.get("fit_polynomial_order_by_plane", {})
+    if (not isinstance(raw_used, dict) or not raw_used) and isinstance(efficiency_fit, dict):
+        models = efficiency_fit.get("models", {})
+        if isinstance(models, dict):
+            raw_used = {
+                str(plane): model.get("order_used")
+                for plane, model in (
+                    (str(k).replace("plane_", ""), v)
+                    for k, v in models.items()
+                    if isinstance(v, dict)
+                )
+            }
     if isinstance(raw_used, dict):
         for k, v in raw_used.items():
             try:
@@ -1551,117 +2039,6 @@ def _mask_sim_eff_within_tolerance_band(
     return finite & (span <= (tol_abs + 1e-12))
 
 
-def _load_lut(lut_path: Path) -> pd.DataFrame:
-    return pd.read_csv(lut_path, comment="#", low_memory=False)
-
-
-def _lut_param_names(lut_df: pd.DataFrame, lut_meta_path: Path | None = None) -> list[str]:
-    if lut_meta_path is not None and lut_meta_path.exists():
-        try:
-            meta = json.loads(lut_meta_path.read_text(encoding="utf-8"))
-            params = meta.get("param_names", [])
-            if isinstance(params, list):
-                cleaned = [str(p) for p in params if str(p)]
-                if cleaned:
-                    return cleaned
-        except Exception as exc:
-            log.warning(
-                "Could not parse LUT metadata at %s (%s). Falling back to column scan.",
-                lut_meta_path,
-                exc,
-            )
-
-    params: list[str] = []
-    for c in lut_df.columns:
-        if not c.startswith("sigma_"):
-            continue
-        if "_p" in c:
-            pname = c[len("sigma_") :].split("_p", 1)[0]
-        elif c.endswith("_std"):
-            pname = c[len("sigma_") : -len("_std")]
-        else:
-            continue
-        if pname and pname not in params:
-            params.append(pname)
-    return params
-
-
-def _interpolate_uncertainties(
-    query_df: pd.DataFrame,
-    lut_df: pd.DataFrame,
-    param_names: list[str],
-    quantile: float,
-) -> pd.DataFrame:
-    if lut_df.empty or query_df.empty:
-        return pd.DataFrame(index=query_df.index)
-
-    q_label = str(int(round(float(quantile) * 100.0)))
-    centre_cols = [c for c in lut_df.columns if c.endswith("_centre")]
-    if not centre_cols:
-        return pd.DataFrame(index=query_df.index)
-
-    lut_centres_df = lut_df[centre_cols].apply(pd.to_numeric, errors="coerce")
-    lut_centres = lut_centres_df.to_numpy(dtype=float)
-    valid_centres = np.all(np.isfinite(lut_centres), axis=1)
-    if not np.any(valid_centres):
-        return pd.DataFrame(index=query_df.index)
-
-    mins = np.nanmin(lut_centres[valid_centres], axis=0)
-    maxs = np.nanmax(lut_centres[valid_centres], axis=0)
-    ranges = maxs - mins
-    ranges[~np.isfinite(ranges) | (ranges <= 0.0)] = 1.0
-    dim_fallbacks = np.nanmedian(lut_centres[valid_centres], axis=0)
-
-    n_rows = len(query_df)
-    n_dims = len(centre_cols)
-    query_vals = np.zeros((n_rows, n_dims), dtype=float)
-    for j, cc in enumerate(centre_cols):
-        dim = cc.replace("_centre", "")
-        if dim in query_df.columns:
-            qv = pd.to_numeric(query_df[dim], errors="coerce").to_numpy(dtype=float)
-        elif dim == "n_events":
-            qv = pd.to_numeric(query_df.get("n_events"), errors="coerce").to_numpy(dtype=float)
-        else:
-            qv = np.full(n_rows, np.nan, dtype=float)
-        qv = np.where(np.isfinite(qv), qv, dim_fallbacks[j])
-        query_vals[:, j] = qv
-
-    d = (lut_centres[np.newaxis, :, :] - query_vals[:, np.newaxis, :]) / ranges[np.newaxis, np.newaxis, :]
-    dist = np.sqrt(np.sum(d * d, axis=2))
-    dist = np.where(valid_centres[np.newaxis, :], dist, np.inf)
-
-    out = pd.DataFrame(index=query_df.index)
-    for pname in param_names:
-        pref_col = f"sigma_{pname}_p{q_label}"
-        sigma_col = pref_col if pref_col in lut_df.columns else None
-        if sigma_col is None:
-            alt = f"sigma_{pname}_std"
-            sigma_col = alt if alt in lut_df.columns else None
-        if sigma_col is None:
-            out[f"unc_{pname}_pct_raw"] = np.nan
-            out[f"unc_{pname}_pct"] = np.nan
-            continue
-
-        sigma_vals = pd.to_numeric(lut_df[sigma_col], errors="coerce").to_numpy(dtype=float)
-        valid_sigma = valid_centres & np.isfinite(sigma_vals)
-        if not np.any(valid_sigma):
-            out[f"unc_{pname}_pct_raw"] = np.nan
-            out[f"unc_{pname}_pct"] = np.nan
-            continue
-
-        masked_dist = np.where(valid_sigma[np.newaxis, :], dist, np.inf)
-        nearest_idx = np.argmin(masked_dist, axis=1)
-        nearest_dist = masked_dist[np.arange(n_rows), nearest_idx]
-        raw = sigma_vals[nearest_idx]
-        raw = np.where(np.isfinite(nearest_dist), raw, np.nan)
-
-        sigma_median = float(np.nanmedian(sigma_vals[valid_sigma]))
-        raw = np.where(np.isfinite(raw), raw, sigma_median)
-        out[f"unc_{pname}_pct_raw"] = raw
-        out[f"unc_{pname}_pct"] = np.abs(raw)
-    return out
-
-
 def _choose_primary_eff_est_col(df: pd.DataFrame) -> str | None:
     preferred = sorted([c for c in df.columns if re.match(r"^est_eff_sim_\d+$", str(c))])
     if preferred:
@@ -1834,6 +2211,127 @@ def _plot_parameter_estimate_series(
         xmax = float(np.nanmax(x_values)) if len(x_values) > 1 else xmin + 1.0
         axes[-1, 0].set_xlim(xmin, xmax)
     fig.suptitle("Estimated parameter time series", fontsize=12)
+    fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.98])
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return n_rows
+
+
+def _plot_parameter_estimate_series_vs_k1(
+    *,
+    x: pd.Series,
+    has_time_axis: bool,
+    xlabel: str,
+    df: pd.DataFrame,
+    parameter_columns: list[str],
+    out_path: Path,
+) -> int:
+    """Plot current runtime estimates against a full k=1 nearest-neighbor proxy series."""
+    panels: list[tuple[str, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]] = []
+    x_values = x.to_numpy()
+
+    for pname in parameter_columns:
+        est_col = _find_estimated_parameter_column(df, pname)
+        k1_col = f"k1_est_{pname}"
+        if est_col is None or k1_col not in df.columns:
+            continue
+        y_runtime = pd.to_numeric(df.get(est_col), errors="coerce").to_numpy(dtype=float)
+        y_k1 = pd.to_numeric(df.get(k1_col), errors="coerce").to_numpy(dtype=float)
+        if not (np.isfinite(y_runtime).any() or np.isfinite(y_k1).any()):
+            continue
+        unc_col = f"unc_{pname}_abs" if f"unc_{pname}_abs" in df.columns else None
+        unc = (
+            pd.to_numeric(df.get(unc_col), errors="coerce").to_numpy(dtype=float)
+            if unc_col is not None
+            else None
+        )
+        panels.append((pname, x_values, y_runtime, y_k1, unc))
+
+    if not panels:
+        _plot_placeholder(
+            out_path,
+            "Estimated parameter time series vs k=1 proxy",
+            "No finite runtime/k=1 comparison series are available.",
+        )
+        return 0
+
+    n_rows = len(panels)
+    fig, axes = plt.subplots(
+        n_rows,
+        1,
+        figsize=(11.0, max(3.0 * n_rows, 4.8)),
+        sharex=True,
+        squeeze=False,
+    )
+
+    for row, (pname, xv, y_runtime, y_k1, unc) in enumerate(panels):
+        ax = axes[row, 0]
+        mask_runtime = np.isfinite(xv) & np.isfinite(y_runtime)
+        mask_k1 = np.isfinite(xv) & np.isfinite(y_k1)
+        if np.any(mask_runtime):
+            xs = xv[mask_runtime]
+            ys = y_runtime[mask_runtime]
+            order = np.argsort(xs)
+            xs = xs[order]
+            ys = ys[order]
+            ax.plot(
+                xs,
+                ys,
+                color="#1F77B4",
+                linewidth=1.35,
+                alpha=0.95,
+                marker="o",
+                markersize=2.5,
+                label="Runtime inverse",
+            )
+            if unc is not None and len(unc) == len(xv):
+                us = np.abs(np.asarray(unc, dtype=float)[mask_runtime][order])
+                valid_u = np.isfinite(us)
+                if np.any(valid_u):
+                    ax.fill_between(
+                        xs[valid_u],
+                        ys[valid_u] - us[valid_u],
+                        ys[valid_u] + us[valid_u],
+                        color="#1F77B4",
+                        alpha=0.12,
+                        linewidth=0.0,
+                    )
+        if np.any(mask_k1):
+            xs = xv[mask_k1]
+            ys = y_k1[mask_k1]
+            order = np.argsort(xs)
+            xs = xs[order]
+            ys = ys[order]
+            ax.plot(
+                xs,
+                ys,
+                color="#E15759",
+                linewidth=1.15,
+                alpha=0.92,
+                linestyle="--",
+                marker="s",
+                markersize=2.2,
+                label="k=1 nearest dictionary",
+            )
+        if not np.any(mask_runtime) and not np.any(mask_k1):
+            ax.text(
+                0.5,
+                0.5,
+                f"No finite runtime/k=1 values for {pname}",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
+        ax.set_ylabel(pname)
+        ax.grid(True, alpha=0.22)
+        ax.legend(loc="best", fontsize=8, framealpha=0.92)
+
+    axes[-1, 0].set_xlabel(xlabel)
+    if not has_time_axis and len(x_values) > 0:
+        xmin = float(np.nanmin(x_values))
+        xmax = float(np.nanmax(x_values)) if len(x_values) > 1 else xmin + 1.0
+        axes[-1, 0].set_xlim(xmin, xmax)
+    fig.suptitle("Estimated parameter time series: runtime inverse vs k=1 proxy", fontsize=12)
     fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.98])
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
@@ -2509,7 +3007,7 @@ def _plot_eff2_vs_global_rate(
     dict_rate_col: str,
     out_path: Path,
 ) -> tuple[int, int]:
-    """Plot real-data eff2 trajectory directly in the (global_rate, eff2) plane."""
+    """Plot real-data plane-2 efficiency proxy trajectory in the (global_rate, proxy) plane."""
     real_eff = pd.to_numeric(real_df[real_eff2_col], errors="coerce")
     real_rate = pd.to_numeric(real_df[real_rate_col], errors="coerce")
     dict_eff = pd.to_numeric(dict_df[dict_eff2_col], errors="coerce")
@@ -2523,8 +3021,8 @@ def _plot_eff2_vs_global_rate(
     if n_real == 0:
         _plot_placeholder(
             out_path,
-            "Eff2 vs global rate",
-            "No finite real points available for eff2/global-rate trajectory.",
+            "Plane-2 efficiency proxy vs global rate",
+            "No finite real points available for plane-2 proxy/global-rate trajectory.",
         )
         return (n_real, n_dict)
 
@@ -2604,9 +3102,9 @@ def _plot_eff2_vs_global_rate(
     ax.set_xlim(x_lo, x_hi)
     ax.set_ylim(y_lo, y_hi)
     ax.set_xlabel("Global rate [Hz]")
-    ax.set_ylabel("Efficiency (eff2)")
+    ax.set_ylabel("Efficiency proxy (plane 2)")
     ax.set_title(
-        "Real-data eff2 trajectory vs global rate\n"
+        "Real-data plane-2 efficiency proxy vs global rate\n"
         f"real_y={real_eff2_col} | dict_y={dict_eff2_col}"
     )
     ax.grid(True, alpha=0.2)
@@ -2799,6 +3297,7 @@ def main() -> int:
     lut_csv_cfg = cfg_42.get("uncertainty_lut_csv", None)
     lut_meta_cfg = cfg_42.get("uncertainty_lut_meta_json", None)
     build_summary_cfg = cfg_42.get("build_summary_json", None)
+    efficiency_calibration_summary_cfg = cfg_42.get("efficiency_calibration_summary_json", None)
     parameter_space_spec_cfg = cfg_42.get("parameter_space_columns_json", None)
 
     real_path = _resolve_input_path(args.real_csv or real_csv_cfg or DEFAULT_REAL_COLLECTED)
@@ -2806,6 +3305,15 @@ def main() -> int:
     lut_path = _resolve_input_path(args.lut_csv or lut_csv_cfg or DEFAULT_LUT)
     lut_meta_path = _resolve_input_path(args.lut_meta_json or lut_meta_cfg or DEFAULT_LUT_META)
     build_summary_path = _resolve_input_path(build_summary_cfg or DEFAULT_BUILD_SUMMARY)
+    efficiency_calibration_summary_requested = _resolve_input_path(
+        efficiency_calibration_summary_cfg or build_summary_path
+    )
+    efficiency_calibration_summary_path, efficiency_calibration_summary_resolution, _ = (
+        _resolve_efficiency_calibration_summary_path(
+            efficiency_calibration_summary_requested,
+            fallback_path=DEFAULT_STEP13_BUILD_SUMMARY,
+        )
+    )
     parameter_space_spec_path = _resolve_input_path(parameter_space_spec_cfg or DEFAULT_PARAMETER_SPACE_SPEC)
 
     for label, path in (
@@ -2952,6 +3460,12 @@ def main() -> int:
     log.info("Dictionary:     %s", dict_path)
     log.info("LUT:            %s", lut_path)
     log.info("Fit summary:    %s", build_summary_path)
+    log.info(
+        "Efficiency calibration summary: requested=%s used=%s (%s)",
+        efficiency_calibration_summary_requested,
+        efficiency_calibration_summary_path,
+        efficiency_calibration_summary_resolution,
+    )
     log.info("Task IDs used for efficiency source: %s", selected_task_ids)
     log.info("Preferred TT prefix order for efficiencies: %s", preferred_tt_prefixes)
     log.info("Preferred TT prefix order for auto features: %s", preferred_feature_prefixes)
@@ -3175,28 +3689,33 @@ def main() -> int:
     if feature_mode in selected_feature_modes:
         selected_from_step12, selected_info = _load_step12_selected_feature_columns(step12_selected_path)
         dict_selected, real_selected, _, _, _ = _materialize_derived_feature_space(dict_df, real_df)
-        selected = [
-            c for c in selected_from_step12
-            if c in dict_selected.columns and c in real_selected.columns
-        ]
-        if selected:
-            dict_work, real_work = dict_selected, real_selected
-            feature_columns = selected
-            feature_strategy = "step12_selected"
-            feature_mapping = []
-            use_step12_selected = True
-            log.info(
-                "Using STEP 1.2 selected features (%d) from %s.",
-                len(feature_columns),
-                step12_selected_path,
+        try:
+            selected = _resolve_selected_step12_feature_columns_strict(
+                selected_from_step12,
+                dict_df=dict_selected,
+                real_df=real_selected,
             )
-        else:
-            log.warning(
-                "STEP 1.2 selected features unavailable/empty at %s (%s); falling back to derived mode.",
-                step12_selected_path,
-                selected_info.get("error", "no_selected_columns"),
-            )
-            feature_mode = "derived"
+        except ValueError as exc:
+            if selected_info.get("error"):
+                log.error(
+                    "STEP 1.2 selected features at %s are invalid (%s): %s",
+                    step12_selected_path,
+                    selected_info.get("error"),
+                    exc,
+                )
+            else:
+                log.error("%s", exc)
+            return 1
+        dict_work, real_work = dict_selected, real_selected
+        feature_columns = selected
+        feature_strategy = "step12_selected"
+        feature_mapping = []
+        use_step12_selected = True
+        log.info(
+            "Using STEP 1.2 selected features (%d) from %s.",
+            len(feature_columns),
+            step12_selected_path,
+        )
 
     if use_step12_selected:
         pass
@@ -3301,18 +3820,11 @@ def main() -> int:
                 catalog_info.get("invalid_exclude_patterns"),
             )
         if not selected:
-            if auto_feature_columns:
-                log.warning(
-                    "No features selected by config_columns catalog; falling back to auto (%d columns).",
-                    len(auto_feature_columns),
-                )
-                dict_work, real_work = dict_auto, real_auto
-                feature_columns = auto_feature_columns
-                feature_strategy = "auto_fallback_from_config_columns"
-                feature_mapping = auto_feature_mapping
-            else:
-                log.error("No features selected by config_columns catalog and no auto fallback available.")
-                return 1
+            log.error(
+                "No features selected by config_columns catalog. Refusing to fall back to auto, "
+                "because that would silently change the STEP 4.2 feature space."
+            )
+            return 1
         else:
             dict_work, real_work = dict_df, real_df
             feature_columns = selected
@@ -3320,9 +3832,17 @@ def main() -> int:
             feature_mapping = []
     else:
         explicit_features = parse_explicit_feature_columns(feature_columns_cfg)
-        feature_columns = [c for c in explicit_features if c in dict_df.columns and c in real_df.columns]
-        if not feature_columns:
-            log.error("No explicit feature columns found in both dictionary and real data.")
+        try:
+            feature_columns = require_explicit_columns_present_in_both_frames(
+                explicit_features,
+                left_columns=dict_df.columns,
+                right_columns=real_df.columns,
+                left_label="dictionary",
+                right_label="real data",
+                context_label="STEP 4.2",
+            )
+        except ValueError as exc:
+            log.error(str(exc))
             return 1
         if include_global_rate and global_rate_col in dict_df.columns and global_rate_col in real_df.columns:
             if global_rate_col not in feature_columns:
@@ -3338,29 +3858,18 @@ def main() -> int:
     if feature_strategy == "step12_selected":
         log.info("STEP 1.2 selected-feature artifact: %s", step12_selected_path)
 
-    dd = load_distance_definition(feature_columns)
-    if dd["available"]:
-        n_active_groups = int(
-            sum(float(v) > 0.0 for v in (dd.get("group_weights", {}) or {}).values())
+    try:
+        dd, inverse_mapping_cfg_runtime, interpolation_k = resolve_runtime_distance_and_inverse_mapping(
+            feature_columns=feature_columns,
+            inverse_mapping_cfg=inverse_mapping_cfg_requested,
+            interpolation_k=interpolation_k,
+            context_label="STEP 4.2",
+            distance_definition_path=STEP_ROOT / "STEP_1_SETUP" / "STEP_1_5_TUNE_DISTANCE_DEFINITION" / "OUTPUTS" / "FILES" / "distance_definition.json",
+            logger=log,
         )
-        log.info(
-            "Loaded STEP 1.5 distance definition: %s (p=%.1f, k=%d, λ=%.2g, scalar_active=%d/%d, grouped_active=%d)",
-            dd["selected_mode"], dd["p_norm"], dd["optimal_k"],
-            dd["optimal_lambda"],
-            int(np.sum(dd["weights"] > 0)), len(feature_columns), n_active_groups,
-        )
-        if interpolation_k is None or interpolation_k != dd["optimal_k"]:
-            log.info("Overriding interpolation_k %s → %d from distance definition.", interpolation_k, dd["optimal_k"])
-            interpolation_k = dd["optimal_k"]
-    else:
-        log.warning("STEP 1.5 distance definition not available: %s", dd.get("reason"))
-        dd = None
-
-    inverse_mapping_cfg_runtime = build_step15_runtime_inverse_mapping_cfg(
-        inverse_mapping_cfg=inverse_mapping_cfg_requested,
-        interpolation_k=interpolation_k,
-        distance_definition=dd,
-    )
+    except ValueError as exc:
+        log.error(str(exc))
+        return 1
     if (
         not inherit_step_2_1_method
         and feature_mode == "derived"
@@ -3391,14 +3900,7 @@ def main() -> int:
                 "Ignoring step_4_2.exclude_same_file=%s; using STEP 2.1 runtime behavior (exclude_same_file=false).",
                 exclude_same_file,
             )
-        log.info(
-            "STEP 1.5 runtime inverse mapping: selection=%s k=%d weighting=%s idw_power=%.1f aggregation=%s",
-            inverse_mapping_cfg_runtime["neighbor_selection"],
-            int(inverse_mapping_cfg_runtime["neighbor_count"]),
-            inverse_mapping_cfg_runtime["weighting"],
-            float(inverse_mapping_cfg_runtime["inverse_distance_power"]),
-            inverse_mapping_cfg_runtime["aggregation"],
-        )
+        log_runtime_inverse_mapping_summary(log, inverse_mapping_cfg_runtime)
 
     parameter_space_cfg = cfg_42.get("parameter_space_columns", None)
     param_columns = _resolve_estimation_parameter_columns(
@@ -3434,6 +3936,30 @@ def main() -> int:
         inverse_mapping_cfg=inverse_mapping_cfg_runtime,
         distance_definition=dd,
     )
+    inverse_mapping_cfg_k1 = dict(inverse_mapping_cfg_runtime)
+    inverse_mapping_cfg_k1["neighbor_selection"] = "knn"
+    inverse_mapping_cfg_k1["neighbor_count"] = 1
+    est_df_k1 = estimate_from_dataframes(
+        dict_df=dict_work,
+        data_df=real_work,
+        feature_columns=feature_columns,
+        distance_metric=distance_metric,
+        interpolation_k=interpolation_k,
+        param_columns=param_columns,
+        include_global_rate=False,
+        global_rate_col=global_rate_col,
+        exclude_same_file=False if inherit_step_2_1_method else exclude_same_file,
+        shared_parameter_exclusion_mode="full" if inherit_step_2_1_method else None,
+        shared_parameter_exclusion_columns=["param_set_id"] if inherit_step_2_1_method else None,
+        shared_parameter_exclusion_ignore=(
+            ()
+            if inherit_step_2_1_method
+            else tuple(shared_parameter_exclusion_ignore_cfg)
+        ),
+        density_weighting_cfg=None,
+        inverse_mapping_cfg=inverse_mapping_cfg_k1,
+        distance_definition=dd,
+    )
     eff_oos_masking_summary = est_df.attrs.get(
         "efficiency_feature_out_of_support_masking"
     )
@@ -3441,6 +3967,24 @@ def main() -> int:
     real_with_idx = real_df.copy()
     real_with_idx["dataset_index"] = np.arange(len(real_with_idx), dtype=int)
     merged = pd.merge(est_df, real_with_idx, on="dataset_index", how="left", suffixes=("", "_real"))
+    k1_keep_cols = ["dataset_index"]
+    k1_rename_map = {
+        "best_distance": "k1_best_distance",
+        "n_neighbors_used": "k1_n_neighbors_used",
+        "estimation_failure_reason": "k1_estimation_failure_reason",
+    }
+    for pname in param_columns:
+        src = f"est_{pname}"
+        if src in est_df_k1.columns:
+            k1_keep_cols.append(src)
+            k1_rename_map[src] = f"k1_est_{pname}"
+    for src in ("best_distance", "n_neighbors_used", "estimation_failure_reason"):
+        if src in est_df_k1.columns:
+            k1_keep_cols.append(src)
+    est_df_k1 = est_df_k1.loc[:, [col for col in k1_keep_cols if col in est_df_k1.columns]].rename(
+        columns=k1_rename_map
+    )
+    merged = pd.merge(merged, est_df_k1, on="dataset_index", how="left")
 
     if n_events_column_cfg == "auto":
         n_events_col_used = _pick_n_events_column(merged)
@@ -3462,7 +4006,7 @@ def main() -> int:
     raw_eff_by_plane, raw_eff_formula_by_plane, raw_eff_cols_by_plane, raw_eff_selected_prefix = _compute_empirical_efficiencies_from_rates(merged)
     for plane in (1, 2, 3, 4):
         merged[f"eff{plane}_raw_from_data"] = raw_eff_by_plane[plane]
-    merged["eff2_from_data"] = merged["eff2_raw_from_data"]
+        merged[f"eff{plane}_empirical_proxy"] = raw_eff_by_plane[plane]
     eff2_formula = raw_eff_formula_by_plane.get(2, "missing_rate_columns")
 
     # Dictionary-side efficiencies from rates with the same definition.
@@ -3471,7 +4015,14 @@ def main() -> int:
     dict_eff_by_plane, _, dict_eff_cols_by_plane, dict_eff_selected_prefix = _compute_empirical_efficiencies_from_rates(dict_df_plot)
     for plane in (1, 2, 3, 4):
         dict_df_plot[f"dict_eff{plane}_raw_from_rates"] = dict_eff_by_plane[plane]
-    dict_eff2_col = "dict_eff2_raw_from_rates"
+        dict_df_plot[f"dict_eff{plane}_empirical_proxy"] = dict_eff_by_plane[plane]
+    dict_eff2_col = "dict_eff2_empirical_proxy"
+
+    vector_proxy_by_plane_real, vector_proxy_meta_real = _compute_efficiency_vector_median_proxies(merged)
+    vector_proxy_by_plane_dict, vector_proxy_meta_dict = _compute_efficiency_vector_median_proxies(dict_df_plot)
+    for plane in (1, 2, 3, 4):
+        merged[f"eff{plane}_vector_median_proxy"] = vector_proxy_by_plane_real[plane]
+        dict_df_plot[f"dict_eff{plane}_vector_median_proxy"] = vector_proxy_by_plane_dict[plane]
 
     fit_input_domain_by_plane: dict[int, tuple[float, float]] = {}
     for plane in (1, 2, 3, 4):
@@ -3509,8 +4060,12 @@ def main() -> int:
     dict_global_rate_col = _pick_global_rate_column(dict_df_plot, preferred=global_rate_col)
 
     # Efficiency calibration: load both polynomial and isotonic from STEP 1.2 summary.
-    fit_models_by_plane, fit_status, fit_summary_payload = _load_eff_fit_lines(build_summary_path)
-    isotonic_models_by_plane, isotonic_status = _load_isotonic_calibration(build_summary_path)
+    fit_models_by_plane, fit_status, fit_summary_payload = _load_eff_fit_lines(
+        efficiency_calibration_summary_path
+    )
+    isotonic_models_by_plane, isotonic_status = _load_isotonic_calibration(
+        efficiency_calibration_summary_path
+    )
     eff_calibration_method = str(cfg_42.get("eff_calibration_method", "isotonic")).strip().lower()
     if eff_calibration_method not in {"isotonic", "polynomial"}:
         eff_calibration_method = "isotonic"
@@ -3518,7 +4073,9 @@ def main() -> int:
         eff_transform_mode_requested,
         fit_summary_payload,
     )
-    fit_order_requested, fit_order_by_plane_from_summary = _read_fit_order_info(build_summary_path)
+    fit_order_requested, fit_order_by_plane_from_summary = _read_fit_order_info(
+        efficiency_calibration_summary_path
+    )
 
     # Choose calibration method: prefer isotonic, fall back to polynomial.
     use_isotonic = (
@@ -3595,14 +4152,17 @@ def main() -> int:
             contour_eff_band_tolerance_pct,
         )
 
-    lut_df = _load_lut(lut_path)
-    lut_params = _lut_param_names(lut_df, lut_meta_path if lut_meta_path.exists() else None)
+    lut_df = load_uncertainty_lut_table(lut_path)
+    lut_params = detect_uncertainty_lut_param_names(
+        lut_df,
+        lut_meta_path if lut_meta_path.exists() else None,
+    )
     lut_params = [p for p in lut_params if f"est_{p}" in merged.columns]
 
     if not lut_params:
         log.warning("No matching LUT parameters found in inference output. Uncertainty columns will be NaN.")
 
-    unc_df = _interpolate_uncertainties(
+    unc_df = interpolate_uncertainty_columns(
         query_df=merged,
         lut_df=lut_df,
         param_names=lut_params,
@@ -3697,6 +4257,14 @@ def main() -> int:
         parameter_columns=param_columns,
         out_path=PLOT_PARAMETER_SERIES,
     )
+    n_parameter_series_vs_k1_panels = _plot_parameter_estimate_series_vs_k1(
+        x=x,
+        has_time_axis=has_time_axis,
+        xlabel=x_label,
+        df=merged,
+        parameter_columns=param_columns,
+        out_path=PLOT_PARAMETER_SERIES_VS_K1,
+    )
     distance_term_dominance_summary = _plot_distance_term_dominance(
         x=x,
         has_time_axis=has_time_axis,
@@ -3704,6 +4272,56 @@ def main() -> int:
         df=merged,
         out_path=PLOT_DISTANCE_DOMINANCE,
     )
+    grouped_diag_cfg = cfg_42.get("grouped_feature_diagnostic", {}) or {}
+    grouped_diag_enabled = bool(grouped_diag_cfg.get("enabled", True))
+    grouped_diag_selector = str(grouped_diag_cfg.get("selector", "largest_best_distance"))
+    grouped_diag_top_k = int(grouped_diag_cfg.get("top_k", 10) or 10)
+    grouped_case_summary = _plot_grouped_case_diagnostic_real(
+        dict_df=dict_work,
+        data_df=real_work,
+        result_df=merged,
+        param_cols=param_columns,
+        feature_cols=feature_columns,
+        distance_definition=dd,
+        case_selector=grouped_diag_selector,
+        top_k=max(grouped_diag_top_k, 1),
+        out_path=PLOT_GROUPED_CASE,
+        neighbors_csv_path=GROUPED_CASE_NEIGHBORS_CSV,
+    ) if grouped_diag_enabled else {
+        "plot_available": False,
+        "selector": grouped_diag_selector,
+        "plot_path": str(PLOT_GROUPED_CASE),
+        "neighbors_csv_path": str(GROUPED_CASE_NEIGHBORS_CSV),
+    }
+    inverse_proxy_case_summary = _plot_inverse_estimate_vs_k1_proxy_case(
+        dict_df=dict_work,
+        result_df=merged,
+        param_cols=param_columns,
+        grouped_case_summary=grouped_case_summary,
+        inverse_mapping_cfg=inverse_mapping_cfg_runtime,
+        out_path=PLOT_INVERSE_PROXY_CASE,
+        out_csv_path=INVERSE_PROXY_CASE_CSV,
+    ) if grouped_diag_enabled else {
+        "plot_available": False,
+        "plot_path": str(PLOT_INVERSE_PROXY_CASE),
+        "csv_path": str(INVERSE_PROXY_CASE_CSV),
+    }
+
+    k1_proxy_delta_summary: dict[str, float | None] = {}
+    for pname in param_columns:
+        est_col = _find_estimated_parameter_column(merged, pname)
+        k1_col = f"k1_est_{pname}"
+        if est_col is None or k1_col not in merged.columns:
+            continue
+        est_vals = pd.to_numeric(merged.get(est_col), errors="coerce").to_numpy(dtype=float)
+        k1_vals = pd.to_numeric(merged.get(k1_col), errors="coerce").to_numpy(dtype=float)
+        valid = np.isfinite(est_vals) & np.isfinite(k1_vals)
+        if not np.any(valid):
+            k1_proxy_delta_summary[pname] = None
+            continue
+        denom = np.maximum(np.abs(k1_vals[valid]), 1e-12)
+        delta_pct = 100.0 * np.abs(est_vals[valid] - k1_vals[valid]) / denom
+        k1_proxy_delta_summary[pname] = float(np.median(delta_pct)) if np.isfinite(delta_pct).any() else None
 
     out_csv = FILES_DIR / "real_results.csv"
     merged.to_csv(out_csv, index=False)
@@ -3723,7 +4341,18 @@ def main() -> int:
             eff_unc_abs_col = candidate
 
     eff2_plot_source_cfg = str(cfg_42.get("eff2_global_rate_eff_source", "auto")).strip().lower()
-    if eff2_plot_source_cfg not in {"auto", "transformed", "raw"}:
+    proxy_source_aliases = {
+        "raw": "empirical_proxy",
+        "empirical": "empirical_proxy",
+        "empirical_proxy": "empirical_proxy",
+        "transformed": "transformed_proxy",
+        "transformed_proxy": "transformed_proxy",
+        "vector_median": "vector_median_proxy",
+        "vector_median_proxy": "vector_median_proxy",
+        "auto": "auto",
+    }
+    eff2_plot_source_cfg = proxy_source_aliases.get(eff2_plot_source_cfg, eff2_plot_source_cfg)
+    if eff2_plot_source_cfg not in {"auto", "empirical_proxy", "transformed_proxy", "vector_median_proxy"}:
         log.warning(
             "Invalid step_4_2.eff2_global_rate_eff_source=%r; using 'auto'.",
             eff2_plot_source_cfg,
@@ -3738,7 +4367,16 @@ def main() -> int:
         "dict_eff2_transformed_from_rates" in dict_df_plot.columns
         and pd.to_numeric(dict_df_plot["dict_eff2_transformed_from_rates"], errors="coerce").notna().any()
     )
+    has_real_eff2_vector_proxy = (
+        "eff2_vector_median_proxy" in merged.columns
+        and pd.to_numeric(merged["eff2_vector_median_proxy"], errors="coerce").notna().any()
+    )
+    has_dict_eff2_vector_proxy = (
+        "dict_eff2_vector_median_proxy" in dict_df_plot.columns
+        and pd.to_numeric(dict_df_plot["dict_eff2_vector_median_proxy"], errors="coerce").notna().any()
+    )
     transformed_available = has_real_eff2_trans and has_dict_eff2_trans
+    vector_proxy_available = has_real_eff2_vector_proxy and has_dict_eff2_vector_proxy
     real_eff2_trans_frac_physical = (
         _fraction_in_closed_interval(merged["eff2_transformed"], 0.0, 1.0)
         if has_real_eff2_trans
@@ -3777,13 +4415,26 @@ def main() -> int:
             else _boundary_fraction_metrics(pd.Series(dtype=float))
         )
 
-    if eff2_plot_source_cfg == "raw":
-        use_transformed_eff2_for_plane_plot = False
-    elif eff2_plot_source_cfg == "transformed":
-        use_transformed_eff2_for_plane_plot = transformed_available
+    eff2_proxy_source_used = "empirical_proxy"
+    if eff2_plot_source_cfg == "empirical_proxy":
+        eff2_proxy_source_used = "empirical_proxy"
+    elif eff2_plot_source_cfg == "vector_median_proxy":
+        if vector_proxy_available:
+            eff2_proxy_source_used = "vector_median_proxy"
+        else:
+            log.warning(
+                "Requested plane-2 vector-median proxy is unavailable; falling back to empirical proxy."
+            )
+    elif eff2_plot_source_cfg == "transformed_proxy":
+        if transformed_available:
+            eff2_proxy_source_used = "transformed_proxy"
+        else:
+            log.warning(
+                "Requested plane-2 transformed proxy is unavailable; falling back to empirical proxy."
+            )
     else:
-        # Auto: only trust transformed eff2 when both real and dictionary are
-        # predominantly within physical bounds.
+        # Auto: only trust transformed proxies when both real and dictionary are
+        # predominantly within physical bounds; otherwise use direct empirical proxy.
         use_transformed_eff2_for_plane_plot = (
             transformed_available
             and real_eff2_trans_frac_physical >= 0.95
@@ -3791,17 +4442,47 @@ def main() -> int:
         )
         if transformed_available and not use_transformed_eff2_for_plane_plot:
             log.warning(
-                "Fallback to raw eff2: transformed physical fractions "
+                "Fallback to empirical plane-2 proxy: transformed physical fractions "
                 "(real=%.3f, dict=%.3f) below threshold 0.95.",
                 real_eff2_trans_frac_physical,
                 dict_eff2_trans_frac_physical,
             )
+        if use_transformed_eff2_for_plane_plot:
+            eff2_proxy_source_used = "transformed_proxy"
 
-    eff2_real_col_for_plane_plot = (
-        "eff2_transformed" if use_transformed_eff2_for_plane_plot else "eff2_from_data"
-    )
-    dict_eff2_col_for_plane_plot = (
-        "dict_eff2_transformed_from_rates" if use_transformed_eff2_for_plane_plot else dict_eff2_col
+    if eff2_proxy_source_used == "transformed_proxy":
+        eff2_real_col_for_plane_plot = "eff2_transformed"
+        dict_eff2_col_for_plane_plot = "dict_eff2_transformed_from_rates"
+    elif eff2_proxy_source_used == "vector_median_proxy":
+        eff2_real_col_for_plane_plot = "eff2_vector_median_proxy"
+        dict_eff2_col_for_plane_plot = "dict_eff2_vector_median_proxy"
+    else:
+        eff2_real_col_for_plane_plot = "eff2_empirical_proxy"
+        dict_eff2_col_for_plane_plot = "dict_eff2_empirical_proxy"
+
+    if eff2_proxy_source_used == "transformed_proxy":
+        eff2_real_proxy_formula = transformed_eff_formula_by_plane.get(2)
+        dict_eff2_proxy_formula = dict_transformed_eff_formula_by_plane.get(2)
+    elif eff2_proxy_source_used == "vector_median_proxy":
+        eff2_real_proxy_formula = (
+            "median(" + ", ".join(vector_proxy_meta_real.get(2, {}).get("columns", [])) + ")"
+            if vector_proxy_meta_real.get(2, {}).get("columns")
+            else "missing_efficiency_vector_bins"
+        )
+        dict_eff2_proxy_formula = (
+            "median(" + ", ".join(vector_proxy_meta_dict.get(2, {}).get("columns", [])) + ")"
+            if vector_proxy_meta_dict.get(2, {}).get("columns")
+            else "missing_efficiency_vector_bins"
+        )
+    else:
+        eff2_real_proxy_formula = eff2_formula
+        dict_eff2_proxy_formula = "raw_from_rates"
+
+    log.info(
+        "Plane-2 global-rate diagnostic proxy: source=%s real_y=%s dict_y=%s",
+        eff2_proxy_source_used,
+        eff2_real_col_for_plane_plot,
+        dict_eff2_col_for_plane_plot,
     )
 
     n_est_curve_real = 0
@@ -3905,6 +4586,8 @@ def main() -> int:
         "parameter_space_columns_used": param_columns,
         "parameter_series_plot": str(PLOT_PARAMETER_SERIES),
         "parameter_series_plot_panels": int(n_parameter_series_panels),
+        "parameter_series_vs_k1_plot": str(PLOT_PARAMETER_SERIES_VS_K1),
+        "parameter_series_vs_k1_plot_panels": int(n_parameter_series_vs_k1_panels),
         "distance_term_dominance_plot": str(PLOT_DISTANCE_DOMINANCE),
         "distance_term_dominance_summary": distance_term_dominance_summary,
         "parameter_estimate_columns": {
@@ -3918,6 +4601,7 @@ def main() -> int:
         "interpolation_k": interpolation_k,
         "inverse_mapping": inverse_mapping_cfg_requested,
         "inverse_mapping_runtime_applied": inverse_mapping_cfg_runtime,
+        "k1_proxy_inverse_mapping_runtime": inverse_mapping_cfg_k1,
         "inherit_step_2_1_method": bool(inherit_step_2_1_method),
         "shared_parameter_exclusion_ignore": shared_parameter_exclusion_ignore_cfg,
         "feature_strategy": feature_strategy,
@@ -3946,6 +4630,13 @@ def main() -> int:
         "dictionary_rows_for_iso_rate_contours": int(dict_rows_for_contours),
         "dictionary_rows_excluded_iso_rate_eff_band": int(dict_rows_total - dict_rows_for_contours),
         "build_summary_json_used": str(build_summary_path),
+        "efficiency_calibration_summary_json_requested": str(
+            efficiency_calibration_summary_requested
+        ),
+        "efficiency_calibration_summary_json_used": str(
+            efficiency_calibration_summary_path
+        ),
+        "efficiency_calibration_summary_resolution": efficiency_calibration_summary_resolution,
         "fit_lines_load_status": fit_status,
         "fit_polynomial_relation_from_summary": fit_summary_payload.get("fit_polynomial_relation"),
         "fit_polynomial_x_variable_from_summary": fit_summary_payload.get("fit_polynomial_x_variable"),
@@ -4005,6 +4696,26 @@ def main() -> int:
             "eff3": "eff3_raw_from_data",
             "eff4": "eff4_raw_from_data",
         },
+        "empirical_efficiency_proxy_columns": {
+            "eff1": "eff1_empirical_proxy",
+            "eff2": "eff2_empirical_proxy",
+            "eff3": "eff3_empirical_proxy",
+            "eff4": "eff4_empirical_proxy",
+        },
+        "vector_median_efficiency_proxy_columns": {
+            "eff1": "eff1_vector_median_proxy",
+            "eff2": "eff2_vector_median_proxy",
+            "eff3": "eff3_vector_median_proxy",
+            "eff4": "eff4_vector_median_proxy",
+        },
+        "vector_median_efficiency_proxy_metadata_real": {
+            f"eff{p}": vector_proxy_meta_real.get(p, {})
+            for p in (1, 2, 3, 4)
+        },
+        "vector_median_efficiency_proxy_metadata_dictionary": {
+            f"eff{p}": vector_proxy_meta_dict.get(p, {})
+            for p in (1, 2, 3, 4)
+        },
         "efficiency_source_task_ids": selected_task_ids,
         "efficiency_source_most_advanced_task_id": int(max(selected_task_ids)) if selected_task_ids else 1,
         "efficiency_source_prefix_mode": efficiency_source_prefix_mode,
@@ -4021,21 +4732,22 @@ def main() -> int:
             f"eff{p}": raw_eff_cols_by_plane.get(p, {})
             for p in (1, 2, 3, 4)
         },
-        "transformed_efficiency_columns": {
+        "transformed_efficiency_proxy_columns": {
             "eff1": "eff1_transformed",
             "eff2": "eff2_transformed",
             "eff3": "eff3_transformed",
             "eff4": "eff4_transformed",
         },
-        "transformed_efficiency_formulas": {
+        "transformed_efficiency_proxy_formulas": {
             f"eff{p}": transformed_eff_formula_by_plane.get(p)
             for p in (1, 2, 3, 4)
         },
+        "eff2_proxy_column": eff2_real_col_for_plane_plot,
         "eff2_real_column": eff2_real_col_for_plane_plot,
+        "eff2_global_rate_proxy_source_requested": eff2_plot_source_cfg,
         "eff2_global_rate_eff_source_requested": eff2_plot_source_cfg,
-        "eff2_global_rate_eff_source_used": (
-            "transformed" if use_transformed_eff2_for_plane_plot else "raw"
-        ),
+        "eff2_global_rate_proxy_source_used": eff2_proxy_source_used,
+        "eff2_global_rate_eff_source_used": eff2_proxy_source_used,
         "eff2_global_rate_transformed_fraction_in_0_1": {
             "real": float(real_eff2_trans_frac_physical),
             "dictionary": float(dict_eff2_trans_frac_physical),
@@ -4053,20 +4765,15 @@ def main() -> int:
         "efficiency_feature_out_of_support_masking": (
             eff_oos_masking_summary if isinstance(eff_oos_masking_summary, dict) else None
         ),
-        "eff2_formula": (
-            transformed_eff_formula_by_plane.get(2)
-            if eff2_real_col_for_plane_plot == "eff2_transformed"
-            else eff2_formula
-        ),
+        "eff2_proxy_formula": eff2_real_proxy_formula,
+        "eff2_formula": eff2_real_proxy_formula,
         "eff2_raw_formula": eff2_formula,
         "eff2_transformed_formula": transformed_eff_formula_by_plane.get(2),
         "eff2_real_rate_columns": raw_eff_cols_by_plane.get(2, {}),
+        "eff2_dictionary_proxy_column": dict_eff2_col_for_plane_plot,
         "eff2_dictionary_eff_column": dict_eff2_col_for_plane_plot,
-        "eff2_dictionary_eff_formula": (
-            dict_transformed_eff_formula_by_plane.get(2)
-            if dict_eff2_col_for_plane_plot == "dict_eff2_transformed_from_rates"
-            else "raw_from_rates"
-        ),
+        "eff2_dictionary_proxy_formula": dict_eff2_proxy_formula,
+        "eff2_dictionary_eff_formula": dict_eff2_proxy_formula,
         "eff2_dictionary_rate_columns": {
             "three_plane_col": dict_eff_cols_by_plane.get(2, {}).get("three_plane_col"),
             "four_plane_col": dict_eff_cols_by_plane.get(2, {}).get("four_plane_col"),
@@ -4080,6 +4787,9 @@ def main() -> int:
         "recovery_story_eff_column": story_eff_col,
         "recovery_story_global_rate_column": real_global_rate_col,
         "recovery_story_flux_column": flux_est_col,
+        "grouped_case_diagnostic": grouped_case_summary,
+        "inverse_proxy_case_diagnostic": inverse_proxy_case_summary,
+        "k1_proxy_parameter_median_abs_relative_delta_pct": k1_proxy_delta_summary,
         "parameter_space_estimate_uncertainty_medians_pct": {
             pname: _series_median_or_none(merged.get(f"unc_{pname}_pct"))
             for pname in param_columns

@@ -16,5 +16,5 @@ plots:
   tsum_spread_histograms_filtered_og: debug
   tq_scatter_raw_by_tt: usual
   tq_scatter_filtered_by_tt: usual
-  channel_tq_matrix_by_planepair: usual
+  channel_tq_matrix_by_planepair: essential
   channel_combination_filter_by_tt: essential

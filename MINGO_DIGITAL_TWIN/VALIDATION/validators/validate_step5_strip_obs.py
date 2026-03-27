@@ -115,6 +115,8 @@ def run(
 
     cfg = art5.metadata.get("config") or {}
     qdiff_frac = float(cfg.get("qdiff_frac", 0.01))
+    qdiff_width_raw = cfg.get("qdiff_width")
+    qdiff_width = None if qdiff_width_raw in (None, "") else float(qdiff_width_raw)
     c_mm_per_ns = _find_c_mm_per_ns(art5.metadata)
     x_to_time = 3.0 / (2.0 * c_mm_per_ns)
 
@@ -130,8 +132,11 @@ def run(
             qv = df5[q_col].to_numpy(dtype=float)
             zero_qdiff_viol += int(((yv <= 0) & (np.abs(qv) > 1e-12)).sum())
             pos = yv > 0
-            if pos.any() and qdiff_frac > 0:
-                denom = qdiff_frac * yv[pos]
+            if pos.any() and (qdiff_width is not None or qdiff_frac > 0):
+                if qdiff_width is not None:
+                    denom = np.full(pos.sum(), qdiff_width, dtype=float)
+                else:
+                    denom = qdiff_frac * yv[pos]
                 good = np.abs(denom) > 0
                 if good.any():
                     norm_q = qv[pos][good] / denom[good]

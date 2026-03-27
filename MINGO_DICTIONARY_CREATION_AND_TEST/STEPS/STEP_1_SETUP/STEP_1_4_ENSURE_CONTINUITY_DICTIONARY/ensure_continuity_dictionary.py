@@ -37,8 +37,10 @@ if STEP_DIR.parents[1].name == "STEPS":
     PIPELINE_DIR = STEP_DIR.parents[2]
 else:
     PIPELINE_DIR = STEP_DIR.parents[1]
-
-DEFAULT_CONFIG = PIPELINE_DIR / "config_step_1.1_method.json"
+STEP_ROOT = PIPELINE_DIR if (PIPELINE_DIR / "STEP_1_SETUP").exists() else PIPELINE_DIR / "STEPS"
+DEFAULT_CONFIG = (
+    STEP_ROOT / "STEP_1_SETUP" / "STEP_1_1_COLLECT_DATA" / "INPUTS" / "config_step_1.1_method.json"
+)
 DEFAULT_DICTIONARY = STEP_DIR.parent / "STEP_1_3_BUILD_DICTIONARY" / "OUTPUTS" / "FILES" / "dictionary.csv"
 DEFAULT_DATASET = STEP_DIR.parent / "STEP_1_3_BUILD_DICTIONARY" / "OUTPUTS" / "FILES" / "dataset.csv"
 DEFAULT_SELECTED_FEATURES = (
@@ -318,8 +320,10 @@ def _resolve_parameter_columns(
         if requested:
             source = f"artifact:{parameter_space_path.name}"
         else:
-            requested = ["flux_cm2_min", "eff_sim_1", "eff_sim_2", "eff_sim_3", "eff_sim_4", "cos_n"]
-            source = "internal_fallback"
+            raise ValueError(
+                "STEP 1.4 parameter-space artifact is missing or empty: "
+                f"{parameter_space_path}"
+            )
     else:
         requested = _normalize_string_list(raw)
         source = "step_1_4.parameter_columns"
@@ -387,13 +391,17 @@ def _prepare_numeric_features(
     *,
     param_cols: list[str],
     min_feature_non_null_fraction: float = MIN_FEATURE_NON_NULL_FRACTION,
-) -> tuple[pd.DataFrame, np.ndarray, np.ndarray, np.ndarray, list[str]]:
+) -> tuple[pd.DataFrame, np.ndarray, np.ndarray, np.ndarray, list[str], dict[str, object]]:
     """Extract raw numeric feature and parameter matrices from dictionary.
 
     Returns un-normalised features; normalization is applied separately
     after distance-mode tuning.
     """
-    feat_num = dictionary[feature_cols].apply(pd.to_numeric, errors="coerce")
+    feat_num = (
+        dictionary[feature_cols]
+        .apply(pd.to_numeric, errors="coerce")
+        .replace([np.inf, -np.inf], np.nan)
+    )
     non_null_frac = feat_num.notna().mean(axis=0)
     threshold = max(float(min_feature_non_null_fraction), 0.0)
     kept_feature_cols = [c for c in feature_cols if float(non_null_frac.get(c, 0.0)) >= threshold]
@@ -403,20 +411,50 @@ def _prepare_numeric_features(
             f"No continuity feature columns remain after min_non_null_fraction={threshold:.2f}."
         )
 
-    feat_num = dictionary[kept_feature_cols].apply(pd.to_numeric, errors="coerce")
-    feat_num = feat_num.fillna(feat_num.median(numeric_only=True))
+    feat_num = (
+        dictionary[kept_feature_cols]
+        .apply(pd.to_numeric, errors="coerce")
+        .replace([np.inf, -np.inf], np.nan)
+    )
 
-    par_num = dictionary[param_cols].apply(pd.to_numeric, errors="coerce")
-    valid_mask = par_num.notna().all(axis=1)
+    par_num = (
+        dictionary[param_cols]
+        .apply(pd.to_numeric, errors="coerce")
+        .replace([np.inf, -np.inf], np.nan)
+    )
+    feature_valid_mask = feat_num.notna().all(axis=1)
+    param_valid_mask = par_num.notna().all(axis=1)
+    valid_mask = feature_valid_mask & param_valid_mask
     valid_idx = np.flatnonzero(valid_mask.to_numpy())
     if len(valid_idx) < 3:
-        raise RuntimeError(f"Not enough valid dictionary rows for continuity check (need >=3, got {len(valid_idx)}).")
+        raise RuntimeError(
+            "Not enough valid dictionary rows for continuity check "
+            f"(need >=3, got {len(valid_idx)}; "
+            f"feature-complete={int(feature_valid_mask.sum())}, "
+            f"parameter-complete={int(param_valid_mask.sum())})."
+        )
 
     dict_valid = dictionary.iloc[valid_idx].copy().reset_index(drop=True)
     x_raw = feat_num.iloc[valid_idx].to_numpy(dtype=float)
     y = par_num.iloc[valid_idx].to_numpy(dtype=float)
 
-    return dict_valid, x_raw, y, valid_idx, kept_feature_cols
+    completeness_info = {
+        "feature_columns_requested_count": int(len(feature_cols)),
+        "feature_columns_used_count": int(len(kept_feature_cols)),
+        "feature_columns_dropped_by_non_null_fraction": [
+            str(col) for col in feature_cols if str(col) not in set(kept_feature_cols)
+        ],
+        "min_feature_non_null_fraction": float(threshold),
+        "input_rows": int(len(dictionary)),
+        "rows_with_complete_features": int(feature_valid_mask.sum()),
+        "rows_with_complete_parameters": int(param_valid_mask.sum()),
+        "rows_with_complete_feature_and_parameter_space": int(valid_mask.sum()),
+        "rows_removed_incomplete_features": int((~feature_valid_mask).sum()),
+        "rows_removed_incomplete_parameters": int((~param_valid_mask).sum()),
+        "rows_removed_incomplete_feature_or_parameter_space": int((~valid_mask).sum()),
+    }
+
+    return dict_valid, x_raw, y, valid_idx, kept_feature_cols, completeness_info
 
 
 def _pca_2d(x: np.ndarray) -> np.ndarray:
@@ -1884,11 +1922,15 @@ def main() -> int:
         return 1
 
     feature_cols_requested = _resolve_feature_columns(dictionary, cfg_14, selected_features_path)
-    param_cols, param_cols_source = _resolve_parameter_columns(
-        dictionary,
-        cfg_14,
-        parameter_space_path=DEFAULT_PARAMETER_SPACE,
-    )
+    try:
+        param_cols, param_cols_source = _resolve_parameter_columns(
+            dictionary,
+            cfg_14,
+            parameter_space_path=DEFAULT_PARAMETER_SPACE,
+        )
+    except ValueError as exc:
+        log.error("%s", exc)
+        return 1
     if not feature_cols_requested:
         log.error("No feature columns resolved for STEP 1.4 continuity.")
         return 1
@@ -1905,7 +1947,14 @@ def main() -> int:
     min_feature_non_null_fraction = max(min_feature_non_null_fraction, 0.0)
 
     try:
-        dict_valid, x_raw, y_param, valid_idx, feature_cols_used = _prepare_numeric_features(
+        (
+            dict_valid,
+            x_raw,
+            y_param,
+            valid_idx,
+            feature_cols_used,
+            feature_space_completeness,
+        ) = _prepare_numeric_features(
             dictionary,
             feature_cols_requested,
             param_cols=param_cols,
@@ -1920,6 +1969,11 @@ def main() -> int:
         x_raw.shape[1],
         y_param.shape[1],
     )
+    if int(feature_space_completeness.get("rows_removed_incomplete_feature_or_parameter_space", 0)) > 0:
+        log.info(
+            "Dropped %d row(s) before continuity because the requested feature or parameter space was incomplete.",
+            int(feature_space_completeness.get("rows_removed_incomplete_feature_or_parameter_space", 0)),
+        )
 
     # ── L1 robust z-score for continuity checking ─────────────────────
     x_feat = _robust_scale_matrix(x_raw)
@@ -2059,6 +2113,7 @@ def main() -> int:
         "apply_continuity_filter": bool(apply_continuity_filter),
         "rows_removed_by_continuity": int(removed),
         "rows_removed_by_continuity_fraction": float(removal_fraction),
+        "feature_space_completeness": feature_space_completeness,
         "feature_columns_requested": feature_cols_requested,
         "feature_columns_used": feature_cols_used,
         "min_feature_non_null_fraction": float(min_feature_non_null_fraction),

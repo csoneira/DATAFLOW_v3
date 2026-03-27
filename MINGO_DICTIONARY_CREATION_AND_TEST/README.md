@@ -31,6 +31,10 @@ STEP 4.1  Collect real metadata (station/task/date windows)
 STEP 4.2  Infer real parameters and attach uncertainties
 ```
 
+For the shortest explanation of the method itself, see:
+
+- [DOCS/CORE_METHOD.md](/home/mingo/DATAFLOW_v3/MINGO_DICTIONARY_CREATION_AND_TEST/DOCS/CORE_METHOD.md)
+
 ### Shared libraries (not steps — imported by the scripts above)
 
 | File | Purpose |
@@ -41,15 +45,14 @@ STEP 4.2  Infer real parameters and attach uncertainties
 
 ## Directory layout
 
-Each step lives in its own directory (`STEP_N_<NAME>/`) and writes outputs
-into an `OUTPUTS/` subdirectory that is created automatically:
+Each step lives in its own directory (`STEP_N_<NAME>/`). Step-owned configs
+live in an `INPUTS/` subdirectory and generated artifacts go to `OUTPUTS/`:
 
 ```
 STEP_N_<NAME>/
   script.py
-  config_step_1.1_method.json   (optional method config)
-  config_step_1.1_plots.json    (optional plotting config)
-  config_step_1.1_runtime.json  (optional runtime/path overrides)
+  INPUTS/
+    config_step_X.Y_*.json      first-consumed config files for that step
   OUTPUTS/
     FILES/               CSVs, JSONs, markdown reports
     PLOTS/               PNG figures
@@ -73,18 +76,26 @@ Each step writes to `STEP_*/.../OUTPUTS/{FILES,PLOTS}`.
 Each step reads parameters in this priority order:
 
 ```
-CLI argument  >  config_step_1.1_runtime.json override  >  config_step_1.1_plots.json key  >  config_step_1.1_method.json key  >  hardcoded default
+CLI argument  >  STEP-local `INPUTS/config_step_1.1_runtime.json` override  >  STEP-local `INPUTS/config_step_1.1_plots.json` key  >  STEP-local `INPUTS/config_step_1.1_columns.json` key  >  STEP-local `INPUTS/config_step_1.1_method.json` key  >  hardcoded default
 ```
 
-Main configuration files at repo root:
+Main configuration files now live in the `INPUTS/` directory of the first step that consumes them:
 
-- `config_step_1.1_method.json`: inference and processing method knobs (first consumed in STEP 1.1)
-- `config_step_1.1_plots.json`: plotting/display knobs (first consumed in STEP 1.1)
-- `config_step_1.1_runtime.json`: runtime overrides plus execution-only passthrough columns (first consumed in STEP 1.1)
-- `config_step_1.2_feature_space.json`: STEP 1.2 feature-space dimensions only (`kept` features + `new` feature expressions)
-- `config_step_1.5_feature_groups.json`: STEP 1.5 grouped-feature definitions (vector/grouped distances)
-- `config_step_2.1_columns.json`: compact feature-column selector overrides
+- `STEPS/STEP_1_SETUP/STEP_1_1_COLLECT_DATA/INPUTS/config_step_1.1_method.json`
+- `STEPS/STEP_1_SETUP/STEP_1_1_COLLECT_DATA/INPUTS/config_step_1.1_columns.json`
+- `STEPS/STEP_1_SETUP/STEP_1_1_COLLECT_DATA/INPUTS/config_step_1.1_plots.json`
+- `STEPS/STEP_1_SETUP/STEP_1_1_COLLECT_DATA/INPUTS/config_step_1.1_runtime.json`
+- `STEPS/STEP_1_SETUP/STEP_1_2_TRANSFORM_FEATURE_SPACE/INPUTS/config_step_1.2_feature_space.json`
+- `STEPS/STEP_1_SETUP/STEP_1_5_TUNE_DISTANCE_DEFINITION/INPUTS/config_step_1.5_feature_groups.json`
+- `STEPS/STEP_2_INFERENCE/STEP_2_1_ESTIMATE_PARAMS/INPUTS/config_step_2.1_columns.json`
 - `.ATTIC/config_legacy.json`: deprecated keys kept only as reference
+
+Current STEP 1 contract:
+
+- STEP 1.1 defines column roles only: simulation parameters and general non-feature columns.
+- STEP 1.2 defines the transformed feature space only: primary features, ancillary columns, and derived columns.
+- STEP 1.2 also emits `STEP_1_SETUP/STEP_1_2_TRANSFORM_FEATURE_SPACE/OUTPUTS/FILES/feature_space_manifest.json`, which is the authoritative partition of the transformed table into primary features, ancillary columns, and passthrough columns for downstream STEP 1.3 / STEP 4.1 reuse.
+- STEP 1.3 and STEP 4.1 should consume that manifest instead of re-deriving column families independently.
 
 `config.json` has been retired.
 

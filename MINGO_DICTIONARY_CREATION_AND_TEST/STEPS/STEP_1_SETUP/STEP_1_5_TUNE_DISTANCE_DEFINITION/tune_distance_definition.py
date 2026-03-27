@@ -22,7 +22,7 @@ import json
 import logging
 from pathlib import Path
 import sys
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -39,8 +39,10 @@ if STEP_DIR.parents[1].name == "STEPS":
     PIPELINE_DIR = STEP_DIR.parents[2]
 else:
     PIPELINE_DIR = STEP_DIR.parents[1]
-
-DEFAULT_CONFIG = PIPELINE_DIR / "config_step_1.1_method.json"
+STEP_ROOT = PIPELINE_DIR if (PIPELINE_DIR / "STEP_1_SETUP").exists() else PIPELINE_DIR / "STEPS"
+DEFAULT_CONFIG = (
+    STEP_ROOT / "STEP_1_SETUP" / "STEP_1_1_COLLECT_DATA" / "INPUTS" / "config_step_1.1_method.json"
+)
 DEFAULT_DICTIONARY = (
     STEP_DIR.parent / "STEP_1_4_ENSURE_CONTINUITY_DICTIONARY"
     / "OUTPUTS" / "FILES" / "dictionary.csv"
@@ -80,6 +82,9 @@ from feature_space_config import (  # noqa: E402
     load_feature_space_config,
     resolve_feature_group_config_path,
     resolve_feature_space_group_definitions,
+)
+from feature_space_transform_engine import (  # noqa: E402
+    filter_rows_with_complete_numeric_columns,
 )
 
 STEP2_INFERENCE_DIR = (
@@ -122,6 +127,7 @@ _K_GRID = [3, 5, 7, 10, 15, 20, 30, 50, 80, 120]
 _LAMBDA_GRID = [0.01, 0.1, 1.0, 10.0, 100.0, 1e6]  # 1e6 ≈ pure IDW fallback
 _AGGREGATION_GRID = ["weighted_mean", "weighted_median", "local_linear"]
 _MAX_GROUP_OPTION_COMBINATIONS = 256
+_DISTANCE_SELECTION_HOLDOUT_TOP_N = 4
 
 # Legacy name → (p, normalization) for backward compat with forced modes.
 _LEGACY_MODES: dict[str, tuple[float, str]] = {
@@ -137,6 +143,110 @@ _LEGACY_MODES: dict[str, tuple[float, str]] = {
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
+
+
+def _filter_complete_tuning_rows(
+    df: pd.DataFrame,
+    *,
+    feature_cols: Sequence[str],
+    param_cols: Sequence[str],
+    label: str,
+) -> tuple[pd.DataFrame, dict[str, object]]:
+    missing_feature_cols = [str(col) for col in feature_cols if str(col) not in df.columns]
+    missing_param_cols = [str(col) for col in param_cols if str(col) not in df.columns]
+    missing_cols = [*missing_feature_cols, *missing_param_cols]
+    if missing_cols:
+        raise ValueError(
+            f"STEP 1.5 {label} is missing required tuning columns: "
+            + ", ".join(missing_cols[:50])
+            + (" ..." if len(missing_cols) > 50 else "")
+        )
+
+    filtered, completeness = filter_rows_with_complete_numeric_columns(
+        df,
+        required_columns=[*feature_cols, *param_cols],
+    )
+    completeness = dict(completeness)
+    completeness["label"] = str(label)
+    completeness["feature_columns_checked"] = [str(col) for col in feature_cols]
+    completeness["parameter_columns_checked"] = [str(col) for col in param_cols]
+    return filtered, completeness
+
+
+def _exclude_holdout_rows_with_dictionary_parameter_overlap(
+    dictionary_df: pd.DataFrame,
+    dataset_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, dict[str, object]]:
+    """Remove holdout rows whose physical parameter vector already exists in dictionary."""
+    if dataset_df.empty:
+        return dataset_df.copy(), {
+            "enabled": True,
+            "input_rows": 0,
+            "rows_kept": 0,
+            "rows_removed": 0,
+            "rows_removed_fraction": 0.0,
+            "overlap_via_hash_count": 0,
+            "overlap_via_physical_tuple_count": 0,
+            "tuple_columns_used": [],
+        }
+
+    hash_mask = pd.Series(False, index=dataset_df.index, dtype=bool)
+    if "param_hash_x" in dictionary_df.columns and "param_hash_x" in dataset_df.columns:
+        dict_keys = set(dictionary_df["param_hash_x"].astype(str).dropna().tolist())
+        hash_mask = dataset_df["param_hash_x"].astype(str).isin(dict_keys).fillna(False)
+
+    base_cols = [
+        "flux_cm2_min",
+        "cos_n",
+        "eff_sim_1",
+        "eff_sim_2",
+        "eff_sim_3",
+        "eff_sim_4",
+        "z_plane_1",
+        "z_plane_2",
+        "z_plane_3",
+        "z_plane_4",
+    ]
+    tuple_cols = [
+        str(col)
+        for col in base_cols
+        if str(col) in dictionary_df.columns and str(col) in dataset_df.columns
+    ]
+    tuple_mask = pd.Series(False, index=dataset_df.index, dtype=bool)
+    if tuple_cols:
+        dict_num = dictionary_df[tuple_cols].apply(pd.to_numeric, errors="coerce")
+        data_num = dataset_df[tuple_cols].apply(pd.to_numeric, errors="coerce")
+        dict_keys = {
+            tuple(np.round(row, 12))
+            for row in dict_num.to_numpy(dtype=float)
+            if np.all(np.isfinite(row))
+        }
+        if dict_keys:
+            tuple_mask = pd.Series(
+                [
+                    tuple(np.round(row, 12)) in dict_keys if np.all(np.isfinite(row)) else False
+                    for row in data_num.to_numpy(dtype=float)
+                ],
+                index=dataset_df.index,
+                dtype=bool,
+            )
+
+    overlap_mask = (hash_mask | tuple_mask).fillna(False)
+    filtered = dataset_df.loc[~overlap_mask].copy()
+    input_rows = int(len(dataset_df))
+    rows_removed = int(overlap_mask.sum())
+    rows_kept = int(len(filtered))
+    return filtered, {
+        "enabled": True,
+        "input_rows": input_rows,
+        "rows_kept": rows_kept,
+        "rows_removed": rows_removed,
+        "rows_removed_fraction": (float(rows_removed) / float(input_rows)) if input_rows > 0 else 0.0,
+        "overlap_via_hash_count": int(hash_mask.sum()),
+        "overlap_via_physical_tuple_count": int(tuple_mask.sum()),
+        "tuple_columns_used": list(tuple_cols),
+    }
+
 
 def _load_config(path: Path) -> dict:
     cfg: dict = {}
@@ -158,6 +268,63 @@ def _load_selected_features(path: Path) -> list[str]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     cols = payload.get("selected_feature_columns", []) if isinstance(payload, dict) else []
     return [c for c in cols if isinstance(c, str) and c.strip()]
+
+
+def _coerce_nonnegative_float(value: object, default: float = 0.0) -> float:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        out = float(default)
+    if not np.isfinite(out):
+        out = float(default)
+    return max(float(out), 0.0)
+
+
+def _group_min_weight(
+    feature_groups: Mapping[str, object] | None,
+    group_name: str,
+) -> float:
+    if not isinstance(feature_groups, Mapping):
+        return 0.0
+    raw_cfg = feature_groups.get(group_name, {})
+    if not isinstance(raw_cfg, Mapping):
+        return 0.0
+    return _coerce_nonnegative_float(raw_cfg.get("min_weight"), 0.0)
+
+
+def _resolve_group_weight_candidates(
+    *,
+    feature_groups: Mapping[str, object] | None,
+    group_name: str,
+    raw_candidates: Sequence[object],
+) -> list[float]:
+    min_weight = _group_min_weight(feature_groups, group_name)
+    candidates = sorted(
+        {
+            max(_coerce_nonnegative_float(value, 0.0), min_weight)
+            for value in raw_candidates
+        }
+    )
+    if not candidates:
+        candidates = [float(min_weight)]
+    return [float(value) for value in candidates]
+
+
+def _apply_group_weight_floors(
+    group_weights: Mapping[str, object] | None,
+    *,
+    feature_groups: Mapping[str, object] | None,
+) -> dict[str, float]:
+    out: dict[str, float] = {}
+    if not isinstance(group_weights, Mapping):
+        return out
+    for raw_name, raw_weight in group_weights.items():
+        name = str(raw_name)
+        out[name] = max(
+            _coerce_nonnegative_float(raw_weight, 0.0),
+            _group_min_weight(feature_groups, name),
+        )
+    return out
 
 
 def _load_parameter_space_columns(
@@ -347,6 +514,12 @@ def _resolve_step15_search_cfg(cfg_15: Mapping[str, object] | None) -> dict[str,
         "lambda_grid": _numeric_grid("lambda_grid", _LAMBDA_GRID, minimum=0.0, integer=False),
         "max_weight_rounds": int(max(float(cfg.get("max_weight_rounds", _MAX_WEIGHT_ROUNDS)), 1.0)),
         "max_group_option_combinations": int(max(float(cfg.get("max_group_option_combinations", _MAX_GROUP_OPTION_COMBINATIONS)), 1.0)),
+        "distance_selection_objective": str(
+            cfg.get("distance_selection_objective", "dictionary_loo")
+        ).strip().lower(),
+        "distance_selection_holdout_top_n": int(
+            max(float(cfg.get("distance_selection_holdout_top_n", _DISTANCE_SELECTION_HOLDOUT_TOP_N)), 1.0)
+        ),
         "inverse_mapping_selection_objective": str(
             cfg.get("inverse_mapping_selection_objective", "dictionary_loo")
         ).strip().lower(),
@@ -857,6 +1030,7 @@ def _build_feature_group_inputs(
             hist_option_cfg = {
                 "distance": str(hist_dist_cfg["distance"]),
                 "blend_mode": hist_blend_mode,
+                "min_weight": _coerce_nonnegative_float(hist_cfg.get("min_weight"), 0.0),
                 "normalization": str(hist_dist_cfg["normalization"]),
                 "p_norm": float(hist_dist_cfg["p_norm"]),
                 "amplitude_weight": float(hist_dist_cfg["amplitude_weight"]),
@@ -948,6 +1122,7 @@ def _build_feature_group_inputs(
             eff_option_cfg = {
                 "distance": str(eff_dist_cfg["distance"]),
                 "blend_mode": eff_blend_mode,
+                "min_weight": _coerce_nonnegative_float(effvec_cfg_base.get("min_weight"), 0.0),
                 "normalization": str(eff_dist_cfg["normalization"]),
                 "p_norm": float(eff_dist_cfg["p_norm"]),
                 "amplitude_weight": float(eff_dist_cfg["amplitude_weight"]),
@@ -1063,6 +1238,7 @@ def _build_feature_group_inputs(
                 option_cfg = {
                     "distance": str(resolved_cfg["distance"]),
                     "blend_mode": group_blend_mode,
+                    "min_weight": _coerce_nonnegative_float(group_cfg.get("min_weight"), 0.0),
                     "normalization": str(resolved_cfg["normalization"]),
                     "p_norm": float(resolved_cfg["p_norm"]),
                     "amplitude_weight": float(resolved_cfg["amplitude_weight"]),
@@ -1096,6 +1272,7 @@ def _build_feature_group_inputs(
                 option_cfg = {
                     "distance": str(resolved_cfg["distance"]),
                     "blend_mode": group_blend_mode,
+                    "min_weight": _coerce_nonnegative_float(group_cfg.get("min_weight"), 0.0),
                     "normalization": str(resolved_cfg["normalization"]),
                     "p_norm": float(resolved_cfg["p_norm"]),
                     "amplitude_weight": float(resolved_cfg["amplitude_weight"]),
@@ -1475,6 +1652,118 @@ def _holdout_inverse_mapping_score(
     return float(np.mean(scores))
 
 
+def _select_holdout_inverse_mapping_configuration(
+    *,
+    dictionary_df: pd.DataFrame,
+    dataset_df: pd.DataFrame,
+    feature_cols: list[str],
+    param_cols: list[str],
+    base_distance_definition: dict[str, object],
+    aggregation_candidates: Sequence[str],
+    k_candidates: Sequence[int],
+    lambda_grid: Sequence[float],
+    default_k: int,
+    default_lambda: float,
+    use_in_coverage_only: bool = True,
+) -> tuple[str, int, float, float, list[dict[str, object]]]:
+    """Select the inverse-map runtime on the holdout dataset."""
+    holdout_scores: list[dict[str, object]] = []
+    best_aggregation = str(aggregation_candidates[0])
+    best_k = int(default_k)
+    best_lambda = float(default_lambda)
+    best_score = np.inf
+
+    for neighbor_count in k_candidates:
+        for aggregation_mode in aggregation_candidates:
+            lambda_candidates = (
+                [float(v) for v in lambda_grid]
+                if str(aggregation_mode) == "local_linear"
+                else [1e6]
+            )
+            for ridge_lambda in lambda_candidates:
+                score = _holdout_inverse_mapping_score(
+                    dictionary_df=dictionary_df,
+                    dataset_df=dataset_df,
+                    feature_cols=feature_cols,
+                    param_cols=param_cols,
+                    distance_definition={
+                        **base_distance_definition,
+                        "optimal_aggregation": str(aggregation_mode),
+                        "optimal_lambda": float(ridge_lambda),
+                    },
+                    aggregation_mode=str(aggregation_mode),
+                    neighbor_count=int(neighbor_count),
+                    ridge_lambda=float(ridge_lambda),
+                    use_in_coverage_only=use_in_coverage_only,
+                )
+                holdout_scores.append(
+                    {
+                        "aggregation": str(aggregation_mode),
+                        "neighbor_count": int(neighbor_count),
+                        "ridge_lambda": float(ridge_lambda),
+                        "score": round(float(score), 6),
+                        "selected": False,
+                    }
+                )
+                if score < best_score:
+                    best_score = float(score)
+                    best_aggregation = str(aggregation_mode)
+                    best_k = int(neighbor_count)
+                    best_lambda = float(ridge_lambda)
+
+    for row in holdout_scores:
+        row["selected"] = (
+            row["aggregation"] == best_aggregation
+            and int(row["neighbor_count"]) == best_k
+            and float(row["ridge_lambda"]) == best_lambda
+        )
+    return best_aggregation, best_k, best_lambda, best_score, holdout_scores
+
+
+def _rerank_distance_candidates_on_holdout(
+    candidates: Sequence[Mapping[str, object]],
+    *,
+    top_n: int,
+    scorer: Callable[[Mapping[str, object]], tuple[float, str, int, float]],
+) -> tuple[dict[str, object] | None, list[dict[str, object]]]:
+    """Re-rank the best dictionary candidates on the holdout dataset."""
+    if not candidates:
+        return None, []
+
+    shortlist = sorted(
+        candidates,
+        key=lambda row: (
+            float(row.get("dictionary_score", np.inf)),
+            str(row.get("label", "")),
+        ),
+    )[: max(int(top_n), 1)]
+
+    diagnostics: list[dict[str, object]] = []
+    best_row: dict[str, object] | None = None
+    best_score = np.inf
+    for rank, candidate in enumerate(shortlist, start=1):
+        holdout_score, holdout_agg, holdout_k, holdout_lambda = scorer(candidate)
+        row = dict(candidate)
+        row["shortlist_rank"] = int(rank)
+        row["holdout_score"] = float(holdout_score)
+        row["holdout_selected_aggregation"] = str(holdout_agg)
+        row["holdout_selected_k"] = int(holdout_k)
+        row["holdout_selected_lambda"] = float(holdout_lambda)
+        row["selected"] = False
+        diagnostics.append(row)
+        if float(holdout_score) < best_score:
+            best_score = float(holdout_score)
+            best_row = row
+
+    if best_row is not None:
+        for row in diagnostics:
+            row["selected"] = row is best_row
+            row["holdout_delta_vs_selected"] = (
+                float(row["holdout_score"]) - float(best_row["holdout_score"])
+            )
+    return best_row, diagnostics
+
+
 def _auto_tune_distance(
     x_raw: np.ndarray,
     y_param: np.ndarray,
@@ -1503,6 +1792,12 @@ def _auto_tune_distance(
     weight_candidates = [float(v) for v in resolved_search_cfg["weight_candidates"]]
     k_candidates = [int(k) for k in resolved_search_cfg["k_grid"] if int(k) < n]
     lambda_grid = [float(v) for v in resolved_search_cfg["lambda_grid"]]
+    distance_selection_objective = str(
+        resolved_search_cfg.get("distance_selection_objective", "dictionary_loo")
+    ).strip().lower()
+    distance_selection_holdout_top_n = int(
+        resolved_search_cfg.get("distance_selection_holdout_top_n", _DISTANCE_SELECTION_HOLDOUT_TOP_N)
+    )
     inverse_mapping_selection_objective = str(
         resolved_search_cfg.get("inverse_mapping_selection_objective", "dictionary_loo")
     ).strip().lower()
@@ -1721,7 +2016,77 @@ def _auto_tune_distance(
         ps_to_try = p_grid
 
     uniform_scalar_w = np.ones(d_scalar, dtype=float)
+    uniform_scalar_weights_full = np.zeros(len(feature_cols), dtype=float)
+    for full_idx in scalar_feature_indices.tolist():
+        uniform_scalar_weights_full[int(full_idx)] = 1.0
+
+    def _rebuild_grid_candidate(
+        *,
+        norm: str,
+        p_norm: float,
+        selected_option_idx: Mapping[str, int],
+    ) -> tuple[
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        dict[str, np.ndarray],
+        dict[str, np.ndarray],
+        dict[str, object],
+        np.ndarray,
+        np.ndarray,
+    ]:
+        center, scale = _compute_normalization_params(x_raw, norm)
+        z_full = (x_raw - center) / scale
+        z_scalar = (
+            z_full[:, scalar_feature_indices]
+            if scalar_feature_indices.size > 0
+            else np.empty((n, 0), dtype=float)
+        )
+        combo_group_distance_mats = dict(group_distance_mats)
+        combo_group_coord_mats = dict(group_coord_mats)
+        combo_feature_groups = {
+            str(name): (dict(value) if isinstance(value, Mapping) else value)
+            for name, value in feature_groups.items()
+        }
+        for group_name, raw_idx in selected_option_idx.items():
+            option_sets = group_tuning_options.get(str(group_name), [])
+            if not option_sets:
+                continue
+            idx = int(np.clip(int(raw_idx), 0, len(option_sets) - 1))
+            option = option_sets[idx]
+            combo_group_distance_mats[str(group_name)] = np.asarray(
+                option["distance_matrix"], dtype=float
+            )
+            combo_group_coord_mats[str(group_name)] = np.asarray(
+                option.get("coord_matrix", np.empty((n, 0), dtype=float)),
+                dtype=float,
+            )
+            combo_feature_groups[str(group_name)] = dict(option["config"])
+        dm = _build_distance_matrix(
+            z_scalar=z_scalar,
+            p_norm=p_norm,
+            scalar_weights=uniform_scalar_w,
+            group_weights=group_weights_template,
+            group_distance_mats_local=combo_group_distance_mats,
+            feature_groups_local=combo_feature_groups,
+        )
+        z_feat = _build_local_linear_feature_matrix(
+            z_scalar=z_scalar,
+            group_coord_mats_local=combo_group_coord_mats,
+        )
+        return (
+            center,
+            scale,
+            z_scalar,
+            combo_group_distance_mats,
+            combo_group_coord_mats,
+            combo_feature_groups,
+            dm,
+            z_feat,
+        )
+
     grid_results: dict[str, float] = {}
+    grid_candidate_specs: list[dict[str, object]] = []
     best_score = np.inf
     best_norm = norms_to_try[0]
     best_p = ps_to_try[0]
@@ -1871,6 +2236,22 @@ def _auto_tune_distance(
                     f"_k={combo_best_k}_lam={combo_best_lambda:.0e}"
                 )
             grid_results[label] = round(combo_best_score, 4)
+            grid_candidate_specs.append(
+                {
+                    "label": str(label),
+                    "dictionary_score": float(combo_best_score),
+                    "normalization": str(norm),
+                    "p_norm": float(p),
+                    "dictionary_selected_aggregation": str(combo_best_aggregation),
+                    "dictionary_selected_k": int(combo_best_k),
+                    "dictionary_selected_lambda": float(combo_best_lambda),
+                    "group_metric_combo": str(combo_label),
+                    "group_selected_option_idx": {
+                        str(name): int(idx)
+                        for name, idx in combo_selected_option_idx.items()
+                    },
+                }
+            )
             if combo_best_score < best_score:
                 best_score = combo_best_score
                 best_norm = norm
@@ -1914,6 +2295,120 @@ def _auto_tune_distance(
                  best_norm, best_p, best_aggregation, best_k, best_lambda, best_score)
     if best_group_combo_label:
         log.info("  Best multi-feature vector-term metric combo at grid point: %s", best_group_combo_label)
+
+    holdout_distance_selection: dict[str, object] | None = None
+    if (
+        distance_selection_objective == "holdout_dataset"
+        and isinstance(dictionary_df, pd.DataFrame)
+        and isinstance(dataset_df, pd.DataFrame)
+        and not dataset_df.empty
+        and grid_candidate_specs
+    ):
+        def _score_grid_candidate_on_holdout(
+            candidate: Mapping[str, object],
+        ) -> tuple[float, str, int, float]:
+            (
+                cand_center,
+                cand_scale,
+                _cand_z_scalar,
+                _cand_group_distance_mats,
+                _cand_group_coord_mats,
+                cand_feature_groups,
+                _cand_dm,
+                _cand_z_feat,
+            ) = _rebuild_grid_candidate(
+                norm=str(candidate["normalization"]),
+                p_norm=float(candidate["p_norm"]),
+                selected_option_idx={
+                    str(name): int(idx)
+                    for name, idx in dict(candidate.get("group_selected_option_idx", {})).items()
+                },
+            )
+            base_distance_definition = {
+                "feature_columns": list(feature_cols),
+                "scalar_feature_columns": list(scalar_feature_cols),
+                "center": cand_center.tolist(),
+                "scale": cand_scale.tolist(),
+                "weights": uniform_scalar_weights_full.tolist(),
+                "group_weights": {str(name): float(value) for name, value in group_weights_template.items()},
+                "feature_groups": cand_feature_groups,
+                "p_norm": float(candidate["p_norm"]),
+                "optimal_k": int(candidate["dictionary_selected_k"]),
+            }
+            best_holdout_agg, best_holdout_k, best_holdout_lambda, best_holdout_score, _ = (
+                _select_holdout_inverse_mapping_configuration(
+                    dictionary_df=dictionary_df,
+                    dataset_df=dataset_df,
+                    feature_cols=feature_cols,
+                    param_cols=param_cols,
+                    base_distance_definition=base_distance_definition,
+                    aggregation_candidates=aggregation_candidates,
+                    k_candidates=k_candidates,
+                    lambda_grid=lambda_grid,
+                    default_k=int(candidate["dictionary_selected_k"]),
+                    default_lambda=float(candidate["dictionary_selected_lambda"]),
+                    use_in_coverage_only=True,
+                )
+            )
+            return (
+                float(best_holdout_score),
+                str(best_holdout_agg),
+                int(best_holdout_k),
+                float(best_holdout_lambda),
+            )
+
+        selected_candidate, holdout_distance_diagnostics = _rerank_distance_candidates_on_holdout(
+            grid_candidate_specs,
+            top_n=distance_selection_holdout_top_n,
+            scorer=_score_grid_candidate_on_holdout,
+        )
+        if selected_candidate is not None:
+            holdout_distance_selection = {
+                "objective": "holdout_dataset",
+                "top_n_from_dictionary_grid": int(distance_selection_holdout_top_n),
+                "selected_label": str(selected_candidate["label"]),
+                "selected_dictionary_score": round(float(selected_candidate["dictionary_score"]), 6),
+                "selected_holdout_score": round(float(selected_candidate["holdout_score"]), 6),
+                "selected_aggregation": str(selected_candidate["holdout_selected_aggregation"]),
+                "selected_k": int(selected_candidate["holdout_selected_k"]),
+                "selected_lambda": float(selected_candidate["holdout_selected_lambda"]),
+                "scores": holdout_distance_diagnostics,
+            }
+            best_norm = str(selected_candidate["normalization"])
+            best_p = float(selected_candidate["p_norm"])
+            best_k = int(selected_candidate["holdout_selected_k"])
+            best_lambda = float(selected_candidate["holdout_selected_lambda"])
+            best_aggregation = str(selected_candidate["holdout_selected_aggregation"])
+            best_group_combo_label = str(selected_candidate.get("group_metric_combo", "default"))
+            best_group_selected_option_idx = {
+                str(name): int(idx)
+                for name, idx in dict(selected_candidate.get("group_selected_option_idx", {})).items()
+            }
+            (
+                best_center,
+                best_scale,
+                _best_z_scalar,
+                best_group_distance_mats,
+                best_group_coord_mats,
+                best_feature_groups,
+                _best_dm,
+                _best_z_feat,
+            ) = _rebuild_grid_candidate(
+                norm=best_norm,
+                p_norm=best_p,
+                selected_option_idx=best_group_selected_option_idx,
+            )
+            best_group_weights = dict(group_weights_template)
+            best_score = float(selected_candidate["dictionary_score"])
+            log.info(
+                "  Holdout distance re-ranking selected: %s (dictionary %.3f %% → holdout %.3f %%, agg=%s, k=%d, λ=%.2g)",
+                str(selected_candidate["label"]),
+                float(selected_candidate["dictionary_score"]),
+                float(selected_candidate["holdout_score"]),
+                best_aggregation,
+                best_k,
+                best_lambda,
+            )
 
     grid_boundary_details = {
         "k": _grid_boundary_detail(
@@ -1985,7 +2480,10 @@ def _auto_tune_distance(
     current_lambda = float(local_linear_lambda if current_aggregation == "local_linear" else 1e6)
 
     weights_scalar = np.ones(d_scalar, dtype=float)
-    group_weights = dict(best_group_weights)
+    group_weights = _apply_group_weight_floors(
+        best_group_weights,
+        feature_groups=active_feature_groups,
+    )
     current_score = best_score
     log.info(
         "  Starting weight tuning at the selected grid point: %d one-feature vector term(s), %d multi-feature vector term(s), up to %d round(s), %d candidate weight(s) per term.",
@@ -2211,10 +2709,16 @@ def _auto_tune_distance(
                     current_score = best_wg_score
                     improved_count += 1
             else:
-                w_orig = float(group_weights[group_name])
+                min_group_weight = _group_min_weight(active_feature_groups, group_name)
+                w_orig = max(float(group_weights[group_name]), min_group_weight)
                 best_wg = w_orig
                 best_wg_score = current_score
-                for wc in weight_candidates:
+                candidate_group_weights = _resolve_group_weight_candidates(
+                    feature_groups=active_feature_groups,
+                    group_name=group_name,
+                    raw_candidates=weight_candidates,
+                )
+                for wc in candidate_group_weights:
                     if float(wc) == w_orig:
                         continue
                     trial_group_weights = dict(group_weights)
@@ -2244,7 +2748,7 @@ def _auto_tune_distance(
                     if s < best_wg_score:
                         best_wg_score = s
                         best_wg = float(wc)
-                group_weights[group_name] = float(best_wg)
+                group_weights[group_name] = max(float(best_wg), min_group_weight)
                 if best_wg != w_orig:
                     current_score = best_wg_score
                     improved_count += 1
@@ -2291,51 +2795,41 @@ def _auto_tune_distance(
             "p_norm": float(best_p),
             "optimal_k": int(best_k),
         }
-        holdout_scores: list[dict[str, object]] = []
-        best_holdout_agg = str(current_aggregation)
-        best_holdout_score = np.inf
-        for aggregation_mode in aggregation_candidates:
-            trial_lambda = float(local_linear_lambda if aggregation_mode == "local_linear" else 1e6)
-            score = _holdout_inverse_mapping_score(
-                dictionary_df=dictionary_df,
-                dataset_df=dataset_df,
-                feature_cols=feature_cols,
-                param_cols=param_cols,
-                distance_definition={
-                    **base_distance_definition,
-                    "optimal_aggregation": str(aggregation_mode),
-                    "optimal_lambda": float(trial_lambda),
-                },
-                aggregation_mode=str(aggregation_mode),
-                neighbor_count=int(best_k),
-                ridge_lambda=float(trial_lambda),
-                use_in_coverage_only=True,
-            )
-            holdout_scores.append(
-                {
-                    "aggregation": str(aggregation_mode),
-                    "score": round(float(score), 6),
-                    "selected": False,
-                }
-            )
-            if score < best_holdout_score:
-                best_holdout_score = float(score)
-                best_holdout_agg = str(aggregation_mode)
-        for row in holdout_scores:
-            row["selected"] = row["aggregation"] == best_holdout_agg
+        (
+            best_holdout_agg,
+            best_holdout_k,
+            best_holdout_lambda,
+            best_holdout_score,
+            holdout_scores,
+        ) = _select_holdout_inverse_mapping_configuration(
+            dictionary_df=dictionary_df,
+            dataset_df=dataset_df,
+            feature_cols=feature_cols,
+            param_cols=param_cols,
+            base_distance_definition=base_distance_definition,
+            aggregation_candidates=aggregation_candidates,
+            k_candidates=k_candidates,
+            lambda_grid=lambda_grid,
+            default_k=int(best_k),
+            default_lambda=float(local_linear_lambda),
+            use_in_coverage_only=True,
+        )
         holdout_inverse_mapping_selection = {
             "objective": "holdout_dataset",
-            "neighbor_count": int(best_k),
+            "neighbor_count": int(best_holdout_k),
             "scores": holdout_scores,
             "selected_aggregation": str(best_holdout_agg),
+            "selected_lambda": float(best_holdout_lambda),
             "selected_score": round(float(best_holdout_score), 6),
         }
         current_aggregation = str(best_holdout_agg)
-        current_lambda = float(local_linear_lambda if current_aggregation == "local_linear" else 1e6)
+        best_k = int(best_holdout_k)
+        current_lambda = float(best_holdout_lambda if current_aggregation == "local_linear" else 1e6)
         log.info(
-            "  Holdout inverse-map selection: agg=%s at k=%d (mean median-relerr %.3f %%)",
+            "  Holdout inverse-map selection: agg=%s at k=%d λ=%.2g (mean median-relerr %.3f %%)",
             current_aggregation,
             best_k,
+            current_lambda,
             best_holdout_score,
         )
 
@@ -2487,6 +2981,8 @@ def _auto_tune_distance(
         "grid_best_group_metric_combo": str(best_group_combo_label),
         "scalar_grid_inactive": bool(scalar_grid_inactive),
         "one_feature_vector_grid_inactive": bool(scalar_grid_inactive),
+        "distance_selection_objective": distance_selection_objective,
+        "holdout_distance_selection": holdout_distance_selection,
         "_grid_boundary_warning_comment": (
             "If grid_boundary_warning is true, the selected STEP 1.5 optimum "
             "touched at least one boundary of the tested search grid. "
@@ -2611,39 +3107,55 @@ def main() -> int:
 
     # ── Prepare numeric matrices ─────────────────────────────────────
     try:
-        min_feature_non_null_fraction = float(
-            cfg_15.get("min_feature_non_null_fraction", MIN_FEATURE_NON_NULL_FRACTION)
+        dictionary_valid, tuning_feature_space_completeness = _filter_complete_tuning_rows(
+            dictionary,
+            feature_cols=feature_cols,
+            param_cols=param_cols,
+            label="dictionary",
         )
-    except (TypeError, ValueError):
-        min_feature_non_null_fraction = float(MIN_FEATURE_NON_NULL_FRACTION)
-    min_feature_non_null_fraction = max(min_feature_non_null_fraction, 0.0)
-
-    feat_num = dictionary[feature_cols].apply(pd.to_numeric, errors="coerce")
-    non_null_frac = feat_num.notna().mean(axis=0)
-    kept_cols = [c for c in feature_cols if float(non_null_frac.get(c, 0.0)) >= min_feature_non_null_fraction]
-    if not kept_cols:
-        log.error("No feature columns survived non-null filter.")
+    except ValueError as exc:
+        log.error("%s", exc)
         return 1
-    feature_cols = kept_cols
-
-    feat_num = dictionary[feature_cols].apply(pd.to_numeric, errors="coerce")
-    feat_num = feat_num.fillna(feat_num.median(numeric_only=True))
-
-    par_num = dictionary[param_cols].apply(pd.to_numeric, errors="coerce")
-    valid_mask = par_num.notna().all(axis=1)
-    valid_idx = np.flatnonzero(valid_mask.to_numpy())
-    if len(valid_idx) < 3:
-        log.error("Not enough valid rows for tuning (need >=3, got %d).", len(valid_idx))
+    if int(tuning_feature_space_completeness.get("rows_removed", 0)) > 0:
+        log.info(
+            "Dropped %d dictionary row(s) with incomplete tuning feature/parameter space; kept %d/%d rows.",
+            int(tuning_feature_space_completeness.get("rows_removed", 0)),
+            int(tuning_feature_space_completeness.get("rows_kept", 0)),
+            int(tuning_feature_space_completeness.get("input_rows", len(dictionary))),
+        )
+    if len(dictionary_valid) < 3:
+        log.error("Not enough valid rows for tuning (need >=3, got %d).", len(dictionary_valid))
         return 1
 
-    x_raw = feat_num.iloc[valid_idx].to_numpy(dtype=float)
-    y_param = par_num.iloc[valid_idx].to_numpy(dtype=float)
-    dictionary_valid = dictionary.iloc[valid_idx].reset_index(drop=True)
-    log.info("Valid dictionary rows for tuning: %d, feature dims: %d", len(valid_idx), x_raw.shape[1])
+    feat_num = (
+        dictionary_valid[feature_cols]
+        .apply(pd.to_numeric, errors="coerce")
+        .replace([np.inf, -np.inf], np.nan)
+    )
+    par_num = (
+        dictionary_valid[param_cols]
+        .apply(pd.to_numeric, errors="coerce")
+        .replace([np.inf, -np.inf], np.nan)
+    )
+
+    x_raw = feat_num.to_numpy(dtype=float)
+    y_param = par_num.to_numpy(dtype=float)
+    log.info("Valid dictionary rows for tuning: %d, feature dims: %d", len(dictionary_valid), x_raw.shape[1])
 
     dataset_valid: pd.DataFrame | None = None
-    holdout_objective = str(cfg_15.get("inverse_mapping_selection_objective", "dictionary_loo")).strip().lower()
-    if holdout_objective == "holdout_dataset":
+    holdout_feature_space_completeness: dict[str, object] | None = None
+    holdout_overlap_exclusion: dict[str, object] | None = None
+    distance_selection_objective_cfg = str(
+        cfg_15.get("distance_selection_objective", "dictionary_loo")
+    ).strip().lower()
+    inverse_mapping_selection_objective_cfg = str(
+        cfg_15.get("inverse_mapping_selection_objective", "dictionary_loo")
+    ).strip().lower()
+    holdout_objectives = {
+        distance_selection_objective_cfg,
+        inverse_mapping_selection_objective_cfg,
+    }
+    if "holdout_dataset" in holdout_objectives:
         dataset_cfg = cfg_15.get("dataset_csv")
         if dataset_cfg not in (None, "", "null", "None"):
             dataset_path = Path(str(dataset_cfg)).expanduser()
@@ -2652,7 +3164,38 @@ def main() -> int:
         if dataset_path.exists():
             dataset_loaded = pd.read_csv(dataset_path, low_memory=False)
             if not dataset_loaded.empty:
-                dataset_valid = dataset_loaded.reset_index(drop=True)
+                try:
+                    dataset_valid, holdout_feature_space_completeness = _filter_complete_tuning_rows(
+                        dataset_loaded.reset_index(drop=True),
+                        feature_cols=feature_cols,
+                        param_cols=param_cols,
+                        label="holdout_dataset",
+                    )
+                except ValueError as exc:
+                    log.error("%s", exc)
+                    return 1
+                if int(holdout_feature_space_completeness.get("rows_removed", 0)) > 0:
+                    log.info(
+                        "Dropped %d holdout row(s) with incomplete tuning feature/parameter space; kept %d/%d rows.",
+                        int(holdout_feature_space_completeness.get("rows_removed", 0)),
+                        int(holdout_feature_space_completeness.get("rows_kept", 0)),
+                        int(holdout_feature_space_completeness.get("input_rows", len(dataset_loaded))),
+                    )
+                dataset_valid, holdout_overlap_exclusion = _exclude_holdout_rows_with_dictionary_parameter_overlap(
+                    dictionary_valid,
+                    dataset_valid,
+                )
+                if int(holdout_overlap_exclusion.get("rows_removed", 0)) > 0:
+                    log.info(
+                        "Dropped %d holdout row(s) whose physical parameter vector already exists in dictionary; kept %d/%d rows.",
+                        int(holdout_overlap_exclusion.get("rows_removed", 0)),
+                        int(holdout_overlap_exclusion.get("rows_kept", 0)),
+                        int(holdout_overlap_exclusion.get("input_rows", len(dataset_valid))),
+                    )
+                if dataset_valid.empty:
+                    log.warning(
+                        "Holdout dataset became empty after completeness and dictionary-overlap filtering; STEP 1.5 will fall back to dictionary-only selection."
+                    )
                 log.info("Loaded holdout dataset for inverse-map selection: %s (%d rows)", dataset_path, len(dataset_valid))
         else:
             log.warning("Requested holdout inverse-map selection, but dataset CSV not found: %s", dataset_path)
@@ -2679,6 +3222,9 @@ def main() -> int:
     tune_result["feature_space_group_selection"] = feature_group_info
     tune_result["feature_space_config_path"] = str(feature_group_config_path)
     tune_result["feature_group_config_path"] = str(feature_group_config_path)
+    tune_result["tuning_feature_space_completeness"] = tuning_feature_space_completeness
+    tune_result["holdout_feature_space_completeness"] = holdout_feature_space_completeness
+    tune_result["holdout_overlap_exclusion"] = holdout_overlap_exclusion
 
     # ── Save artifact ────────────────────────────────────────────────
     out_path = FILES_DIR / "distance_definition.json"
