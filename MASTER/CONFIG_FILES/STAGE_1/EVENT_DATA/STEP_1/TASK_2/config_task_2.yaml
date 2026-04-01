@@ -9,6 +9,7 @@ article_format: false
 # create_plots options: null | debug | usual | essential | all
 # Task 2 plot alias statuses live in config_plots_task_2.yaml
 create_plots: null
+filter_parameter_config_csv: config_filter_parameters_task_2.csv
 strip_pair_min_events: 10
 track_removed_rows_task2: false
 removed_marker: x

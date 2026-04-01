@@ -43,6 +43,10 @@ from STEP_6.step_6_triggered_to_timing import compute_front_back
 from STEP_7.step_7_timing_to_uncalibrated import apply_calibration
 from STEP_8.step_8_uncalibrated_to_threshold import apply_fee, apply_threshold
 from STEP_9.step_9_threshold_to_trigger import apply_trigger
+from MASTER.common.tot_charge_calibration import (
+    TotChargeCalibration,
+    default_tot_charge_calibration_path,
+)
 
 
 PLANE_MISSING_TAG = {1: "234", 2: "134", 3: "124", 4: "123"}
@@ -178,7 +182,6 @@ def _simulate_case(row: pd.Series, cfg: dict, n_tracks: int, seed: int) -> dict:
     df3 = build_avalanche(
         df2,
         efficiencies=efficiencies,
-        gain=float(step3_cfg["avalanche_gain"]),
         townsend_alpha=float(step3_cfg["townsend_alpha_per_mm"]),
         gap_mm=float(step3_cfg["avalanche_gap_mm"]),
         electron_sigma=float(step3_cfg["avalanche_electron_sigma"]),
@@ -189,32 +192,41 @@ def _simulate_case(row: pd.Series, cfg: dict, n_tracks: int, seed: int) -> dict:
         df3,
         x_noise=float(step4_cfg["x_noise_mm"]),
         time_sigma_ns=float(step4_cfg["time_sigma_ns"]),
-        avalanche_width=float(step4_cfg["avalanche_width_mm"]),
-        charge_share_points=int(step4_cfg["charge_share_points"]),
-        width_scale_exponent=float(step4_cfg["width_scale_exponent"]),
-        width_scale_max=float(step4_cfg["width_scale_max"]),
+        lorentzian_gamma_mm=float(
+            step4_cfg.get("lorentzian_gamma_mm", 0.5 * float(step4_cfg.get("avalanche_width_mm", 40.0)))
+        ),
+        induced_charge_fraction=float(step4_cfg.get("induced_charge_fraction", 1.0)),
         rng=rng_step4,
         debug_event_index=None,
         debug_points=None,
-        debug_rng=None,
     )
     df5 = compute_tdiff_qdiff(
         df4,
         c_mm_per_ns=float(step1_cfg["c_mm_per_ns"]),
-        qdiff_frac=float(step5_cfg["qdiff_frac"]),
-        qdiff_width=(
-            None
-            if step5_cfg.get("qdiff_width") in (None, "")
-            else float(step5_cfg["qdiff_width"])
-        ),
+        qdiff_width=float(step5_cfg["qdiff_width"]),
         rng=rng_step5,
     )
     df6 = compute_front_back(df5)
     df7 = apply_calibration(df6, step7_cfg)
+    charge_conversion_model = str(
+        step8_cfg.get("charge_conversion_model", "linear_q_to_time_factor")
+    ).strip().lower()
+    charge_calibration = None
+    if charge_conversion_model == "tot_curve_inverse":
+        calibration_path = step8_cfg.get("tot_to_charge_calibration_path")
+        if calibration_path is None:
+            calibration_path = default_tot_charge_calibration_path(ROOT_DIR)
+        else:
+            calibration_path = Path(calibration_path)
+            if not calibration_path.is_absolute():
+                calibration_path = ROOT_DIR / calibration_path
+        charge_calibration = TotChargeCalibration.from_csv(calibration_path)
     df8 = apply_fee(
         df7,
         t_fee_sigma_ns=float(step8_cfg["t_fee_sigma_ns"]),
+        charge_conversion_model=charge_conversion_model,
         q_to_time_factor=float(step8_cfg["q_to_time_factor"]),
+        charge_calibration=charge_calibration,
         qfront_offsets=step8_cfg["qfront_offsets"],
         qback_offsets=step8_cfg["qback_offsets"],
         rng=rng_step8,

@@ -30,8 +30,10 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
+REPO_ROOT = ROOT_DIR.parent
 sys.path.append(str(ROOT_DIR))
 sys.path.append(str(ROOT_DIR / "MASTER_STEPS"))
+sys.path.append(str(REPO_ROOT))
 
 from STEP_SHARED.sim_utils import (
     ensure_dir,
@@ -53,12 +55,18 @@ from STEP_SHARED.sim_utils import (
     save_with_metadata,
     write_chunked_output,
 )
+from MASTER.common.tot_charge_calibration import (
+    TotChargeCalibration,
+    default_tot_charge_calibration_path,
+)
 
 
 def apply_fee(
     df: pd.DataFrame,
     t_fee_sigma_ns: float,
+    charge_conversion_model: str,
     q_to_time_factor: float,
+    charge_calibration: TotChargeCalibration | None,
     qfront_offsets: list[list[float]],
     qback_offsets: list[list[float]],
     rng: np.random.Generator,
@@ -88,17 +96,23 @@ def apply_fee(
                 vals = out[qf_col].to_numpy(dtype=float)
                 mask = vals != 0
                 if mask.any():
-                    vals[mask] = vals[mask] * q_to_time_factor + float(
-                        qfront_offsets[plane_idx - 1][strip_idx - 1]
+                    converted = (
+                        charge_calibration.charge_fc_to_width_ns(vals[mask])
+                        if charge_conversion_model == "tot_curve_inverse" and charge_calibration is not None
+                        else vals[mask] * q_to_time_factor
                     )
+                    vals[mask] = converted
                 out[qf_col] = vals
             if qb_col in out.columns:
                 vals = out[qb_col].to_numpy(dtype=float)
                 mask = vals != 0
                 if mask.any():
-                    vals[mask] = vals[mask] * q_to_time_factor + float(
-                        qback_offsets[plane_idx - 1][strip_idx - 1]
+                    converted = (
+                        charge_calibration.charge_fc_to_width_ns(vals[mask])
+                        if charge_conversion_model == "tot_curve_inverse" and charge_calibration is not None
+                        else vals[mask] * q_to_time_factor
                     )
+                    vals[mask] = converted
                 out[qb_col] = vals
     return out
 
@@ -114,6 +128,31 @@ def apply_threshold(df: pd.DataFrame, threshold: float) -> pd.DataFrame:
                 vals = out[col].to_numpy(dtype=float)
                 vals[vals < threshold] = 0.0
                 out[col] = vals
+    return out
+
+
+def apply_charge_offsets(
+    df: pd.DataFrame,
+    qfront_offsets: list[list[float]],
+    qback_offsets: list[list[float]],
+) -> pd.DataFrame:
+    out = df.copy()
+    for plane_idx in range(1, 5):
+        for strip_idx in range(1, 5):
+            qf_col = f"Q_front_{plane_idx}_s{strip_idx}"
+            qb_col = f"Q_back_{plane_idx}_s{strip_idx}"
+            if qf_col in out.columns:
+                vals = out[qf_col].to_numpy(dtype=float)
+                mask = vals != 0
+                if mask.any():
+                    vals[mask] = vals[mask] + float(qfront_offsets[plane_idx - 1][strip_idx - 1])
+                out[qf_col] = vals
+            if qb_col in out.columns:
+                vals = out[qb_col].to_numpy(dtype=float)
+                mask = vals != 0
+                if mask.any():
+                    vals[mask] = vals[mask] + float(qback_offsets[plane_idx - 1][strip_idx - 1])
+                out[qb_col] = vals
     return out
 
 
@@ -299,6 +338,24 @@ def main() -> None:
     threshold = float(cfg.get("charge_threshold", 0.01))
     t_fee_sigma_ns = float(cfg.get("t_fee_sigma_ns", 0.01))
     q_to_time_factor = float(cfg.get("q_to_time_factor", 1.0e-5))
+    charge_conversion_model = str(
+        cfg.get("charge_conversion_model", "linear_q_to_time_factor")
+    ).strip().lower()
+    if charge_conversion_model not in {"linear_q_to_time_factor", "tot_curve_inverse"}:
+        raise ValueError(
+            "charge_conversion_model must be 'linear_q_to_time_factor' or 'tot_curve_inverse'."
+        )
+    charge_calibration = None
+    calibration_path = None
+    if charge_conversion_model == "tot_curve_inverse":
+        calibration_path = cfg.get("tot_to_charge_calibration_path")
+        if calibration_path is None:
+            calibration_path = default_tot_charge_calibration_path(REPO_ROOT)
+        else:
+            calibration_path = Path(calibration_path)
+            if not calibration_path.is_absolute():
+                calibration_path = REPO_ROOT / calibration_path
+        charge_calibration = TotChargeCalibration.from_csv(calibration_path)
     qfront_offsets = cfg.get("qfront_offsets", [[0, 0, 0, 0]] * 4)
     qback_offsets = cfg.get("qback_offsets", [[0, 0, 0, 0]] * 4)
     rng = np.random.default_rng(cfg.get("seed"))
@@ -310,6 +367,10 @@ def main() -> None:
     print(f"Input dir: {input_dir}")
     print(f"Output dir: {output_dir}")
     print(f"charge_threshold: {threshold}")
+    print(f"charge_conversion_model: {charge_conversion_model}")
+    print(f"q_to_time_factor: {q_to_time_factor}")
+    if calibration_path is not None:
+        print(f"tot_to_charge_calibration_path: {calibration_path}")
 
     if args.plot_only:
         if args.no_plots:
@@ -423,8 +484,18 @@ def main() -> None:
     if chunk_rows:
         def _iter_out() -> Iterable[pd.DataFrame]:
             for chunk in input_iter:
-                out_chunk = apply_threshold(chunk, threshold)
-                out_chunk = apply_fee(out_chunk, t_fee_sigma_ns, q_to_time_factor, qfront_offsets, qback_offsets, rng)
+                out_chunk = apply_fee(
+                    chunk,
+                    t_fee_sigma_ns,
+                    charge_conversion_model,
+                    q_to_time_factor,
+                    charge_calibration,
+                    qfront_offsets,
+                    qback_offsets,
+                    rng,
+                )
+                out_chunk = apply_threshold(out_chunk, threshold)
+                out_chunk = apply_charge_offsets(out_chunk, qfront_offsets, qback_offsets)
                 yield prune_step8(out_chunk)
 
         manifest_path, last_chunk, row_count = write_chunked_output(
@@ -448,8 +519,18 @@ def main() -> None:
         print(f"Saved {manifest_path}")
     else:
         df, upstream_meta = load_with_metadata(input_path)
-        out = apply_threshold(df, threshold)
-        out = apply_fee(out, t_fee_sigma_ns, q_to_time_factor, qfront_offsets, qback_offsets, rng)
+        out = apply_fee(
+            df,
+            t_fee_sigma_ns,
+            charge_conversion_model,
+            q_to_time_factor,
+            charge_calibration,
+            qfront_offsets,
+            qback_offsets,
+            rng,
+        )
+        out = apply_threshold(out, threshold)
+        out = apply_charge_offsets(out, qfront_offsets, qback_offsets)
         out = prune_step8(out)
         out_path = sim_run_dir / f"{out_stem}.{output_format}"
         save_with_metadata(out, out_path, metadata, output_format)

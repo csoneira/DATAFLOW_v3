@@ -19,6 +19,13 @@ Key behavior:
   `efficiencies_max_spread` (number or `null` for unrestricted spread inside
   configured `efficiencies` bounds).
 - Supports fixed geometry override via `z_positions_override_mm` in physics config.
+- Supports `adapt_z_positions_for_station_date_range`, which filters the allowed
+  geometry roster to the station-config rows overlapping the active
+  `MASTER/CONFIG_FILES/config_selection.yaml` stations/date ranges.
+  When this is enabled, `z_positions_override_mm` is ignored.
+- Supports `adapt_trigger_combinations_for_station_date_range`, which copies the
+  `C1..C4` trigger combinations from those same selected station-config rows so
+  only real `(geometry, trigger)` pairs are sampled into the mesh.
 - Supports append `mode`:
   - `uniform_random` (default): one or more random samples.
   - `regular_mesh`: regular grid over selected parameters around random centers.

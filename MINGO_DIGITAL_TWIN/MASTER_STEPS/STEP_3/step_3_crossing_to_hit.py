@@ -92,7 +92,6 @@ def is_random_value(value: object) -> bool:
 def build_avalanche(
     df: pd.DataFrame,
     efficiencies: list[float],
-    gain: float,
     townsend_alpha: float,
     gap_mm: float,
     electron_sigma: float,
@@ -132,7 +131,6 @@ def build_avalanche(
 
         avalanche_x = np.where(avalanche_exists, x_vals, np.nan)
         avalanche_y = np.where(avalanche_exists, y_vals, np.nan)
-        avalanche_qsum = np.where(avalanche_exists, ions * gain, 0.0)
         avalanche_size = np.zeros(n, dtype=float)
         if avalanche_exists.any():
             gain_factor = np.exp(townsend_alpha * gap_mm)
@@ -143,7 +141,6 @@ def build_avalanche(
         out[f"avalanche_exists_{plane_idx}"] = avalanche_exists
         out[f"avalanche_x_{plane_idx}"] = avalanche_x
         out[f"avalanche_y_{plane_idx}"] = avalanche_y
-        out[f"avalanche_qsum_{plane_idx}"] = avalanche_qsum
         out[f"avalanche_size_electrons_{plane_idx}"] = avalanche_size
 
         tt_array[avalanche_exists] = tt_array[avalanche_exists] + str(plane_idx)
@@ -293,7 +290,6 @@ def main() -> None:
     output_format = str(cfg.get("output_format", "pkl")).lower()
     chunk_rows = cfg.get("chunk_rows")
     plot_sample_rows = cfg.get("plot_sample_rows")
-    gain = float(cfg.get("avalanche_gain", 1.0))
     townsend_alpha = float(cfg.get("townsend_alpha_per_mm", 0.1))
     gap_mm = float(cfg.get("avalanche_gap_mm", 1.0))
     electron_sigma = float(cfg.get("avalanche_electron_sigma", 0.2))
@@ -519,7 +515,7 @@ def main() -> None:
     if chunk_rows:
         def _iter_out() -> Iterable[pd.DataFrame]:
             for chunk in input_iter:
-                yield prune_step3(build_avalanche(chunk, efficiencies, gain, townsend_alpha, gap_mm, electron_sigma, rng))
+                yield prune_step3(build_avalanche(chunk, efficiencies, townsend_alpha, gap_mm, electron_sigma, rng))
 
         manifest_path, last_chunk, row_count = write_chunked_output(
             _iter_out(),
@@ -545,7 +541,7 @@ def main() -> None:
     else:
         df, upstream_meta = load_with_metadata(input_path)
         print(f"Loaded {len(df):,} rows from {input_path.name}")
-        out = prune_step3(build_avalanche(df, efficiencies, gain, townsend_alpha, gap_mm, electron_sigma, rng))
+        out = prune_step3(build_avalanche(df, efficiencies, townsend_alpha, gap_mm, electron_sigma, rng))
         print("Avalanche build complete.")
         out_name = f"{out_stem_base}.{output_format}"
         out_path = sim_run_dir / out_name

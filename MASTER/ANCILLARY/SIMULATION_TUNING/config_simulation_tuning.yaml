@@ -1,0 +1,52 @@
+# Shared selection for simulation-tuning studies.
+# Null means "take all available entries".
+
+selection:
+  # Usually keep the simulation side as MINGO00.
+  simulation_stations:
+    - MINGO00
+
+  # Real-data stations to aggregate for tuning comparisons.
+  # Examples:
+  #   real_stations: [MINGO01]
+  #   real_stations: [1, 2]
+  #   real_stations: null
+  real_stations: null
+
+  # Date ranges are inclusive. Use YYYY-MM-DD or full timestamps.
+  # Examples:
+  #   simulation_date_ranges:
+  #     - [2007-01-01, 2008-12-31]
+  #   real_date_ranges:
+  #     - [2024-09-01, 2024-10-31]
+  simulation_date_ranges: null
+  real_date_ranges: null
+
+tdif_active_length:
+  reference_strip_length_mm: 300.0
+  summary_strip_selection_seed: 20260331
+
+induction_section:
+  efficiency_match_max_abs_difference: 0.05
+  max_pairs_per_plane: 80
+  min_clusterlike_entries_per_plane: 200
+
+charge_spectrum:
+  # Use single-strip plane entries to reduce induction-width contamination.
+  multiplicity_mode: single_strip_only
+
+  # Match simulated and real files by per-plane empirical efficiency.
+  efficiency_match_max_abs_difference: 0.05
+  efficiency_match_fallback_max_abs_difference: 0.15
+  max_pairs_per_plane: 80
+  min_pairs_per_plane: 6
+
+  # Deterministic subsampling keeps the study lightweight while preserving shape.
+  sample_entries_per_file: 1500
+  min_positive_charge_ns: 0.05
+
+  # Histogram/fit controls for the charge-scale recommendation.
+  hist_bin_count: 90
+  alpha_min: 0.20
+  alpha_max: 2.00
+  alpha_grid_points: 161

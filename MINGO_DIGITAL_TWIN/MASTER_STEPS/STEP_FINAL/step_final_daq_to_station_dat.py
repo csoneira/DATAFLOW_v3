@@ -544,6 +544,10 @@ def _mi_id_set(paths: list[Path]) -> set[str]:
     return out
 
 
+def _is_backpressure_ignored_queue_artifact(path: Path) -> bool:
+    return path.name.startswith(("removed_channel_values_", "removed_rows_"))
+
+
 def build_pending_backpressure_snapshot(
     simulated_data_dir: Path,
     simulated_data_files_dir: Path,
@@ -552,12 +556,20 @@ def build_pending_backpressure_snapshot(
     sim_root_files = [p for p in simulated_data_dir.glob("mi*.dat") if p.is_file()] if simulated_data_dir.exists() else []
     sim_files_files = [p for p in simulated_data_files_dir.glob("mi*.dat") if p.is_file()] if simulated_data_files_dir.exists() else []
     unprocessed_files = (
-        [p for p in stations_step1_dir.glob("TASK_*/INPUT_FILES/UNPROCESSED_DIRECTORY/*") if p.is_file()]
+        [
+            p
+            for p in stations_step1_dir.glob("TASK_*/INPUT_FILES/UNPROCESSED_DIRECTORY/*")
+            if p.is_file() and not _is_backpressure_ignored_queue_artifact(p)
+        ]
         if stations_step1_dir.exists()
         else []
     )
     processing_files = (
-        [p for p in stations_step1_dir.glob("TASK_*/INPUT_FILES/PROCESSING_DIRECTORY/*") if p.is_file()]
+        [
+            p
+            for p in stations_step1_dir.glob("TASK_*/INPUT_FILES/PROCESSING_DIRECTORY/*")
+            if p.is_file() and not _is_backpressure_ignored_queue_artifact(p)
+        ]
         if stations_step1_dir.exists()
         else []
     )

@@ -99,11 +99,13 @@ from MASTER.common.config_loader import update_config_with_parameters
 from MASTER.common.debug_plots import plot_debug_histograms
 from MASTER.common.execution_logger import set_station, start_timer
 from MASTER.common.file_selection import (
+    filter_expected_artifact_names,
     file_name_in_any_date_range,
     load_date_ranges_from_config,
     select_latest_candidate,
     sync_unprocessed_with_date_range,
 )
+from MASTER.common.input_file_config import select_input_file_configuration
 from MASTER.common.path_config import (
     get_master_config_root,
     get_repo_root,
@@ -1008,6 +1010,19 @@ base_directories = {
     "metadata_directory": metadata_directory,
 }
 
+EXPECTED_INPUT_PREFIX = "listed_"
+EXPECTED_INPUT_EXTENSION = ".parquet"
+
+
+def _expected_input_files(file_names):
+    return sorted(
+        filter_expected_artifact_names(
+            file_names,
+            prefix=EXPECTED_INPUT_PREFIX,
+            extension=EXPECTED_INPUT_EXTENSION,
+        )
+    )
+
 # Accessing all the variables from the configuration
 crontab_execution = config["crontab_execution"]
 (
@@ -1091,10 +1106,10 @@ empty_files_directory = base_directories["empty_files_directory"]
 rejected_files_directory = base_directories["rejected_files_directory"]
 temp_files_directory = base_directories["temp_files_directory"]
 
-raw_files = set(os.listdir(raw_directory))
-unprocessed_files = set(os.listdir(unprocessed_directory))
-processing_files = set(os.listdir(processing_directory))
-completed_files = set(os.listdir(completed_directory))
+raw_files = set(_expected_input_files(os.listdir(raw_directory)))
+unprocessed_files = set(_expected_input_files(os.listdir(unprocessed_directory)))
+processing_files = set(_expected_input_files(os.listdir(processing_directory)))
+completed_files = set(_expected_input_files(os.listdir(completed_directory)))
 
 last_file_test = bool(config.get("last_file_test", False))
 
@@ -1106,9 +1121,9 @@ print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 
 # Get lists of files in the directories
-unprocessed_files = sorted(os.listdir(base_directories["unprocessed_directory"]))
-processing_files = sorted(os.listdir(base_directories["processing_directory"]))
-completed_files = sorted(os.listdir(base_directories["completed_directory"]))
+unprocessed_files = _expected_input_files(os.listdir(base_directories["unprocessed_directory"]))
+processing_files = _expected_input_files(os.listdir(base_directories["processing_directory"]))
+completed_files = _expected_input_files(os.listdir(base_directories["completed_directory"]))
 
 def process_file(source_path, dest_path):
     print("Source path:", source_path)
@@ -1161,10 +1176,10 @@ empty_files_directory = base_directories["empty_files_directory"]
 rejected_files_directory = base_directories["rejected_files_directory"]
 temp_files_directory = base_directories["temp_files_directory"]
 
-raw_files = set(os.listdir(raw_directory))
-unprocessed_files = set(os.listdir(unprocessed_directory))
-processing_files = set(os.listdir(processing_directory))
-completed_files = set(os.listdir(completed_directory))
+raw_files = set(_expected_input_files(os.listdir(raw_directory)))
+unprocessed_files = set(_expected_input_files(os.listdir(unprocessed_directory)))
+processing_files = set(_expected_input_files(os.listdir(processing_directory)))
+completed_files = set(_expected_input_files(os.listdir(completed_directory)))
 
 # Ordered list from highest to lowest priority
 LEVELS = [
@@ -1237,10 +1252,10 @@ for directory in [raw_directory, unprocessed_directory, processing_directory, co
             os.utime(empty_destination_path, (now, now))
 
 # Files to move: in STAGE_0_to_1 but not in UNPROCESSED, PROCESSING, or COMPLETED
-raw_files = set(os.listdir(raw_directory))
-unprocessed_files = set(os.listdir(unprocessed_directory))
-processing_files = set(os.listdir(processing_directory))
-completed_files = set(os.listdir(completed_directory))
+raw_files = set(_expected_input_files(os.listdir(raw_directory)))
+unprocessed_files = set(_expected_input_files(os.listdir(unprocessed_directory)))
+processing_files = set(_expected_input_files(os.listdir(processing_directory)))
+completed_files = set(_expected_input_files(os.listdir(completed_directory)))
 
 files_to_move = raw_files - unprocessed_files - processing_files - completed_files
 
@@ -1306,9 +1321,9 @@ sync_unprocessed_with_date_range(
     station_id=station,
     master_config_root=config_root,
 )
-unprocessed_files = os.listdir(base_directories["unprocessed_directory"])
-processing_files = os.listdir(base_directories["processing_directory"])
-completed_files = os.listdir(base_directories["completed_directory"])
+unprocessed_files = _expected_input_files(os.listdir(base_directories["unprocessed_directory"]))
+processing_files = _expected_input_files(os.listdir(base_directories["processing_directory"]))
+completed_files = _expected_input_files(os.listdir(base_directories["completed_directory"]))
 date_ranges = load_date_ranges_from_config(
     config,
     station_id=station,
@@ -2383,37 +2398,33 @@ elif is_simulated_file:
     z_source = "simulated_default_missing_param_hash"
 elif exists_input_file:
     used_input_file = True
-    # Ensure `start` and `end` columns are in datetime format
-    input_file["start"] = pd.to_datetime(input_file["start"], format="%Y-%m-%d", errors="coerce")
-    input_file["end"] = pd.to_datetime(input_file["end"], format="%Y-%m-%d", errors="coerce")
-    input_file["end"] = input_file["end"].fillna(pd.to_datetime('now'))
-    start_day = pd.to_datetime(start_time).normalize()
-    end_day = pd.to_datetime(end_time).normalize()
-    input_file["start_day"] = input_file["start"].dt.normalize()
-    input_file["end_day"] = input_file["end"].dt.normalize()
-    matching_confs = input_file[(input_file["start_day"] <= start_day) & (input_file["end_day"] >= end_day)]
-    print(matching_confs)
-    
-    if not matching_confs.empty:
-        if len(matching_confs) > 1:
-            print(f"Warning:\nMultiple configurations match the date range\n{start_time} to {end_time}.\nTaking the first one.")
-        selected_conf = matching_confs.iloc[0]
+    selection_result = select_input_file_configuration(
+        input_file,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    print(selection_result.matching_confs)
+
+    if selection_result.selected_conf is not None:
+        if selection_result.reason == "exact_overlap_latest_start":
+            print(
+                "Warning:\n"
+                "Multiple configurations match the date range\n"
+                f"{start_time} to {end_time}.\n"
+                "Selecting the matching configuration with the most recent start date."
+            )
+        elif selection_result.reason != "exact":
+            print("Warning: No matching configuration for the date range; selecting closest configuration.")
+        selected_conf = selection_result.selected_conf
         print(f"Selected configuration: {selected_conf['conf']}")
         z_positions = np.array([selected_conf.get(f"P{i}", np.nan) for i in range(1, 5)])
         found_matching_conf = True
         print(selected_conf['conf'])
         z_source = f"input_file_conf_{selected_conf.get('conf')}"
     else:
-        print("Warning: No matching configuration for the date range; selecting closest configuration.")
-        before = input_file[input_file["start_day"] <= end_day].sort_values("start_day", ascending=False)
-        if not before.empty:
-            selected_conf = before.iloc[0]
-        else:
-            selected_conf = input_file.sort_values("start", ascending=True).iloc[0]
-        print(f"Selected configuration: {selected_conf['conf']}")
-        z_positions = np.array([selected_conf.get(f"P{i}", np.nan) for i in range(1, 5)])
-        found_matching_conf = True
-        z_source = f"input_file_closest_conf_{selected_conf.get('conf')}"
+        print("Warning: Input configuration file has no valid selectable rows. Using default z_positions.")
+        z_positions = np.array([0, 150, 300, 450])  # In mm
+        z_source = "default_invalid_input_file"
 else:
     print("Error: No input file. Using default z_positions.")
     z_positions = np.array([0, 150, 300, 450])  # In mm

@@ -13,9 +13,10 @@ Outputs:
 - `INTERSTEPS/STEP_4_TO_5/SIM_RUN_<N>/PLOTS/step_4_plots.pdf`
 
 Algorithm highlights:
-- Avalanche size sets an effective induction width scaled by a power law.
-- A uniform disk model is used to compute strip overlap fractions.
-- Charge sharing is sampled with `charge_share_points` binomial draws.
+- Avalanche electrons are converted to gap charge in `fC`, then scaled to induced charge with `induced_charge_fraction`.
+- An isotropic 2D Lorentzian is centered at the avalanche point.
+- Strip charges are computed from exact rectangle integrals of that Lorentzian inside the detector x-range and each strip y-band.
+- The physical width parameter is `lorentzian_gamma_mm`.
 - `X_mea` and `T_sum_meas` receive Gaussian noise.
 
 Run:

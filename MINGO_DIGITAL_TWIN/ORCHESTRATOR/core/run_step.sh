@@ -84,6 +84,8 @@ ensure_simulation_time_csv() {
   local csv_path
   local header
   local current_header
+  local first_line
+  local tmp_path
   local backup
   csv_path="$(simulation_time_csv_path)"
   header='exec_time_s,step,timestamp_utc'
@@ -94,8 +96,19 @@ ensure_simulation_time_csv() {
   fi
   current_header="$(head -n 1 "$csv_path" 2>/dev/null || true)"
   if [[ "$current_header" != "$header" ]]; then
-    # header mismatch detected; keep existing file intact to preserve history
-    log_warn "simulation timing CSV header mismatch (found='$current_header' expected='$header'); preserving existing file"
+    first_line="$current_header"
+    if [[ "$first_line" =~ ^[0-9]+([.][0-9]+)?,[0-9]+,[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
+      tmp_path="${csv_path}.tmp.$$"
+      {
+        printf '%s\n' "$header"
+        cat "$csv_path"
+      } > "$tmp_path"
+      mv "$tmp_path" "$csv_path"
+      log_info "simulation timing CSV upgraded from legacy headerless format: $csv_path"
+    else
+      # unknown mismatch detected; keep existing file intact to preserve history
+      log_warn "simulation timing CSV header mismatch (found='$current_header' expected='$header'); preserving existing file"
+    fi
   fi
 }
 

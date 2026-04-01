@@ -97,6 +97,28 @@ def select_latest_candidate(files: Iterable[str], station: str) -> Optional[str]
     return max(candidates, key=key_fn)
 
 
+def filter_expected_artifact_names(
+    files: Iterable[str],
+    *,
+    prefix: str = "",
+    extension: str = "",
+) -> list[str]:
+    """Keep only files matching the expected handoff naming pattern."""
+    prefix_lower = prefix.lower()
+    extension_lower = extension.lower()
+    filtered: list[str] = []
+    for name in files:
+        if not name:
+            continue
+        lowered = name.lower()
+        if prefix_lower and not lowered.startswith(prefix_lower):
+            continue
+        if extension_lower and not lowered.endswith(extension_lower):
+            continue
+        filtered.append(name)
+    return filtered
+
+
 def load_date_ranges_from_config(
     config: Mapping[str, object],
     *,

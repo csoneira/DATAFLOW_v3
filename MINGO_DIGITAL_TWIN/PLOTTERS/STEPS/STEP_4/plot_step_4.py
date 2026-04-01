@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import sys
 
 import numpy as np
 import pandas as pd
@@ -24,6 +25,16 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
+
+ROOT_DIR = Path(__file__).resolve().parents[3]
+sys.path.append(str(ROOT_DIR))
+sys.path.append(str(ROOT_DIR / "MASTER_STEPS"))
+
+from STEP_4.step_4_hit_to_measured import (
+    induce_signal as live_induce_signal,
+    plot_hit_summary as live_plot_hit_summary,
+    plot_step4_summary as live_plot_step4_summary,
+)
 
 Y_WIDTHS = [np.array([63, 63, 63, 98], dtype=float), np.array([98, 63, 63, 63], dtype=float)]
 
@@ -965,19 +976,11 @@ def plot_step4_summary(
 
 def find_any_chunk_for_step(step: int) -> Path | None:
     root = Path(__file__).resolve().parents[3] / "INTERSTEPS"
-    parts = sorted(root.glob(f"**/step_{step}_chunks/part_*.pkl"))
-    if parts:
-        return parts[0]
-    manifests = sorted(root.rglob(f"*step_{step}_chunks.chunks.json"))
-    if manifests:
-        try:
-            j = json.loads(manifests[0].read_text())
-            parts_list = [p for p in (j.get("parts") or j.get("chunks") or []) if str(p).endswith(".pkl")]
-            if parts_list:
-                return Path(parts_list[0])
-        except Exception:
-            return manifests[0]
-    return None
+    candidates = list(root.glob(f"**/step_{step}_chunks/part_*.pkl"))
+    candidates.extend(root.rglob(f"*step_{step}_chunks.chunks.json"))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
 def load_df(path: Path) -> pd.DataFrame:
@@ -1038,6 +1041,75 @@ def load_step4_plot_context(sample_path: Path) -> tuple[pd.DataFrame | None, dic
         return None, cfg
 
 
+def build_live_step4_plot_frame(
+    avalanche_df: pd.DataFrame,
+    step4_cfg: dict,
+) -> tuple[pd.DataFrame, dict]:
+    needed_cols = {"event_id", "T_thick_s", "X_gen", "Y_gen", "Theta_gen", "Phi_gen"}
+    for plane_idx in range(1, 5):
+        needed_cols.update(
+            {
+                f"avalanche_size_electrons_{plane_idx}",
+                f"avalanche_x_{plane_idx}",
+                f"avalanche_y_{plane_idx}",
+                f"T_sum_{plane_idx}_ns",
+            }
+        )
+    keep_cols = [col for col in avalanche_df.columns if col in needed_cols]
+    input_df = avalanche_df[keep_cols].copy()
+
+    x_noise = float(step4_cfg.get("x_noise_mm", 0.0))
+    time_sigma_ns = float(step4_cfg.get("time_sigma_ns", 0.0))
+    lorentzian_gamma_mm = step4_cfg.get("lorentzian_gamma_mm")
+    if lorentzian_gamma_mm in (None, ""):
+        legacy_fwhm = float(step4_cfg.get("avalanche_width_mm", 40.0))
+        lorentzian_gamma_mm = 0.5 * legacy_fwhm
+    lorentzian_gamma_mm = float(lorentzian_gamma_mm)
+    induced_charge_fraction = float(step4_cfg.get("induced_charge_fraction", 1.0))
+    seed = step4_cfg.get("seed")
+    rng = np.random.default_rng(seed)
+
+    required_cols = [f"avalanche_size_electrons_{plane_idx}" for plane_idx in range(1, 5)]
+    debug_event_index = None
+    if all(col in input_df.columns for col in required_cols):
+        full_hit_mask = np.ones(len(input_df), dtype=bool)
+        for col in required_cols:
+            full_hit_mask &= input_df[col].to_numpy(dtype=float) > 0
+        hit_indices = np.where(full_hit_mask)[0]
+        if hit_indices.size > 0:
+            chooser = np.random.default_rng(seed if seed is not None else 0)
+            debug_event_index = int(chooser.choice(hit_indices))
+
+    debug_points: dict = {}
+    out_full = live_induce_signal(
+        input_df,
+        x_noise=x_noise,
+        time_sigma_ns=time_sigma_ns,
+        lorentzian_gamma_mm=lorentzian_gamma_mm,
+        induced_charge_fraction=induced_charge_fraction,
+        rng=rng,
+        debug_event_index=debug_event_index,
+        debug_points=debug_points if debug_event_index is not None else None,
+    )
+    plot_cols = [
+        col
+        for col in out_full.columns
+        if col == "tt_hit"
+        or col.startswith(("Y_mea_", "X_mea_", "T_sum_meas_"))
+        or col.startswith(
+            (
+                "avalanche_size_electrons_",
+                "avalanche_gap_charge_fc_",
+                "induced_charge_total_fc_",
+                "lorentzian_gamma_mm_",
+                "avalanche_x_",
+                "avalanche_y_",
+            )
+        )
+    ]
+    return out_full[plot_cols], debug_points
+
+
 def main() -> None:
     step = 4
     sample = find_any_chunk_for_step(step)
@@ -1049,36 +1121,24 @@ def main() -> None:
     avalanche_df, step4_cfg = load_step4_plot_context(sample)
     if avalanche_df is not None:
         print("Loaded upstream STEP 3 dataset for avalanche cloud plotting.")
-
-    points_per_plane = int(step4_cfg.get("charge_share_points", 2000))
-    point_seed = step4_cfg.get("seed")
-    if point_seed is not None:
-        try:
-            point_seed = int(point_seed)
-        except Exception:
-            point_seed = None
-    avalanche_width_mm = float(step4_cfg.get("avalanche_width_mm", 40.0))
-    width_scale_exponent = float(step4_cfg.get("width_scale_exponent", 0.1))
-    width_scale_max = float(step4_cfg.get("width_scale_max", 2.0))
+        plot_df, debug_points = build_live_step4_plot_frame(avalanche_df, step4_cfg)
+        print("Rebuilt STEP 4 plot frame with the live Lorentzian sharing model.")
+    else:
+        plot_df = df
+        debug_points = {}
+        print("Upstream STEP 3 dataset unavailable; plotting the saved STEP 4 sample directly.")
 
     out_dir = Path(__file__).resolve().parent / "PLOTS"
     out_dir.mkdir(exist_ok=True)
     out_path = out_dir / f"step_{step}_sample_plots.pdf"
     with PdfPages(out_path) as pdf:
-        plot_hit_summary(df, pdf)
-        plot_step4_summary(
-            df,
+        live_plot_hit_summary(plot_df, pdf)
+        live_plot_step4_summary(
+            plot_df,
             pdf,
-            include_thrown_points=False,
-            points_per_plane=points_per_plane,
-            point_seed=point_seed,
-            thrown_points=None,
-            examples_df=df,
-            avalanche_df=avalanche_df,
-            avalanche_width_mm=avalanche_width_mm,
-            width_scale_exponent=width_scale_exponent,
-            width_scale_max=width_scale_max,
-            n_avalanche_events=5,
+            include_thrown_points=bool(debug_points),
+            thrown_points=debug_points or None,
+            examples_df=plot_df,
         )
     print(f"Saved {out_path}")
 

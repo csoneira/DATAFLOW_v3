@@ -107,6 +107,7 @@ from MASTER.common.file_selection import (
     select_latest_candidate,
     sync_unprocessed_with_date_range,
 )
+from MASTER.common.input_file_config import select_input_file_configuration
 from MASTER.common.path_config import (
     get_master_config_root,
     get_repo_root,
@@ -393,11 +394,20 @@ plot_catalog_file_path = (
 parameter_config_file_path = (
     config_root / "STAGE_1" / "EVENT_DATA" / "STEP_1" / "TASK_1" / "config_parameters_task_1.csv"
 )
+filter_parameter_config_file_path = (
+    config_root
+    / "STAGE_1"
+    / "EVENT_DATA"
+    / "STEP_1"
+    / "TASK_1"
+    / "config_filter_parameters_task_1.csv"
+)
 fallback_parameter_config_file_path = (
     config_root / "STAGE_1" / "EVENT_DATA" / "STEP_1" / "config_parameters.csv"
 )
 print(f"Using config file: {config_file_path}")
 print(f"Using plot catalog file: {plot_catalog_file_path}")
+print(f"Using filter parameter config file: {filter_parameter_config_file_path}")
 with config_file_path.open("r", encoding="utf-8") as config_file:
     config = yaml.safe_load(config_file)
 task1_plot_status_by_alias = load_step1_task_plot_catalog(
@@ -427,6 +437,10 @@ if CLI_ARGS.station is None:
     CLI_PARSER.error("No station provided. Pass <station>.")
 station = str(CLI_ARGS.station)
 set_station(station)
+
+if filter_parameter_config_file_path.exists():
+    config = update_config_with_parameters(config, filter_parameter_config_file_path, station)
+    print(f"Warning: Loaded filter parameters from {filter_parameter_config_file_path}")
 
 config = apply_step1_task_parameter_overrides(
     config_obj=config,
@@ -504,6 +518,8 @@ base_directories = {
     "empty_files_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY/EMPTY_FILES"),
     "rejected_files_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY/REJECTED_FILES"),
     "temp_files_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY/TEMP_FILES"),
+    "removed_channel_values_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY/REMOVED_CHANNEL_VALUES"),
+    "tracking_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY/TRACKING"),
     
     "unprocessed_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/UNPROCESSED_DIRECTORY"),
     "out_of_date_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/OUT_OF_DATE_DIRECTORY"),
@@ -596,6 +612,10 @@ csv_path_trigger_type = os.path.join(
     f"task_{task_number}_metadata_trigger_type.csv",
 )
 csv_path_filter = os.path.join(metadata_directory, f"task_{task_number}_metadata_filter.csv")
+csv_path_noise_control = os.path.join(
+    metadata_directory,
+    f"task_{task_number}_metadata_noise_control.csv",
+)
 csv_path_status = os.path.join(metadata_directory, f"task_{task_number}_metadata_status.csv")
 csv_path_profiling = os.path.join(metadata_directory, f"task_{task_number}_metadata_profiling.csv")
 status_filename_base = ""
@@ -861,6 +881,68 @@ channel_combination_t_dif_threshold = config.get(
     "channel_combination_t_dif_threshold",
     config.get("plane_combination_t_dif_threshold", T_dif_pre_cal_threshold),
 )
+recalculate_noise_charge_limit = _coerce_config_bool(
+    config.get("recalculate_noise_charge_limit", True),
+    default=True,
+)
+noise_charge_limit_by_channel_config = config.get("noise_charge_limit_by_channel", {}) or {}
+manual_channel_noise_charge_limits: dict[tuple[int, str, int], float] = {}
+if isinstance(noise_charge_limit_by_channel_config, dict):
+    for channel_label, limit_value in noise_charge_limit_by_channel_config.items():
+        match = re.fullmatch(r"P(?P<plane>\d+)S(?P<strip>\d+)(?P<side>[FB])", str(channel_label).strip())
+        if match is None:
+            continue
+        if limit_value in (None, "", "null", "None"):
+            continue
+        try:
+            parsed_limit = float(limit_value)
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(parsed_limit):
+            continue
+        manual_channel_noise_charge_limits[
+            (
+                int(match.group("plane")),
+                str(match.group("side")),
+                int(match.group("strip")),
+            )
+        ] = parsed_limit
+print(
+    "Task 1 noise-charge-limit mode: "
+    f"{'recalculate' if recalculate_noise_charge_limit else 'config'} "
+    f"(configured channels: {len(manual_channel_noise_charge_limits)})"
+)
+channel_noise_limit_hist_bins = max(
+    24,
+    _coerce_config_value(config.get("channel_noise_limit_hist_bins", 48), int, 48),
+)
+channel_noise_limit_min_total_values = max(
+    20,
+    _coerce_config_value(config.get("channel_noise_limit_min_total_values", 80), int, 80),
+)
+channel_noise_limit_min_removed_values = max(
+    5,
+    _coerce_config_value(config.get("channel_noise_limit_min_removed_values", 12), int, 12),
+)
+channel_noise_limit_min_class_count = max(
+    5,
+    _coerce_config_value(config.get("channel_noise_limit_min_class_count", 10), int, 10),
+)
+channel_noise_limit_min_removed_left_fraction = min(
+    1.0,
+    max(
+        0.0,
+        _coerce_config_value(
+            config.get("channel_noise_limit_min_removed_left_fraction", 0.7),
+            float,
+            0.7,
+        ),
+    ),
+)
+channel_noise_limit_min_log_separation = max(
+    0.0,
+    _coerce_config_value(config.get("channel_noise_limit_min_log_separation", 0.12), float, 0.12),
+)
 
 # Post-calibration
 
@@ -943,6 +1025,14 @@ channel_combination_plot_include_same_strip_pairs = _coerce_config_bool(
     config.get("channel_combination_plot_include_same_strip_pairs", True),
     default=True,
 )
+_channel_pair_plot_top_n_raw = config.get("channel_pair_plot_top_n", None)
+if _channel_pair_plot_top_n_raw in (None, "", "null", "None"):
+    channel_pair_plot_top_n = None
+else:
+    channel_pair_plot_top_n = max(
+        1,
+        _coerce_config_value(_channel_pair_plot_top_n_raw, int, 10),
+    )
 
 calibrate_strip_Q_pedestal_thr_factor = config.get("calibrate_strip_Q_pedestal_thr_factor", 31.62)
 calibrate_strip_Q_pedestal_thr_factor_2 = config.get("calibrate_strip_Q_pedestal_thr_factor_2", 1.5)
@@ -1394,36 +1484,27 @@ TASK1_SELECTED_OFFENDER_CARDINALITY_VALUES: tuple[int, ...] = tuple(range(1, 33)
 
 FILTER_METRIC_NAMES: tuple[str, ...] = (
     "channel_qt_mismatch_rows_affected_pct",
-    "channel_qt_mismatch_values_zeroed_pct",
-    "channel_qt_q_only_rows_pct",
-    "channel_qt_t_only_rows_pct",
-    "channel_qt_mismatch_front_rows_pct",
-    "channel_qt_mismatch_back_rows_pct",
-    "channel_qt_mismatch_channels_pct",
+    "plane_combination_noise_limit_rows_affected_pct",
     "plane_combination_filter_rows_affected_pct",
-    "plane_combination_filter_values_zeroed_pct",
-    "plane_combination_filter_any_failed_pct",
-    "plane_combination_filter_q_sum_failed_pct",
-    "plane_combination_filter_q_dif_failed_pct",
-    "plane_combination_filter_t_sum_failed_pct",
-    "plane_combination_filter_t_dif_failed_pct",
-    "plane_combination_filter_flagged_rows_pct",
-    "plane_combination_filter_selected_offender_channels_pct",
-    "plane_combination_filter_multi_offender_rows_pct",
-    *tuple(
-        f"plane_combination_filter_rows_with_{selected_count}_selected_offenders_pct"
-        for selected_count in TASK1_SELECTED_OFFENDER_CARDINALITY_VALUES
-    ),
-    "plane_combination_filter_mean_failed_pairs_per_flagged_row",
-    "plane_combination_filter_mean_selected_offenders_per_flagged_row",
-    "plane_combination_filter_max_failed_pairs_in_row",
-    "plane_combination_filter_max_selected_offenders_in_row",
-    "channel_qt_mismatch_rows_removed_clean_tt_of_mismatch_pct",
-    "channel_qt_mismatch_rows_retained_final_of_mismatch_pct",
     "valid_lines_in_binary_file_percentage",
     "data_purity_percentage",
     "clean_tt_lt_10_rows_removed_pct",
 )
+NOISE_CONTROL_RATE_DENOMINATOR_COLUMN = "count_rate_denominator_seconds"
+TASK1_NOISE_CONTROL_METRIC_NAMES: tuple[str, ...] = tuple(
+    f"plane_combination_filter_rows_with_{selected_count}_selected_offenders_rate_hz"
+    for selected_count in TASK1_SELECTED_OFFENDER_CARDINALITY_VALUES
+)
+TASK1_NOISE_CONTROL_PERCENT_METRIC_NAMES: tuple[str, ...] = tuple(
+    f"plane_combination_filter_rows_with_{selected_count}_selected_offenders_pct"
+    for selected_count in TASK1_SELECTED_OFFENDER_CARDINALITY_VALUES
+)
+FILTER_METADATA_ALLOWED_COLUMNS = {
+    "filename_base",
+    "execution_timestamp",
+    "param_hash",
+    *FILTER_METRIC_NAMES,
+}
 
 filter_metrics: dict[str, float] = {}
 
@@ -1470,12 +1551,374 @@ def _task1_channel_offender_metric_key(channel_key: tuple[int, str, int]) -> str
     return f"plane_combination_filter_offender_count_P{plane}{side}{strip}"
 
 
+def _task1_channel_noise_limit_metric_key(channel_key: tuple[int, str, int]) -> str:
+    plane, side, strip = channel_key
+    return f"plane_combination_noise_limit_P{plane}{side}{strip}"
+
+
 def _task1_selected_offender_cardinality_metric_key(selected_count: int) -> str:
     return f"plane_combination_filter_rows_with_{selected_count}_selected_offenders"
 
 
-def _task1_selected_offender_cardinality_pct_metric_key(selected_count: int) -> str:
-    return f"{_task1_selected_offender_cardinality_metric_key(selected_count)}_pct"
+def _task1_selected_offender_cardinality_rate_metric_key(selected_count: int) -> str:
+    return f"{_task1_selected_offender_cardinality_metric_key(selected_count)}_rate_hz"
+
+
+def _task1_channel_label(channel_key: tuple[int, str, int]) -> str:
+    plane, side, strip = channel_key
+    return f"P{plane}S{strip}{side}"
+
+
+def _task1_default_q_left_for_channel(channel_key: tuple[int, str, int]) -> float:
+    _, side, _ = channel_key
+    return float(Q_F_left_pre_cal if side == "F" else Q_B_left_pre_cal)
+
+
+def _empty_task1_removed_channel_values_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        columns=[
+            "row_index",
+            "channel",
+            "plane",
+            "side",
+            "strip",
+            "Q",
+            "T",
+            "pass_label",
+            "Q_zeroed",
+            "T_zeroed",
+        ]
+    )
+
+
+def _task1_build_removed_channel_values_frame(
+    df_input: pd.DataFrame,
+    channel_key: tuple[int, str, int],
+    q_values: pd.Series,
+    t_values: pd.Series,
+    fail_mask: np.ndarray | pd.Series,
+    pass_label: str,
+) -> pd.DataFrame:
+    aligned_mask = pd.Series(fail_mask, index=df_input.index, dtype=bool).reindex(df_input.index, fill_value=False)
+    if not aligned_mask.any():
+        return _empty_task1_removed_channel_values_frame()
+
+    plane, side, strip = channel_key
+    rows = pd.DataFrame(
+        {
+            "row_index": df_input.index[aligned_mask].to_numpy(),
+            "channel": _task1_channel_label(channel_key),
+            "plane": plane,
+            "side": side,
+            "strip": strip,
+            "Q": pd.to_numeric(q_values.loc[aligned_mask], errors="coerce").to_numpy(dtype=float),
+            "T": pd.to_numeric(t_values.loc[aligned_mask], errors="coerce").to_numpy(dtype=float),
+            "pass_label": pass_label,
+        }
+    )
+    return rows.reset_index(drop=True)
+
+
+def collect_task1_zeroed_channel_values(
+    reference_df: pd.DataFrame,
+    current_df: pd.DataFrame,
+    *,
+    pass_label: str,
+) -> pd.DataFrame:
+    if reference_df.empty or current_df.empty:
+        return _empty_task1_removed_channel_values_frame()
+
+    channel_map = collect_task1_channel_qt_map(reference_df)
+    if not channel_map:
+        return _empty_task1_removed_channel_values_frame()
+
+    aligned_reference = reference_df.reindex(current_df.index).copy()
+    payload_frames: list[pd.DataFrame] = []
+    for channel_key, cols in channel_map.items():
+        if cols["Q"] not in current_df.columns or cols["T"] not in current_df.columns:
+            continue
+        ref_q = pd.to_numeric(aligned_reference[cols["Q"]], errors="coerce").fillna(0)
+        ref_t = pd.to_numeric(aligned_reference[cols["T"]], errors="coerce").fillna(0)
+        cur_q = pd.to_numeric(current_df[cols["Q"]], errors="coerce").fillna(0)
+        cur_t = pd.to_numeric(current_df[cols["T"]], errors="coerce").fillna(0)
+        q_zeroed = (ref_q != 0) & (cur_q == 0)
+        t_zeroed = (ref_t != 0) & (cur_t == 0)
+        zeroed_mask = q_zeroed | t_zeroed
+        if not zeroed_mask.any():
+            continue
+
+        channel_payload = _task1_build_removed_channel_values_frame(
+            aligned_reference,
+            channel_key,
+            ref_q,
+            ref_t,
+            zeroed_mask.to_numpy(dtype=bool),
+            pass_label,
+        )
+        if channel_payload.empty:
+            continue
+        channel_payload["Q_zeroed"] = q_zeroed.reindex(channel_payload["row_index"]).to_numpy(dtype=bool)
+        channel_payload["T_zeroed"] = t_zeroed.reindex(channel_payload["row_index"]).to_numpy(dtype=bool)
+        payload_frames.append(channel_payload)
+
+    if not payload_frames:
+        return _empty_task1_removed_channel_values_frame()
+    return pd.concat(payload_frames, ignore_index=True)
+
+
+def _task1_estimate_channel_noise_limit(
+    channel_key: tuple[int, str, int],
+    q_all: np.ndarray,
+    q_removed: np.ndarray,
+) -> float | None:
+    q_all = q_all[np.isfinite(q_all) & (q_all > 0)]
+    q_removed = q_removed[np.isfinite(q_removed) & (q_removed > 0)]
+    if (
+        q_all.size < channel_noise_limit_min_total_values
+        or q_removed.size < channel_noise_limit_min_removed_values
+    ):
+        return None
+
+    log_q_all = np.log10(q_all)
+    low = float(np.nanmin(log_q_all))
+    high = float(np.nanmax(log_q_all))
+    if not np.isfinite(low) or not np.isfinite(high) or high <= low:
+        return None
+
+    n_bins = min(channel_noise_limit_hist_bins, max(24, int(np.sqrt(log_q_all.size))))
+    hist, edges = np.histogram(log_q_all, bins=n_bins, range=(low, high))
+    if hist.sum() == 0 or np.count_nonzero(hist) < 2:
+        return None
+
+    mids = 0.5 * (edges[:-1] + edges[1:])
+    probs = hist.astype(float) / float(hist.sum())
+    omega = np.cumsum(probs)
+    mu = np.cumsum(probs * mids)
+    mu_total = float(mu[-1])
+    sigma_b2 = np.full_like(mids, -np.inf, dtype=float)
+    valid = (omega > 0) & (omega < 1)
+    sigma_b2[valid] = ((mu_total * omega[valid] - mu[valid]) ** 2) / (
+        omega[valid] * (1.0 - omega[valid])
+    )
+    if not np.isfinite(sigma_b2).any():
+        return None
+
+    threshold_idx = int(np.nanargmax(sigma_b2))
+    threshold_log_q = float(edges[threshold_idx + 1])
+
+    left_mask = log_q_all <= threshold_log_q
+    right_mask = log_q_all > threshold_log_q
+    if (
+        int(np.count_nonzero(left_mask)) < channel_noise_limit_min_class_count
+        or int(np.count_nonzero(right_mask)) < channel_noise_limit_min_class_count
+    ):
+        return None
+
+    log_q_removed = np.log10(q_removed)
+    removed_left_fraction = float(np.mean(log_q_removed <= threshold_log_q))
+    if removed_left_fraction < channel_noise_limit_min_removed_left_fraction:
+        return None
+
+    class_separation = float(np.mean(log_q_all[right_mask]) - np.mean(log_q_all[left_mask]))
+    if not np.isfinite(class_separation) or class_separation < channel_noise_limit_min_log_separation:
+        return None
+
+    learned_limit = float(10 ** threshold_log_q)
+    return max(learned_limit, _task1_default_q_left_for_channel(channel_key))
+
+
+def derive_task1_channel_noise_limits(
+    df_input: pd.DataFrame,
+    removed_channel_values: pd.DataFrame,
+) -> dict[tuple[int, str, int], float]:
+    if removed_channel_values.empty:
+        return {}
+
+    learned_limits: dict[tuple[int, str, int], float] = {}
+    channel_map = collect_task1_channel_qt_map(df_input)
+    grouped = removed_channel_values.groupby(["plane", "side", "strip"], sort=False)
+    for (plane, side, strip), group in grouped:
+        channel_key = (int(plane), str(side), int(strip))
+        if channel_key not in channel_map:
+            continue
+        cols = channel_map[channel_key]
+        q_all = pd.to_numeric(df_input[cols["Q"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        q_removed = pd.to_numeric(group.get("Q"), errors="coerce").dropna().to_numpy(dtype=float)
+        learned_limit = _task1_estimate_channel_noise_limit(channel_key, q_all, q_removed)
+        if learned_limit is not None and np.isfinite(learned_limit):
+            learned_limits[channel_key] = float(learned_limit)
+    return learned_limits
+
+
+def build_task1_effective_q_left_limits(
+    learned_limits: dict[tuple[int, str, int], float],
+) -> dict[tuple[int, str, int], float]:
+    return {
+        channel_key: float(learned_limits.get(channel_key, _task1_default_q_left_for_channel(channel_key)))
+        for channel_key in TASK1_CHANNEL_KEYS
+    }
+
+
+def apply_task1_channel_noise_limit_filter(
+    df_input: pd.DataFrame,
+    *,
+    learned_q_limits: dict[tuple[int, str, int], float],
+    snapshot_originals=None,
+    removed_value_pass_label: str | None = None,
+) -> dict[str, object]:
+    channel_map = collect_task1_channel_qt_map(df_input)
+    if len(channel_map) < 1 or not learned_q_limits:
+        return {
+            "tracked_channel_count": len(channel_map),
+            "channels_with_learned_limits": 0,
+            "rows_affected": 0,
+            "values_zeroed": 0,
+            "removed_channel_values": _empty_task1_removed_channel_values_frame(),
+        }
+
+    n_rows = len(df_input)
+    any_row_affected = np.zeros(n_rows, dtype=bool)
+    changed_columns: list[str] = []
+    removed_value_frames: list[pd.DataFrame] = []
+    values_zeroed = 0
+    channels_with_learned_limits = 0
+
+    channel_fail_masks: dict[tuple[int, str, int], np.ndarray] = {}
+    for channel_key in sorted(learned_q_limits, key=_task1_channel_order_key):
+        if channel_key not in channel_map:
+            continue
+        limit_value = learned_q_limits.get(channel_key)
+        if limit_value is None or not np.isfinite(limit_value):
+            continue
+
+        cols = channel_map[channel_key]
+        q_values = pd.to_numeric(df_input[cols["Q"]], errors="coerce").fillna(0)
+        t_values = pd.to_numeric(df_input[cols["T"]], errors="coerce").fillna(0)
+        q_array = q_values.to_numpy(dtype=float)
+        fail_mask = (q_array != 0) & (q_array <= float(limit_value))
+        if not np.any(fail_mask):
+            continue
+
+        channels_with_learned_limits += 1
+        channel_fail_masks[channel_key] = fail_mask
+        any_row_affected |= fail_mask
+        changed_columns.extend((cols["Q"], cols["T"]))
+        values_zeroed += int((q_values[fail_mask] != 0).sum())
+        values_zeroed += int((t_values[fail_mask] != 0).sum())
+        if removed_value_pass_label is not None:
+            removed_value_frames.append(
+                _task1_build_removed_channel_values_frame(
+                    df_input,
+                    channel_key,
+                    q_values,
+                    t_values,
+                    fail_mask,
+                    removed_value_pass_label,
+                )
+            )
+
+    if changed_columns and snapshot_originals is not None:
+        snapshot_originals(df_input, list(dict.fromkeys(changed_columns)))
+
+    for channel_key, fail_mask in channel_fail_masks.items():
+        cols = channel_map[channel_key]
+        df_input.loc[fail_mask, [cols["Q"], cols["T"]]] = 0
+
+    removed_values_df = (
+        pd.concat(removed_value_frames, ignore_index=True)
+        if removed_value_frames
+        else _empty_task1_removed_channel_values_frame()
+    )
+    return {
+        "tracked_channel_count": len(channel_map),
+        "channels_with_learned_limits": channels_with_learned_limits,
+        "rows_affected": int(np.count_nonzero(any_row_affected)),
+        "values_zeroed": int(values_zeroed),
+        "removed_channel_values": removed_values_df,
+    }
+
+
+def apply_task1_channel_qt_mismatch_filter(
+    df_input: pd.DataFrame,
+    *,
+    snapshot_originals=None,
+) -> dict[str, object]:
+    task1_channel_pairs: list[tuple[str, str]] = []
+    for plane in range(1, 5):
+        for side in ("F", "B"):
+            for strip in range(1, 5):
+                q_col = f"Q{plane}_{side}_{strip}"
+                t_col = f"T{plane}_{side}_{strip}"
+                if q_col in df_input.columns and t_col in df_input.columns:
+                    task1_channel_pairs.append((q_col, t_col))
+
+    row_mismatch_mask = pd.Series(False, index=df_input.index)
+    q_only_row_mask = pd.Series(False, index=df_input.index)
+    t_only_row_mask = pd.Series(False, index=df_input.index)
+    front_row_mask = pd.Series(False, index=df_input.index)
+    back_row_mask = pd.Series(False, index=df_input.index)
+    channel_qt_mismatch_channels = 0
+    channel_qt_values_zeroed = 0
+
+    if task1_channel_pairs and not df_input.empty:
+        for q_col, t_col in task1_channel_pairs:
+            q_values = pd.to_numeric(df_input[q_col], errors="coerce").fillna(0)
+            t_values = pd.to_numeric(df_input[t_col], errors="coerce").fillna(0)
+            q_only_mask = (q_values != 0) & (t_values == 0)
+            t_only_mask = (q_values == 0) & (t_values != 0)
+            mismatch_mask = q_only_mask | t_only_mask
+            if not mismatch_mask.any():
+                continue
+            if snapshot_originals is not None:
+                snapshot_originals(df_input, [q_col, t_col])
+            row_mismatch_mask |= mismatch_mask
+            q_only_row_mask |= q_only_mask
+            t_only_row_mask |= t_only_mask
+            if "_F_" in q_col:
+                front_row_mask |= mismatch_mask
+            elif "_B_" in q_col:
+                back_row_mask |= mismatch_mask
+            channel_qt_mismatch_channels += int(mismatch_mask.sum())
+            channel_qt_values_zeroed += int((q_values[mismatch_mask] != 0).sum())
+            channel_qt_values_zeroed += int((t_values[mismatch_mask] != 0).sum())
+            df_input.loc[mismatch_mask, [q_col, t_col]] = 0
+
+    return {
+        "task1_channel_pairs": task1_channel_pairs,
+        "row_mismatch_mask": row_mismatch_mask,
+        "rows_affected": int(row_mismatch_mask.sum()),
+        "values_zeroed": int(channel_qt_values_zeroed),
+        "q_only_rows": int(q_only_row_mask.sum()),
+        "t_only_rows": int(t_only_row_mask.sum()),
+        "front_rows": int(front_row_mask.sum()),
+        "back_rows": int(back_row_mask.sum()),
+        "mismatch_channels": int(channel_qt_mismatch_channels),
+    }
+
+
+_TASK1_COMBO_LABEL_PATTERN = re.compile(
+    r"^P(?P<plane_a>\d+)S(?P<strip_a>\d+)(?P<side_a>[FB])-P(?P<plane_b>\d+)S(?P<strip_b>\d+)(?P<side_b>[FB])$"
+)
+
+
+def _task1_parse_combo_label(
+    combo_label: str,
+) -> tuple[tuple[int, str, int], tuple[int, str, int]] | None:
+    match = _TASK1_COMBO_LABEL_PATTERN.match(str(combo_label))
+    if match is None:
+        return None
+    return (
+        (
+            int(match.group("plane_a")),
+            match.group("side_a"),
+            int(match.group("strip_a")),
+        ),
+        (
+            int(match.group("plane_b")),
+            match.group("side_b"),
+            int(match.group("strip_b")),
+        ),
+    )
 
 
 def apply_task1_plane_combination_filter(
@@ -1488,7 +1931,9 @@ def apply_task1_plane_combination_filter(
     t_sum_right: float,
     t_dif_threshold: float,
     snapshot_originals=None,
-) -> dict[str, int]:
+    apply_changes: bool = True,
+    removed_value_pass_label: str | None = None,
+) -> dict[str, object]:
     """
     Apply the Task 1 plane-combination filter directly from channel Q/T values.
 
@@ -1500,6 +1945,7 @@ def apply_task1_plane_combination_filter(
     channel_map = collect_task1_channel_qt_map(df_input)
     if len(channel_map) < 2:
         return {
+            "input_rows": len(df_input),
             "tracked_channel_count": len(channel_map),
             "valid_pair_observations": 0,
             "failed_pair_any": 0,
@@ -1521,10 +1967,12 @@ def apply_task1_plane_combination_filter(
             "selected_offender_counts": {
                 channel_key: 0 for channel_key in TASK1_CHANNEL_KEYS
             },
+            "removed_channel_values": _empty_task1_removed_channel_values_frame(),
         }
 
     n_rows = len(df_input)
     summary = {
+        "input_rows": n_rows,
         "tracked_channel_count": len(channel_map),
         "valid_pair_observations": 0,
         "failed_pair_any": 0,
@@ -1553,6 +2001,7 @@ def apply_task1_plane_combination_filter(
         channel_key: 0
         for channel_key in TASK1_CHANNEL_KEYS
     }
+    removed_value_frames: list[pd.DataFrame] = []
 
     for channel_a, channel_b in combinations(sorted(channel_map), 2):
         if channel_a[0] == channel_b[0]:
@@ -1668,16 +2117,28 @@ def apply_task1_plane_combination_filter(
         summary["values_zeroed"] += int((t_values[fail_mask] != 0).sum())
         any_row_affected |= fail_mask
         changed_columns.extend((cols["Q"], cols["T"]))
+        if removed_value_pass_label is not None:
+            removed_value_frames.append(
+                _task1_build_removed_channel_values_frame(
+                    df_input,
+                    channel_key,
+                    q_values,
+                    t_values,
+                    fail_mask,
+                    removed_value_pass_label,
+                )
+            )
 
     summary["rows_affected"] = int(np.count_nonzero(any_row_affected))
-    if changed_columns and snapshot_originals is not None:
+    if apply_changes and changed_columns and snapshot_originals is not None:
         snapshot_originals(df_input, list(dict.fromkeys(changed_columns)))
 
-    for channel_key, fail_mask in channel_fail_masks.items():
-        if not np.any(fail_mask):
-            continue
-        cols = channel_map[channel_key]
-        df_input.loc[fail_mask, [cols["Q"], cols["T"]]] = 0
+    if apply_changes:
+        for channel_key, fail_mask in channel_fail_masks.items():
+            if not np.any(fail_mask):
+                continue
+            cols = channel_map[channel_key]
+            df_input.loc[fail_mask, [cols["Q"], cols["T"]]] = 0
 
     top_offenders = sorted(
         (
@@ -1705,6 +2166,11 @@ def apply_task1_plane_combination_filter(
         channel_key: int(offender_hit_counts.get(channel_key, 0))
         for channel_key in TASK1_CHANNEL_KEYS
     }
+    summary["removed_channel_values"] = (
+        pd.concat(removed_value_frames, ignore_index=True)
+        if removed_value_frames
+        else _empty_task1_removed_channel_values_frame()
+    )
     return summary
 
 
@@ -1791,7 +2257,9 @@ def collect_task1_channel_combination_histogram_payload(
     payload_rows: list[pd.DataFrame] = []
     channel_map = collect_task1_channel_qt_map(df_input)
     if len(channel_map) < 2:
-        return pd.DataFrame(columns=["tt", "combo", "same_strip", "q_sum", "q_dif", "t_sum", "t_dif"])
+        return pd.DataFrame(
+            columns=["row_index", "tt", "combo", "same_strip", "q_sum", "q_dif", "t_sum", "t_dif"]
+        )
 
     tt_series = tt_series.reindex(df_input.index).fillna("0").astype(str)
     for channel_a, channel_b in combinations(sorted(channel_map), 2):
@@ -1822,6 +2290,7 @@ def collect_task1_channel_combination_histogram_payload(
         payload_rows.append(
             pd.DataFrame(
                 {
+                    "row_index": valid_index.to_numpy(),
                     "tt": tt_series.loc[valid_index].to_numpy(dtype=str),
                     "combo": f"P{channel_a[0]}S{channel_a[2]}{channel_a[1]}-P{channel_b[0]}S{channel_b[2]}{channel_b[1]}",
                     "same_strip": bool(channel_a[2] == channel_b[2]),
@@ -1834,11 +2303,33 @@ def collect_task1_channel_combination_histogram_payload(
         )
 
     if not payload_rows:
-        return pd.DataFrame(columns=["tt", "combo", "same_strip", "q_sum", "q_dif", "t_sum", "t_dif"])
+        return pd.DataFrame(
+            columns=["row_index", "tt", "combo", "same_strip", "q_sum", "q_dif", "t_sum", "t_dif"]
+        )
     return pd.concat(payload_rows, ignore_index=True)
 
 
+def subtract_task1_channel_combination_payload(
+    left_payload: pd.DataFrame,
+    right_payload: pd.DataFrame,
+) -> pd.DataFrame:
+    if left_payload.empty:
+        return left_payload.copy()
+    if right_payload.empty or not {"row_index", "combo"}.issubset(left_payload.columns) or not {"row_index", "combo"}.issubset(right_payload.columns):
+        return left_payload.copy()
+
+    reduced_right = right_payload.loc[:, ["row_index", "combo"]].drop_duplicates()
+    removed_payload = left_payload.merge(
+        reduced_right,
+        on=["row_index", "combo"],
+        how="left",
+        indicator=True,
+    )
+    return removed_payload.loc[removed_payload["_merge"] == "left_only"].drop(columns="_merge")
+
+
 def plot_task1_channel_combination_filter_by_tt(
+    original_payload: pd.DataFrame,
     before_payload: pd.DataFrame,
     after_payload: pd.DataFrame,
     basename_no_ext_value: str,
@@ -1848,37 +2339,62 @@ def plot_task1_channel_combination_filter_by_tt(
     save_plots: bool,
     plot_list: list[str] | None,
     limits_by_observable: dict[str, tuple[float | None, float | None]],
+    q_left_limits_by_channel: dict[tuple[int, str, int], float] | None,
     top_n: int | None,
     include_same_strip_pairs: bool,
 ) -> int:
     observable_names = [observable for observable, _ in TASK1_CHANNEL_COMBINATION_OBSERVABLES]
     observable_labels = {observable: label for observable, label in TASK1_CHANNEL_COMBINATION_OBSERVABLES}
     scatter_max_points = 5000
+    removed_scatter_marker_size = max(8, int(round(0.6 * removed_marker_size)))
+    prefilter_scatter_size = max(3, int(round(0.25 * removed_marker_size)))
+    noise_limit_line_kwargs = {
+        "color": "red",
+        "linestyle": "--",
+        "linewidth": 1.4,
+        "alpha": 0.85,
+        "zorder": 6,
+    }
+    noise_limit_boundary_kwargs = {
+        "color": "red",
+        "linestyle": "--",
+        "linewidth": 1.2,
+        "alpha": 0.65,
+        "zorder": 6,
+    }
     rng = np.random.default_rng(0)
+    q_left_limits_by_channel = q_left_limits_by_channel or {}
 
+    original_payload = original_payload.copy()
     before_payload = before_payload.copy()
     after_payload = after_payload.copy()
     if not include_same_strip_pairs:
+        original_payload = original_payload.loc[~original_payload.get("same_strip", pd.Series(False, index=original_payload.index)).astype(bool)].copy()
         before_payload = before_payload.loc[~before_payload.get("same_strip", pd.Series(False, index=before_payload.index)).astype(bool)].copy()
         after_payload = after_payload.loc[~after_payload.get("same_strip", pd.Series(False, index=after_payload.index)).astype(bool)].copy()
 
     tt_labels = []
-    for payload in (before_payload, after_payload):
+    for payload in (original_payload, before_payload, after_payload):
         if "tt" in payload.columns:
             tt_labels.extend(payload["tt"].astype(str).tolist())
     ordered_tts = [tt_label for tt_label in TT_COLOR_LABELS if tt_label != "0" and tt_label in set(tt_labels)]
 
     for tt_label in ordered_tts:
+        original_tt_all = original_payload.loc[
+            original_payload.get("tt", pd.Series(dtype=str)).astype(str) == tt_label
+        ].copy()
         before_tt_all = before_payload.loc[
             before_payload.get("tt", pd.Series(dtype=str)).astype(str) == tt_label
         ].copy()
         after_tt_all = after_payload.loc[
             after_payload.get("tt", pd.Series(dtype=str)).astype(str) == tt_label
         ].copy()
-        if before_tt_all.empty and after_tt_all.empty:
+        if original_tt_all.empty and before_tt_all.empty and after_tt_all.empty:
             continue
 
         reference_counts = before_tt_all.groupby("combo").size().sort_values(ascending=False)
+        if reference_counts.empty:
+            reference_counts = original_tt_all.groupby("combo").size().sort_values(ascending=False)
         if reference_counts.empty:
             reference_counts = after_tt_all.groupby("combo").size().sort_values(ascending=False)
         combo_labels = (
@@ -1889,21 +2405,56 @@ def plot_task1_channel_combination_filter_by_tt(
         if not combo_labels:
             continue
 
-        before_tt = before_tt_all.loc[before_tt_all["combo"].isin(combo_labels)].copy()
-        after_tt = after_tt_all.loc[after_tt_all["combo"].isin(combo_labels)].copy()
-        if before_tt.empty and after_tt.empty:
+        original_tt_full = original_tt_all.loc[original_tt_all["combo"].isin(combo_labels)].copy()
+        before_tt_full = before_tt_all.loc[before_tt_all["combo"].isin(combo_labels)].copy()
+        after_tt_full = after_tt_all.loc[after_tt_all["combo"].isin(combo_labels)].copy()
+        if original_tt_full.empty and before_tt_full.empty and after_tt_full.empty:
             continue
 
-        if len(before_tt) > scatter_max_points:
-            before_tt = before_tt.iloc[rng.choice(len(before_tt), size=scatter_max_points, replace=False)].copy()
-        if len(after_tt) > scatter_max_points:
-            after_tt = after_tt.iloc[rng.choice(len(after_tt), size=scatter_max_points, replace=False)].copy()
+        prefilter_removed_tt_full = subtract_task1_channel_combination_payload(
+            original_tt_full,
+            before_tt_full,
+        )
+        removed_tt_full = subtract_task1_channel_combination_payload(
+            before_tt_full,
+            after_tt_full,
+        )
+
+        def _sample_scatter_payload(payload: pd.DataFrame) -> pd.DataFrame:
+            if len(payload) <= scatter_max_points:
+                return payload.copy()
+            return payload.iloc[
+                rng.choice(len(payload), size=scatter_max_points, replace=False)
+            ].copy()
+
+        after_tt = _sample_scatter_payload(after_tt_full)
+        prefilter_removed_tt = _sample_scatter_payload(prefilter_removed_tt_full)
+        removed_tt = _sample_scatter_payload(removed_tt_full)
 
         combo_color_map = {label: _task1_population_color(label) for label in combo_labels}
+        combo_q_boundaries: dict[str, dict[str, object]] = {}
+        for combo_label in combo_labels:
+            parsed_combo = _task1_parse_combo_label(combo_label)
+            if parsed_combo is None:
+                continue
+            channel_a, channel_b = parsed_combo
+            q_left_a = q_left_limits_by_channel.get(channel_a)
+            q_left_b = q_left_limits_by_channel.get(channel_b)
+            combo_q_boundaries[combo_label] = {
+                "channel_a": channel_a,
+                "channel_b": channel_b,
+                "q_left_a": q_left_a,
+                "q_left_b": q_left_b,
+                "q_sum_left": (
+                    0.5 * (float(q_left_a) + float(q_left_b))
+                    if q_left_a is not None and q_left_b is not None
+                    else None
+                ),
+            }
         before_combo_data = {
             label: {
                 observable: pd.to_numeric(
-                    before_tt.loc[before_tt["combo"] == label, observable],
+                    before_tt_full.loc[before_tt_full["combo"] == label, observable],
                     errors="coerce",
                 ).to_numpy(dtype=float)
                 for observable in observable_names
@@ -1913,6 +2464,26 @@ def plot_task1_channel_combination_filter_by_tt(
         after_combo_data = {
             label: {
                 observable: pd.to_numeric(
+                    after_tt_full.loc[after_tt_full["combo"] == label, observable],
+                    errors="coerce",
+                ).to_numpy(dtype=float)
+                for observable in observable_names
+            }
+            for label in combo_labels
+        }
+        removed_combo_data = {
+            label: {
+                observable: pd.to_numeric(
+                    removed_tt_full.loc[removed_tt_full["combo"] == label, observable],
+                    errors="coerce",
+                ).to_numpy(dtype=float)
+                for observable in observable_names
+            }
+            for label in combo_labels
+        }
+        after_scatter_combo_data = {
+            label: {
+                observable: pd.to_numeric(
                     after_tt.loc[after_tt["combo"] == label, observable],
                     errors="coerce",
                 ).to_numpy(dtype=float)
@@ -1920,24 +2491,28 @@ def plot_task1_channel_combination_filter_by_tt(
             }
             for label in combo_labels
         }
-
+        removed_scatter_combo_data = {
+            label: {
+                observable: pd.to_numeric(
+                    removed_tt.loc[removed_tt["combo"] == label, observable],
+                    errors="coerce",
+                ).to_numpy(dtype=float)
+                for observable in observable_names
+            }
+            for label in combo_labels
+        }
         n_obs = len(observable_names)
         fig, axes = plt.subplots(n_obs, n_obs, figsize=(2.3 * n_obs, 2.3 * n_obs), constrained_layout=True)
         any_panel_data = False
 
         axis_ranges: dict[str, tuple[float, float]] = {}
         for observable in observable_names:
-            before_values = pd.to_numeric(
-                before_tt.get(observable, pd.Series(dtype=float)),
+            full_values = pd.to_numeric(
+                original_tt_full.get(observable, pd.Series(dtype=float)),
                 errors="coerce",
             ).dropna().to_numpy(dtype=float)
-            after_values = pd.to_numeric(
-                after_tt.get(observable, pd.Series(dtype=float)),
-                errors="coerce",
-            ).dropna().to_numpy(dtype=float)
-            axis_ranges[observable] = _task1_hist_range(
-                before_values,
-                after_values,
+            axis_ranges[observable] = _task1_full_data_range(
+                full_values,
                 limits_by_observable.get(observable, (None, None)),
             )
 
@@ -1949,16 +2524,35 @@ def plot_task1_channel_combination_filter_by_tt(
                     continue
 
                 if row_idx == col_idx:
-                    before_values = pd.to_numeric(before_tt.get(x_name, pd.Series(dtype=float)), errors="coerce").dropna().to_numpy(dtype=float)
-                    after_values = pd.to_numeric(after_tt.get(x_name, pd.Series(dtype=float)), errors="coerce").dropna().to_numpy(dtype=float)
-                    if before_values.size == 0 and after_values.size == 0:
+                    before_values = pd.to_numeric(before_tt_full.get(x_name, pd.Series(dtype=float)), errors="coerce").dropna().to_numpy(dtype=float)
+                    after_values = pd.to_numeric(after_tt_full.get(x_name, pd.Series(dtype=float)), errors="coerce").dropna().to_numpy(dtype=float)
+                    prefilter_removed_values = pd.to_numeric(
+                        prefilter_removed_tt_full.get(x_name, pd.Series(dtype=float)),
+                        errors="coerce",
+                    ).dropna().to_numpy(dtype=float)
+                    prefilter_removed_values = prefilter_removed_values[np.isfinite(prefilter_removed_values)]
+                    if (
+                        before_values.size == 0
+                        and after_values.size == 0
+                        and prefilter_removed_values.size == 0
+                    ):
                         ax.set_axis_off()
                         continue
                     any_panel_data = True
                     x_low, x_high = axis_ranges[x_name]
                     bins = np.linspace(x_low, x_high, 60)
+                    if prefilter_removed_values.size:
+                        ax.hist(
+                            prefilter_removed_values,
+                            bins=bins,
+                            histtype="step",
+                            linestyle="--",
+                            linewidth=1.0,
+                            alpha=0.55,
+                            color="lightgrey",
+                        )
                     for combo_label in combo_labels:
-                        combo_before = before_combo_data[combo_label][x_name]
+                        combo_before = removed_combo_data[combo_label][x_name]
                         combo_after = after_combo_data[combo_label][x_name]
                         combo_before = combo_before[np.isfinite(combo_before)]
                         combo_after = combo_after[np.isfinite(combo_after)]
@@ -1987,37 +2581,49 @@ def plot_task1_channel_combination_filter_by_tt(
                         ax.axvline(float(lower_limit), color="lightgrey", linestyle="--", linewidth=1.1)
                     if upper_limit is not None:
                         ax.axvline(float(upper_limit), color="lightgrey", linestyle="--", linewidth=1.1)
+                    if x_name == "q_sum":
+                        for combo_label in combo_labels:
+                            q_sum_noise_left = combo_q_boundaries.get(combo_label, {}).get("q_sum_left")
+                            if q_sum_noise_left is None or not np.isfinite(q_sum_noise_left):
+                                continue
+                            ax.axvline(
+                                float(q_sum_noise_left),
+                                **noise_limit_line_kwargs,
+                            )
                     ax.set_xlim(x_low, x_high)
                     ax.set_yscale("log", nonpositive="clip")
                     ax.set_title(observable_labels[x_name], fontsize=9)
                 else:
-                    before_x = pd.to_numeric(before_tt.get(x_name, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
-                    before_y = pd.to_numeric(before_tt.get(y_name, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
                     after_x = pd.to_numeric(after_tt.get(x_name, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
                     after_y = pd.to_numeric(after_tt.get(y_name, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
-                    before_mask = np.isfinite(before_x) & np.isfinite(before_y)
+                    prefilter_removed_x = pd.to_numeric(prefilter_removed_tt.get(x_name, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
+                    prefilter_removed_y = pd.to_numeric(prefilter_removed_tt.get(y_name, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
+                    removed_x = pd.to_numeric(removed_tt.get(x_name, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
+                    removed_y = pd.to_numeric(removed_tt.get(y_name, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
                     after_mask = np.isfinite(after_x) & np.isfinite(after_y)
-                    if not np.any(before_mask) and not np.any(after_mask):
+                    prefilter_removed_mask = np.isfinite(prefilter_removed_x) & np.isfinite(prefilter_removed_y)
+                    removed_mask = np.isfinite(removed_x) & np.isfinite(removed_y)
+                    if not np.any(prefilter_removed_mask) and not np.any(removed_mask) and not np.any(after_mask):
                         ax.set_axis_off()
                         continue
                     any_panel_data = True
+                    if np.any(prefilter_removed_mask):
+                        ax.scatter(
+                            prefilter_removed_x[prefilter_removed_mask],
+                            prefilter_removed_y[prefilter_removed_mask],
+                            s=prefilter_scatter_size,
+                            alpha=0.08,
+                            color="grey",
+                            edgecolors="none",
+                            rasterized=True,
+                        )
                     for combo_label in combo_labels:
-                        combo_before_x = before_combo_data[combo_label][x_name]
-                        combo_before_y = before_combo_data[combo_label][y_name]
-                        combo_after_x = after_combo_data[combo_label][x_name]
-                        combo_after_y = after_combo_data[combo_label][y_name]
-                        combo_before_mask = np.isfinite(combo_before_x) & np.isfinite(combo_before_y)
+                        combo_after_x = after_scatter_combo_data[combo_label][x_name]
+                        combo_after_y = after_scatter_combo_data[combo_label][y_name]
+                        combo_removed_x = removed_scatter_combo_data[combo_label][x_name]
+                        combo_removed_y = removed_scatter_combo_data[combo_label][y_name]
                         combo_after_mask = np.isfinite(combo_after_x) & np.isfinite(combo_after_y)
-                        if np.any(combo_before_mask):
-                            ax.scatter(
-                                combo_before_x[combo_before_mask],
-                                combo_before_y[combo_before_mask],
-                                s=5,
-                                alpha=0.05,
-                                color=combo_color_map[combo_label],
-                                edgecolors="none",
-                                rasterized=True,
-                            )
+                        combo_removed_mask = np.isfinite(combo_removed_x) & np.isfinite(combo_removed_y)
                         if np.any(combo_after_mask):
                             ax.scatter(
                                 combo_after_x[combo_after_mask],
@@ -2026,6 +2632,17 @@ def plot_task1_channel_combination_filter_by_tt(
                                 alpha=0.16,
                                 color=combo_color_map[combo_label],
                                 edgecolors="none",
+                                rasterized=True,
+                            )
+                        if np.any(combo_removed_mask):
+                            ax.scatter(
+                                combo_removed_x[combo_removed_mask],
+                                combo_removed_y[combo_removed_mask],
+                                s=removed_scatter_marker_size,
+                                marker=removed_marker,
+                                alpha=removed_marker_alpha,
+                                linewidths=1.0,
+                                color=combo_color_map[combo_label],
                                 rasterized=True,
                             )
                     x_low, x_high = axis_ranges[x_name]
@@ -2042,6 +2659,42 @@ def plot_task1_channel_combination_filter_by_tt(
                         ax.axhline(float(y_limits[0]), color="lightgrey", linestyle="--", linewidth=0.9)
                     if y_limits[1] is not None:
                         ax.axhline(float(y_limits[1]), color="lightgrey", linestyle="--", linewidth=0.9)
+                    if x_name == "q_sum":
+                        for combo_label in combo_labels:
+                            q_sum_noise_left = combo_q_boundaries.get(combo_label, {}).get("q_sum_left")
+                            if q_sum_noise_left is None or not np.isfinite(q_sum_noise_left):
+                                continue
+                            ax.axvline(
+                                float(q_sum_noise_left),
+                                **noise_limit_line_kwargs,
+                            )
+                    if y_name == "q_sum":
+                        for combo_label in combo_labels:
+                            q_sum_noise_left = combo_q_boundaries.get(combo_label, {}).get("q_sum_left")
+                            if q_sum_noise_left is None or not np.isfinite(q_sum_noise_left):
+                                continue
+                            ax.axhline(
+                                float(q_sum_noise_left),
+                                **noise_limit_line_kwargs,
+                            )
+                    if x_name == "q_sum" and y_name == "q_dif":
+                        q_sum_values = np.linspace(x_low, x_high, 200)
+                        for combo_label in combo_labels:
+                            combo_boundary = combo_q_boundaries.get(combo_label, {})
+                            q_left_a = combo_boundary.get("q_left_a")
+                            q_left_b = combo_boundary.get("q_left_b")
+                            if q_left_a is not None and np.isfinite(q_left_a):
+                                ax.plot(
+                                    q_sum_values,
+                                    float(q_left_a) - q_sum_values,
+                                    **noise_limit_boundary_kwargs,
+                                )
+                            if q_left_b is not None and np.isfinite(q_left_b):
+                                ax.plot(
+                                    q_sum_values,
+                                    q_sum_values - float(q_left_b),
+                                    **noise_limit_boundary_kwargs,
+                                )
 
                 if row_idx == n_obs - 1:
                     ax.set_xlabel(observable_labels[x_name], fontsize=8)
@@ -2060,8 +2713,27 @@ def plot_task1_channel_combination_filter_by_tt(
             continue
 
         style_handles = [
-            mpl.lines.Line2D([0], [0], color="black", linestyle="--", linewidth=1.0, label="Before"),
-            mpl.lines.Line2D([0], [0], color="black", linestyle="-", linewidth=1.4, label="After"),
+            mpl.lines.Line2D([0], [0], color="lightgrey", linestyle="--", linewidth=1.0, label="Removed Before Combination"),
+            mpl.lines.Line2D([0], [0], color="black", linestyle="--", linewidth=1.0, label="Removed By Combination"),
+            mpl.lines.Line2D([0], [0], color="black", linestyle="-", linewidth=1.4, label="Retained"),
+            mpl.lines.Line2D(
+                [0],
+                [0],
+                color="black",
+                marker=removed_marker,
+                linestyle="None",
+                markersize=6,
+                markerfacecolor="none",
+                label="Combination Rejection",
+            ),
+            mpl.lines.Line2D(
+                [0],
+                [0],
+                color="red",
+                linestyle="--",
+                linewidth=1.4,
+                label="Noise Charge Limit",
+            ),
         ]
         combo_handles = [
             mpl.lines.Line2D([0], [0], color=combo_color_map[label], linestyle="-", linewidth=1.6, label=label)
@@ -3489,21 +4161,24 @@ elif simulated_z_positions is not None:
     z_source = "simulated_param_hash"
 elif exists_input_file:
     used_input_file = True
-    # Ensure `start` and `end` columns are in datetime format
-    input_file["start"] = pd.to_datetime(input_file["start"], format="%Y-%m-%d", errors="coerce")
-    input_file["end"] = pd.to_datetime(input_file["end"], format="%Y-%m-%d", errors="coerce")
-    input_file["end"] = input_file["end"].fillna(pd.to_datetime('now'))
-    start_day = pd.to_datetime(start_time).normalize()
-    end_day = pd.to_datetime(end_time).normalize()
-    input_file["start_day"] = input_file["start"].dt.normalize()
-    input_file["end_day"] = input_file["end"].dt.normalize()
-    matching_confs = input_file[(input_file["start_day"] <= start_day) & (input_file["end_day"] >= end_day)]
-    print(matching_confs)
-    
-    if not matching_confs.empty:
-        if len(matching_confs) > 1:
-            print(f"Warning:\nMultiple configurations match the date range\n{start_time} to {end_time}.\nTaking the first one.")
-        selected_conf = matching_confs.iloc[0]
+    selection_result = select_input_file_configuration(
+        input_file,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    print(selection_result.matching_confs)
+
+    if selection_result.selected_conf is not None:
+        if selection_result.reason == "exact_overlap_latest_start":
+            print(
+                "Warning:\n"
+                "Multiple configurations match the date range\n"
+                f"{start_time} to {end_time}.\n"
+                "Selecting the matching configuration with the most recent start date."
+            )
+        elif selection_result.reason != "exact":
+            print("Warning: No matching configuration for the date range; selecting closest configuration.")
+        selected_conf = selection_result.selected_conf
         print(f"Selected configuration: {selected_conf['conf']}")
         z_positions = np.array([selected_conf.get(f"P{i}", np.nan) for i in range(1, 5)])
         try:
@@ -3514,20 +4189,9 @@ elif exists_input_file:
         print(selected_conf['conf'])
         z_source = f"input_file_conf_{selected_conf.get('conf')}"
     else:
-        print("Warning: No matching configuration for the date range; selecting closest configuration.")
-        before = input_file[input_file["start_day"] <= end_day].sort_values("start_day", ascending=False)
-        if not before.empty:
-            selected_conf = before.iloc[0]
-        else:
-            selected_conf = input_file.sort_values("start", ascending=True).iloc[0]
-        print(f"Selected configuration: {selected_conf['conf']}")
-        z_positions = np.array([selected_conf.get(f"P{i}", np.nan) for i in range(1, 5)])
-        try:
-            conf_value = float(selected_conf.get("conf"))
-        except (TypeError, ValueError):
-            conf_value = None
-        found_matching_conf = True
-        z_source = f"input_file_closest_conf_{selected_conf.get('conf')}"
+        print("Warning: Input configuration file has no valid selectable rows. Using default z_positions.")
+        z_positions = np.array([0, 150, 300, 450])  # In mm
+        z_source = "default_invalid_input_file"
 else:
     print("Error: No input file. Using default z_positions.")
     z_positions = np.array([0, 150, 300, 450])  # In mm
@@ -3620,6 +4284,7 @@ working_df = working_df.rename(columns=channel_rename_map)
 removed_rows_df = working_df.iloc[0:0].copy()
 tracking_base_index = working_df.index.copy()
 original_columns_store: dict[str, pd.Series] = {}
+channel_pair_plot_reference_df = pd.DataFrame(index=working_df.index.copy())
 
 
 def snapshot_original_columns_once(
@@ -3676,11 +4341,67 @@ def build_original_columns_frame() -> pd.DataFrame:
     )
 
 
-def build_channel_pair_plot_frames(current_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Return the actual retained and removed sets used by the current Task 1 flow."""
-    if not track_removed_rows or current_df.empty:
-        return current_df, removed_rows_df.iloc[0:0].copy()
-    return current_df, removed_rows_df.copy()
+def build_channel_pair_plot_frames(
+    current_df: pd.DataFrame,
+    *,
+    reference_df: pd.DataFrame | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Return the retained set plus the reference frame used to show removed points."""
+    if current_df.empty:
+        return current_df, current_df.iloc[0:0].copy()
+    if reference_df is None:
+        reference_df = channel_pair_plot_reference_df
+    if reference_df.empty:
+        return current_df, current_df.copy()
+    reference_df = reference_df.reindex(current_df.index).copy()
+    for col in current_df.columns:
+        if col not in reference_df.columns:
+            reference_df[col] = current_df[col]
+    return current_df, reference_df
+
+
+def build_task1_channel_filter_stage_frames(
+    df_input: pd.DataFrame,
+    *,
+    original_reference_df: pd.DataFrame | None,
+    learned_q_limits: dict[tuple[int, str, int], float],
+    q_sum_left: float,
+    q_sum_right: float,
+    q_dif_threshold: float,
+    t_sum_left: float,
+    t_sum_right: float,
+    t_dif_threshold: float,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    if df_input.empty:
+        empty_df = df_input.iloc[0:0].copy()
+        return empty_df, empty_df, empty_df
+
+    if original_reference_df is None or original_reference_df.empty:
+        original_df = df_input.copy()
+    else:
+        original_df = original_reference_df.reindex(df_input.index).copy()
+        for col in df_input.columns:
+            if col not in original_df.columns:
+                original_df[col] = df_input[col]
+
+    pre_combination_df = df_input.copy()
+    apply_task1_channel_qt_mismatch_filter(pre_combination_df)
+    apply_task1_channel_noise_limit_filter(
+        pre_combination_df,
+        learned_q_limits=learned_q_limits,
+    )
+
+    final_df = pre_combination_df.copy()
+    apply_task1_plane_combination_filter(
+        final_df,
+        q_sum_left=q_sum_left,
+        q_sum_right=q_sum_right,
+        q_dif_threshold=q_dif_threshold,
+        t_sum_left=t_sum_left,
+        t_sum_right=t_sum_right,
+        t_dif_threshold=t_dif_threshold,
+    )
+    return original_df, pre_combination_df, final_df
 
 
 original_number_of_events = len(working_df)
@@ -4161,6 +4882,12 @@ T_F_cols = collect_columns(working_df.columns, T_FRONT_PATTERN)
 T_B_cols = collect_columns(working_df.columns, T_BACK_PATTERN)
 Q_F_cols = collect_columns(working_df.columns, Q_FRONT_PATTERN)
 Q_B_cols = collect_columns(working_df.columns, Q_BACK_PATTERN)
+channel_pair_plot_reference_columns = [
+    col
+    for col in ["raw_tt", *T_F_cols, *T_B_cols, *Q_F_cols, *Q_B_cols]
+    if col in working_df.columns
+]
+channel_pair_plot_reference_df = working_df.loc[:, channel_pair_plot_reference_columns].copy()
 
 _debug_plot_filter_group(
     working_df,
@@ -4579,11 +5306,110 @@ _t_sec = time.perf_counter()
 # Variables: [T_F, T_B, Q_F, Q_B] × 4 planes × 4 strips = 64 variables
 # Diagonal: histogram; lower triangle: scatter; upper triangle: hidden.
 # ─────────────────────────────────────────────────────────────────────────────
-if task1_plot_enabled("channel_tq_matrix_by_planepair"):
+channel_noise_limit_learning_reference_df = channel_pair_plot_reference_df.copy()
+channel_noise_limit_learning_df = channel_noise_limit_learning_reference_df.copy()
+_apply_bounds(
+    channel_noise_limit_learning_df,
+    T_F_cols,
+    T_F_left_pre_cal,
+    T_F_right_pre_cal,
+)
+_apply_bounds(
+    channel_noise_limit_learning_df,
+    T_B_cols,
+    T_B_left_pre_cal,
+    T_B_right_pre_cal,
+)
+_apply_bounds(
+    channel_noise_limit_learning_df,
+    Q_F_cols,
+    Q_F_left_pre_cal,
+    Q_F_right_pre_cal,
+)
+_apply_bounds(
+    channel_noise_limit_learning_df,
+    Q_B_cols,
+    Q_B_left_pre_cal,
+    Q_B_right_pre_cal,
+)
+channel_noise_limit_learning_qt_mismatch_summary = apply_task1_channel_qt_mismatch_filter(
+    channel_noise_limit_learning_df,
+)
+channel_noise_limit_learning_summary = apply_task1_plane_combination_filter(
+    channel_noise_limit_learning_df,
+    q_sum_left=channel_combination_q_sum_left,
+    q_sum_right=channel_combination_q_sum_right,
+    q_dif_threshold=channel_combination_q_dif_threshold,
+    t_sum_left=channel_combination_t_sum_left,
+    t_sum_right=channel_combination_t_sum_right,
+    t_dif_threshold=channel_combination_t_dif_threshold,
+    removed_value_pass_label="plane_combination_noise_limit_learning",
+)
+channel_noise_limit_learning_removed_values = collect_task1_zeroed_channel_values(
+    channel_noise_limit_learning_reference_df,
+    channel_noise_limit_learning_df,
+    pass_label="plane_combination_noise_limit_learning_any_filter",
+)
+if recalculate_noise_charge_limit:
+    task1_learned_channel_noise_limits = derive_task1_channel_noise_limits(
+        channel_noise_limit_learning_reference_df if not channel_noise_limit_learning_reference_df.empty else working_df,
+        channel_noise_limit_learning_removed_values,
+    )
+else:
+    task1_learned_channel_noise_limits = dict(manual_channel_noise_charge_limits)
+task1_effective_channel_q_left_limits = build_task1_effective_q_left_limits(
+    task1_learned_channel_noise_limits,
+)
+_plot_channel_tq_matrix_by_planepair = task1_plot_enabled("channel_tq_matrix_by_planepair")
+_plot_channel_combination_filter_by_tt = task1_plot_enabled("channel_combination_filter_by_tt")
+channel_plot_original_df = pd.DataFrame()
+channel_plot_precombination_df = pd.DataFrame()
+channel_plot_final_df = pd.DataFrame()
+channel_combination_hist_original = pd.DataFrame()
+channel_combination_hist_before = pd.DataFrame()
+channel_combination_hist_after_preview = pd.DataFrame()
+if _plot_channel_tq_matrix_by_planepair or _plot_channel_combination_filter_by_tt:
+    (
+        channel_plot_original_df,
+        channel_plot_precombination_df,
+        channel_plot_final_df,
+    ) = build_task1_channel_filter_stage_frames(
+        working_df,
+        original_reference_df=None,
+        learned_q_limits=task1_learned_channel_noise_limits,
+        q_sum_left=channel_combination_q_sum_left,
+        q_sum_right=channel_combination_q_sum_right,
+        q_dif_threshold=channel_combination_q_dif_threshold,
+        t_sum_left=channel_combination_t_sum_left,
+        t_sum_right=channel_combination_t_sum_right,
+        t_dif_threshold=channel_combination_t_dif_threshold,
+    )
+if _plot_channel_combination_filter_by_tt:
+    channel_combination_hist_original = collect_task1_channel_combination_histogram_payload(
+        channel_plot_original_df,
+        _task1_filter_tt_series(channel_plot_original_df),
+    )
+    channel_combination_hist_before = collect_task1_channel_combination_histogram_payload(
+        channel_plot_precombination_df,
+        _task1_filter_tt_series(channel_plot_precombination_df),
+    )
+    channel_combination_hist_after_preview = collect_task1_channel_combination_histogram_payload(
+        channel_plot_final_df,
+        _task1_filter_tt_series(channel_plot_precombination_df),
+    )
+
+if _plot_channel_tq_matrix_by_planepair:
     # Sectorized approach per CHANNEL (plane,strip,side): 2×2 (Q,T) matrix per channel-pair
     # Improve image definition and aesthetics: larger DPI, larger markers, color per plane-pair,
     # histogram drawn with histtype='step' and log-counts.
     _MM1 = 1000
+    raw_noise_limit_line_kwargs = {
+        "color": "red",
+        "linestyle": "--",
+        "linewidth": 1.4,
+        "alpha": 0.9,
+        "zorder": 6,
+    }
     raw_var_limits: dict[int, tuple[float | None, float | None]] = {
         0: (float(Q_F_left_pre_cal), float(Q_F_right_pre_cal)),
         1: (float(T_F_left_pre_cal), float(T_F_right_pre_cal)),
@@ -4592,15 +5418,16 @@ if task1_plot_enabled("channel_tq_matrix_by_planepair"):
     pair_list = [(1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]
     CHANNEL_PAIR_FIGSIZE = (7, 7)
     channel_pair_min_events = int(config.get("channel_pair_min_events", 10))
-    channel_plot_df, channel_plot_removed_df = build_channel_pair_plot_frames(working_df)
+    channel_pair_sector_payloads: list[dict[str, object]] = []
+    channel_pair_candidate_counts: list[tuple[int, int, int, int, int, int]] = []
 
     for _pi, _pj in pair_list:
-        if "raw_tt" in working_df.columns:
-            _tts_all = working_df["raw_tt"].apply(normalize_tt_label)
+        if "raw_tt" in channel_plot_original_df.columns:
+            _tts_all = channel_plot_original_df["raw_tt"].apply(normalize_tt_label)
             _pmask_all = _tts_all.str.contains(str(_pi)) & _tts_all.str.contains(str(_pj))
-            _df_pp_all = working_df.loc[_pmask_all]
+            _df_pp_all = channel_plot_original_df.loc[_pmask_all]
         else:
-            _df_pp_all = working_df
+            _df_pp_all = channel_plot_original_df
         # Previously we gated on the raw number of events for the plane-pair
         # directly from `working_df`. That counted many rows that would later
         # produce blank plots because their channel values were zero. Instead,
@@ -4608,34 +5435,56 @@ if task1_plot_enabled("channel_tq_matrix_by_planepair"):
         # events that actually have non-zero (Q,T) data for at least one
         # channel in the plane-pair. Build the retained preview frame first
         # and then compute the effective count of non-zero channel pairs.
-        if "raw_tt" in channel_plot_df.columns:
-            _tts_retained = channel_plot_df["raw_tt"].apply(normalize_tt_label)
+        if "raw_tt" in channel_plot_final_df.columns:
+            _tts_retained = channel_plot_final_df["raw_tt"].apply(normalize_tt_label)
             _pmask_retained = _tts_retained.str.contains(str(_pi)) & _tts_retained.str.contains(str(_pj))
-            _df_pp1 = channel_plot_df.loc[_pmask_retained]
+            _df_pp1 = channel_plot_final_df.loc[_pmask_retained]
         else:
-            _df_pp1 = channel_plot_df
-        if "raw_tt" in channel_plot_removed_df.columns:
-            _tts_removed = channel_plot_removed_df["raw_tt"].apply(normalize_tt_label)
-            _pmask_removed = _tts_removed.str.contains(str(_pi)) & _tts_removed.str.contains(str(_pj))
-            _df_removed_pp1 = channel_plot_removed_df.loc[_pmask_removed]
+            _df_pp1 = channel_plot_final_df
+        if "raw_tt" in channel_plot_precombination_df.columns:
+            _tts_precombination = channel_plot_precombination_df["raw_tt"].apply(normalize_tt_label)
+            _pmask_precombination = _tts_precombination.str.contains(str(_pi)) & _tts_precombination.str.contains(str(_pj))
+            _df_precombination_pp1 = channel_plot_precombination_df.loc[_pmask_precombination]
         else:
-            _df_removed_pp1 = channel_plot_removed_df.iloc[0:0].copy()
+            _df_precombination_pp1 = channel_plot_precombination_df.iloc[0:0].copy()
 
         # Compute how many events actually contain at least one channel with
         # both Q and T non-zero for this plane-pair. Apply the minimum-event
         # gating to that effective count to avoid producing blank figures.
         channels_check = [(p, s, sd) for p in (_pi, _pj) for s in range(1, 5) for sd in ("F", "B")]
-        if not _df_pp1.empty:
+        if not _df_pp_all.empty or not _df_precombination_pp1.empty or not _df_pp1.empty:
             # Vectorized per-column checks are faster than row-wise Python loops.
-            any_channel_both_nonzero = np.zeros(len(_df_pp1), dtype=bool)
+            any_channel_original_both_nonzero = (
+                np.zeros(len(_df_pp_all), dtype=bool)
+                if not _df_pp_all.empty
+                else np.zeros(0, dtype=bool)
+            )
+            any_channel_precombination_both_nonzero = (
+                np.zeros(len(_df_precombination_pp1), dtype=bool)
+                if not _df_precombination_pp1.empty
+                else np.zeros(0, dtype=bool)
+            )
+            any_channel_both_nonzero = np.zeros(len(_df_pp1), dtype=bool) if not _df_pp1.empty else np.zeros(0, dtype=bool)
             for (pl, ss, sd) in channels_check:
                 qcol = f"Q{pl}_{sd}_{ss}"
                 tcol = f"T{pl}_{sd}_{ss}"
+                if qcol in _df_pp_all.columns and tcol in _df_pp_all.columns:
+                    q_original_nonzero = _df_pp_all[qcol].fillna(0).to_numpy(dtype=float) != 0
+                    t_original_nonzero = _df_pp_all[tcol].fillna(0).to_numpy(dtype=float) != 0
+                    any_channel_original_both_nonzero |= (q_original_nonzero & t_original_nonzero)
+                if qcol in _df_precombination_pp1.columns and tcol in _df_precombination_pp1.columns:
+                    q_precombination_nonzero = _df_precombination_pp1[qcol].fillna(0).to_numpy(dtype=float) != 0
+                    t_precombination_nonzero = _df_precombination_pp1[tcol].fillna(0).to_numpy(dtype=float) != 0
+                    any_channel_precombination_both_nonzero |= (q_precombination_nonzero & t_precombination_nonzero)
                 if qcol in _df_pp1.columns and tcol in _df_pp1.columns:
                     q_nonzero = _df_pp1[qcol].fillna(0).to_numpy(dtype=float) != 0
                     t_nonzero = _df_pp1[tcol].fillna(0).to_numpy(dtype=float) != 0
                     any_channel_both_nonzero |= (q_nonzero & t_nonzero)
-            effective_events = int(any_channel_both_nonzero.sum())
+            effective_events = max(
+                int(any_channel_original_both_nonzero.sum()),
+                int(any_channel_precombination_both_nonzero.sum()),
+                int(any_channel_both_nonzero.sum()),
+            )
         else:
             effective_events = 0
 
@@ -4643,18 +5492,28 @@ if task1_plot_enabled("channel_tq_matrix_by_planepair"):
             # Nothing worth plotting for this plane-pair after non-zero filtering
             continue
 
-        _df_s1 = _df_pp1.sample(n=min(len(_df_pp1), _MM1), random_state=42) if not _df_pp1.empty else _df_pp1.copy()
+        if not _df_pp1.empty:
+            sampled_index = _df_pp1.sample(n=min(len(_df_pp1), _MM1), random_state=42).index
+        elif not _df_precombination_pp1.empty:
+            sampled_index = _df_precombination_pp1.sample(n=min(len(_df_precombination_pp1), _MM1), random_state=42).index
+        elif not _df_pp_all.empty:
+            sampled_index = _df_pp_all.sample(n=min(len(_df_pp_all), _MM1), random_state=42).index
+        else:
+            sampled_index = _df_pp1.index
+        _df_s1 = _df_pp1.reindex(sampled_index).copy()
+        _df_precombination_s1 = _df_precombination_pp1.reindex(sampled_index).copy()
+        _df_original_s1 = _df_pp_all.reindex(sampled_index).copy()
 
         # Map event plane-combination (normalized raw_tt) to colors for per-point coloring
         if "raw_tt" in _df_s1.columns:
             _row_tt = _df_s1["raw_tt"].apply(normalize_tt_label).astype(str)
         else:
             _row_tt = pd.Series([f"{_pi}{_pj}"] * len(_df_s1), index=_df_s1.index)
-        if "raw_tt" in _df_removed_pp1.columns:
-            _removed_row_tt = _df_removed_pp1["raw_tt"].apply(normalize_tt_label).astype(str)
+        if "raw_tt" in _df_precombination_s1.columns:
+            _precombination_row_tt = _df_precombination_s1["raw_tt"].apply(normalize_tt_label).astype(str)
         else:
-            _removed_row_tt = pd.Series([f"{_pi}{_pj}"] * len(_df_removed_pp1), index=_df_removed_pp1.index)
-        unique_tts = sorted(set(_row_tt.unique()).union(set(_removed_row_tt.unique())))
+            _precombination_row_tt = pd.Series([f"{_pi}{_pj}"] * len(_df_precombination_s1), index=_df_precombination_s1.index)
+        unique_tts = sorted(set(_row_tt.unique()).union(set(_precombination_row_tt.unique())))
         if not unique_tts:
             unique_tts = [f"{_pi}{_pj}"]
         tt_color_map: dict[str, tuple[float, float, float, float]] = {
@@ -4662,14 +5521,15 @@ if task1_plot_enabled("channel_tq_matrix_by_planepair"):
         }
         # Per-row color array aligned with _df_s1
         _row_colors = np.array([tt_color_map[str(lbl)] for lbl in _row_tt], dtype=object)
-        _removed_row_colors = np.array([tt_color_map[str(lbl)] for lbl in _removed_row_tt], dtype=object)
+        _precombination_row_colors = np.array([tt_color_map[str(lbl)] for lbl in _precombination_row_tt], dtype=object)
 
         # Build channels including side: ('plane', strip, 'F'/'B')
         channels = [(p, s, sd) for p in (_pi, _pj) for s in range(1, 5) for sd in ("F", "B")]
 
-        # Precompute clipped arrays for each (channel_idx, var_idx)
+        # Precompute retained and pre-zeroing reference arrays for each (channel_idx, var_idx)
         _chan_var_arr: dict[tuple[int, int], np.ndarray] = {}
-        _removed_chan_var_arr: dict[tuple[int, int], np.ndarray] = {}
+        _precombination_chan_var_arr: dict[tuple[int, int], np.ndarray] = {}
+        _original_chan_var_arr: dict[tuple[int, int], np.ndarray] = {}
         for ch_idx, (pl, ss, sd) in enumerate(channels):
             q_col = f"Q{pl}_{sd}_{ss}"
             t_col = f"T{pl}_{sd}_{ss}"
@@ -4679,11 +5539,16 @@ if task1_plot_enabled("channel_tq_matrix_by_planepair"):
                     _chan_var_arr[(ch_idx, var_idx)] = arr
                 else:
                     _chan_var_arr[(ch_idx, var_idx)] = np.zeros(len(_df_s1), dtype=float)
-                if col in _df_removed_pp1.columns:
-                    arr_removed = _df_removed_pp1[col].fillna(0).to_numpy(dtype=float)
-                    _removed_chan_var_arr[(ch_idx, var_idx)] = arr_removed
+                if col in _df_precombination_s1.columns:
+                    arr_precombination = _df_precombination_s1[col].fillna(0).to_numpy(dtype=float)
+                    _precombination_chan_var_arr[(ch_idx, var_idx)] = arr_precombination
                 else:
-                    _removed_chan_var_arr[(ch_idx, var_idx)] = np.zeros(len(_df_removed_pp1), dtype=float)
+                    _precombination_chan_var_arr[(ch_idx, var_idx)] = np.zeros(len(_df_precombination_s1), dtype=float)
+                if col in _df_original_s1.columns:
+                    arr_original = _df_original_s1[col].fillna(0).to_numpy(dtype=float)
+                    _original_chan_var_arr[(ch_idx, var_idx)] = arr_original
+                else:
+                    _original_chan_var_arr[(ch_idx, var_idx)] = np.zeros(len(_df_original_s1), dtype=float)
 
         # Compute per-variable ranges from the full retained+removed raw values and
         # ensure they always include the active configured Q/T limits.
@@ -4693,166 +5558,262 @@ if task1_plot_enabled("channel_tq_matrix_by_planepair"):
                 _chan_var_arr.get((ch, var_idx), np.zeros(0, dtype=float))
                 for ch in range(len(channels))
             ]
-            removed_vals = [
-                _removed_chan_var_arr.get((ch, var_idx), np.zeros(0, dtype=float))
+            precombination_vals = [
+                _precombination_chan_var_arr.get((ch, var_idx), np.zeros(0, dtype=float))
                 for ch in range(len(channels))
             ]
-            all_vals = np.concatenate([*retained_vals, *removed_vals])
+            original_vals = [
+                _original_chan_var_arr.get((ch, var_idx), np.zeros(0, dtype=float))
+                for ch in range(len(channels))
+            ]
+            all_vals = np.concatenate([*retained_vals, *precombination_vals, *original_vals])
             nonzero = all_vals[all_vals != 0]
             col_ranges[var_idx] = _task1_full_data_range(
                 nonzero if nonzero.size else all_vals,
                 raw_var_limits.get(var_idx, (None, None)),
             )
 
-        # For each unordered pair of channels build a 2x2 matrix: cols = (Q,T) of channel A, rows = (Q,T) of channel B
+        pair_plot_candidates: list[tuple[int, int, int, int]] = []
         for ai in range(len(channels)):
             for bj in range(ai, len(channels)):
                 ai_q = _chan_var_arr.get((ai, 0), np.zeros(0, dtype=float))
                 ai_t = _chan_var_arr.get((ai, 1), np.zeros(0, dtype=float))
                 bj_q = _chan_var_arr.get((bj, 0), np.zeros(0, dtype=float))
                 bj_t = _chan_var_arr.get((bj, 1), np.zeros(0, dtype=float))
-                figure_effective_events = int((((ai_q != 0) & (ai_t != 0)) | ((bj_q != 0) & (bj_t != 0))).sum())
+                ai_q_precombination = _precombination_chan_var_arr.get((ai, 0), np.zeros(0, dtype=float))
+                ai_t_precombination = _precombination_chan_var_arr.get((ai, 1), np.zeros(0, dtype=float))
+                bj_q_precombination = _precombination_chan_var_arr.get((bj, 0), np.zeros(0, dtype=float))
+                bj_t_precombination = _precombination_chan_var_arr.get((bj, 1), np.zeros(0, dtype=float))
+                ai_q_original = _original_chan_var_arr.get((ai, 0), np.zeros(0, dtype=float))
+                ai_t_original = _original_chan_var_arr.get((ai, 1), np.zeros(0, dtype=float))
+                bj_q_original = _original_chan_var_arr.get((bj, 0), np.zeros(0, dtype=float))
+                bj_t_original = _original_chan_var_arr.get((bj, 1), np.zeros(0, dtype=float))
+                figure_effective_events = max(
+                    int((((ai_q_original != 0) & (ai_t_original != 0)) | ((bj_q_original != 0) & (bj_t_original != 0))).sum()),
+                    int((((ai_q_precombination != 0) & (ai_t_precombination != 0)) | ((bj_q_precombination != 0) & (bj_t_precombination != 0))).sum()),
+                    int((((ai_q != 0) & (ai_t != 0)) | ((bj_q != 0) & (bj_t != 0))).sum()),
+                )
+                combination_removed_events = int(
+                    (
+                        (
+                            ((ai_q_precombination != 0) & (ai_t_precombination != 0))
+                            | ((bj_q_precombination != 0) & (bj_t_precombination != 0))
+                        )
+                        & ~(
+                            ((ai_q != 0) & (ai_t != 0))
+                            | ((bj_q != 0) & (bj_t != 0))
+                        )
+                    ).sum()
+                )
                 if figure_effective_events < channel_pair_min_events:
                     continue
-                _fig, _axes = plt.subplots(2, 2, figsize=CHANNEL_PAIR_FIGSIZE, squeeze=False, sharex='col', sharey='row')
-                same_channel = ai == bj
-                for r in range(2):
-                    for c in range(2):
-                        ax = _axes[r][c]
-                        # If same channel, render only lower triangle + diagonal
-                        if same_channel and c > r:
-                            ax.set_visible(False)
-                            continue
-                        for sp in ax.spines.values():
-                            sp.set_linewidth(0.4)
+                pair_plot_candidates.append((ai, bj, figure_effective_events, combination_removed_events))
+                channel_pair_candidate_counts.append(
+                    (combination_removed_events, figure_effective_events, _pi, _pj, ai, bj)
+                )
 
-                        col_x = _chan_var_arr.get((ai, c), np.zeros(0, dtype=float))
-                        col_y = _chan_var_arr.get((bj, r), np.zeros(0, dtype=float))
-                        removed_col_x = np.clip(
-                            _removed_chan_var_arr.get((ai, c), np.zeros(0, dtype=float)),
-                            *col_ranges[c],
-                        )
-                        removed_col_y = np.clip(
-                            _removed_chan_var_arr.get((bj, r), np.zeros(0, dtype=float)),
-                            *col_ranges[r],
-                        )
+        if not pair_plot_candidates:
+            continue
 
-                        if same_channel and c == r:
-                            # Diagonal: histogram of non-zero values (overlay histsteps per plane-combination)
-                            vals_all = col_x[col_x != 0]
-                            var_name = 'Q' if c == 0 else 'T'
-                            removed_vals_all = removed_col_x[removed_col_x != 0]
-                            if vals_all.size > 1 or removed_vals_all.size > 0:
-                                # Overlay one hist step per unique TT present in sample
-                                for tt_label in unique_tts:
-                                    mask_tt = (_row_tt.values == tt_label)
-                                    vals_tt = col_x[mask_tt]
-                                    vals_tt = vals_tt[vals_tt != 0]
-                                    if vals_tt.size > 1:
-                                        if var_name == 'T':
-                                            # For T histograms place counts on X (horizontal histogram)
-                                            ax.hist(
-                                                vals_tt,
-                                                bins=30,
-                                                histtype='step',
-                                                color=tt_color_map[tt_label],
-                                                linewidth=1.2,
-                                                log=True,
-                                                orientation='horizontal',
-                                                label=f"TT={tt_label}" if len(unique_tts) > 1 else None,
-                                            )
-                                        else:
-                                            # For Q histograms keep counts on Y (vertical histogram)
-                                            ax.hist(
-                                                vals_tt,
-                                                bins=30,
-                                                histtype='step',
-                                                color=tt_color_map[tt_label],
-                                                linewidth=1.2,
-                                                log=True,
-                                                label=f"TT={tt_label}" if len(unique_tts) > 1 else None,
-                                            )
-                                if removed_vals_all.size > 0:
-                                    hist_kwargs = dict(
+        channel_pair_sector_payloads.append(
+            {
+                "plane_a": _pi,
+                "plane_b": _pj,
+                "plane_pair_event_count": len(_df_pp_all),
+                "pair_plot_candidates": pair_plot_candidates,
+                "row_tt": _row_tt,
+                "precombination_row_tt": _precombination_row_tt,
+                "unique_tts": unique_tts,
+                "tt_color_map": tt_color_map,
+                "row_colors": _row_colors,
+                "precombination_row_colors": _precombination_row_colors,
+                "channels": channels,
+                "chan_var_arr": _chan_var_arr,
+                "precombination_chan_var_arr": _precombination_chan_var_arr,
+                "original_chan_var_arr": _original_chan_var_arr,
+                "col_ranges": col_ranges,
+            }
+        )
+
+    selected_channel_pair_keys: set[tuple[int, int, int, int]] | None = None
+    selected_channel_pair_order: list[tuple[int, int, int, int]] | None = None
+    if channel_pair_plot_top_n is not None:
+        ranked_channel_pair_candidates = sorted(
+            channel_pair_candidate_counts,
+            key=lambda item: (-item[0], -item[1], item[2], item[3], item[4], item[5]),
+        )
+        selected_channel_pair_order = [
+            (plane_a, plane_b, ai, bj)
+            for _, _, plane_a, plane_b, ai, bj in ranked_channel_pair_candidates[:channel_pair_plot_top_n]
+        ]
+        selected_channel_pair_keys = {
+            (plane_a, plane_b, ai, bj)
+            for plane_a, plane_b, ai, bj in selected_channel_pair_order
+        }
+        print(
+            "Task 1 channel T/Q matrix plot cap: "
+            f"plotting top {len(selected_channel_pair_keys)} of {len(channel_pair_candidate_counts)} "
+            "eligible channel-pair figures ranked by combination-filter removals."
+        )
+    else:
+        print(
+            "Task 1 channel T/Q matrix plot cap: plotting all "
+            f"{len(channel_pair_candidate_counts)} eligible channel-pair figures."
+        )
+
+    sector_payload_lookup = {
+        (int(sector_payload["plane_a"]), int(sector_payload["plane_b"])): sector_payload
+        for sector_payload in channel_pair_sector_payloads
+    }
+
+    if selected_channel_pair_order is not None:
+        pair_iteration_order: list[tuple[int, int, int, int, int, int]] = []
+        for _pi, _pj, ai, bj in selected_channel_pair_order:
+            sector_payload = sector_payload_lookup.get((_pi, _pj))
+            if sector_payload is None:
+                continue
+            for candidate_ai, candidate_bj, figure_effective_events, combination_removed_events in sector_payload["pair_plot_candidates"]:
+                if candidate_ai == ai and candidate_bj == bj:
+                    pair_iteration_order.append(
+                        (_pi, _pj, candidate_ai, candidate_bj, figure_effective_events, combination_removed_events)
+                    )
+                    break
+    else:
+        pair_iteration_order = []
+        for sector_payload in channel_pair_sector_payloads:
+            _pi = int(sector_payload["plane_a"])
+            _pj = int(sector_payload["plane_b"])
+            for ai, bj, figure_effective_events, combination_removed_events in sector_payload["pair_plot_candidates"]:
+                pair_iteration_order.append(
+                    (_pi, _pj, ai, bj, figure_effective_events, combination_removed_events)
+                )
+
+    for _pi, _pj, ai, bj, figure_effective_events, combination_removed_events in pair_iteration_order:
+        sector_payload = sector_payload_lookup.get((_pi, _pj))
+        if sector_payload is None:
+            continue
+        plane_pair_event_count = int(sector_payload["plane_pair_event_count"])
+        _row_tt = sector_payload["row_tt"]
+        _precombination_row_tt = sector_payload["precombination_row_tt"]
+        unique_tts = list(sector_payload["unique_tts"])
+        tt_color_map = dict(sector_payload["tt_color_map"])
+        _row_colors = sector_payload["row_colors"]
+        _precombination_row_colors = sector_payload["precombination_row_colors"]
+        channels = list(sector_payload["channels"])
+        _chan_var_arr = dict(sector_payload["chan_var_arr"])
+        _precombination_chan_var_arr = dict(sector_payload["precombination_chan_var_arr"])
+        _original_chan_var_arr = dict(sector_payload["original_chan_var_arr"])
+        col_ranges = dict(sector_payload["col_ranges"])
+
+        if (
+            selected_channel_pair_keys is not None
+            and (_pi, _pj, ai, bj) not in selected_channel_pair_keys
+        ):
+            continue
+
+        ai_channel_key = (channels[ai][0], channels[ai][2], channels[ai][1])
+        bj_channel_key = (channels[bj][0], channels[bj][2], channels[bj][1])
+        ai_noise_limit = task1_effective_channel_q_left_limits.get(ai_channel_key)
+        bj_noise_limit = task1_effective_channel_q_left_limits.get(bj_channel_key)
+        _fig, _axes = plt.subplots(2, 2, figsize=CHANNEL_PAIR_FIGSIZE, squeeze=False, sharex='col', sharey='row')
+        same_channel = ai == bj
+        for r in range(2):
+            for c in range(2):
+                ax = _axes[r][c]
+                if same_channel and c > r:
+                    ax.set_visible(False)
+                    continue
+                for sp in ax.spines.values():
+                    sp.set_linewidth(0.4)
+
+                col_x = _chan_var_arr.get((ai, c), np.zeros(0, dtype=float))
+                col_y = _chan_var_arr.get((bj, r), np.zeros(0, dtype=float))
+                precombination_col_x = np.clip(
+                    _precombination_chan_var_arr.get((ai, c), np.zeros(0, dtype=float)),
+                    *col_ranges[c],
+                )
+                precombination_col_y = np.clip(
+                    _precombination_chan_var_arr.get((bj, r), np.zeros(0, dtype=float)),
+                    *col_ranges[r],
+                )
+                original_col_x = np.clip(
+                    _original_chan_var_arr.get((ai, c), np.zeros(0, dtype=float)),
+                    *col_ranges[c],
+                )
+                original_col_y = np.clip(
+                    _original_chan_var_arr.get((bj, r), np.zeros(0, dtype=float)),
+                    *col_ranges[r],
+                )
+
+                if same_channel and c == r:
+                    vals_all = col_x[col_x != 0]
+                    var_name = 'Q' if c == 0 else 'T'
+                    prefilter_removed_vals_all = original_col_x[(original_col_x != 0) & (precombination_col_x == 0)]
+                    combination_removed_vals_all = precombination_col_x[(precombination_col_x != 0) & (col_x == 0)]
+                    if vals_all.size > 1 or prefilter_removed_vals_all.size > 0 or combination_removed_vals_all.size > 0:
+                        if prefilter_removed_vals_all.size > 0:
+                            hist_kwargs = dict(
+                                bins=30,
+                                histtype='step',
+                                color='lightgrey',
+                                linewidth=1.4,
+                                linestyle='--',
+                                log=True,
+                                alpha=0.65,
+                                label='Removed before combination',
+                            )
+                            if var_name == 'T':
+                                hist_kwargs["orientation"] = 'horizontal'
+                            ax.hist(prefilter_removed_vals_all, **hist_kwargs)
+                        for tt_label in unique_tts:
+                            precombination_mask_tt = (_precombination_row_tt.values == tt_label)
+                            removed_vals_tt = precombination_col_x[precombination_mask_tt]
+                            removed_vals_tt = removed_vals_tt[(removed_vals_tt != 0) & (col_x[precombination_mask_tt] == 0)]
+                            if removed_vals_tt.size > 1:
+                                combo_hist_kwargs = dict(
+                                    bins=30,
+                                    histtype='step',
+                                    color=tt_color_map[tt_label],
+                                    linewidth=1.0,
+                                    linestyle='--',
+                                    log=True,
+                                    alpha=0.7,
+                                    label=f"TT={tt_label} removed" if len(unique_tts) > 1 else None,
+                                )
+                                if var_name == 'T':
+                                    combo_hist_kwargs["orientation"] = 'horizontal'
+                                ax.hist(removed_vals_tt, **combo_hist_kwargs)
+                            mask_tt = (_row_tt.values == tt_label)
+                            vals_tt = col_x[mask_tt]
+                            vals_tt = vals_tt[vals_tt != 0]
+                            if vals_tt.size > 1:
+                                if var_name == 'T':
+                                    ax.hist(
+                                        vals_tt,
                                         bins=30,
                                         histtype='step',
-                                        color='lightgrey',
-                                        linewidth=1.6,
-                                        linestyle='--',
+                                        color=tt_color_map[tt_label],
+                                        linewidth=1.2,
                                         log=True,
-                                        label='Removed',
+                                        orientation='horizontal',
+                                        label=f"TT={tt_label}" if len(unique_tts) > 1 else None,
                                     )
-                                    if var_name == 'T':
-                                        hist_kwargs["orientation"] = 'horizontal'
-                                    ax.hist(removed_vals_all, **hist_kwargs)
-                                if len(unique_tts) > 1 or removed_vals_all.size > 0:
-                                    ax.legend(fontsize=6)
-                                # Axis labels: make counts orientation explicit for diagonal panels
-                                if var_name == 'T':
-                                    ax.set_xlabel('Counts (log)', fontsize=7)
-                                    # Set T axis range (vertical axis holds T for horizontal hist)
-                                    ax.set_ylabel('T (ns)', fontsize=7)
-                                    ax.set_ylim(col_ranges[c])
-                                    # Draw configured T limits as horizontal dashed lines
-                                    try:
-                                        tl_lo = float(raw_var_limits[1][0])
-                                        tl_hi = float(raw_var_limits[1][1])
-                                        ax.axhline(tl_lo, color='lightgrey', linestyle='--', linewidth=0.8)
-                                        ax.axhline(tl_hi, color='lightgrey', linestyle='--', linewidth=0.8)
-                                    except Exception:
-                                        pass
                                 else:
-                                    ax.set_xlabel('Q (ns)', fontsize=7)
-                                    # Set Q axis range (horizontal axis holds Q for vertical hist)
-                                    ax.set_ylabel('Counts (log)', fontsize=7)
-                                    ax.set_xlim(col_ranges[c])
-                                    # Draw configured Q limits as vertical dashed lines
-                                    try:
-                                        ql_lo = float(raw_var_limits[0][0])
-                                        ql_hi = float(raw_var_limits[0][1])
-                                        ax.axvline(ql_lo, color='lightgrey', linestyle='--', linewidth=0.8)
-                                        ax.axvline(ql_hi, color='lightgrey', linestyle='--', linewidth=0.8)
-                                    except Exception:
-                                        pass
-                        else:
-                            # Scatter: include only points where BOTH variables != 0 (filter applied per plot)
-                            if col_x.size and col_y.size:
-                                mask = (col_x != 0) & (col_y != 0)
-                                if np.any(mask):
-                                    # Color each point according to its event TT label
-                                    ax.scatter(
-                                        col_x[mask],
-                                        col_y[mask],
-                                        s=12,
-                                        alpha=0.75,
-                                        linewidths=0,
-                                        c=_row_colors[mask].tolist(),
-                                        edgecolors='none',
+                                    ax.hist(
+                                        vals_tt,
+                                        bins=30,
+                                        histtype='step',
+                                        color=tt_color_map[tt_label],
+                                        linewidth=1.2,
+                                        log=True,
+                                        label=f"TT={tt_label}" if len(unique_tts) > 1 else None,
                                     )
-                            if removed_col_x.size and removed_col_y.size:
-                                removed_mask = (removed_col_x != 0) & (removed_col_y != 0)
-                                if np.any(removed_mask):
-                                    ax.scatter(
-                                        removed_col_x[removed_mask],
-                                        removed_col_y[removed_mask],
-                                        s=removed_marker_size,
-                                        marker=removed_marker,
-                                        alpha=removed_marker_alpha,
-                                        linewidths=1.0,
-                                        c=_removed_row_colors[removed_mask].tolist(),
-                                        zorder=3,
-                                    )
-                            # Set per-variable axis limits for this scatter panel
-                            ax.set_xlim(col_ranges[c])
-                            ax.set_ylim(col_ranges[r])
-                            # Draw configured default limits as dashed light-grey lines
-                            try:
-                                ql_lo = float(raw_var_limits[0][0])
-                                ql_hi = float(raw_var_limits[0][1])
-                                ax.axvline(ql_lo, color='lightgrey', linestyle='--', linewidth=0.8)
-                                ax.axvline(ql_hi, color='lightgrey', linestyle='--', linewidth=0.8)
-                            except Exception:
-                                pass
+                        if len(unique_tts) > 1 or prefilter_removed_vals_all.size > 0 or combination_removed_vals_all.size > 0:
+                            ax.legend(fontsize=6)
+                        if var_name == 'T':
+                            ax.set_xlabel('Counts (log)', fontsize=7)
+                            ax.set_ylabel('T (ns)', fontsize=7)
+                            ax.set_ylim(col_ranges[c])
                             try:
                                 tl_lo = float(raw_var_limits[1][0])
                                 tl_hi = float(raw_var_limits[1][1])
@@ -4860,38 +5821,148 @@ if task1_plot_enabled("channel_tq_matrix_by_planepair"):
                                 ax.axhline(tl_hi, color='lightgrey', linestyle='--', linewidth=0.8)
                             except Exception:
                                 pass
-                            if r == 1:
-                                ax.set_xlabel("Q" if c == 0 else "T", fontsize=7)
-                            else:
-                                ax.set_xlabel("")
-                            if c == 0:
-                                ax.set_ylabel("Q" if r == 0 else "T", fontsize=7)
-                            else:
-                                ax.set_ylabel("")
+                        else:
+                            ax.set_xlabel('Q (ns)', fontsize=7)
+                            ax.set_ylabel('Counts (log)', fontsize=7)
+                            ax.set_xlim(col_ranges[c])
+                            try:
+                                ql_lo = float(raw_var_limits[0][0])
+                                ql_hi = float(raw_var_limits[0][1])
+                                ax.axvline(ql_lo, color='lightgrey', linestyle='--', linewidth=0.8)
+                                ax.axvline(ql_hi, color='lightgrey', linestyle='--', linewidth=0.8)
+                            except Exception:
+                                pass
+                            if ai_noise_limit is not None and np.isfinite(ai_noise_limit):
+                                ax.axvline(
+                                    float(ai_noise_limit),
+                                    **raw_noise_limit_line_kwargs,
+                                )
+                else:
+                    prefilter_removed_mask = (
+                        (original_col_x != 0)
+                        & (original_col_y != 0)
+                        & ~((precombination_col_x != 0) & (precombination_col_y != 0))
+                    )
+                    if np.any(prefilter_removed_mask):
+                        ax.scatter(
+                            original_col_x[prefilter_removed_mask],
+                            original_col_y[prefilter_removed_mask],
+                            s=4,
+                            alpha=0.08,
+                            linewidths=0,
+                            color='grey',
+                            edgecolors='none',
+                            zorder=1,
+                        )
+                    if col_x.size and col_y.size:
+                        mask = (col_x != 0) & (col_y != 0)
+                        if np.any(mask):
+                            ax.scatter(
+                                col_x[mask],
+                                col_y[mask],
+                                s=12,
+                                alpha=0.75,
+                                linewidths=0,
+                                c=_row_colors[mask].tolist(),
+                                edgecolors='none',
+                            )
+                    if precombination_col_x.size and precombination_col_y.size:
+                        removed_mask = (
+                            (precombination_col_x != 0)
+                            & (precombination_col_y != 0)
+                            & ~((col_x != 0) & (col_y != 0))
+                        )
+                        if np.any(removed_mask):
+                            ax.scatter(
+                                precombination_col_x[removed_mask],
+                                precombination_col_y[removed_mask],
+                                s=removed_marker_size,
+                                marker=removed_marker,
+                                alpha=removed_marker_alpha,
+                                linewidths=1.0,
+                                c=_precombination_row_colors[removed_mask].tolist(),
+                                zorder=3,
+                            )
+                    ax.set_xlim(col_ranges[c])
+                    ax.set_ylim(col_ranges[r])
+                    try:
+                        ql_lo = float(raw_var_limits[0][0])
+                        ql_hi = float(raw_var_limits[0][1])
+                        ax.axvline(ql_lo, color='lightgrey', linestyle='--', linewidth=0.8)
+                        ax.axvline(ql_hi, color='lightgrey', linestyle='--', linewidth=0.8)
+                    except Exception:
+                        pass
+                    if c == 0 and ai_noise_limit is not None and np.isfinite(ai_noise_limit):
+                        ax.axvline(
+                            float(ai_noise_limit),
+                            **raw_noise_limit_line_kwargs,
+                        )
+                    try:
+                        tl_lo = float(raw_var_limits[1][0])
+                        tl_hi = float(raw_var_limits[1][1])
+                        ax.axhline(tl_lo, color='lightgrey', linestyle='--', linewidth=0.8)
+                        ax.axhline(tl_hi, color='lightgrey', linestyle='--', linewidth=0.8)
+                    except Exception:
+                        pass
+                    if r == 0 and bj_noise_limit is not None and np.isfinite(bj_noise_limit):
+                        ax.axhline(
+                            float(bj_noise_limit),
+                            **raw_noise_limit_line_kwargs,
+                        )
+                    if r == 1:
+                        ax.set_xlabel("Q" if c == 0 else "T", fontsize=7)
+                    else:
+                        ax.set_xlabel("")
+                    if c == 0:
+                        ax.set_ylabel("Q" if r == 0 else "T", fontsize=7)
+                    else:
+                        ax.set_ylabel("")
 
-                        ax.tick_params(axis="x", labelsize=6, labelbottom=(r == 1))
-                        ax.tick_params(axis="y", labelsize=6, labelleft=(c == 0))
+                    if ax.get_xscale() == "linear":
+                        ax.xaxis.set_major_locator(mpl.ticker.MaxNLocator(nbins=5, min_n_ticks=3))
+                        ax.xaxis.set_major_formatter(mpl.ticker.ScalarFormatter())
+                    if ax.get_yscale() == "linear":
+                        ax.yaxis.set_major_locator(mpl.ticker.MaxNLocator(nbins=5, min_n_ticks=3))
+                        ax.yaxis.set_major_formatter(mpl.ticker.ScalarFormatter())
+                    ax.tick_params(
+                        axis="x",
+                        which="both",
+                        labelsize=6,
+                        labelbottom=True,
+                        bottom=True,
+                    )
+                    ax.tick_params(
+                        axis="y",
+                        which="both",
+                        labelsize=6,
+                        labelleft=True,
+                        left=True,
+                    )
+                    for _tick_label in ax.get_xticklabels():
+                        _tick_label.set_visible(True)
+                    for _tick_label in ax.get_yticklabels():
+                        _tick_label.set_visible(True)
 
-                plt.subplots_adjust(wspace=0.08, hspace=0.08, left=0.08, right=0.98, top=0.95, bottom=0.08)
-                # Build human-friendly channel address strings, e.g. "P1S1F" or "P2S3B"
-                a_pl, a_strip, a_side = channels[ai]
-                b_pl, b_strip, b_side = channels[bj]
-                a_addr = f"P{a_pl}S{a_strip}{a_side}"
-                b_addr = f"P{b_pl}S{b_strip}{b_side}"
-                _fig.suptitle(
-                    f"{a_addr} vs {b_addr} — Channel Sector: P{_pi}×P{_pj} [{len(_df_pp_all)} events] · mingo0{station}",
-                    fontsize=9,
-                )
+        plt.subplots_adjust(wspace=0.08, hspace=0.08, left=0.08, right=0.98, top=0.95, bottom=0.08)
+        a_pl, a_strip, a_side = channels[ai]
+        b_pl, b_strip, b_side = channels[bj]
+        a_addr = f"P{a_pl}S{a_strip}{a_side}"
+        b_addr = f"P{b_pl}S{b_strip}{b_side}"
+        _fig.suptitle(
+            f"{a_addr} vs {b_addr} — Channel Sector: P{_pi}×P{_pj} "
+            f"[{plane_pair_event_count} events, combo-removed={combination_removed_events}] · mingo0{station}",
+            fontsize=9,
+        )
 
-                if save_plots:
-                    fname = f"{fig_idx:03d}_channel_pair_P{_pi}P{_pj}_ch{ai+1}_ch{bj+1}.png"
-                    fig_idx += 1
-                    fpath = os.path.join(base_directories["figure_directory"], fname)
-                    plot_list.append(fpath)
-                    save_plot_figure(fpath, fig=_fig, format="png", dpi=150, bbox_inches='tight')
-                if show_plots:
-                    plt.show()
-                plt.close(_fig)
+        if save_plots:
+            fname = f"{fig_idx:03d}_channel_pair_P{_pi}P{_pj}_ch{ai+1}_ch{bj+1}.png"
+            fig_idx += 1
+            fpath = os.path.join(base_directories["figure_directory"], fname)
+            plot_list.append(fpath)
+            save_plot_figure(fpath, fig=_fig, format="png", dpi=150, bbox_inches='tight')
+        if show_plots:
+            plt.show()
+        plt.close(_fig)
 
 # Path to save the cleaned dataframe
 # Create output directory if it does not exist.
@@ -4917,46 +5988,19 @@ channel_qt_back_rows = 0
 channel_qt_mismatch_channels = 0
 channel_qt_removed_clean_tt = 0
 channel_qt_retained_final = 0
-task1_channel_pairs: list[tuple[str, str]] = []
-for plane in range(1, 5):
-    for side in ("F", "B"):
-        for strip in range(1, 5):
-            q_col = f"Q{plane}_{side}_{strip}"
-            t_col = f"T{plane}_{side}_{strip}"
-            if q_col in working_df.columns and t_col in working_df.columns:
-                task1_channel_pairs.append((q_col, t_col))
-
-row_mismatch_mask = pd.Series(False, index=working_df.index)
-if task1_channel_pairs and not working_df.empty:
-    q_only_row_mask = pd.Series(False, index=working_df.index)
-    t_only_row_mask = pd.Series(False, index=working_df.index)
-    front_row_mask = pd.Series(False, index=working_df.index)
-    back_row_mask = pd.Series(False, index=working_df.index)
-    for q_col, t_col in task1_channel_pairs:
-        q_values = pd.to_numeric(working_df[q_col], errors="coerce").fillna(0)
-        t_values = pd.to_numeric(working_df[t_col], errors="coerce").fillna(0)
-        q_only_mask = (q_values != 0) & (t_values == 0)
-        t_only_mask = (q_values == 0) & (t_values != 0)
-        mismatch_mask = q_only_mask | t_only_mask
-        if not mismatch_mask.any():
-            continue
-        snapshot_original_columns_once(working_df, [q_col, t_col])
-        row_mismatch_mask |= mismatch_mask
-        q_only_row_mask |= q_only_mask
-        t_only_row_mask |= t_only_mask
-        if "_F_" in q_col:
-            front_row_mask |= mismatch_mask
-        elif "_B_" in q_col:
-            back_row_mask |= mismatch_mask
-        channel_qt_mismatch_channels += int(mismatch_mask.sum())
-        channel_qt_values_zeroed += int((q_values[mismatch_mask] != 0).sum())
-        channel_qt_values_zeroed += int((t_values[mismatch_mask] != 0).sum())
-        working_df.loc[mismatch_mask, [q_col, t_col]] = 0
-    channel_qt_rows_affected = int(row_mismatch_mask.sum())
-    channel_qt_q_only_rows = int(q_only_row_mask.sum())
-    channel_qt_t_only_rows = int(t_only_row_mask.sum())
-    channel_qt_front_rows = int(front_row_mask.sum())
-    channel_qt_back_rows = int(back_row_mask.sum())
+mismatch_summary = apply_task1_channel_qt_mismatch_filter(
+    working_df,
+    snapshot_originals=snapshot_original_columns_once,
+)
+task1_channel_pairs = mismatch_summary["task1_channel_pairs"]
+row_mismatch_mask = mismatch_summary["row_mismatch_mask"]
+channel_qt_rows_affected = int(mismatch_summary["rows_affected"])
+channel_qt_values_zeroed = int(mismatch_summary["values_zeroed"])
+channel_qt_q_only_rows = int(mismatch_summary["q_only_rows"])
+channel_qt_t_only_rows = int(mismatch_summary["t_only_rows"])
+channel_qt_front_rows = int(mismatch_summary["front_rows"])
+channel_qt_back_rows = int(mismatch_summary["back_rows"])
+channel_qt_mismatch_channels = int(mismatch_summary["mismatch_channels"])
 
 record_activity_metric(
     "channel_qt_mismatch_rows_affected_pct",
@@ -5001,18 +6045,57 @@ record_activity_metric(
     label="mismatched Q/T channel pairs",
 )
 
-# Second and final Task 1 filter: use cross-plane channel combinations as an
-# ancillary consistency test, but keep the saved output channel-level only.
-_plot_channel_combination_filter_by_tt = task1_plot_enabled("channel_combination_filter_by_tt")
-if _plot_channel_combination_filter_by_tt:
-    channel_combination_tt_before = _task1_filter_tt_series(working_df).copy()
-    channel_combination_hist_before = collect_task1_channel_combination_histogram_payload(
-        working_df,
-        channel_combination_tt_before,
+# Final Task 1 channel-combination stage:
+# 1. learn per-channel low-Q noise boundaries from a dry run of the exact
+#    minimum-cover combination logic,
+# 2. apply those learned channel boundaries directly on Q/T,
+# 3. run the actual channel-combination filter once on the real dataframe.
+plane_combination_noise_limit_summary = apply_task1_channel_noise_limit_filter(
+    working_df,
+    learned_q_limits=task1_learned_channel_noise_limits,
+    snapshot_originals=snapshot_original_columns_once,
+    removed_value_pass_label="plane_combination_noise_limit_filter",
+)
+record_activity_metric(
+    "plane_combination_noise_limit_rows_affected_pct",
+    plane_combination_noise_limit_summary["rows_affected"],
+    len(working_df) if len(working_df) else 0,
+    label="rows with learned channel noise-limit zeroing",
+)
+record_activity_metric(
+    "plane_combination_noise_limit_values_zeroed_pct",
+    plane_combination_noise_limit_summary["values_zeroed"],
+    len(working_df) * (2 * plane_combination_noise_limit_summary["tracked_channel_count"])
+    if (len(working_df) and plane_combination_noise_limit_summary["tracked_channel_count"])
+    else 0,
+    label="channel Q/T values zeroed by learned noise limits",
+)
+global_variables["plane_combination_noise_limit_learning_removed_values"] = int(
+    len(channel_noise_limit_learning_removed_values)
+)
+global_variables["plane_combination_noise_limit_learning_zeroed_values"] = int(
+    len(channel_noise_limit_learning_removed_values)
+)
+global_variables["plane_combination_noise_limit_learning_channels"] = int(
+    len(task1_learned_channel_noise_limits)
+)
+global_variables["plane_combination_noise_limit_mode"] = (
+    "recalculate" if recalculate_noise_charge_limit else "config"
+)
+global_variables["plane_combination_noise_limit_configured_channels"] = int(
+    len(manual_channel_noise_charge_limits)
+)
+global_variables["plane_combination_noise_limit_rows_affected"] = int(
+    plane_combination_noise_limit_summary["rows_affected"]
+)
+global_variables["plane_combination_noise_limit_values_zeroed"] = int(
+    plane_combination_noise_limit_summary["values_zeroed"]
+)
+for channel_key in TASK1_CHANNEL_KEYS:
+    global_variables[_task1_channel_noise_limit_metric_key(channel_key)] = round(
+        float(task1_effective_channel_q_left_limits.get(channel_key, _task1_default_q_left_for_channel(channel_key))),
+        6,
     )
-else:
-    channel_combination_tt_before = pd.Series(dtype=str)
-    channel_combination_hist_before = pd.DataFrame()
 
 plane_combination_summary = apply_task1_plane_combination_filter(
     working_df,
@@ -5023,6 +6106,7 @@ plane_combination_summary = apply_task1_plane_combination_filter(
     t_sum_right=channel_combination_t_sum_right,
     t_dif_threshold=channel_combination_t_dif_threshold,
     snapshot_originals=snapshot_original_columns_once,
+    removed_value_pass_label="plane_combination_filter",
 )
 record_activity_metric(
     "plane_combination_filter_rows_affected_pct",
@@ -5091,6 +6175,9 @@ record_activity_metric(
 global_variables["plane_combination_filter_flagged_rows"] = int(
     plane_combination_summary["flagged_rows"]
 )
+global_variables["plane_combination_filter_input_rows"] = int(
+    plane_combination_summary.get("input_rows", len(working_df))
+)
 global_variables["plane_combination_filter_selected_offender_channels"] = int(
     plane_combination_summary["selected_offender_channels"]
 )
@@ -5108,12 +6195,6 @@ for selected_count in TASK1_SELECTED_OFFENDER_CARDINALITY_VALUES:
         plane_combination_summary["selected_offender_cardinality_counts"].get(selected_count, 0)
     )
     global_variables[_task1_selected_offender_cardinality_metric_key(selected_count)] = selected_rows
-    record_activity_metric(
-        _task1_selected_offender_cardinality_pct_metric_key(selected_count),
-        selected_rows,
-        plane_combination_summary["flagged_rows"],
-        label=f"flagged rows solved by selecting exactly {selected_count} offending channels",
-    )
 for channel_key, offender_count in plane_combination_summary["selected_offender_counts"].items():
     global_variables[_task1_channel_offender_metric_key(channel_key)] = int(offender_count)
 filter_metrics["plane_combination_filter_mean_failed_pairs_per_flagged_row"] = round(
@@ -5134,11 +6215,13 @@ filter_metrics["plane_combination_filter_max_failed_pairs_in_row"] = int(
 filter_metrics["plane_combination_filter_max_selected_offenders_in_row"] = int(
     plane_combination_summary["max_selected_offenders_in_row"]
 )
+task1_removed_channel_values_df = collect_task1_zeroed_channel_values(
+    channel_pair_plot_reference_df if not channel_pair_plot_reference_df.empty else working_df,
+    working_df,
+    pass_label="final_zeroed_any_filter",
+)
+global_variables["task1_zeroed_channel_values"] = int(len(task1_removed_channel_values_df))
 if _plot_channel_combination_filter_by_tt:
-    channel_combination_hist_after = collect_task1_channel_combination_histogram_payload(
-        working_df,
-        channel_combination_tt_before,
-    )
     channel_combination_limits = {
         "q_sum": (channel_combination_q_sum_left, channel_combination_q_sum_right),
         "q_dif": (-abs(channel_combination_q_dif_threshold), abs(channel_combination_q_dif_threshold)),
@@ -5146,14 +6229,16 @@ if _plot_channel_combination_filter_by_tt:
         "t_dif": (-abs(channel_combination_t_dif_threshold), abs(channel_combination_t_dif_threshold)),
     }
     fig_idx = plot_task1_channel_combination_filter_by_tt(
+        channel_combination_hist_original,
         channel_combination_hist_before,
-        channel_combination_hist_after,
+        channel_combination_hist_after_preview,
         basename_no_ext,
         fig_idx,
         show_plots=show_plots,
         save_plots=save_plots,
         plot_list=plot_list,
         limits_by_observable=channel_combination_limits,
+        q_left_limits_by_channel=task1_effective_channel_q_left_limits,
         top_n=channel_combination_plot_top_n,
         include_same_strip_pairs=channel_combination_plot_include_same_strip_pairs,
     )
@@ -5331,8 +6416,64 @@ metadata_filter_csv_path = save_metadata(
     csv_path_filter,
     filter_row,
     preferred_fieldnames=("filename_base", "execution_timestamp", "param_hash", *FILTER_METRIC_NAMES),
+    drop_field_predicate=lambda column_name: column_name not in FILTER_METADATA_ALLOWED_COLUMNS,
 )
 print(f"Metadata (filter) CSV updated at: {metadata_filter_csv_path}")
+
+noise_control_events_per_second_meta = build_events_per_second_metadata(working_df)
+try:
+    noise_control_rate_denominator_seconds = int(
+        noise_control_events_per_second_meta.get("events_per_second_total_seconds", 0) or 0
+    )
+except (TypeError, ValueError):
+    noise_control_rate_denominator_seconds = 0
+if noise_control_rate_denominator_seconds < 0:
+    noise_control_rate_denominator_seconds = 0
+
+noise_control_row = {
+    "filename_base": filename_base,
+    "execution_timestamp": execution_timestamp,
+    "param_hash": param_hash_value,
+    NOISE_CONTROL_RATE_DENOMINATOR_COLUMN: noise_control_rate_denominator_seconds,
+}
+for selected_count in TASK1_SELECTED_OFFENDER_CARDINALITY_VALUES:
+    raw_count = global_variables.get(_task1_selected_offender_cardinality_metric_key(selected_count), 0)
+    try:
+        raw_count_value = float(raw_count)
+    except (TypeError, ValueError):
+        noise_control_row[_task1_selected_offender_cardinality_rate_metric_key(selected_count)] = ""
+        noise_control_row[
+            f"plane_combination_filter_rows_with_{selected_count}_selected_offenders_pct"
+        ] = ""
+        continue
+    rate_value = (
+        raw_count_value / noise_control_rate_denominator_seconds
+        if noise_control_rate_denominator_seconds > 0
+        else 0.0
+    )
+    noise_control_row[_task1_selected_offender_cardinality_rate_metric_key(selected_count)] = round(
+        rate_value,
+        6,
+    )
+    input_rows_value = float(global_variables.get("plane_combination_filter_input_rows", 0) or 0)
+    pct_value = 100.0 * raw_count_value / input_rows_value if input_rows_value > 0 else 0.0
+    noise_control_row[
+        f"plane_combination_filter_rows_with_{selected_count}_selected_offenders_pct"
+    ] = round(pct_value, 4)
+
+metadata_noise_control_csv_path = save_metadata(
+    csv_path_noise_control,
+    noise_control_row,
+    preferred_fieldnames=(
+        "filename_base",
+        "execution_timestamp",
+        "param_hash",
+        NOISE_CONTROL_RATE_DENOMINATOR_COLUMN,
+        *TASK1_NOISE_CONTROL_METRIC_NAMES,
+        *TASK1_NOISE_CONTROL_PERCENT_METRIC_NAMES,
+    ),
+)
+print(f"Metadata (noise_control) CSV updated at: {metadata_noise_control_csv_path}")
 
  
 # -------------------------------------------------------------------------------
@@ -5491,12 +6632,29 @@ if "datetime" in working_df.columns:
 if "param_hash" not in working_df.columns:
     working_df["param_hash"] = str(simulated_param_hash) if simulated_param_hash else ""
 
+channel_removed_values_output_directory = base_directories["removed_channel_values_directory"]
+os.makedirs(channel_removed_values_output_directory, exist_ok=True)
+channel_removed_values_base = os.path.join(
+    channel_removed_values_output_directory,
+    f"removed_channel_values_{basename_no_ext}",
+)
+task1_removed_channel_values_df = task1_removed_channel_values_df.copy()
+task1_removed_channel_values_df["filename_base"] = filename_base
+task1_removed_channel_values_df.to_parquet(
+    f"{channel_removed_values_base}.parquet",
+    engine="pyarrow",
+    compression="zstd",
+    index=False,
+)
+task1_removed_channel_values_df.to_csv(
+    f"{channel_removed_values_base}.csv",
+    index=False,
+)
+print(f"Removed channel-value parquet saved to: {channel_removed_values_base}.parquet")
+print(f"Removed channel-value CSV saved to: {channel_removed_values_base}.csv")
+
 if track_removed_rows:
-    tracking_output_directory = (
-        base_directories["figure_directory"]
-        if os.path.isdir(base_directories["figure_directory"])
-        else output_directory
-    )
+    tracking_output_directory = base_directories["tracking_directory"]
     os.makedirs(tracking_output_directory, exist_ok=True)
 
     removed_rows_base = os.path.join(

@@ -10,8 +10,44 @@ article_format: false
 # create_plots options: null | debug | usual | essential | all
 # Task 1 plot alias statuses live in config_plots_task_1.yaml
 create_plots: null
+filter_parameter_config_csv: config_filter_parameters_task_1.csv
 limit_number: null
 EXPECTED_COLUMNS_config: 71
 time_window_filtering: false
+channel_pair_plot_top_n: 5
 channel_combination_plot_top_n: 20
 channel_combination_plot_include_same_strip_pairs: false
+recalculate_noise_charge_limit: false
+noise_charge_limit_by_channel:
+  P1S1F: null
+  P1S1B: null
+  P1S2F: null
+  P1S2B: null
+  P1S3F: null
+  P1S3B: null
+  P1S4F: null
+  P1S4B: null
+  P2S1F: null
+  P2S1B: null
+  P2S2F: null
+  P2S2B: null
+  P2S3F: null
+  P2S3B: null
+  P2S4F: null
+  P2S4B: null
+  P3S1F: null
+  P3S1B: null
+  P3S2F: null
+  P3S2B: null
+  P3S3F: null
+  P3S3B: null
+  P3S4F: null
+  P3S4B: null
+  P4S1F: null
+  P4S1B: null
+  P4S2F: null
+  P4S2B: null
+  P4S3F: null
+  P4S3B: null
+  P4S4F: null
+  P4S4B: null

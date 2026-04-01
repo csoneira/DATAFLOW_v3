@@ -21,13 +21,16 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterable
 
 import numpy as np
 import pandas as pd
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
+REPO_ROOT = ROOT_DIR.parent
 sys.path.append(str(ROOT_DIR))
 sys.path.append(str(ROOT_DIR / "MASTER_STEPS"))
+sys.path.append(str(REPO_ROOT))
 
 from STEP_SHARED.sim_utils import (
     ensure_dir,
@@ -39,6 +42,7 @@ from STEP_SHARED.sim_utils import (
     write_csv_atomic,
     write_text_atomic,
 )
+from MASTER.common.selection_config import SelectionConfig, load_master_selection
 
 
 def _max_existing_step1_id(intersteps_dir: Path) -> int:
@@ -112,10 +116,13 @@ def _assign_step_ids(mesh: pd.DataFrame, *, intersteps_dir: Path | None = None) 
     assign_ids(["cos_n", "flux_cm2_min"], "step_1_id", seed_min_id=seed_step1_id)
     assign_ids(["z_p1", "z_p2", "z_p3", "z_p4"], "step_2_id")
     assign_ids(["eff_p1", "eff_p2", "eff_p3", "eff_p4"], "step_3_id")
-    for idx in range(4, 11):
+    for idx in range(4, 9):
         col = f"step_{idx}_id"
         mesh[col] = mesh[col].fillna("001").astype("string")
         _normalize_step_id_column(col)
+    assign_ids(["trigger_c1", "trigger_c2", "trigger_c3", "trigger_c4"], "step_9_id")
+    mesh["step_10_id"] = mesh["step_10_id"].fillna("001").astype("string")
+    _normalize_step_id_column("step_10_id")
     return mesh
 
 
@@ -287,14 +294,107 @@ def _build_regular_mesh_overrides(
     return overrides
 
 
-def _collect_z_positions(station_files: dict[int, Path]) -> pd.DataFrame:
-    station_dfs = [read_station_config(path) for path in station_files.values()]
+def _date_range_overlap_mask(
+    frame: pd.DataFrame,
+    date_ranges: Iterable[tuple[datetime | None, datetime | None]] | None,
+) -> pd.Series:
+    if not date_ranges:
+        return pd.Series(True, index=frame.index)
+
+    if "start" not in frame.columns or "end" not in frame.columns:
+        return pd.Series(True, index=frame.index)
+
+    start_day = pd.to_datetime(frame["start"], errors="coerce").dt.normalize()
+    end_day = pd.to_datetime(frame["end"], errors="coerce").dt.normalize()
+    far_future = pd.Timestamp("2262-04-11")
+    end_day = end_day.fillna(far_future)
+
+    mask = pd.Series(False, index=frame.index)
+    for start_value, end_value in date_ranges:
+        range_start = (
+            pd.Timestamp(start_value).normalize()
+            if start_value is not None
+            else pd.Timestamp("1900-01-01")
+        )
+        range_end = (
+            pd.Timestamp(end_value).normalize()
+            if end_value is not None
+            else far_future
+        )
+        mask |= (start_day <= range_end) & (end_day >= range_start)
+    return mask.fillna(False)
+
+
+def _selected_station_ids_for_z_adaptation(
+    station_files: dict[int, Path],
+    selection: SelectionConfig,
+) -> list[int]:
+    available_real = sorted(station_id for station_id in station_files if station_id != 0)
+    if selection.stations is None:
+        return available_real
+
+    selected_real = sorted(
+        station_id
+        for station_id in selection.stations
+        if station_id in station_files and station_id != 0
+    )
+    return selected_real or available_real
+
+
+def _collect_z_positions(
+    station_files: dict[int, Path],
+    *,
+    selected_station_ids: Iterable[int] | None = None,
+    date_ranges: Iterable[tuple[datetime | None, datetime | None]] | None = None,
+) -> pd.DataFrame:
+    if selected_station_ids is None:
+        selected_ids = sorted(station_files)
+    else:
+        selected_ids = [station_id for station_id in selected_station_ids if station_id in station_files]
+    station_dfs: list[pd.DataFrame] = []
+    for station_id in selected_ids:
+        df = read_station_config(station_files[station_id]).copy()
+        df["station"] = station_id
+        mask = _date_range_overlap_mask(df, date_ranges)
+        filtered = df.loc[mask].copy()
+        if not filtered.empty:
+            station_dfs.append(filtered)
+    if not station_dfs:
+        return pd.DataFrame(columns=["P1", "P2", "P3", "P4"])
     geom_cols = ["P1", "P2", "P3", "P4"]
     all_geoms = pd.concat([df[geom_cols] for df in station_dfs], ignore_index=True)
     unique_geoms = all_geoms.dropna().drop_duplicates().reset_index(drop=True)
     non_zero = (unique_geoms[geom_cols] != 0).any(axis=1)
     unique_geoms = unique_geoms[non_zero].reset_index(drop=True)
     return unique_geoms
+
+
+def _collect_geometry_trigger_rows(
+    station_files: dict[int, Path],
+    *,
+    selected_station_ids: Iterable[int] | None = None,
+    date_ranges: Iterable[tuple[datetime | None, datetime | None]] | None = None,
+) -> pd.DataFrame:
+    if selected_station_ids is None:
+        selected_ids = sorted(station_files)
+    else:
+        selected_ids = [station_id for station_id in selected_station_ids if station_id in station_files]
+    station_dfs: list[pd.DataFrame] = []
+    for station_id in selected_ids:
+        df = read_station_config(station_files[station_id]).copy()
+        df["station"] = station_id
+        mask = _date_range_overlap_mask(df, date_ranges)
+        filtered = df.loc[mask].copy()
+        if not filtered.empty:
+            station_dfs.append(filtered)
+    if not station_dfs:
+        return pd.DataFrame(columns=["P1", "P2", "P3", "P4", "C1", "C2", "C3", "C4"])
+    cols = ["P1", "P2", "P3", "P4", "C1", "C2", "C3", "C4"]
+    combined = pd.concat([df[cols] for df in station_dfs], ignore_index=True)
+    combined = combined.dropna().drop_duplicates().reset_index(drop=True)
+    geom_non_zero = (combined[["P1", "P2", "P3", "P4"]] != 0).any(axis=1)
+    combined = combined[geom_non_zero].reset_index(drop=True)
+    return combined
 
 
 def _z_positions_from_override(raw_override: object) -> pd.DataFrame:
@@ -372,7 +472,7 @@ def _append_param_row(
     meta_path: Path,
     physics_cfg: dict,
     rng: np.random.Generator,
-    z_positions: pd.DataFrame,
+    geometry_rows: pd.DataFrame,
 ) -> None:
     mode = str(physics_cfg.get("mode", "uniform_random")).strip().lower()
     if mode not in {"uniform_random", "regular_mesh"}:
@@ -428,30 +528,62 @@ def _append_param_row(
             mesh.loc[missing_et, "execution_time"] = now_iso()
     mesh["done"] = mesh["done"].fillna(0).astype(int)
 
-    if z_positions.empty:
-        raise ValueError("No z positions found in station configs; cannot select z positions.")
+    if geometry_rows.empty:
+        raise ValueError("No geometry/trigger rows found in station configs; cannot build param mesh.")
+
+    z_positions = geometry_rows[["P1", "P2", "P3", "P4"]].drop_duplicates().reset_index(drop=True)
 
     for col in ("z_p1", "z_p2", "z_p3", "z_p4"):
         if col not in mesh.columns:
             mesh[col] = np.nan
+    for col in ("trigger_c1", "trigger_c2", "trigger_c3", "trigger_c4"):
+        if col not in mesh.columns:
+            mesh[col] = pd.NA
 
     if not mesh.empty:
-        missing_mask = mesh[["z_p1", "z_p2", "z_p3", "z_p4"]].isna().any(axis=1)
+        missing_mask = mesh[
+            ["z_p1", "z_p2", "z_p3", "z_p4", "trigger_c1", "trigger_c2", "trigger_c3", "trigger_c4"]
+        ].isna().any(axis=1)
         if missing_mask.any():
             for idx in mesh.index[missing_mask]:
-                geom_row = z_positions.sample(
+                row_geom = mesh.loc[idx, ["z_p1", "z_p2", "z_p3", "z_p4"]]
+                has_geom = not row_geom.isna().any()
+                if has_geom:
+                    geom_frame = geometry_rows[
+                        np.isclose(pd.to_numeric(geometry_rows["P1"], errors="coerce"), float(row_geom["z_p1"]), atol=1e-6)
+                        & np.isclose(pd.to_numeric(geometry_rows["P2"], errors="coerce"), float(row_geom["z_p2"]), atol=1e-6)
+                        & np.isclose(pd.to_numeric(geometry_rows["P3"], errors="coerce"), float(row_geom["z_p3"]), atol=1e-6)
+                        & np.isclose(pd.to_numeric(geometry_rows["P4"], errors="coerce"), float(row_geom["z_p4"]), atol=1e-6)
+                    ]
+                else:
+                    geom_frame = geometry_rows
+                if geom_frame.empty:
+                    geom_frame = geometry_rows
+                geom_row = geom_frame.sample(
                     n=1, random_state=rng.integers(0, 2**32 - 1)
                 ).iloc[0]
-                mesh.at[idx, "z_p1"] = float(geom_row["P1"])
-                mesh.at[idx, "z_p2"] = float(geom_row["P2"])
-                mesh.at[idx, "z_p3"] = float(geom_row["P3"])
-                mesh.at[idx, "z_p4"] = float(geom_row["P4"])
+                if pd.isna(mesh.at[idx, "z_p1"]):
+                    mesh.at[idx, "z_p1"] = float(geom_row["P1"])
+                if pd.isna(mesh.at[idx, "z_p2"]):
+                    mesh.at[idx, "z_p2"] = float(geom_row["P2"])
+                if pd.isna(mesh.at[idx, "z_p3"]):
+                    mesh.at[idx, "z_p3"] = float(geom_row["P3"])
+                if pd.isna(mesh.at[idx, "z_p4"]):
+                    mesh.at[idx, "z_p4"] = float(geom_row["P4"])
+                if pd.isna(mesh.at[idx, "trigger_c1"]):
+                    mesh.at[idx, "trigger_c1"] = str(geom_row["C1"]).strip()
+                if pd.isna(mesh.at[idx, "trigger_c2"]):
+                    mesh.at[idx, "trigger_c2"] = str(geom_row["C2"]).strip()
+                if pd.isna(mesh.at[idx, "trigger_c3"]):
+                    mesh.at[idx, "trigger_c3"] = str(geom_row["C3"]).strip()
+                if pd.isna(mesh.at[idx, "trigger_c4"]):
+                    mesh.at[idx, "trigger_c4"] = str(geom_row["C4"]).strip()
 
     shared_values: dict[str, float] = {}
     expand_z_positions = _as_bool(physics_cfg.get("expand_z_positions", False), default=False)
     shared_geom_row = None
     if not expand_z_positions and {"z_p1", "z_p2", "z_p3", "z_p4"} & shared:
-        shared_geom_row = z_positions.sample(
+        shared_geom_row = geometry_rows.sample(
             n=1, random_state=rng.integers(0, 2**32 - 1)
         ).iloc[0]
         shared_values.update(
@@ -525,10 +657,10 @@ def _append_param_row(
         if shared_geom_row is not None:
             geom_rows = [shared_geom_row]
         elif expand_z_positions:
-            geom_rows = [row for _, row in z_positions.iterrows()]
+            geom_rows = [row for _, row in geometry_rows.iterrows()]
         else:
             geom_rows = [
-                z_positions.sample(n=1, random_state=rng.integers(0, 2**32 - 1)).iloc[0]
+                geometry_rows.sample(n=1, random_state=rng.integers(0, 2**32 - 1)).iloc[0]
             ]
         for geom_row in geom_rows:
             new_rows.append(
@@ -541,6 +673,10 @@ def _append_param_row(
                     "z_p2": float(geom_row["P2"]),
                     "z_p3": float(geom_row["P3"]),
                     "z_p4": float(geom_row["P4"]),
+                    "trigger_c1": str(geom_row["C1"]).strip(),
+                    "trigger_c2": str(geom_row["C2"]).strip(),
+                    "trigger_c3": str(geom_row["C3"]).strip(),
+                    "trigger_c4": str(geom_row["C4"]).strip(),
                     "eff_p1": float(effs[0]),
                     "eff_p2": float(effs[1]),
                     "eff_p3": float(effs[2]),
@@ -565,7 +701,8 @@ def _append_param_row(
     z_cols = ["z_p1", "z_p2", "z_p3", "z_p4"]
     head_cols = ["done", "param_set_id", "param_date", "execution_time"]
     step_id_cols = [f"step_{idx}_id" for idx in range(1, 11)]
-    front_cols = ["cos_n", "flux_cm2_min"] + z_cols
+    trigger_cols = ["trigger_c1", "trigger_c2", "trigger_c3", "trigger_c4"]
+    front_cols = ["cos_n", "flux_cm2_min"] + z_cols + trigger_cols
     ordered_cols = (
         [c for c in head_cols if c in mesh.columns]
         + [c for c in step_id_cols if c in mesh.columns]
@@ -662,12 +799,55 @@ def main() -> None:
         raise FileNotFoundError(f"No station config CSVs found under {station_root}")
     _log_info(f"Station configs found: {len(station_files)}")
 
+    adapt_z_positions = _as_bool(
+        physics_cfg.get("adapt_z_positions_for_station_date_range", False),
+        default=False,
+    )
+    adapt_trigger_combinations = _as_bool(
+        physics_cfg.get("adapt_trigger_combinations_for_station_date_range", False),
+        default=False,
+    )
     z_override = _z_positions_from_override(physics_cfg.get("z_positions_override_mm"))
-    if z_override.empty:
+    if adapt_z_positions or adapt_trigger_combinations:
+        selection = load_master_selection(REPO_ROOT / "MASTER" / "CONFIG_FILES")
+        selected_station_ids = _selected_station_ids_for_z_adaptation(station_files, selection)
+        if not z_override.empty:
+            _log_info(
+                "Ignoring z_positions_override_mm because "
+                "station/date-range adaptation is enabled for geometry and/or triggers."
+            )
+        geometry_rows = _collect_geometry_trigger_rows(
+            station_files,
+            selected_station_ids=selected_station_ids,
+            date_ranges=selection.date_ranges,
+        )
+        if geometry_rows.empty:
+            _log_info(
+                "No geometry/trigger rows matched the selected stations/date ranges; "
+                "falling back to all available station rows for those stations."
+            )
+            geometry_rows = _collect_geometry_trigger_rows(
+                station_files,
+                selected_station_ids=selected_station_ids,
+                date_ranges=None,
+            )
+        z_positions = geometry_rows[["P1", "P2", "P3", "P4"]].drop_duplicates().reset_index(drop=True)
+        _log_info(
+            "Unique geometry/trigger rows (from selected station configs/date ranges): "
+            f"{len(geometry_rows)}; unique z rows={len(z_positions)} stations={selected_station_ids} "
+            f"date_ranges={list(selection.date_ranges) if selection.date_ranges else 'all'}"
+        )
+    elif z_override.empty:
         z_positions = _collect_z_positions(station_files)
+        geometry_rows = z_positions.copy()
+        for col, fallback in zip(("C1", "C2", "C3", "C4"), ("12", "23", "34", "13")):
+            geometry_rows[col] = fallback
         _log_info(f"Unique z-position rows (from station configs): {len(z_positions)}")
     else:
         z_positions = z_override
+        geometry_rows = z_positions.copy()
+        for col, fallback in zip(("C1", "C2", "C3", "C4"), ("12", "23", "34", "13")):
+            geometry_rows[col] = fallback
         z_rows = "; ".join(
             f"({row.P1:g}, {row.P2:g}, {row.P3:g}, {row.P4:g})"
             for row in z_positions.itertuples(index=False)
@@ -701,7 +881,7 @@ def main() -> None:
                 _log_info("Skip append: mesh not fully done")
                 return
 
-        _append_param_row(mesh_path, mesh_meta_path, physics_cfg, rng, z_positions)
+        _append_param_row(mesh_path, mesh_meta_path, physics_cfg, rng, geometry_rows)
 
         try:
             mesh = pd.read_csv(mesh_path)

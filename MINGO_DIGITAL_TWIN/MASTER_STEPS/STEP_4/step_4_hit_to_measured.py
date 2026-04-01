@@ -57,6 +57,10 @@ from STEP_SHARED.sim_utils import (
     select_param_row,
     extract_param_set,
 )
+from STEP_SHARED.sim_utils_geometry import DEFAULT_BOUNDS
+
+ELEMENTARY_CHARGE_FC = 1.602176634e-4
+LORENTZIAN_MIN_GAMMA_MM = 1.0e-6
 
 
 def normalize_tt(series: pd.Series) -> pd.Series:
@@ -71,172 +75,151 @@ def is_random_value(value: object) -> bool:
     return isinstance(value, str) and value.lower() == "random"
 
 
-def compute_strip_signals(
-    y_center: np.ndarray,
-    lower_edges: np.ndarray,
-    upper_edges: np.ndarray,
-    width: float,
+def lorentzian_corner_angle(x_rel: np.ndarray, y_rel: np.ndarray, gamma: np.ndarray) -> np.ndarray:
+    return np.arctan2(
+        x_rel * y_rel,
+        gamma * np.sqrt(x_rel ** 2 + y_rel ** 2 + gamma ** 2),
+    )
+
+
+def isotropic_lorentzian_rectangle_fraction(
+    center_x: np.ndarray,
+    center_y: np.ndarray,
+    gammas: np.ndarray,
+    x_lower: float,
+    x_upper: float,
+    y_lower: float,
+    y_upper: float,
 ) -> np.ndarray:
-    n_events = len(y_center)
-    n_strips = len(lower_edges)
-    signals = np.zeros((n_events, n_strips), dtype=float)
-
-    valid = ~np.isnan(y_center)
+    fractions = np.zeros_like(center_x, dtype=float)
+    valid = (
+        np.isfinite(center_x)
+        & np.isfinite(center_y)
+        & np.isfinite(gammas)
+        & (gammas > 0)
+    )
     if not np.any(valid):
-        return signals
+        return fractions
 
-    y_valid = y_center[valid]
-    y_low = y_valid - width / 2
-    y_high = y_valid + width / 2
+    x0 = center_x[valid]
+    y0 = center_y[valid]
+    gamma = gammas[valid]
+    x1 = x_lower - x0
+    x2 = x_upper - x0
+    y1 = y_lower - y0
+    y2 = y_upper - y0
+    solid_angle = (
+        lorentzian_corner_angle(x2, y2, gamma)
+        - lorentzian_corner_angle(x1, y2, gamma)
+        - lorentzian_corner_angle(x2, y1, gamma)
+        + lorentzian_corner_angle(x1, y1, gamma)
+    )
+    fractions[valid] = solid_angle / (2.0 * np.pi)
+    return np.clip(fractions, 0.0, 1.0)
 
-    for idx in range(n_strips):
-        overlap = np.minimum(y_high, upper_edges[idx]) - np.maximum(y_low, lower_edges[idx])
-        overlap = np.maximum(overlap, 0.0)
-        signals[valid, idx] = overlap / width
 
-    return signals
-
-
-def compute_strip_signals_variable_width(
-    y_center: np.ndarray,
-    widths: np.ndarray,
-    lower_edges: np.ndarray,
-    upper_edges: np.ndarray,
+def isotropic_lorentzian_density_grid(
+    x_axis: np.ndarray,
+    y_axis: np.ndarray,
+    center_x: float,
+    center_y: float,
+    gamma_mm: float,
+    total_charge_fc: float,
 ) -> np.ndarray:
-    n_events = len(y_center)
-    n_strips = len(lower_edges)
-    signals = np.zeros((n_events, n_strips), dtype=float)
-
-    valid = ~np.isnan(y_center)
-    if not np.any(valid):
-        return signals
-
-    y_valid = y_center[valid]
-    widths_valid = widths[valid]
-    width_safe = np.where(widths_valid > 0, widths_valid, np.nan)
-    y_low = y_valid - width_safe / 2
-    y_high = y_valid + width_safe / 2
-
-    for idx in range(n_strips):
-        overlap = np.minimum(y_high, upper_edges[idx]) - np.maximum(y_low, lower_edges[idx])
-        overlap = np.maximum(overlap, 0.0)
-        frac = overlap / width_safe
-        frac = np.where(np.isfinite(frac), frac, 0.0)
-        signals[valid, idx] = frac
-
-    return signals
-
-
-def circle_area_below(y: np.ndarray, radius: np.ndarray, area_total: np.ndarray) -> np.ndarray:
-    y_clipped = np.clip(y, -radius, radius)
-    term = y_clipped / radius
-    area = (radius ** 2) * (np.arcsin(term) + term * np.sqrt(1.0 - term ** 2)) + 0.5 * area_total
-    area = np.where(y <= -radius, 0.0, area)
-    area = np.where(y >= radius, area_total, area)
-    return area
+    gamma = max(float(gamma_mm), LORENTZIAN_MIN_GAMMA_MM)
+    x_grid, y_grid = np.meshgrid(x_axis, y_axis)
+    radius_sq = (x_grid - center_x) ** 2 + (y_grid - center_y) ** 2
+    return float(total_charge_fc) * gamma / (2.0 * np.pi * (radius_sq + gamma ** 2) ** 1.5)
 
 
 def induce_signal(
     df: pd.DataFrame,
     x_noise: float,
     time_sigma_ns: float,
-    avalanche_width: float,
-    charge_share_points: int,
-    width_scale_exponent: float,
-    width_scale_max: float,
+    lorentzian_gamma_mm: float,
+    induced_charge_fraction: float,
     rng: np.random.Generator,
     debug_event_index: int | None,
     debug_points: dict | None,
-    debug_rng: np.random.Generator | None,
 ) -> pd.DataFrame:
     out = df.copy()
     n = len(df)
     tt_array = np.full(n, "", dtype=object)
 
     for plane_idx in range(1, 5):
-        aval_q_col = f"avalanche_size_electrons_{plane_idx}"
+        aval_e_col = f"avalanche_size_electrons_{plane_idx}"
         aval_x_col = f"avalanche_x_{plane_idx}"
         aval_y_col = f"avalanche_y_{plane_idx}"
-        aval_q = df.get(aval_q_col, pd.Series(np.zeros(n))).to_numpy(dtype=float)
+        aval_electrons = df.get(aval_e_col, pd.Series(np.zeros(n))).to_numpy(dtype=float)
         aval_x = df.get(aval_x_col, pd.Series(np.full(n, np.nan))).to_numpy(dtype=float)
         aval_y = df.get(aval_y_col, pd.Series(np.full(n, np.nan))).to_numpy(dtype=float)
         t_sum_col = f"T_sum_{plane_idx}_ns"
         t_sum_vals = df[t_sum_col].to_numpy(dtype=float) if t_sum_col in df.columns else None
-
-        y_width, _, lower_edges, upper_edges = get_strip_geometry(plane_idx)
-        positive_mask = aval_q > 0
-        if np.any(positive_mask):
-            hist_vals = aval_q[positive_mask]
-            counts, edges = np.histogram(hist_vals, bins="auto")
-            mode_idx = int(np.argmax(counts)) if len(counts) else 0
-            mode_charge = 0.5 * (edges[mode_idx] + edges[mode_idx + 1]) if len(edges) > 1 else 1.0
-        else:
-            mode_charge = 1.0
-        if mode_charge <= 0:
-            mode_charge = 1.0
-
-        base_scale = np.where(aval_q > 0, aval_q / mode_charge, 0.0)
-        width_scale = np.power(base_scale, width_scale_exponent, where=base_scale > 0, out=np.zeros_like(base_scale))
-        width_scale = np.minimum(width_scale, width_scale_max)
-        scaled_width = avalanche_width * width_scale
-        valid = ~np.isnan(aval_y) & (scaled_width > 0)
-        y_valid = aval_y[valid].astype(np.float64, copy=False)
-        radius_valid = (scaled_width[valid] / 2.0).astype(np.float64, copy=False)
-        area_total = np.pi * radius_valid * radius_valid
-        out[f"avalanche_size_electrons_{plane_idx}"] = aval_q.astype(np.float32, copy=False)
-        out[f"avalanche_width_scale_{plane_idx}"] = width_scale.astype(np.float32, copy=False)
-        out[f"avalanche_scaled_width_{plane_idx}"] = scaled_width.astype(np.float32, copy=False)
+        gap_charge_fc = np.where(aval_electrons > 0, aval_electrons * ELEMENTARY_CHARGE_FC, 0.0)
+        induced_charge_total_fc = gap_charge_fc * induced_charge_fraction
+        _, _, lower_edges, upper_edges = get_strip_geometry(plane_idx)
+        plane_y_lower = float(np.min(lower_edges))
+        plane_y_upper = float(np.max(upper_edges))
+        gamma_mm = np.where(induced_charge_total_fc > 0, float(lorentzian_gamma_mm), 0.0)
+        valid = (
+            np.isfinite(aval_x)
+            & np.isfinite(aval_y)
+            & (induced_charge_total_fc > 0)
+            & (gamma_mm > 0)
+        )
+        detector_fraction = isotropic_lorentzian_rectangle_fraction(
+            aval_x,
+            aval_y,
+            np.where(valid, gamma_mm, np.nan),
+            DEFAULT_BOUNDS.x_min,
+            DEFAULT_BOUNDS.x_max,
+            plane_y_lower,
+            plane_y_upper,
+        )
+        out[f"avalanche_size_electrons_{plane_idx}"] = aval_electrons.astype(np.float32, copy=False)
+        out[f"avalanche_gap_charge_fc_{plane_idx}"] = gap_charge_fc.astype(np.float32, copy=False)
+        out[f"induced_charge_total_fc_{plane_idx}"] = induced_charge_total_fc.astype(np.float32, copy=False)
+        out[f"lorentzian_gamma_mm_{plane_idx}"] = gamma_mm.astype(np.float32, copy=False)
 
         plane_detected = np.zeros(n, dtype=bool)
-        remaining = np.full(n, charge_share_points, dtype=np.int32)
-        cumulative_p = np.zeros(n, dtype=np.float32)
-        debug_counts = None
         if (
             debug_event_index is not None
             and 0 <= debug_event_index < n
             and valid[debug_event_index]
         ):
-            sigma = float(scaled_width[debug_event_index])
-            center_x = float(aval_x[debug_event_index])
-            center_y = float(aval_y[debug_event_index])
-            points_rng = debug_rng or rng
-            x_pts = center_x + points_rng.normal(0.0, sigma, int(charge_share_points))
-            y_pts = center_y + points_rng.normal(0.0, sigma, int(charge_share_points))
             if debug_points is not None:
                 debug_points[plane_idx] = {
-                    "x": x_pts,
-                    "y": y_pts,
-                    "charge": float(aval_q[debug_event_index]),
+                    "center_x": float(aval_x[debug_event_index]),
+                    "center_y": float(aval_y[debug_event_index]),
+                    "gamma_mm": float(gamma_mm[debug_event_index]),
+                    "gap_charge_fc": float(gap_charge_fc[debug_event_index]),
+                    "induced_charge_fc": float(induced_charge_total_fc[debug_event_index]),
+                    "detector_fraction": float(detector_fraction[debug_event_index]),
                 }
-            debug_counts = []
-            for strip_idx in range(len(lower_edges)):
-                in_strip = (y_pts >= lower_edges[strip_idx]) & (y_pts < upper_edges[strip_idx])
-                debug_counts.append(int(in_strip.sum()))
 
         for strip_idx in range(len(lower_edges)):
-            frac = np.zeros(n, dtype=np.float32)
-            if valid.any():
-                y_low_rel = lower_edges[strip_idx] - y_valid
-                y_high_rel = upper_edges[strip_idx] - y_valid
-                area_low = circle_area_below(y_low_rel, radius_valid, area_total)
-                area_high = circle_area_below(y_high_rel, radius_valid, area_total)
-                area_strip = np.maximum(area_high - area_low, 0.0)
-                p_strip = np.zeros(n, dtype=np.float32)
-                p_strip[valid] = np.where(area_total > 0, area_strip / area_total, 0.0)
-                denom = 1.0 - cumulative_p
-                adj = np.zeros(n, dtype=np.float32)
-                denom_mask = denom > 0
-                adj[denom_mask] = p_strip[denom_mask] / denom[denom_mask]
-                counts = rng.binomial(remaining, np.clip(adj, 0.0, 1.0))
-                if debug_counts is not None:
-                    counts[debug_event_index] = debug_counts[strip_idx]
-                remaining -= counts
-                cumulative_p += p_strip
-                frac = counts.astype(np.float32, copy=False) / float(charge_share_points)
-            qsum = (frac * aval_q).astype(np.float32, copy=False)
+            frac = isotropic_lorentzian_rectangle_fraction(
+                aval_x,
+                aval_y,
+                np.where(valid, gamma_mm, np.nan),
+                DEFAULT_BOUNDS.x_min,
+                DEFAULT_BOUNDS.x_max,
+                lower_edges[strip_idx],
+                upper_edges[strip_idx],
+            ).astype(np.float32, copy=False)
+            qsum = (frac * induced_charge_total_fc).astype(np.float32, copy=False)
             out[f"Y_mea_{plane_idx}_s{strip_idx + 1}"] = qsum
             hit_mask = qsum > 0
             plane_detected |= hit_mask
+            if (
+                debug_event_index is not None
+                and 0 <= debug_event_index < n
+                and valid[debug_event_index]
+                and debug_points is not None
+                and plane_idx in debug_points
+            ):
+                debug_points[plane_idx][f"strip_{strip_idx + 1}_fraction"] = float(frac[debug_event_index])
+                debug_points[plane_idx][f"strip_{strip_idx + 1}_charge_fc"] = float(qsum[debug_event_index])
 
             x_strip = np.full(n, np.nan, dtype=np.float32)
             if hit_mask.any():
@@ -277,8 +260,6 @@ def plot_step4_summary(
     df: pd.DataFrame,
     pdf: PdfPages,
     include_thrown_points: bool,
-    points_per_plane: int,
-    point_seed: int | None,
     thrown_points: dict | None,
     examples_df: pd.DataFrame | None = None,
 ) -> None:
@@ -382,7 +363,7 @@ def plot_step4_summary(
             ax.set_title(f"P{plane} row {idx} tt={tt_label}")
             ax.set_xticks(strip_positions)
             ax.set_xlabel("Strip")
-        axes[0, 0].set_ylabel("qsum")
+        axes[0, 0].set_ylabel("qsum [fC]")
         fig.suptitle("Charge sharing examples (single plane per event)")
         fig.tight_layout()
         pdf.savefig(fig, dpi=150)
@@ -390,7 +371,7 @@ def plot_step4_summary(
 
     fig, axes = plt.subplots(4, 1, figsize=(8, 10), sharex=True)
     for plane_idx, ax in enumerate(axes, start=1):
-        aval_col = f"avalanche_size_electrons_{plane_idx}"
+        aval_col = f"induced_charge_total_fc_{plane_idx}"
         strip_cols = [c for c in df.columns if c.startswith(f"Y_mea_{plane_idx}_s")]
         if aval_col not in df.columns or not strip_cols:
             ax.axis("off")
@@ -406,11 +387,11 @@ def plot_step4_summary(
             ax.axis("off")
             continue
         ax.hist(ratios, bins=80, color="steelblue", alpha=0.8)
-        ax.set_title(f"Plane {plane_idx} qsum / avalanche size")
+        ax.set_title(f"Plane {plane_idx} detector charge / induced charge")
         ax.set_xlim(left=0)
         for patch in ax.patches:
             patch.set_rasterized(True)
-    axes[-1].set_xlabel("qsum / avalanche size")
+    axes[-1].set_xlabel("qsum total / induced charge")
     fig.tight_layout()
     pdf.savefig(fig, dpi=150)
     plt.close(fig)
@@ -423,29 +404,69 @@ def plot_step4_summary(
             if not points:
                 ax.axis("off")
                 continue
-            x_pts = points["x"]
-            y_pts = points["y"]
-            charge = points.get("charge")
-            ax.scatter(x_pts, y_pts, s=8, alpha=0.5, rasterized=True)
-            ax.scatter([np.mean(x_pts)], [np.mean(y_pts)], s=40, color="black", marker="x")
+            center_x = points["center_x"]
+            center_y = points["center_y"]
+            gamma_mm = points["gamma_mm"]
+            gap_charge = points.get("gap_charge_fc")
+            induced_charge = points.get("induced_charge_fc")
+            detector_fraction = points.get("detector_fraction")
+            x_axis = np.linspace(DEFAULT_BOUNDS.x_min, DEFAULT_BOUNDS.x_max, 240)
+            y_axis = np.linspace(DEFAULT_BOUNDS.y_min, DEFAULT_BOUNDS.y_max, 240)
+            density = isotropic_lorentzian_density_grid(
+                x_axis,
+                y_axis,
+                center_x,
+                center_y,
+                gamma_mm,
+                induced_charge,
+            )
+            norm_density = density / max(float(np.max(density)), 1.0e-12)
+            ax.imshow(
+                norm_density,
+                origin="lower",
+                extent=(x_axis[0], x_axis[-1], y_axis[0], y_axis[-1]),
+                cmap="magma",
+                aspect="equal",
+                alpha=0.95,
+            )
+            ax.scatter([center_x], [center_y], s=35, color="cyan", marker="x")
             _, _, lower_edges, upper_edges = get_strip_geometry(plane_idx)
             for edge in np.concatenate([lower_edges, upper_edges]):
                 ax.axhline(edge, color="gray", linestyle="--", linewidth=0.8, alpha=0.5)
-            if charge is not None:
-                ax.set_title(f"Plane {plane_idx} thrown points (Q={charge:,.0f})")
+            strip_text = "\n".join(
+                f"S{i}={points.get(f'strip_{i}_charge_fc', 0.0):.2f} fC"
+                for i in range(1, 5)
+            )
+            if detector_fraction is not None:
+                strip_text = f"Fdet={detector_fraction:.4f}\n" + strip_text
+            if gap_charge is not None and induced_charge is not None:
+                ax.set_title(
+                    f"Plane {plane_idx} isotropic 2D Lorentzian "
+                    f"(Qgap={gap_charge:,.1f} fC, Qind={induced_charge:,.1f} fC, gamma={gamma_mm:,.1f} mm)"
+                )
             else:
-                ax.set_title(f"Plane {plane_idx} thrown points")
+                ax.set_title(f"Plane {plane_idx} isotropic 2D Lorentzian")
             ax.set_xlabel("X (mm)")
             ax.set_ylabel("Y (mm)")
-            ax.set_xlim(-150, 150)
-            ax.set_ylim(-150, 150)
+            ax.set_xlim(DEFAULT_BOUNDS.x_min, DEFAULT_BOUNDS.x_max)
+            ax.set_ylim(DEFAULT_BOUNDS.y_min, DEFAULT_BOUNDS.y_max)
+            ax.text(
+                0.03,
+                0.97,
+                strip_text,
+                transform=ax.transAxes,
+                ha="left",
+                va="top",
+                fontsize=8,
+                bbox={"boxstyle": "round,pad=0.2", "facecolor": "white", "alpha": 0.7, "edgecolor": "none"},
+            )
         fig.tight_layout()
         pdf.savefig(fig, dpi=150)
         plt.close(fig)
 
     fig, axes = plt.subplots(4, 1, figsize=(8, 10), sharex=True)
     for plane_idx, ax in enumerate(axes, start=1):
-        aval_col = f"avalanche_size_electrons_{plane_idx}"
+        aval_col = f"induced_charge_total_fc_{plane_idx}"
         strip_cols = [c for c in df.columns if c.startswith(f"Y_mea_{plane_idx}_s")]
         if aval_col not in df.columns or not strip_cols:
             ax.axis("off")
@@ -457,13 +478,13 @@ def plot_step4_summary(
         qsum_total = qsum_total[mask]
         aval_vals = aval_vals[mask]
         ax.hist(qsum_total, bins=120, color="seagreen", alpha=0.8, label="qsum total")
-        ax.hist(aval_vals, bins=120, color="darkorange", alpha=0.5, label="avalanche size")
-        ax.set_title(f"Plane {plane_idx} qsum total vs avalanche size")
+        ax.hist(aval_vals, bins=120, color="darkorange", alpha=0.5, label="induced total")
+        ax.set_title(f"Plane {plane_idx} qsum total vs induced charge")
         ax.set_xlim(left=0)
         ax.legend()
         for patch in ax.patches:
             patch.set_rasterized(True)
-    axes[-1].set_xlabel("electrons")
+    axes[-1].set_xlabel("charge [fC]")
     fig.tight_layout()
     pdf.savefig(fig, dpi=150)
     plt.close(fig)
@@ -487,14 +508,14 @@ def plot_step4_summary(
         ax.set_xlim(0, median_val)
         for patch in ax.patches:
             patch.set_rasterized(True)
-    axes[-1].set_xlabel("electrons")
+    axes[-1].set_xlabel("induced charge [fC]")
     fig.tight_layout()
     pdf.savefig(fig, dpi=150)
     plt.close(fig)
 
     fig, axes = plt.subplots(4, 1, figsize=(8, 10), sharex=True)
     for plane_idx, ax in enumerate(axes, start=1):
-        aval_col = f"avalanche_size_electrons_{plane_idx}"
+        aval_col = f"induced_charge_total_fc_{plane_idx}"
         strip_cols = [c for c in df.columns if c.startswith(f"Y_mea_{plane_idx}_s")]
         if aval_col not in df.columns or not strip_cols:
             ax.axis("off")
@@ -515,9 +536,9 @@ def plot_step4_summary(
             alpha=0.2,
             rasterized=True,
         )
-        ax.set_title(f"Plane {plane_idx} qsum total vs avalanche size")
-        ax.set_xlabel("avalanche size")
-        ax.set_ylabel("qsum total")
+        ax.set_title(f"Plane {plane_idx} qsum total vs induced charge")
+        ax.set_xlabel("induced total charge [fC]")
+        ax.set_ylabel("qsum total [fC]")
     fig.tight_layout()
     pdf.savefig(fig, dpi=150)
     plt.close(fig)
@@ -542,36 +563,18 @@ def plot_step4_summary(
 
     fig, axes = plt.subplots(4, 1, figsize=(8, 10), sharex=True)
     for plane_idx, ax in enumerate(axes, start=1):
-        col = f"avalanche_width_scale_{plane_idx}"
+        col = f"lorentzian_gamma_mm_{plane_idx}"
         if col not in df.columns:
             ax.axis("off")
             continue
         vals = df[col].to_numpy(dtype=float)
         vals = vals[vals > 0]
         ax.hist(vals, bins=80, color="seagreen", alpha=0.8)
-        ax.set_title(f"Plane {plane_idx} width scale")
+        ax.set_title(f"Plane {plane_idx} Lorentzian gamma")
         ax.set_xlim(left=0)
         for patch in ax.patches:
             patch.set_rasterized(True)
-    axes[-1].set_xlabel("width scale (charge / mode charge)")
-    fig.tight_layout()
-    pdf.savefig(fig, dpi=150)
-    plt.close(fig)
-
-    fig, axes = plt.subplots(4, 1, figsize=(8, 10), sharex=True)
-    for plane_idx, ax in enumerate(axes, start=1):
-        col = f"avalanche_scaled_width_{plane_idx}"
-        if col not in df.columns:
-            ax.axis("off")
-            continue
-        vals = df[col].to_numpy(dtype=float)
-        vals = vals[vals > 0]
-        ax.hist(vals, bins=80, color="slateblue", alpha=0.8)
-        ax.set_title(f"Plane {plane_idx} scaled width")
-        ax.set_xlim(left=0)
-        for patch in ax.patches:
-            patch.set_rasterized(True)
-    axes[-1].set_xlabel("scaled width (mm)")
+    axes[-1].set_xlabel("gamma (mm)")
     fig.tight_layout()
     pdf.savefig(fig, dpi=150)
     plt.close(fig)
@@ -693,6 +696,8 @@ def plot_step4_summary(
 def prune_step4(df: pd.DataFrame) -> pd.DataFrame:
     keep = {"event_id", "T_thick_s", "X_gen", "Y_gen", "Theta_gen", "Phi_gen", "tt_hit"}
     for plane_idx in range(1, 5):
+        keep.add(f"avalanche_gap_charge_fc_{plane_idx}")
+        keep.add(f"induced_charge_total_fc_{plane_idx}")
         for strip_idx in range(1, 5):
             keep.add(f"Y_mea_{plane_idx}_s{strip_idx}")
             keep.add(f"X_mea_{plane_idx}_s{strip_idx}")
@@ -736,10 +741,16 @@ def main() -> None:
     plot_sample_rows = cfg.get("plot_sample_rows")
     x_noise = float(cfg.get("x_noise_mm", 0.0))
     time_sigma_ns = float(cfg.get("time_sigma_ns", 0.0))
-    avalanche_width = float(cfg.get("avalanche_width_mm", 40.0))
-    charge_share_points = int(cfg.get("charge_share_points", 2000))
-    width_scale_exponent = float(cfg.get("width_scale_exponent", 0.5))
-    width_scale_max = float(cfg.get("width_scale_max", 2.0))
+    lorentzian_gamma_mm = cfg.get("lorentzian_gamma_mm")
+    if lorentzian_gamma_mm in (None, ""):
+        legacy_fwhm = float(cfg.get("avalanche_width_mm", 40.0))
+        lorentzian_gamma_mm = 0.5 * legacy_fwhm
+    lorentzian_gamma_mm = float(lorentzian_gamma_mm)
+    if lorentzian_gamma_mm <= 0:
+        raise ValueError("lorentzian_gamma_mm must be > 0.")
+    induced_charge_fraction = float(cfg.get("induced_charge_fraction", 1.0))
+    if not (0.0 <= induced_charge_fraction <= 1.0):
+        raise ValueError("induced_charge_fraction must be in [0, 1].")
     rng = np.random.default_rng(cfg.get("seed"))
 
     input_glob = cfg.get("input_glob", "**/step_3_chunks.chunks.json")
@@ -768,8 +779,6 @@ def main() -> None:
                 df,
                 pdf,
                 include_thrown_points=False,
-                points_per_plane=charge_share_points,
-                point_seed=cfg.get("seed"),
                 thrown_points=None,
                 examples_df=df,
             )
@@ -908,14 +917,11 @@ def main() -> None:
             chunk,
             x_noise,
             time_sigma_ns,
-            avalanche_width,
-            charge_share_points,
-            width_scale_exponent,
-            width_scale_max,
+            lorentzian_gamma_mm,
+            induced_charge_fraction,
             rng,
             debug_event_index,
             debug_state["points"] if debug_event_index is not None else None,
-            debug_rng if debug_event_index is not None else None,
         )
         plot_cols = [
             col
@@ -925,8 +931,9 @@ def main() -> None:
             or col.startswith(
                 (
                     "avalanche_size_electrons_",
-                    "avalanche_width_scale_",
-                    "avalanche_scaled_width_",
+                    "avalanche_gap_charge_fc_",
+                    "induced_charge_total_fc_",
+                    "lorentzian_gamma_mm_",
                     "avalanche_x_",
                     "avalanche_y_",
                 )
@@ -1027,8 +1034,6 @@ def main() -> None:
                     plot_df,
                     pdf,
                     include_thrown_points=True,
-                    points_per_plane=charge_share_points,
-                    point_seed=cfg.get("seed"),
                     thrown_points=debug_state["points"],
                     examples_df=plot_df_examples,
                 )
@@ -1053,14 +1058,11 @@ def main() -> None:
             df,
             x_noise,
             time_sigma_ns,
-            avalanche_width,
-            charge_share_points,
-            width_scale_exponent,
-            width_scale_max,
+            lorentzian_gamma_mm,
+            induced_charge_fraction,
             rng,
             debug_event_index,
             debug_state["points"] if debug_event_index is not None else None,
-            debug_rng if debug_event_index is not None else None,
         )
         print("Signal induction complete.")
 
@@ -1074,8 +1076,9 @@ def main() -> None:
             or col.startswith(
                 (
                     "avalanche_size_electrons_",
-                    "avalanche_width_scale_",
-                    "avalanche_scaled_width_",
+                    "avalanche_gap_charge_fc_",
+                    "induced_charge_total_fc_",
+                    "lorentzian_gamma_mm_",
                     "avalanche_x_",
                     "avalanche_y_",
                 )
@@ -1107,8 +1110,6 @@ def main() -> None:
                     plot_df,
                     pdf,
                     include_thrown_points=True,
-                    points_per_plane=charge_share_points,
-                    point_seed=cfg.get("seed"),
                     thrown_points=debug_state["points"],
                     examples_df=plot_df_examples,
                 )

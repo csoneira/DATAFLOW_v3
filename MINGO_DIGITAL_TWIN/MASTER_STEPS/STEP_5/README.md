@@ -14,8 +14,7 @@ Outputs:
 
 Algorithm highlights:
 - `T_diff = X_mea * (3 / (2 * c_mm_per_ns))`.
-- `q_diff ~ Normal(0, qdiff_width)` for hit strips when `qdiff_width` is configured.
-- Legacy fallback: `q_diff ~ Normal(0, qdiff_frac * Y_mea)` when `qdiff_width` is unset.
+- `q_diff ~ Normal(0, qdiff_width)` for hit strips.
 
 Run:
 ```
@@ -26,5 +25,5 @@ python3 step_5_measured_to_triggered.py --config config_step_5_physics.yaml --pl
 
 Notes:
 - `c_mm_per_ns` can be specified in config or inherited from upstream metadata.
-- `qdiff_width` is the preferred constant Gaussian sigma in the same units as `Y_mea`.
+- `qdiff_width` is the required constant Gaussian sigma in the same units as `Y_mea`.
 - The step skips if the target SIM_RUN exists unless `--force` is provided.

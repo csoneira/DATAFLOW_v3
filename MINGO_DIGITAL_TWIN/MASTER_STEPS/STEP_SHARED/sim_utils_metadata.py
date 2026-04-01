@@ -55,30 +55,23 @@ def build_sim_run_name(step_ids: Iterable[str]) -> str:
 
 
 def extract_param_set(meta: Optional[Dict]) -> Tuple[Optional[int], Optional[str]]:
-    if not isinstance(meta, dict):
-        return None, None
-    if "param_set_id" in meta:
-        return meta.get("param_set_id"), meta.get("param_date")
-    upstream = meta.get("upstream")
-    if isinstance(upstream, dict):
-        return upstream.get("param_set_id"), upstream.get("param_date")
+    current = meta
+    while isinstance(current, dict):
+        if "param_set_id" in current:
+            return current.get("param_set_id"), current.get("param_date")
+        current = current.get("upstream")
     return None, None
 
 
 def extract_param_row_id(meta: Optional[Dict]) -> Optional[int]:
-    if not isinstance(meta, dict):
-        return None
-    if "param_row_id" in meta:
-        try:
-            return int(meta.get("param_row_id"))
-        except (TypeError, ValueError):
-            return None
-    upstream = meta.get("upstream")
-    if isinstance(upstream, dict):
-        try:
-            return int(upstream.get("param_row_id"))
-        except (TypeError, ValueError):
-            return None
+    current = meta
+    while isinstance(current, dict):
+        if "param_row_id" in current:
+            try:
+                return int(current.get("param_row_id"))
+            except (TypeError, ValueError):
+                return None
+        current = current.get("upstream")
     return None
 
 

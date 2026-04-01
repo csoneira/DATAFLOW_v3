@@ -51,6 +51,7 @@ def plot_threshold_summary(
     qfront_offsets: list[list[float]] | None = None,
     qback_offsets: list[list[float]] | None = None,
     sample_path: Path | None = None,
+    source_df: pd.DataFrame | None = None,
 ) -> None:
     if qfront_offsets is None:
         qfront_offsets = [[0.0] * 4 for _ in range(4)]
@@ -95,6 +96,11 @@ def plot_threshold_summary(
         fig.tight_layout()
         pdf.savefig(fig, dpi=150)
         plt.close(fig)
+
+        if source_df is not None and not source_df.empty:
+            plot_charge_unit_comparison(source_df, df, pdf, threshold)
+
+        plot_step8_cluster_topology(df, pdf)
 
         # --- Add per-plane 4x4 Q grids with offsets (copied from MASTER) ---
         fig, axes = plt.subplots(4, 4, figsize=(12, 10))
@@ -596,6 +602,183 @@ def plot_tt_xy_histograms(df: pd.DataFrame, pdf: PdfPages) -> None:
     plt.close(fig)
 
 
+def collect_charge_columns(df: pd.DataFrame) -> tuple[list[str], list[str]]:
+    qfront_cols = [c for c in df.columns if c.startswith("Q_front_")]
+    qback_cols = [c for c in df.columns if c.startswith("Q_back_")]
+    return qfront_cols, qback_cols
+
+
+def plane_total_charge(df: pd.DataFrame, plane_idx: int) -> np.ndarray:
+    cols = [
+        c
+        for c in df.columns
+        if c.startswith(f"Q_front_{plane_idx}_s") or c.startswith(f"Q_back_{plane_idx}_s")
+    ]
+    if not cols:
+        return np.array([], dtype=float)
+    vals = df[cols].to_numpy(dtype=float).sum(axis=1)
+    vals = vals[np.isfinite(vals) & (vals > 0)]
+    return vals
+
+
+def plane_strip_activity_mask(df: pd.DataFrame, plane_idx: int) -> np.ndarray:
+    masks: list[np.ndarray] = []
+    for strip_idx in range(1, 5):
+        qf_col = f"Q_front_{plane_idx}_s{strip_idx}"
+        qb_col = f"Q_back_{plane_idx}_s{strip_idx}"
+        qf = (
+            df[qf_col].to_numpy(dtype=float)
+            if qf_col in df.columns
+            else np.zeros(len(df), dtype=float)
+        )
+        qb = (
+            df[qb_col].to_numpy(dtype=float)
+            if qb_col in df.columns
+            else np.zeros(len(df), dtype=float)
+        )
+        masks.append((np.isfinite(qf) & (qf > 0)) | (np.isfinite(qb) & (qb > 0)))
+    return np.column_stack(masks) if masks else np.zeros((len(df), 4), dtype=bool)
+
+
+def plane_cluster_sizes(df: pd.DataFrame, plane_idx: int) -> np.ndarray:
+    return plane_strip_activity_mask(df, plane_idx).sum(axis=1)
+
+
+def plane_topology_patterns(df: pd.DataFrame, plane_idx: int) -> pd.Series:
+    mask = plane_strip_activity_mask(df, plane_idx)
+    patterns = np.array(
+        ["".join("1" if bit else "0" for bit in row) for row in mask],
+        dtype=object,
+    )
+    return pd.Series(patterns, dtype="string")
+
+
+def plot_step8_cluster_topology(df: pd.DataFrame, pdf: PdfPages) -> None:
+    fig_sizes, axes_sizes = plt.subplots(2, 2, figsize=(11, 8), sharey=True)
+    for plane_idx, ax in enumerate(axes_sizes.flatten(), start=1):
+        sizes = plane_cluster_sizes(df, plane_idx)
+        counts = pd.Series(sizes).value_counts().sort_index()
+        x = np.arange(5)
+        y = np.array([int(counts.get(i, 0)) for i in x], dtype=int)
+        ax.bar(x, y, color="tab:purple", alpha=0.8)
+        ax.set_xticks(x)
+        ax.set_xlabel("Cluster size")
+        ax.set_title(f"Plane {plane_idx}")
+        ax.grid(axis="y", alpha=0.2)
+        if plane_idx in (1, 3):
+            ax.set_ylabel("Rows")
+        active = sizes[sizes > 0]
+        mean_size = float(np.mean(active)) if active.size else float("nan")
+        ax.text(
+            0.03,
+            0.95,
+            f"active rows={int(active.size)}\nmean active size={mean_size:.3f}",
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=9,
+            bbox={"boxstyle": "round,pad=0.2", "facecolor": "white", "alpha": 0.8, "edgecolor": "none"},
+        )
+    fig_sizes.suptitle("STEP 8 cluster-size distribution by plane")
+    fig_sizes.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))
+    pdf.savefig(fig_sizes, dpi=150)
+    plt.close(fig_sizes)
+
+    fig_pat, axes_pat = plt.subplots(2, 2, figsize=(12, 8))
+    for plane_idx, ax in enumerate(axes_pat.flatten(), start=1):
+        patterns = plane_topology_patterns(df, plane_idx)
+        patterns = patterns[patterns != "0000"]
+        if patterns.empty:
+            ax.axis("off")
+            continue
+        counts = patterns.value_counts().sort_values(ascending=False).head(8)
+        ax.bar(counts.index.astype(str), counts.to_numpy(dtype=int), color="tab:cyan", alpha=0.8)
+        ax.set_title(f"Plane {plane_idx}")
+        ax.set_xlabel("Active-strip pattern")
+        if plane_idx in (1, 3):
+            ax.set_ylabel("Rows")
+        ax.tick_params(axis="x", labelrotation=45)
+        ax.grid(axis="y", alpha=0.2)
+    fig_pat.suptitle("STEP 8 dominant active-strip topologies by plane")
+    fig_pat.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))
+    pdf.savefig(fig_pat, dpi=150)
+    plt.close(fig_pat)
+
+
+def plot_charge_unit_comparison(
+    source_df: pd.DataFrame,
+    fee_df: pd.DataFrame,
+    pdf: PdfPages,
+    threshold_ns: float,
+) -> None:
+    source_qf, source_qb = collect_charge_columns(source_df)
+    fee_qf, fee_qb = collect_charge_columns(fee_df)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    source_vals = []
+    if source_qf:
+        source_vals.append(source_df[source_qf].to_numpy(dtype=float).ravel())
+    if source_qb:
+        source_vals.append(source_df[source_qb].to_numpy(dtype=float).ravel())
+    source_all = np.concatenate(source_vals) if source_vals else np.array([], dtype=float)
+    source_all = source_all[np.isfinite(source_all) & (source_all > 0)]
+    if source_all.size > 0:
+        axes[0].hist(source_all, bins=100, color="tab:green", alpha=0.8)
+    axes[0].set_title("STEP 7 endpoint charge before FEE")
+    axes[0].set_xlabel("Charge [fC]")
+    axes[0].set_ylabel("Counts")
+
+    fee_vals = []
+    if fee_qf:
+        fee_vals.append(fee_df[fee_qf].to_numpy(dtype=float).ravel())
+    if fee_qb:
+        fee_vals.append(fee_df[fee_qb].to_numpy(dtype=float).ravel())
+    fee_all = np.concatenate(fee_vals) if fee_vals else np.array([], dtype=float)
+    fee_all = fee_all[np.isfinite(fee_all) & (fee_all > 0)]
+    if fee_all.size > 0:
+        axes[1].hist(fee_all, bins=100, color="tab:blue", alpha=0.8)
+    axes[1].axvline(threshold_ns, color="red", linestyle="--", linewidth=1.0)
+    axes[1].set_title("STEP 8 endpoint charge after FEE")
+    axes[1].set_xlabel("Width-equivalent charge [ns]")
+    axes[1].set_ylabel("Counts")
+
+    fig.suptitle("Same-sample charge view before and after FEE conversion")
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.95))
+    pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+
+    fig_fc, axes_fc = plt.subplots(2, 2, figsize=(11, 8), sharey=True)
+    for plane_idx, ax in enumerate(axes_fc.flatten(), start=1):
+        vals = plane_total_charge(source_df, plane_idx)
+        if vals.size == 0:
+            ax.axis("off")
+            continue
+        ax.hist(vals, bins=100, color="tab:green", alpha=0.8)
+        ax.set_title(f"Plane {plane_idx} total endpoint charge before FEE")
+        ax.set_xlabel("Plane charge [fC]")
+        ax.set_ylabel("Counts")
+    fig_fc.suptitle("STEP 7 plane-charge totals in original fC units")
+    fig_fc.tight_layout(rect=(0.0, 0.0, 1.0, 0.95))
+    pdf.savefig(fig_fc, dpi=150)
+    plt.close(fig_fc)
+
+    fig_ns, axes_ns = plt.subplots(2, 2, figsize=(11, 8), sharey=True)
+    for plane_idx, ax in enumerate(axes_ns.flatten(), start=1):
+        vals = plane_total_charge(fee_df, plane_idx)
+        if vals.size == 0:
+            ax.axis("off")
+            continue
+        ax.hist(vals, bins=100, color="tab:blue", alpha=0.8)
+        ax.axvline(threshold_ns, color="red", linestyle="--", linewidth=1.0)
+        ax.set_title(f"Plane {plane_idx} total endpoint charge after FEE")
+        ax.set_xlabel("Plane charge [ns]")
+        ax.set_ylabel("Counts")
+    fig_ns.suptitle("STEP 8 plane-charge totals in FEE ns units")
+    fig_ns.tight_layout(rect=(0.0, 0.0, 1.0, 0.95))
+    pdf.savefig(fig_ns, dpi=150)
+    plt.close(fig_ns)
+
+
 def find_step_manifest_for_sample(sample_path: Path, step: int) -> Path | None:
     manifest_name = f"step_{step}_chunks.chunks.json"
     if sample_path.name == manifest_name:
@@ -623,20 +806,37 @@ def load_step8_config(sample_path: Path) -> dict:
     return cfg if isinstance(cfg, dict) else {}
 
 
+def load_step_source_df(sample_path: Path, source_step: int) -> pd.DataFrame | None:
+    manifest = find_step_manifest_for_sample(sample_path, step=8)
+    if manifest is None or not manifest.exists():
+        return None
+    try:
+        j = json.loads(manifest.read_text())
+    except Exception:
+        return None
+    metadata = j.get("metadata", {}) if isinstance(j, dict) else {}
+    source_dataset = metadata.get("source_dataset") if isinstance(metadata, dict) else None
+    if not source_dataset:
+        return None
+    source_path = Path(str(source_dataset))
+    if not source_path.is_absolute():
+        source_path = (manifest.parent / source_path).resolve()
+    if source_step == 7 and source_path.exists():
+        try:
+            return load_df(source_path)
+        except Exception:
+            return None
+    return None
+
+
 def find_any_chunk_for_step(step: int) -> Path | None:
     root = Path(__file__).resolve().parents[3] / "INTERSTEPS"
-    parts = sorted(root.glob(f"**/step_{step}_chunks/part_*.pkl"))
-    if parts:
-        return parts[0]
-    manifests = sorted(root.rglob(f"*step_{step}_chunks.chunks.json"))
+    manifests = list(root.rglob(f"*step_{step}_chunks.chunks.json"))
     if manifests:
-        try:
-            j = json.loads(manifests[0].read_text())
-            parts_list = [p for p in (j.get("parts") or j.get("chunks") or []) if str(p).endswith(".pkl")]
-            if parts_list:
-                return Path(parts_list[0])
-        except Exception:
-            return manifests[0]
+        return max(manifests, key=lambda p: p.stat().st_mtime)
+    parts = list(root.glob(f"**/step_{step}_chunks/part_*.pkl"))
+    if parts:
+        return max(parts, key=lambda p: p.stat().st_mtime)
     return None
 
 
@@ -661,8 +861,11 @@ def main() -> None:
         return
     print(f"Using sample: {sample}")
     df = load_df(sample)
+    source_df = load_step_source_df(sample, source_step=7)
+    if source_df is not None:
+        print("Loaded matching STEP 7 source dataset for original-fC charge plots.")
     cfg = load_step8_config(sample)
-    thresh = float(cfg.get("threshold", 0.0))
+    thresh = float(cfg.get("charge_threshold", cfg.get("threshold", 0.0)))
     qfront_offsets = cfg.get("qfront_offsets", [[0.0] * 4 for _ in range(4)])
     qback_offsets = cfg.get("qback_offsets", [[0.0] * 4 for _ in range(4)])
 
@@ -676,6 +879,7 @@ def main() -> None:
         qfront_offsets=qfront_offsets,
         qback_offsets=qback_offsets,
         sample_path=sample,
+        source_df=source_df,
     )
     print(f"Saved {out_path}")
 

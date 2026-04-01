@@ -73,14 +73,14 @@ Out-of-bounds crossings are NaN; times are normalized so earliest valid plane pe
 - avalanche centroid follows crossing coordinates.
 
 ### STEP_4: induction and strip coupling
-- width scales with avalanche size (bounded by config caps).
-- charge sharing uses strip-overlap geometry and binomial allocation.
+- avalanche electrons are converted to gap charge in `fC`, then to induced charge with `induced_charge_fraction`.
+- charge sharing uses an isotropic 2D Lorentzian with total area equal to the induced charge.
+- strip charges are the exact Lorentzian rectangle integrals over detector x-bounds and strip y-bands.
 - outputs per-strip charge/time/position observables for hit strips.
 
 ### STEP_5: difference observables
 - `T_diff = X_mea * (3 / (2 * c_mm_per_ns))`
-- preferred: `q_diff ~ Normal(0, qdiff_width)`
-- legacy fallback: `q_diff ~ Normal(0, qdiff_frac * Y_mea)`
+- `q_diff ~ Normal(0, qdiff_width)`
 
 ### STEP_6: front/back conversion
 - `T_front = T_sum_meas - T_diff`

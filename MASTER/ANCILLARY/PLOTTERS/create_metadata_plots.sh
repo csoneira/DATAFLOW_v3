@@ -46,6 +46,11 @@ run_plotter \
   --config "$PLOTTERS_ROOT/METADATA/FILTER/filter_metadata_config.json"
 
 run_plotter \
+  "noise_control_metadata_plotter" \
+  python3 -u "$PLOTTERS_ROOT/METADATA/NOISE_CONTROL/noise_control_metadata_plotter.py" \
+  --config "$PLOTTERS_ROOT/METADATA/NOISE_CONTROL/noise_control_metadata_config.json"
+
+run_plotter \
   "rates_metadata_plotter" \
   python3 -u "$PLOTTERS_ROOT/RATES/rates_metadata_plotter.py" \
   --config "$PLOTTERS_ROOT/RATES/rates_metadata_config.json"
@@ -59,6 +64,11 @@ run_plotter \
   "efficiency_metadata_plotter" \
   python3 -u "$PLOTTERS_ROOT/METADATA/EFFICIENCIES/efficiency_metadata_plotter.py" \
   --config "$PLOTTERS_ROOT/METADATA/EFFICIENCIES/efficiency_metadata_config.json"
+
+run_plotter \
+  "efficiencies_three_to_four_plotter" \
+  python3 -u "$PLOTTERS_ROOT/METADATA/EFFICIENCIES_THREE_TO_FOUR/efficiencies_three_to_four_plotter.py" \
+  --config "$PLOTTERS_ROOT/METADATA/EFFICIENCIES_THREE_TO_FOUR/efficiencies_three_to_four_config.json"
 
 run_plotter \
   "simulated_data_evolution_plotter" \

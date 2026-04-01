@@ -800,27 +800,88 @@ def plot_station_page(
             x_tick_rotation=45.0,
         )
 
-        legend_handles, legend_labels = build_task_legend(
+        if row_idx == n_rows - 1:
+            left_ax.set_xlabel("Basename timestamp")
+            right_ax.set_xlabel("Execution timestamp")
+
+    pdf_save_rasterized_page(pdf, fig, dpi=150)
+    plt.close(fig)
+
+
+def plot_station_legend_page(
+    station: str,
+    task_data: Dict[int, pd.DataFrame],
+    tasks: Sequence[int],
+    pdf: PdfPages,
+    legend_min_percent: float,
+    y_max_percent: float,
+) -> None:
+    legend_specs: List[Tuple[int, List[object], List[str]]] = []
+    row_weights: List[float] = []
+
+    for task_id in tasks:
+        df = task_data.get(task_id, pd.DataFrame())
+        filter_columns = detect_filter_columns(df)
+        colors = colour_map_for_columns(filter_columns)
+        handles, labels = build_task_legend(
             df=df,
             filter_columns=filter_columns,
             column_colors=colors,
             legend_min_percent=legend_min_percent,
             y_max_percent=y_max_percent,
         )
-        if legend_handles:
-            right_ax.legend(
-                legend_handles,
-                legend_labels,
-                loc="upper left",
-                bbox_to_anchor=(1.01, 1.0),
-                borderaxespad=0.0,
-                fontsize=7,
-                framealpha=0.85,
-            )
+        legend_specs.append((task_id, handles, labels))
+        row_weights.append(max(1.0, 0.45 * max(len(handles), 1)))
 
-        if row_idx == n_rows - 1:
-            left_ax.set_xlabel("Basename timestamp")
-            right_ax.set_xlabel("Execution timestamp")
+    fig_height = max(6.0, 1.2 + sum(row_weights))
+    fig, axes = plt.subplots(
+        len(tasks),
+        1,
+        figsize=(14, fig_height),
+        constrained_layout=True,
+        gridspec_kw={"height_ratios": row_weights},
+    )
+
+    if len(tasks) == 1:
+        axes = np.array([axes])
+
+    fig.suptitle(
+        f"{station} - Filter metadata legend",
+        fontsize=13,
+    )
+
+    for ax, (task_id, handles, labels) in zip(axes, legend_specs):
+        ax.axis("off")
+        if not handles:
+            ax.text(
+                0.0,
+                0.9,
+                f"Task {task_id}: no legend entries above threshold.",
+                transform=ax.transAxes,
+                ha="left",
+                va="top",
+                fontsize=10,
+                color="dimgray",
+            )
+            continue
+
+        ncol = max(1, min(3, int(np.ceil(len(handles) / 10.0))))
+        legend = ax.legend(
+            handles,
+            labels,
+            loc="upper left",
+            bbox_to_anchor=(0.0, 1.0),
+            borderaxespad=0.0,
+            fontsize=8,
+            framealpha=0.85,
+            ncol=ncol,
+            title=f"Task {task_id}",
+            title_fontsize=10,
+            columnspacing=1.2,
+            handletextpad=0.5,
+            labelspacing=0.5,
+        )
+        legend._legend_box.align = "left"
 
     pdf_save_rasterized_page(pdf, fig, dpi=150)
     plt.close(fig)
@@ -1044,6 +1105,14 @@ def main() -> None:
                 y_max_percent=y_max_percent,
                 legend_min_percent=legend_min_percent,
                 max_fill_gap_hours=max_fill_gap_hours,
+            )
+            plot_station_legend_page(
+                station=station,
+                task_data=station_task_data,
+                tasks=tasks,
+                pdf=pdf,
+                legend_min_percent=legend_min_percent,
+                y_max_percent=y_max_percent,
             )
 
     print(f"Saved filter metadata report: {output_path}")

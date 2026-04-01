@@ -36,6 +36,8 @@ sys.path.append(str(ROOT_DIR / "MASTER_STEPS"))
 
 from STEP_SHARED.sim_utils import (
     ensure_dir,
+    extract_param_row_id,
+    extract_param_set,
     find_latest_data_path,
     find_sim_run,
     find_sim_run_dir,
@@ -47,7 +49,9 @@ from STEP_SHARED.sim_utils import (
     now_iso,
     build_sim_run_name,
     register_sim_run,
+    resolve_param_mesh,
     extract_step_id_chain,
+    select_param_row,
     select_next_step_id,
     resolve_sim_run,
     reset_dir,
@@ -62,6 +66,51 @@ def normalize_tt(series: pd.Series) -> pd.Series:
     tt = tt.str.replace(r"\.0$", "", regex=True)
     tt = tt.replace({"0": "", "0.0": "", "nan": "", "<NA>": ""})
     return tt
+
+
+def _normalize_trigger_value(value: object) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "<na>"}:
+        return None
+    if text.endswith(".0"):
+        text = text[:-2]
+    text = "".join(ch for ch in text if ch.isdigit())
+    if not text or set(text) == {"0"}:
+        return None
+    return text
+
+
+def resolve_trigger_combinations_for_input(
+    upstream_meta: dict,
+    mesh_dir: Path,
+    mesh_sim_run: str | None,
+    seed: int | None,
+    fallback_triggers: list[str],
+) -> tuple[list[str], str]:
+    param_row_id = extract_param_row_id(upstream_meta)
+    param_set_id, _ = extract_param_set(upstream_meta)
+    if param_row_id is None and param_set_id is None:
+        return fallback_triggers, "config_fallback"
+    try:
+        mesh, _ = resolve_param_mesh(mesh_dir, mesh_sim_run, seed)
+        param_row = select_param_row(mesh, np.random.default_rng(seed), param_set_id, param_row_id)
+    except Exception:
+        return fallback_triggers, "config_fallback"
+
+    trigger_cols = ["trigger_c1", "trigger_c2", "trigger_c3", "trigger_c4"]
+    if not all(col in param_row.index for col in trigger_cols):
+        return fallback_triggers, "config_fallback"
+
+    resolved: list[str] = []
+    for col in trigger_cols:
+        trig = _normalize_trigger_value(param_row.get(col))
+        if trig and trig not in resolved:
+            resolved.append(trig)
+    if not resolved:
+        return fallback_triggers, "config_fallback"
+    return resolved, "param_mesh"
 
 
 def passes_trigger(tt_value: str, triggers: List[str]) -> bool:
@@ -211,7 +260,7 @@ def main() -> None:
     chunk_rows = cfg.get("chunk_rows")
     plot_sample_rows = cfg.get("plot_sample_rows")
     rng = np.random.default_rng(cfg.get("seed"))
-    triggers = [str(t) for t in cfg.get("trigger_combinations", [])]
+    configured_triggers = [str(t) for t in cfg.get("trigger_combinations", [])]
 
     input_glob = cfg.get("input_glob", "**/step_8_chunks.chunks.json")
     input_sim_run = cfg.get("input_sim_run", "latest")
@@ -219,7 +268,7 @@ def main() -> None:
     print("\n-----\nStep 9 starting...\n-----")
     print(f"Input dir: {input_dir}")
     print(f"Output dir: {output_dir}")
-    print(f"Triggers: {triggers}")
+    print(f"Configured triggers: {configured_triggers}")
 
     if args.plot_only:
         if args.no_plots:
@@ -302,8 +351,16 @@ def main() -> None:
         print("Skipping STEP_9: all step_9_id combinations already exist.")
         return
 
+    triggers, trigger_source = resolve_trigger_combinations_for_input(
+        upstream_meta,
+        mesh_dir,
+        cfg.get("param_mesh_sim_run", "none"),
+        cfg.get("seed"),
+        configured_triggers,
+    )
     normalized_stem = normalize_stem(input_path)
     print(f"Processing: {input_path}")
+    print(f"Resolved triggers ({trigger_source}): {triggers}")
     sim_run = build_sim_run_name(step_chain + [step_9_id])
     sim_run_dir = output_dir / sim_run
     if not args.force and sim_run_dir.exists():
@@ -311,6 +368,7 @@ def main() -> None:
         return
 
     physics_cfg["step_9_id"] = step_9_id
+    physics_cfg["trigger_combinations"] = triggers
     sim_run, sim_run_dir, config_hash, upstream_hash, _ = register_sim_run(
         output_dir, "STEP_9", config_path, physics_cfg, upstream_meta, sim_run
     )
@@ -329,6 +387,8 @@ def main() -> None:
         "source_dataset": str(input_path),
         "upstream": upstream_meta,
         "step_9_id": step_9_id,
+        "trigger_combinations": triggers,
+        "trigger_source": trigger_source,
     }
     if chunk_rows:
         def _iter_out() -> Iterable[pd.DataFrame]:

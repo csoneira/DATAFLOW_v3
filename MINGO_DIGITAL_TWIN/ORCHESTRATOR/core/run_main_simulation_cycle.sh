@@ -220,8 +220,8 @@ count_pending_files() {
     n_sim_files=$(find "${SIMULATED_DATA_FILES_DIR}" -maxdepth 1 -name "mi*.dat" -type f 2>/dev/null | wc -l || true)
   fi
   if [[ -d "${STATIONS_STEP1_DIR}" ]]; then
-    n_unprocessed=$(find "${STATIONS_STEP1_DIR}" -path "*/INPUT_FILES/UNPROCESSED_DIRECTORY/*" -type f 2>/dev/null | wc -l || true)
-    n_processing=$(find "${STATIONS_STEP1_DIR}" -path "*/INPUT_FILES/PROCESSING_DIRECTORY/*" -type f 2>/dev/null | wc -l || true)
+    n_unprocessed=$(find "${STATIONS_STEP1_DIR}" -path "*/INPUT_FILES/UNPROCESSED_DIRECTORY/*" -type f ! -name "removed_channel_values_*" ! -name "removed_rows_*" 2>/dev/null | wc -l || true)
+    n_processing=$(find "${STATIONS_STEP1_DIR}" -path "*/INPUT_FILES/PROCESSING_DIRECTORY/*" -type f ! -name "removed_channel_values_*" ! -name "removed_rows_*" 2>/dev/null | wc -l || true)
   fi
 
   total=$(( n_sim_root + n_sim_files + n_unprocessed + n_processing ))
@@ -241,6 +241,7 @@ from itertools import combinations
 from pathlib import Path
 
 rx = re.compile(r"(mi\d{13})")
+IGNORED_QUEUE_PREFIXES = ("removed_channel_values_", "removed_rows_")
 
 
 def extract_ids(paths):
@@ -261,6 +262,10 @@ def list_files(path: str, pattern: str, recursive: bool = False):
     return [p for p in root.glob(pattern) if p.is_file()]
 
 
+def is_countable_queue_file(path: Path) -> bool:
+    return not path.name.startswith(IGNORED_QUEUE_PREFIXES)
+
+
 sim_root_files = list_files(os.environ.get("SIMULATED_DATA_DIR", ""), "mi*.dat", recursive=False)
 sim_files_files = list_files(os.environ.get("SIMULATED_DATA_FILES_DIR", ""), "mi*.dat", recursive=False)
 step1_dir = Path(os.environ.get("STATIONS_STEP1_DIR", ""))
@@ -268,12 +273,16 @@ if step1_dir.is_dir():
     unprocessed_files = [
         p
         for p in step1_dir.rglob("*")
-        if p.is_file() and "INPUT_FILES/UNPROCESSED_DIRECTORY/" in str(p)
+        if p.is_file()
+        and "INPUT_FILES/UNPROCESSED_DIRECTORY/" in str(p)
+        and is_countable_queue_file(p)
     ]
     processing_files = [
         p
         for p in step1_dir.rglob("*")
-        if p.is_file() and "INPUT_FILES/PROCESSING_DIRECTORY/" in str(p)
+        if p.is_file()
+        and "INPUT_FILES/PROCESSING_DIRECTORY/" in str(p)
+        and is_countable_queue_file(p)
     ]
 else:
     unprocessed_files = []

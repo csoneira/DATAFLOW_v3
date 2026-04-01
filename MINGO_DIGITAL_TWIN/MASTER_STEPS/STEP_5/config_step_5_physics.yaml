@@ -3,6 +3,5 @@
 
 # Semifixed
 qdiff_width: 0.01
-qdiff_frac: 0.01  # Legacy fallback used only when qdiff_width is unset.
 
 # Variable (to loop on)

@@ -52,6 +52,17 @@ PDF_TARGETS = {
         / "filter_metadata_report.pdf",
         "description": "Filter metadata report",
     },
+    "noise_control_metadata_report": {
+        "path": BASE_DIR
+        / "MASTER"
+        / "ANCILLARY"
+        / "PLOTTERS"
+        / "METADATA"
+        / "NOISE_CONTROL"
+        / "PLOTS"
+        / "noise_control_metadata_report.pdf",
+        "description": "Noise-control metadata report",
+    },
     "rates_metadata_report": {
         "path": BASE_DIR
         / "MASTER"
@@ -83,6 +94,17 @@ PDF_TARGETS = {
         / "PLOTS"
         / "efficiency_metadata_report.pdf",
         "description": "Efficiency metadata report",
+    },
+    "efficiencies_three_to_four_report": {
+        "path": BASE_DIR
+        / "MASTER"
+        / "ANCILLARY"
+        / "PLOTTERS"
+        / "METADATA"
+        / "EFFICIENCIES_THREE_TO_FOUR"
+        / "PLOTS"
+        / "efficiencies_three_to_four_report.pdf",
+        "description": "Three-to-four efficiency metadata report",
     },
     "simulated_data_evolution_report": {
         "path": BASE_DIR
@@ -142,9 +164,11 @@ HELP_TEXT = (
     "ANALYSIS PDF Reports:\n"
     "  /definitive_execution_report - Definitive execution map PDF.\n"
     "  /filter_metadata_report - Filter metadata PDF.\n"
+    "  /noise_control_metadata_report - Noise-control metadata PDF.\n"
     "  /rates_metadata_report - Rates metadata PDF.\n"
     "  /execution_metadata_report - Execution metadata PDF.\n"
     "  /efficiency_metadata_report - Efficiency metadata PDF.\n"
+    "  /efficiencies_three_to_four_report - Three-to-four efficiency metadata PDF.\n"
     "  /simulated_data_evolution_report - Simulated data evolution report PDF.\n\n"
     "Maintenance Tools:\n"
     "  /clean_dataflow_status - Run clean_dataflow.sh --compact to show disk usage.\n"

@@ -3,7 +3,6 @@ seed: null
 avalanche_gap_mm: 3.0
 
 # Semifixed
-avalanche_gain: 1.0
 townsend_alpha_per_mm: 4.836
 avalanche_electron_sigma: 0.4
 

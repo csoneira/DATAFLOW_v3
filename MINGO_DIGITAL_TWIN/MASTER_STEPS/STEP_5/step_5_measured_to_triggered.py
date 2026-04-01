@@ -55,17 +55,10 @@ from STEP_SHARED.sim_utils import (
 )
 
 
-def _resolve_qdiff_sigma(qsum_vals: np.ndarray, qdiff_frac: float, qdiff_width: float | None) -> np.ndarray:
-    if qdiff_width is not None:
-        return np.full_like(qsum_vals, float(qdiff_width), dtype=float)
-    return qdiff_frac * qsum_vals
-
-
 def compute_tdiff_qdiff(
     df: pd.DataFrame,
     c_mm_per_ns: float,
-    qdiff_frac: float,
-    qdiff_width: float | None,
+    qdiff_width: float,
     rng: np.random.Generator,
 ) -> pd.DataFrame:
     out = df.copy()
@@ -85,7 +78,7 @@ def compute_tdiff_qdiff(
             qdiff = np.zeros(len(out), dtype=float)
             hit_mask = qsum_vals > 0
             if hit_mask.any():
-                qdiff_sigma = _resolve_qdiff_sigma(qsum_vals[hit_mask], qdiff_frac, qdiff_width)
+                qdiff_sigma = np.full(hit_mask.sum(), float(qdiff_width), dtype=float)
                 qdiff[hit_mask] = rng.normal(0.0, qdiff_sigma, size=hit_mask.sum())
 
             out[f"T_diff_{plane_idx}_s{strip_idx}"] = tdiff
@@ -297,9 +290,10 @@ def main() -> None:
     output_format = str(cfg.get("output_format", "pkl")).lower()
     chunk_rows = cfg.get("chunk_rows")
     plot_sample_rows = cfg.get("plot_sample_rows")
-    qdiff_frac = float(cfg.get("qdiff_frac", 0.01))
     qdiff_width_raw = cfg.get("qdiff_width")
-    qdiff_width = None if qdiff_width_raw in (None, "") else float(qdiff_width_raw)
+    if qdiff_width_raw in (None, ""):
+        raise ValueError("qdiff_width must be set explicitly in config_step_5_physics.yaml.")
+    qdiff_width = float(qdiff_width_raw)
     rng = np.random.default_rng(cfg.get("seed"))
 
     input_glob = cfg.get("input_glob", "**/step_4_chunks.chunks.json")
@@ -419,12 +413,11 @@ def main() -> None:
         "source_dataset": str(input_path),
         "upstream": upstream_meta,
         "step_5_id": step_5_id,
-        "qdiff_mode": "constant_width" if qdiff_width is not None else "fractional",
     }
     if chunk_rows:
         def _iter_out() -> Iterable[pd.DataFrame]:
             for chunk in input_iter:
-                yield prune_step5(compute_tdiff_qdiff(chunk, c_mm_per_ns, qdiff_frac, qdiff_width, rng))
+                yield prune_step5(compute_tdiff_qdiff(chunk, c_mm_per_ns, qdiff_width, rng))
 
         manifest_path, last_chunk, row_count = write_chunked_output(
             _iter_out(),
@@ -447,7 +440,7 @@ def main() -> None:
         print(f"Saved {manifest_path}")
     else:
         df, upstream_meta = load_with_metadata(input_path)
-        out = prune_step5(compute_tdiff_qdiff(df, c_mm_per_ns, qdiff_frac, qdiff_width, rng))
+        out = prune_step5(compute_tdiff_qdiff(df, c_mm_per_ns, qdiff_width, rng))
         out_path = sim_run_dir / f"{out_stem}.{output_format}"
         save_with_metadata(out, out_path, metadata, output_format)
         if not args.no_plots:

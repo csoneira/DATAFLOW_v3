@@ -14,7 +14,9 @@ Outputs:
 
 Algorithm highlights:
 - `T_front` and `T_back` receive Gaussian jitter (`t_fee_sigma_ns`).
-- Q values are converted to time-walk units using `q_to_time_factor` and per-channel offsets.
+- Q values are converted to detector-side width using the configured `charge_conversion_model`.
+- The preferred mode is `tot_curve_inverse`, which applies the inverse TOT calibration curve.
+- `q_to_time_factor` is kept only as a legacy linear fallback.
 - Channels below `charge_threshold` are set to 0.
 
 Run:

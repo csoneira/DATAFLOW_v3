@@ -103,11 +103,13 @@ from MASTER.common.config_loader import update_config_with_parameters
 from MASTER.common.debug_plots import plot_debug_histograms
 from MASTER.common.execution_logger import set_station, start_timer
 from MASTER.common.file_selection import (
+    filter_expected_artifact_names,
     file_name_in_any_date_range,
     load_date_ranges_from_config,
     select_latest_candidate,
     sync_unprocessed_with_date_range,
 )
+from MASTER.common.input_file_config import select_input_file_configuration
 from MASTER.common.path_config import (
     get_master_config_root,
     get_repo_root,
@@ -525,6 +527,14 @@ parameter_config_file_path = (
     / "TASK_2"
     / "config_parameters_task_2.csv"
 )
+filter_parameter_config_file_path = (
+    config_root
+    / "STAGE_1"
+    / "EVENT_DATA"
+    / "STEP_1"
+    / "TASK_2"
+    / "config_filter_parameters_task_2.csv"
+)
 fallback_parameter_config_file_path = (
     config_root
     / "STAGE_1"
@@ -534,6 +544,7 @@ fallback_parameter_config_file_path = (
 )
 print(f"Using config file: {config_file_path}")
 print(f"Using plot catalog file: {plot_catalog_file_path}")
+print(f"Using filter parameter config file: {filter_parameter_config_file_path}")
 with config_file_path.open("r", encoding="utf-8") as config_file:
     config = yaml.safe_load(config_file)
 task2_plot_status_by_alias = load_step1_task_plot_catalog(
@@ -562,6 +573,10 @@ if CLI_ARGS.station is None:
     CLI_PARSER.error("No station provided. Pass <station>.")
 station = str(CLI_ARGS.station)
 set_station(station)
+
+if filter_parameter_config_file_path.exists():
+    config = update_config_with_parameters(config, filter_parameter_config_file_path, station)
+    print(f"Warning: Loaded filter parameters from {filter_parameter_config_file_path}")
 
 config = apply_step1_task_parameter_overrides(
     config_obj=config,
@@ -709,6 +724,7 @@ base_directories = {
     "empty_files_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY/EMPTY_FILES"),
     "rejected_files_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY/REJECTED_FILES"),
     "temp_files_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY/TEMP_FILES"),
+    "tracking_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY/TRACKING"),
     
     "unprocessed_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/UNPROCESSED_DIRECTORY"),
     "out_of_date_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/OUT_OF_DATE_DIRECTORY"),
@@ -736,6 +752,19 @@ debug_plot_directory = os.path.join(
     f"FIGURES_EXEC_ON_{date_execution}",
 )
 debug_fig_idx = 1
+
+EXPECTED_INPUT_PREFIX = "cleaned_"
+EXPECTED_INPUT_EXTENSION = ".parquet"
+
+
+def _expected_input_files(file_names):
+    return sorted(
+        filter_expected_artifact_names(
+            file_names,
+            prefix=EXPECTED_INPUT_PREFIX,
+            extension=EXPECTED_INPUT_EXTENSION,
+        )
+    )
 
 def _debug_plot_filter_group(
     df: pd.DataFrame,
@@ -791,6 +820,10 @@ csv_path_calibration = os.path.join(
     f"task_{task_number}_metadata_calibration.csv",
 )
 csv_path_filter = os.path.join(metadata_directory, f"task_{task_number}_metadata_filter.csv")
+csv_path_noise_control = os.path.join(
+    metadata_directory,
+    f"task_{task_number}_metadata_noise_control.csv",
+)
 csv_path_status = os.path.join(metadata_directory, f"task_{task_number}_metadata_status.csv")
 csv_path_profiling = os.path.join(metadata_directory, f"task_{task_number}_metadata_profiling.csv")
 status_filename_base = ""
@@ -812,10 +845,10 @@ empty_files_directory = base_directories["empty_files_directory"]
 rejected_files_directory = base_directories["rejected_files_directory"]
 temp_files_directory = base_directories["temp_files_directory"]
 
-raw_files = set(os.listdir(raw_directory))
-unprocessed_files = set(os.listdir(unprocessed_directory))
-processing_files = set(os.listdir(processing_directory))
-completed_files = set(os.listdir(completed_directory))
+raw_files = set(_expected_input_files(os.listdir(raw_directory)))
+unprocessed_files = set(_expected_input_files(os.listdir(unprocessed_directory)))
+processing_files = set(_expected_input_files(os.listdir(processing_directory)))
+completed_files = set(_expected_input_files(os.listdir(completed_directory)))
 
 # Ordered list from highest to lowest priority
 LEVELS = [
@@ -888,10 +921,10 @@ for directory in [raw_directory, unprocessed_directory, processing_directory, co
             os.utime(empty_destination_path, (now, now))
 
 # Files to move: in STAGE_0_to_1 but not in UNPROCESSED, PROCESSING, or COMPLETED
-raw_files = set(os.listdir(raw_directory))
-unprocessed_files = set(os.listdir(unprocessed_directory))
-processing_files = set(os.listdir(processing_directory))
-completed_files = set(os.listdir(completed_directory))
+raw_files = set(_expected_input_files(os.listdir(raw_directory)))
+unprocessed_files = set(_expected_input_files(os.listdir(unprocessed_directory)))
+processing_files = set(_expected_input_files(os.listdir(processing_directory)))
+completed_files = set(_expected_input_files(os.listdir(completed_directory)))
 
 files_to_move = raw_files - unprocessed_files - processing_files - completed_files
 
@@ -1341,68 +1374,34 @@ TASK2_SELECTED_OFFENDER_CARDINALITY_VALUES: tuple[int, ...] = tuple(range(1, 17)
 
 FILTER_METRIC_NAMES: tuple[str, ...] = (
     "clean_tt_nan_rows_removed_pct",
-    "strip_zeroing_stage1_rows_affected_pct",
-    "strip_zeroing_stage1_values_zeroed_pct",
-    "strip_zeroing_stage1_partial_strip_rows_pct",
-    "strip_zeroing_stage1_partial_strip_blocks_pct",
-    "strip_zeroing_stage1_already_all_zero_strip_blocks_pct",
-    "strip_zeroing_stage1_q_sum_trigger_rows_pct",
-    "strip_zeroing_stage1_q_dif_trigger_rows_pct",
-    "strip_zeroing_stage1_t_sum_trigger_rows_pct",
-    "strip_zeroing_stage1_t_dif_trigger_rows_pct",
-    "strip_zeroing_stage2_rows_affected_pct",
-    "strip_zeroing_stage2_values_zeroed_pct",
-    "strip_zeroing_stage2_partial_strip_rows_pct",
-    "strip_zeroing_stage2_partial_strip_blocks_pct",
-    "strip_zeroing_stage2_already_all_zero_strip_blocks_pct",
-    "strip_zeroing_stage2_q_sum_trigger_rows_pct",
-    "strip_zeroing_stage2_q_dif_trigger_rows_pct",
-    "strip_zeroing_stage2_t_sum_trigger_rows_pct",
-    "strip_zeroing_stage2_t_dif_trigger_rows_pct",
-    "strip_zeroing_stage3_rows_affected_pct",
-    "strip_zeroing_stage3_values_zeroed_pct",
-    "strip_zeroing_stage3_partial_strip_rows_pct",
-    "strip_zeroing_stage3_partial_strip_blocks_pct",
-    "strip_zeroing_stage3_already_all_zero_strip_blocks_pct",
-    "strip_zeroing_stage3_q_sum_trigger_rows_pct",
-    "strip_zeroing_stage3_q_dif_trigger_rows_pct",
-    "strip_zeroing_stage3_t_sum_trigger_rows_pct",
-    "strip_zeroing_stage3_t_dif_trigger_rows_pct",
-    "strip_zeroing_stage4_rows_affected_pct",
-    "strip_zeroing_stage4_values_zeroed_pct",
-    "strip_zeroing_stage4_partial_strip_rows_pct",
-    "strip_zeroing_stage4_partial_strip_blocks_pct",
-    "strip_zeroing_stage4_already_all_zero_strip_blocks_pct",
-    "strip_zeroing_stage4_q_sum_trigger_rows_pct",
-    "strip_zeroing_stage4_q_dif_trigger_rows_pct",
-    "strip_zeroing_stage4_t_sum_trigger_rows_pct",
-    "strip_zeroing_stage4_t_dif_trigger_rows_pct",
-    "strip_zeroing_stage5_rows_affected_pct",
-    "strip_zeroing_stage5_values_zeroed_pct",
-    "strip_zeroing_stage6_rows_affected_pct",
-    "strip_zeroing_stage6_values_zeroed_pct",
-    "strip_zeroing_stage7_rows_affected_pct",
-    "strip_zeroing_stage7_values_zeroed_pct",
+    "precal_strip_window_rows_affected_pct",
+    "calibrated_t_dif_rows_affected_pct",
+    "calibrated_q_dif_rows_affected_pct",
+    "calibrated_q_sum_rows_affected_pct",
+    "front_back_q_dif_rows_affected_pct",
+    "calibrated_t_sum_rows_affected_pct",
+    "post_crosstalk_q_sum_rows_affected_pct",
     "strip_combination_filter_rows_affected_pct",
-    "strip_combination_filter_values_zeroed_pct",
-    "strip_combination_filter_any_failed_pct",
-    "strip_combination_filter_q_sum_sum_failed_pct",
-    "strip_combination_filter_q_sum_dif_failed_pct",
-    "strip_combination_filter_q_dif_sum_failed_pct",
-    "strip_combination_filter_q_dif_dif_failed_pct",
-    "strip_combination_filter_t_sum_sum_failed_pct",
-    "strip_combination_filter_t_sum_dif_failed_pct",
-    "strip_combination_filter_t_dif_sum_failed_pct",
-    "strip_combination_filter_t_dif_dif_failed_pct",
-    *tuple(
-        f"strip_combination_filter_rows_with_{selected_count}_selected_offenders_pct"
-        for selected_count in TASK2_SELECTED_OFFENDER_CARDINALITY_VALUES
-    ),
     "q_sum_all_zero_rows_removed_pct",
     "data_purity_percentage",
     "all_components_zero_rows_removed_pct",
     "cal_tt_lt_10_rows_removed_pct",
 )
+NOISE_CONTROL_RATE_DENOMINATOR_COLUMN = "count_rate_denominator_seconds"
+TASK2_NOISE_CONTROL_METRIC_NAMES: tuple[str, ...] = tuple(
+    f"strip_combination_filter_rows_with_{selected_count}_selected_offenders_rate_hz"
+    for selected_count in TASK2_SELECTED_OFFENDER_CARDINALITY_VALUES
+)
+TASK2_NOISE_CONTROL_PERCENT_METRIC_NAMES: tuple[str, ...] = tuple(
+    f"strip_combination_filter_rows_with_{selected_count}_selected_offenders_pct"
+    for selected_count in TASK2_SELECTED_OFFENDER_CARDINALITY_VALUES
+)
+FILTER_METADATA_ALLOWED_COLUMNS = {
+    "filename_base",
+    "execution_timestamp",
+    "param_hash",
+    *FILTER_METRIC_NAMES,
+}
 
 filter_metrics: dict[str, float] = {
     name: 0.0 for name in FILTER_METRIC_NAMES if name != "data_purity_percentage"
@@ -1858,8 +1857,8 @@ def _task2_selected_offender_cardinality_metric_key(selected_count: int) -> str:
     return f"strip_combination_filter_rows_with_{selected_count}_selected_offenders"
 
 
-def _task2_selected_offender_cardinality_pct_metric_key(selected_count: int) -> str:
-    return f"{_task2_selected_offender_cardinality_metric_key(selected_count)}_pct"
+def _task2_selected_offender_cardinality_rate_metric_key(selected_count: int) -> str:
+    return f"{_task2_selected_offender_cardinality_metric_key(selected_count)}_rate_hz"
 
 
 def apply_task2_strip_combination_filter(
@@ -1888,6 +1887,7 @@ def apply_task2_strip_combination_filter(
     strip_map = _task2_strip_component_columns_map(df_input)
     if len(strip_map) < 2:
         return {
+            "input_rows": len(df_input),
             "tracked_strip_count": len(strip_map),
             "valid_pair_observations": 0,
             "failed_pair_any": 0,
@@ -1920,6 +1920,7 @@ def apply_task2_strip_combination_filter(
         for strip_key in TASK2_STRIP_KEYS
     }
     summary = {
+        "input_rows": len(df_input),
         "tracked_strip_count": len(strip_map),
         "valid_pair_observations": 0,
         "failed_pair_any": 0,
@@ -3545,9 +3546,9 @@ print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 
 # Get lists of files in the directories
-unprocessed_files = sorted(os.listdir(base_directories["unprocessed_directory"]))
-processing_files = sorted(os.listdir(base_directories["processing_directory"]))
-completed_files = sorted(os.listdir(base_directories["completed_directory"]))
+unprocessed_files = _expected_input_files(os.listdir(base_directories["unprocessed_directory"]))
+processing_files = _expected_input_files(os.listdir(base_directories["processing_directory"]))
+completed_files = _expected_input_files(os.listdir(base_directories["completed_directory"]))
 
 def process_file(source_path, dest_path):
     print("Source path:", source_path)
@@ -3589,9 +3590,9 @@ sync_unprocessed_with_date_range(
     station_id=station,
     master_config_root=config_root,
 )
-unprocessed_files = os.listdir(base_directories["unprocessed_directory"])
-processing_files = os.listdir(base_directories["processing_directory"])
-completed_files = os.listdir(base_directories["completed_directory"])
+unprocessed_files = _expected_input_files(os.listdir(base_directories["unprocessed_directory"]))
+processing_files = _expected_input_files(os.listdir(base_directories["processing_directory"]))
+completed_files = _expected_input_files(os.listdir(base_directories["completed_directory"]))
 date_ranges = load_date_ranges_from_config(
     config,
     station_id=station,
@@ -4044,21 +4045,24 @@ elif basename_no_ext.startswith("mi00"):
     z_source = "simulated_default_missing_param_hash"
 elif exists_input_file:
     used_input_file = True
-    # Ensure `start` and `end` columns are in datetime format
-    input_file["start"] = pd.to_datetime(input_file["start"], format="%Y-%m-%d", errors="coerce")
-    input_file["end"] = pd.to_datetime(input_file["end"], format="%Y-%m-%d", errors="coerce")
-    input_file["end"] = input_file["end"].fillna(pd.to_datetime('now'))
-    start_day = pd.to_datetime(start_time).normalize()
-    end_day = pd.to_datetime(end_time).normalize()
-    input_file["start_day"] = input_file["start"].dt.normalize()
-    input_file["end_day"] = input_file["end"].dt.normalize()
-    matching_confs = input_file[(input_file["start_day"] <= start_day) & (input_file["end_day"] >= end_day)]
-    print(matching_confs)
-    
-    if not matching_confs.empty:
-        if len(matching_confs) > 1:
-            print(f"Warning:\nMultiple configurations match the date range\n{start_time} to {end_time}.\nTaking the first one.")
-        selected_conf = matching_confs.iloc[0]
+    selection_result = select_input_file_configuration(
+        input_file,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    print(selection_result.matching_confs)
+
+    if selection_result.selected_conf is not None:
+        if selection_result.reason == "exact_overlap_latest_start":
+            print(
+                "Warning:\n"
+                "Multiple configurations match the date range\n"
+                f"{start_time} to {end_time}.\n"
+                "Selecting the matching configuration with the most recent start date."
+            )
+        elif selection_result.reason != "exact":
+            print("Warning: No matching configuration for the date range; selecting closest configuration.")
+        selected_conf = selection_result.selected_conf
         print(f"Selected configuration: {selected_conf['conf']}")
         z_positions = np.array([selected_conf.get(f"P{i}", np.nan) for i in range(1, 5)])
         found_matching_conf = True
@@ -4070,21 +4074,9 @@ elif exists_input_file:
         current_conf_number = conf_value
         z_source = f"input_file_conf_{selected_conf.get('conf')}"
     else:
-        print("Warning: No matching configuration for the date range; selecting closest configuration.")
-        before = input_file[input_file["start_day"] <= end_day].sort_values("start_day", ascending=False)
-        if not before.empty:
-            selected_conf = before.iloc[0]
-        else:
-            selected_conf = input_file.sort_values("start", ascending=True).iloc[0]
-        print(f"Selected configuration: {selected_conf['conf']}")
-        z_positions = np.array([selected_conf.get(f"P{i}", np.nan) for i in range(1, 5)])
-        found_matching_conf = True
-        try:
-            conf_value = int(selected_conf.get("conf"))
-        except (TypeError, ValueError):
-            conf_value = None
-        current_conf_number = conf_value
-        z_source = f"input_file_closest_conf_{selected_conf.get('conf')}"
+        print("Warning: Input configuration file has no valid selectable rows. Using default z_positions.")
+        z_positions = np.array([0, 150, 300, 450])  # In mm
+        z_source = "default_invalid_input_file"
 else:
     print("Error: No input file. Using default z_positions.")
     z_positions = np.array([0, 150, 300, 450])  # In mm
@@ -6178,7 +6170,7 @@ if self_trigger:
     filter_strip_family_inplace(working_st_df, "Q_dif", abs_threshold=Q_dif_pre_cal_threshold)
 
 run_strip_zeroing_stage(
-    "strip_zeroing_stage1",
+    "precal_strip_window",
     working_df,
     snapshot_originals=snapshot_original_columns_once,
     record_triggers=True,
@@ -6222,7 +6214,7 @@ if self_trigger and apply_T_dif_calibration:
     filter_strip_family_inplace(working_st_df, "T_dif", abs_threshold=T_dif_cal_threshold)
 
 run_strip_zeroing_stage(
-    "strip_zeroing_stage2",
+    "calibrated_t_dif",
     working_df,
     snapshot_originals=snapshot_original_columns_once,
     record_triggers=True,
@@ -6265,7 +6257,7 @@ if self_trigger:
     filter_strip_family_inplace(working_st_df, "Q_dif", abs_threshold=Q_dif_cal_threshold)
 
 run_strip_zeroing_stage(
-    "strip_zeroing_stage3",
+    "calibrated_q_dif",
     working_df,
     snapshot_originals=snapshot_original_columns_once,
     record_triggers=True,
@@ -6309,7 +6301,7 @@ if self_trigger:
     filter_strip_family_inplace(working_st_df, "Q_sum", left=Q_sum_left_cal, right=Q_sum_right_cal)
 
 run_strip_zeroing_stage(
-    "strip_zeroing_stage4",
+    "calibrated_q_sum",
     working_df,
     snapshot_originals=snapshot_original_columns_once,
     record_triggers=True,
@@ -6533,7 +6525,7 @@ if self_trigger:
     filter_strip_family_inplace(working_st_df, "Q_dif", abs_threshold=Q_dif_cal_threshold_FB)
 
 run_strip_zeroing_stage(
-    "strip_zeroing_stage5",
+    "front_back_q_dif",
     working_df,
     snapshot_originals=snapshot_original_columns_once,
 )
@@ -7653,7 +7645,7 @@ if apply_T_sum_calibration and has_T_sum_RPC_filter:
         )
 
     run_strip_zeroing_stage(
-        "strip_zeroing_stage6",
+        "calibrated_t_sum",
         working_df,
         snapshot_originals=snapshot_original_columns_once,
     )
@@ -7868,7 +7860,7 @@ if self_trigger:
     filter_strip_family_inplace(working_st_df, "Q_sum", left=Q_sum_left_cal, right=Q_sum_right_cal)
 
 run_strip_zeroing_stage(
-    "strip_zeroing_stage7",
+    "post_crosstalk_q_sum",
     working_df,
     snapshot_originals=snapshot_original_columns_once,
 )
@@ -7994,6 +7986,9 @@ print(
 global_variables["strip_combination_filter_flagged_rows"] = int(
     strip_combination_summary["flagged_rows"]
 )
+global_variables["strip_combination_filter_input_rows"] = int(
+    strip_combination_summary.get("input_rows", len(working_df))
+)
 global_variables["strip_combination_filter_selected_offender_strips"] = int(
     strip_combination_summary["selected_offender_strips"]
 )
@@ -8011,12 +8006,6 @@ for selected_count in TASK2_SELECTED_OFFENDER_CARDINALITY_VALUES:
         strip_combination_summary["selected_offender_cardinality_counts"].get(selected_count, 0)
     )
     global_variables[_task2_selected_offender_cardinality_metric_key(selected_count)] = selected_rows
-    record_activity_metric(
-        _task2_selected_offender_cardinality_pct_metric_key(selected_count),
-        selected_rows,
-        strip_combination_summary["flagged_rows"],
-        label=f"flagged rows solved by selecting exactly {selected_count} offending strips",
-    )
 for strip_key, offender_count in strip_combination_summary["selected_offender_counts"].items():
     global_variables[_task2_strip_offender_metric_key(strip_key)] = int(offender_count)
 if _plot_strip_combination_filter_by_tt:
@@ -8625,8 +8614,64 @@ metadata_filter_csv_path = save_metadata(
     csv_path_filter,
     filter_row,
     preferred_fieldnames=("filename_base", "execution_timestamp", "param_hash", *FILTER_METRIC_NAMES),
+    drop_field_predicate=lambda column_name: column_name not in FILTER_METADATA_ALLOWED_COLUMNS,
 )
 print(f"Metadata (filter) CSV updated at: {metadata_filter_csv_path}")
+
+noise_control_events_per_second_meta = build_events_per_second_metadata(working_df)
+try:
+    noise_control_rate_denominator_seconds = int(
+        noise_control_events_per_second_meta.get("events_per_second_total_seconds", 0) or 0
+    )
+except (TypeError, ValueError):
+    noise_control_rate_denominator_seconds = 0
+if noise_control_rate_denominator_seconds < 0:
+    noise_control_rate_denominator_seconds = 0
+
+noise_control_row = {
+    "filename_base": filename_base,
+    "execution_timestamp": execution_timestamp,
+    "param_hash": param_hash_value,
+    NOISE_CONTROL_RATE_DENOMINATOR_COLUMN: noise_control_rate_denominator_seconds,
+}
+for selected_count in TASK2_SELECTED_OFFENDER_CARDINALITY_VALUES:
+    raw_count = global_variables.get(_task2_selected_offender_cardinality_metric_key(selected_count), 0)
+    try:
+        raw_count_value = float(raw_count)
+    except (TypeError, ValueError):
+        noise_control_row[_task2_selected_offender_cardinality_rate_metric_key(selected_count)] = ""
+        noise_control_row[
+            f"strip_combination_filter_rows_with_{selected_count}_selected_offenders_pct"
+        ] = ""
+        continue
+    rate_value = (
+        raw_count_value / noise_control_rate_denominator_seconds
+        if noise_control_rate_denominator_seconds > 0
+        else 0.0
+    )
+    noise_control_row[_task2_selected_offender_cardinality_rate_metric_key(selected_count)] = round(
+        rate_value,
+        6,
+    )
+    input_rows_value = float(global_variables.get("strip_combination_filter_input_rows", 0) or 0)
+    pct_value = 100.0 * raw_count_value / input_rows_value if input_rows_value > 0 else 0.0
+    noise_control_row[
+        f"strip_combination_filter_rows_with_{selected_count}_selected_offenders_pct"
+    ] = round(pct_value, 4)
+
+metadata_noise_control_csv_path = save_metadata(
+    csv_path_noise_control,
+    noise_control_row,
+    preferred_fieldnames=(
+        "filename_base",
+        "execution_timestamp",
+        "param_hash",
+        NOISE_CONTROL_RATE_DENOMINATOR_COLUMN,
+        *TASK2_NOISE_CONTROL_METRIC_NAMES,
+        *TASK2_NOISE_CONTROL_PERCENT_METRIC_NAMES,
+    ),
+)
+print(f"Metadata (noise_control) CSV updated at: {metadata_noise_control_csv_path}")
 
 # -------------------------------------------------------------------------------
 # Execution metadata ------------------------------------------------------------
@@ -8763,11 +8808,7 @@ metadata_specific_csv_path = save_metadata(
 print(f"Metadata (specific) CSV updated at: {metadata_specific_csv_path}")
 
 if track_removed_rows_task2:
-    tracking_output_directory = (
-        base_directories["figure_directory"]
-        if os.path.isdir(base_directories["figure_directory"])
-        else output_directory
-    )
+    tracking_output_directory = base_directories["tracking_directory"]
     os.makedirs(tracking_output_directory, exist_ok=True)
 
     removed_rows_base = os.path.join(

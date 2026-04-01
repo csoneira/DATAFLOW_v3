@@ -14,6 +14,7 @@ stratos_save: false
 # create_plots options: null | debug | usual | essential | all
 # Task 3 plot statuses by alias live in config_plots_task_3.yaml
 create_plots: null
+filter_parameter_config_csv: config_filter_parameters_task_3.csv
 # list_tt_qsum_pair_plot_mode options: hexbin | scatter
 list_tt_qsum_pair_plot_mode: scatter
 # Plot-only cap for the Task 3 list_tt Q_sum lower-triangular figure.
@@ -28,7 +29,7 @@ list_tt_charge_threshold_auto_steps: 10
 # You can set a global value with list_tt_charge_limit, and/or station-specific overrides here.
 list_tt_charge_limit_by_station:
   mingo00: 150
-  mingo01: 50
+  mingo01: 150
 # Charge asymmetry (Q_diff/Q_sum) x-axis controls:
 # - Set charge_asymmetry_x_abs_max to force symmetric limits [-abs_max, +abs_max].
 # - Keep null to use shared auto-limits from quantiles below.

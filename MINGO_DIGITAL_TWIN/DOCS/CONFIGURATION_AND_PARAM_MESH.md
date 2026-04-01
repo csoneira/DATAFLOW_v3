@@ -71,7 +71,7 @@ Runtime:
 
 ### STEP_3 (avalanche)
 Physics:
-- `avalanche_gap_mm`, `avalanche_gain`
+- `avalanche_gap_mm`
 - `townsend_alpha_per_mm`, `avalanche_electron_sigma`
 - `efficiencies` (vector(s) or `random`)
 
@@ -80,14 +80,13 @@ Runtime:
 
 ### STEP_4 (induction)
 Physics:
-- `charge_share_points`
 - `x_noise_mm`, `time_sigma_ns`
-- `width_scale_exponent`, `width_scale_max`, `avalanche_width_mm`
+- `lorentzian_gamma_mm`
+- `induced_charge_fraction`
 
 ### STEP_5 (signal observables)
 Physics:
-- `qdiff_width` (preferred constant sigma for `q_diff`)
-- `qdiff_frac`
+- `qdiff_width` (required constant sigma for `q_diff`)
 - `c_mm_per_ns` (optional override)
 
 ### STEP_6 (front/back)
@@ -102,7 +101,9 @@ Physics:
 Physics:
 - `t_fee_sigma_ns`
 - `charge_threshold`
-- `q_to_time_factor`
+- `charge_conversion_model`
+- `tot_to_charge_calibration_path`
+- `q_to_time_factor` (legacy fallback for linear conversion mode)
 - `qfront_offsets`, `qback_offsets`
 
 ### STEP_9 (trigger)

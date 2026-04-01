@@ -86,6 +86,10 @@ declare -A TYPE_BEFORE=()
 declare -A TYPE_AFTER=()
 declare -A TYPE_FREED=()
 declare -A TYPE_COUNTS=()
+QUEUE_SIDECAR_BEFORE=0
+QUEUE_SIDECAR_AFTER=0
+QUEUE_SIDECAR_FREED=0
+QUEUE_SIDECAR_COUNT=0
 
 join_by() {
   local sep="$1"
@@ -227,6 +231,59 @@ clean_completed() {
   log_info "   Size before: $(format_bytes "$total_before")"
   log_info "   Size after:  $(format_bytes "$total_after")"
   log_info "   Freed:       $(format_bytes "$freed")"
+}
+
+clean_step1_queue_sidecars() {
+  local -a files=()
+  if [[ ! -d "$STATIONS_BASE" ]]; then
+    log_info "Skipping Step-1 queue sidecar cleanup: $STATIONS_BASE not found."
+    QUEUE_SIDECAR_BEFORE=0
+    QUEUE_SIDECAR_AFTER=0
+    QUEUE_SIDECAR_FREED=0
+    QUEUE_SIDECAR_COUNT=0
+    return 0
+  fi
+
+  while IFS= read -r -d '' file; do
+    [[ -f "$file" ]] || continue
+    files+=("$file")
+  done < <(
+    find "$STATIONS_BASE" -type f \
+      \( \
+        -path '*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/INPUT_FILES/UNPROCESSED_DIRECTORY/removed_channel_values_*' -o \
+        -path '*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/INPUT_FILES/UNPROCESSED_DIRECTORY/removed_rows_*' -o \
+        -path '*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/INPUT_FILES/PROCESSING_DIRECTORY/removed_channel_values_*' -o \
+        -path '*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/INPUT_FILES/PROCESSING_DIRECTORY/removed_rows_*' \
+      \) -print0 2>/dev/null
+  )
+
+  if (( ${#files[@]} == 0 )); then
+    log_info "No misplaced Step-1 queue sidecars found."
+    QUEUE_SIDECAR_BEFORE=0
+    QUEUE_SIDECAR_AFTER=0
+    QUEUE_SIDECAR_FREED=0
+    QUEUE_SIDECAR_COUNT=0
+    return 0
+  fi
+
+  local total_before
+  total_before=$(du -cb "${files[@]}" 2>/dev/null | awk 'END{print $1+0}')
+
+  for file in "${files[@]}"; do
+    log_detail "--> Removing misplaced queue sidecar $file"
+    chmod u+w "$file" 2>/dev/null || true
+    rm -f "$file" 2>/dev/null || true
+  done
+
+  QUEUE_SIDECAR_BEFORE=$total_before
+  QUEUE_SIDECAR_AFTER=0
+  QUEUE_SIDECAR_FREED=$total_before
+  QUEUE_SIDECAR_COUNT=${#files[@]}
+
+  log_info "Misplaced Step-1 queue sidecars cleaned: ${#files[@]}"
+  log_info "   Size before: $(format_bytes "$QUEUE_SIDECAR_BEFORE")"
+  log_info "   Size after:  $(format_bytes "$QUEUE_SIDECAR_AFTER")"
+  log_info "   Freed:       $(format_bytes "$QUEUE_SIDECAR_FREED")"
 }
 
 clean_cronlogs() {
@@ -611,6 +668,10 @@ else
   log_info "Disk usage ${usage_percent}% exceeds threshold ${THRESHOLD}%. Proceeding with cleanup."
 fi
 
+log_info ""
+log_info "=== Cleaning misplaced Step-1 queue sidecars ==="
+clean_step1_queue_sidecars
+
 for type in "${SELECTED_TYPES[@]}"; do
   log_info ""
   case "$type" in
@@ -642,11 +703,14 @@ for type in "${SELECTED_TYPES[@]}"; do
   overall_before=$((overall_before + before))
   overall_after=$((overall_after + after))
 done
+overall_before=$((overall_before + QUEUE_SIDECAR_BEFORE))
+overall_after=$((overall_after + QUEUE_SIDECAR_AFTER))
 
 overall_freed=$((overall_before - overall_after))
 
 log_info ""
 log_info "Summary:"
+log_info "  - Step-1 queue sidecars: $(format_bytes "$QUEUE_SIDECAR_FREED") freed across ${QUEUE_SIDECAR_COUNT} item(s)"
 for type in "${SELECTED_TYPES[@]}"; do
   label=$(label_for_type "$type")
   freed=${TYPE_FREED["$type"]:-0}
