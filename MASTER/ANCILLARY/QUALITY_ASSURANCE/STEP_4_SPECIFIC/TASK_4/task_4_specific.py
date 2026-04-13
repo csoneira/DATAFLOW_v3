@@ -44,6 +44,24 @@ DEFAULT_SIGMOID_VARIABLES = [
 ]
 DEFAULT_RESIDUAL_METRICS = ["ystr", "tsum", "tdif"]
 PLANE_COLORS = {1: "#1f77b4", 2: "#ff7f0e", 3: "#2ca02c", 4: "#d62728"}
+EFFICIENCY_MISSING_RATE_COLUMNS = {
+    1: "list_tt_234_rate_hz",
+    2: "list_tt_134_rate_hz",
+    3: "list_tt_124_rate_hz",
+    4: "list_tt_123_rate_hz",
+}
+EFFICIENCY_BASE_RATE_COLUMN = "list_tt_1234_rate_hz"
+STREAMER_EVENT_COUNT_COLUMN = "activation_plane_streamer_to_signal_filtered_by_tt_tt1234_event_count"
+STREAMER_GIVEN_COUNT_COLUMNS = {
+    plane: f"activation_plane_streamer_to_signal_filtered_by_tt_tt1234_given_count_P{plane}"
+    for plane in range(1, 5)
+}
+PURITY_SOURCES = (
+    ("TASK 1", 1, "execution"),
+    ("TASK 2", 2, "filter"),
+    ("TASK 3", 3, "filter"),
+    ("TASK 4", 4, "filter"),
+)
 
 
 def _normalize_station_name(station: object) -> str:
@@ -65,6 +83,20 @@ def _metadata_path(station_name: str) -> Path:
         / f"TASK_{TASK_ID}"
         / "METADATA"
         / f"task_{TASK_ID}_metadata_{METADATA_SUFFIX}.csv"
+    )
+
+
+def _task_metadata_path(station_name: str, task_id: int, suffix: str) -> Path:
+    return (
+        REPO_ROOT
+        / "STATIONS"
+        / station_name
+        / "STAGE_1"
+        / "EVENT_DATA"
+        / "STEP_1"
+        / f"TASK_{task_id}"
+        / "METADATA"
+        / f"task_{task_id}_metadata_{suffix}.csv"
     )
 
 
@@ -151,6 +183,35 @@ def _parse_filename_timestamp_series(series: pd.Series) -> pd.Series:
     as_text = series.astype("string").fillna("").str.strip()
     parsed = as_text.map(lambda value: extract_run_datetime_from_name(value) if value else None)
     return pd.to_datetime(parsed, errors="coerce")
+
+
+def _load_latest_metadata_csv(path: Path, *, usecols: list[str] | None = None) -> pd.DataFrame:
+    if not path.exists() or path.stat().st_size <= 0:
+        return pd.DataFrame(columns=["filename_base"])
+    effective_usecols = usecols
+    if usecols is not None:
+        available_columns = pd.read_csv(path, nrows=0).columns.tolist()
+        effective_usecols = [column for column in usecols if column in available_columns]
+        if "filename_base" not in effective_usecols and "filename_base" in available_columns:
+            effective_usecols = ["filename_base", *effective_usecols]
+        if "execution_timestamp" in available_columns and "execution_timestamp" not in effective_usecols:
+            effective_usecols.append("execution_timestamp")
+    frame = pd.read_csv(path, usecols=effective_usecols, low_memory=False)
+    if frame.empty or "filename_base" not in frame.columns:
+        return pd.DataFrame(columns=["filename_base"])
+    frame = frame.copy()
+    frame["filename_base"] = frame["filename_base"].astype("string").fillna("").str.strip()
+    frame = frame[frame["filename_base"] != ""].copy()
+    if frame.empty:
+        return pd.DataFrame(columns=["filename_base"])
+    if "execution_timestamp" in frame.columns:
+        frame["_exec_ts"] = _parse_timestamp_series(frame["execution_timestamp"])
+        frame = frame.sort_values(["filename_base", "_exec_ts"], na_position="last")
+        frame = frame.drop_duplicates(subset=["filename_base"], keep="last")
+        frame = frame.drop(columns=["_exec_ts"])
+    else:
+        frame = frame.drop_duplicates(subset=["filename_base"], keep="last")
+    return frame.reset_index(drop=True)
 
 
 def _x_axis_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -254,6 +315,353 @@ def _normalize_list(values: object, fallback: list[str]) -> list[str]:
         if text:
             out.append(text)
     return out or list(fallback)
+
+
+def _correlation_plot_config(config: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(config.get("global_x_correlations"), dict) or "global_x_correlations" in config:
+        plots_cfg = config
+    else:
+        plots_cfg = config.get("plots") if isinstance(config.get("plots"), dict) else {}
+    raw = plots_cfg.get("global_x_correlations")
+    if not isinstance(raw, dict):
+        raw = {}
+    return raw
+
+
+def _compute_correlation_stats(x: pd.Series, y: pd.Series) -> tuple[int, float | None, float | None]:
+    x_num = pd.to_numeric(x, errors="coerce")
+    y_num = pd.to_numeric(y, errors="coerce")
+    mask = x_num.notna() & y_num.notna()
+    if int(mask.sum()) < 2:
+        return int(mask.sum()), None, None
+    xv = x_num.loc[mask].to_numpy(dtype=float)
+    yv = y_num.loc[mask].to_numpy(dtype=float)
+    if np.allclose(xv, xv[0]) or np.allclose(yv, yv[0]):
+        return int(mask.sum()), None, None
+    pearson = float(np.corrcoef(xv, yv)[0, 1])
+    slope = float(np.polyfit(xv, yv, 1)[0])
+    return int(mask.sum()), pearson, slope
+
+
+def _draw_scatter_with_trend(
+    *,
+    ax: plt.Axes,
+    df: pd.DataFrame,
+    x_col: str,
+    y_col: str,
+    color_values: pd.Series,
+    cmap: str,
+    title: str,
+    xlabel: str,
+    ylabel: str,
+) -> object | None:
+    x = pd.to_numeric(df[x_col], errors="coerce")
+    y = pd.to_numeric(df[y_col], errors="coerce")
+    mask = x.notna() & y.notna()
+    if int(mask.sum()) == 0:
+        ax.text(0.5, 0.5, "no data", transform=ax.transAxes, ha="center", va="center", color="gray")
+        ax.set_title(title)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        ax.grid(True, alpha=0.25)
+        return None
+
+    scatter = ax.scatter(
+        x.loc[mask],
+        y.loc[mask],
+        c=color_values.loc[mask],
+        cmap=cmap,
+        s=24,
+        alpha=0.90,
+        edgecolors="none",
+    )
+
+    n_points, pearson, slope = _compute_correlation_stats(x, y)
+    if n_points >= 2 and pearson is not None:
+        xv = x.loc[mask].to_numpy(dtype=float)
+        yv = y.loc[mask].to_numpy(dtype=float)
+        fit = np.polyfit(xv, yv, 1)
+        x_line = np.linspace(float(np.nanmin(xv)), float(np.nanmax(xv)), 100)
+        y_line = fit[0] * x_line + fit[1]
+        ax.plot(x_line, y_line, color="black", lw=1.0, ls="--")
+        title = f"{title}\nr={pearson:.3f}, slope={slope:.3f}, n={n_points}"
+    else:
+        title = f"{title}\nn={n_points}"
+
+    ax.set_title(title, fontsize=9)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.grid(True, alpha=0.25)
+    return scatter
+
+
+def _build_global_x_correlation_frame(station_name: str, task4_df: pd.DataFrame) -> pd.DataFrame:
+    base_columns = [
+        "filename_base",
+        "execution_timestamp",
+        "timtrack_projection_scaling_factor_xproj_global",
+    ]
+    task4_base = task4_df[base_columns].copy()
+    task4_base.rename(
+        columns={"timtrack_projection_scaling_factor_xproj_global": "global_x_scale_factor"},
+        inplace=True,
+    )
+    task4_base["global_x_scale_factor"] = pd.to_numeric(
+        task4_base["global_x_scale_factor"], errors="coerce"
+    )
+    task4_base["__timestamp__"] = _parse_filename_timestamp_series(task4_base["filename_base"])
+    task4_base = task4_base.sort_values(["__timestamp__", "filename_base"], na_position="last").reset_index(drop=True)
+    task4_base["__time_order__"] = np.arange(1, len(task4_base) + 1, dtype=int)
+
+    trigger_cols = ["filename_base", "execution_timestamp", EFFICIENCY_BASE_RATE_COLUMN]
+    trigger_cols.extend(EFFICIENCY_MISSING_RATE_COLUMNS.values())
+    trigger_df = _load_latest_metadata_csv(
+        _task_metadata_path(station_name, 3, "trigger_type"),
+        usecols=trigger_cols,
+    )
+    for plane, missing_col in EFFICIENCY_MISSING_RATE_COLUMNS.items():
+        base_rate = pd.to_numeric(trigger_df.get(EFFICIENCY_BASE_RATE_COLUMN), errors="coerce")
+        missing_rate = pd.to_numeric(trigger_df.get(missing_col), errors="coerce")
+        trigger_df[f"plane_efficiency_p{plane}"] = np.where(
+            np.isfinite(base_rate) & np.isfinite(missing_rate) & (base_rate > 0),
+            1.0 - (missing_rate / base_rate),
+            np.nan,
+        )
+    keep_trigger_cols = ["filename_base"] + [f"plane_efficiency_p{plane}" for plane in range(1, 5)]
+    task4_base = task4_base.merge(trigger_df[keep_trigger_cols], on="filename_base", how="left")
+
+    activation_cols = ["filename_base", "execution_timestamp", STREAMER_EVENT_COUNT_COLUMN]
+    activation_cols.extend(STREAMER_GIVEN_COUNT_COLUMNS.values())
+    activation_df = _load_latest_metadata_csv(
+        _task_metadata_path(station_name, 3, "activation"),
+        usecols=activation_cols,
+    )
+    streamer_event_count = pd.to_numeric(
+        activation_df.get(STREAMER_EVENT_COUNT_COLUMN), errors="coerce"
+    )
+    streamer_pct_cols: list[str] = []
+    for plane, given_col in STREAMER_GIVEN_COUNT_COLUMNS.items():
+        streamer_col = f"streamer_percentage_p{plane}"
+        activation_df[streamer_col] = np.where(
+            np.isfinite(streamer_event_count)
+            & (streamer_event_count > 0)
+            & pd.to_numeric(activation_df.get(given_col), errors="coerce").notna(),
+            100.0
+            * pd.to_numeric(activation_df.get(given_col), errors="coerce")
+            / streamer_event_count,
+            np.nan,
+        )
+        streamer_pct_cols.append(streamer_col)
+    activation_df["streamer_percentage_mean"] = activation_df[streamer_pct_cols].mean(axis=1)
+    task4_base = task4_base.merge(
+        activation_df[["filename_base", "streamer_percentage_mean", *streamer_pct_cols]],
+        on="filename_base",
+        how="left",
+    )
+
+    for label, task_id, suffix in PURITY_SOURCES:
+        purity_df = _load_latest_metadata_csv(
+            _task_metadata_path(station_name, task_id, suffix),
+            usecols=["filename_base", "execution_timestamp", "data_purity_percentage"],
+        )
+        purity_col = f"task_{task_id}_data_purity_percentage"
+        if "data_purity_percentage" in purity_df.columns:
+            purity_df = purity_df[["filename_base", "data_purity_percentage"]].rename(
+                columns={"data_purity_percentage": purity_col}
+            )
+            task4_base = task4_base.merge(purity_df, on="filename_base", how="left")
+        else:
+            task4_base[purity_col] = np.nan
+
+    return task4_base
+
+
+def _build_global_x_correlation_summary(correlation_df: pd.DataFrame) -> pd.DataFrame:
+    specs = [(f"plane_efficiency_p{plane}", f"Plane {plane} efficiency") for plane in range(1, 5)]
+    specs.append(("streamer_percentage_mean", "Mean filtered tt1234 streamer percentage"))
+    specs.extend(
+        (f"task_{task_id}_data_purity_percentage", f"{label} data purity percentage")
+        for label, task_id, _ in PURITY_SOURCES
+    )
+    rows: list[dict[str, Any]] = []
+    for column, label in specs:
+        if column not in correlation_df.columns:
+            continue
+        x = pd.to_numeric(correlation_df[column], errors="coerce")
+        y = pd.to_numeric(correlation_df["global_x_scale_factor"], errors="coerce")
+        mask = x.notna() & y.notna()
+        if not mask.any():
+            rows.append(
+                {
+                    "column": column,
+                    "label": label,
+                    "n_points": 0,
+                    "pearson_r": np.nan,
+                    "slope": np.nan,
+                    "x_min": np.nan,
+                    "x_max": np.nan,
+                    "y_min": np.nan,
+                    "y_max": np.nan,
+                }
+            )
+            continue
+        n_points, pearson, slope = _compute_correlation_stats(x, y)
+        rows.append(
+            {
+                "column": column,
+                "label": label,
+                "n_points": n_points,
+                "pearson_r": pearson,
+                "slope": slope,
+                "x_min": float(np.nanmin(x.loc[mask].to_numpy(dtype=float))),
+                "x_max": float(np.nanmax(x.loc[mask].to_numpy(dtype=float))),
+                "y_min": float(np.nanmin(y.loc[mask].to_numpy(dtype=float))),
+                "y_max": float(np.nanmax(y.loc[mask].to_numpy(dtype=float))),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _plot_global_x_vs_efficiencies(
+    *,
+    station_name: str,
+    plots_dir: Path,
+    correlation_df: pd.DataFrame,
+    plot_cfg: dict[str, Any],
+) -> Path | None:
+    corr_cfg = _correlation_plot_config(plot_cfg)
+    eff_cfg = corr_cfg.get("efficiency") if isinstance(corr_cfg.get("efficiency"), dict) else {}
+    if corr_cfg.get("enabled", True) is False or eff_cfg.get("enabled", True) is False:
+        return None
+
+    image_format = str(plot_cfg.get("format", "png")).strip().lower()
+    dpi = int(plot_cfg.get("dpi", 150))
+    cmap = str(corr_cfg.get("cmap", "viridis")).strip() or "viridis"
+    figsize = tuple(eff_cfg.get("figsize", [11, 8]))
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    color_values = correlation_df["__time_order__"]
+    scatter_ref = None
+    for ax, plane in zip(axes.flat, range(1, 5)):
+        scatter = _draw_scatter_with_trend(
+            ax=ax,
+            df=correlation_df,
+            x_col=f"plane_efficiency_p{plane}",
+            y_col="global_x_scale_factor",
+            color_values=color_values,
+            cmap=cmap,
+            title=f"Global x scale vs eff P{plane}",
+            xlabel=f"Plane {plane} efficiency",
+            ylabel="Global x scale factor",
+        )
+        if scatter_ref is None and scatter is not None:
+            scatter_ref = scatter
+    if scatter_ref is not None:
+        cbar = fig.colorbar(scatter_ref, ax=axes.ravel().tolist(), fraction=0.025, pad=0.02)
+        cbar.set_label("file order")
+    fig.suptitle(f"TASK_{TASK_ID} {station_name} QA - global x scale vs plane efficiencies", fontsize=12)
+    fig.subplots_adjust(left=0.08, right=0.93, bottom=0.08, top=0.90, wspace=0.20, hspace=0.30)
+
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    base_name = str(eff_cfg.get("filename", "global_x_vs_plane_efficiency")).strip() or "global_x_vs_plane_efficiency"
+    out_path = plots_dir / f"{station_name}_task_{TASK_ID}_{METADATA_TYPE}_{base_name}.{image_format}"
+    fig.savefig(out_path, dpi=dpi)
+    plt.close(fig)
+    return out_path
+
+
+def _plot_global_x_vs_streamer(
+    *,
+    station_name: str,
+    plots_dir: Path,
+    correlation_df: pd.DataFrame,
+    plot_cfg: dict[str, Any],
+) -> Path | None:
+    corr_cfg = _correlation_plot_config(plot_cfg)
+    streamer_cfg = corr_cfg.get("streamer") if isinstance(corr_cfg.get("streamer"), dict) else {}
+    if corr_cfg.get("enabled", True) is False or streamer_cfg.get("enabled", True) is False:
+        return None
+
+    image_format = str(plot_cfg.get("format", "png")).strip().lower()
+    dpi = int(plot_cfg.get("dpi", 150))
+    cmap = str(corr_cfg.get("cmap", "viridis")).strip() or "viridis"
+    figsize = tuple(streamer_cfg.get("figsize", [7, 5.5]))
+
+    fig, ax = plt.subplots(figsize=figsize)
+    scatter = _draw_scatter_with_trend(
+        ax=ax,
+        df=correlation_df,
+        x_col="streamer_percentage_mean",
+        y_col="global_x_scale_factor",
+        color_values=correlation_df["__time_order__"],
+        cmap=cmap,
+        title="Global x scale vs streamer %",
+        xlabel="Mean filtered tt1234 streamer percentage [%]",
+        ylabel="Global x scale factor",
+    )
+    if scatter is not None:
+        cbar = fig.colorbar(scatter, ax=ax, fraction=0.046, pad=0.04)
+        cbar.set_label("file order")
+    fig.suptitle(
+        f"TASK_{TASK_ID} {station_name} QA - global x scale vs streamer fraction\n"
+        "Streamer % = mean per-plane streamer occupancy within filtered tt1234 events",
+        fontsize=11,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.93))
+
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    base_name = str(streamer_cfg.get("filename", "global_x_vs_streamer_pct")).strip() or "global_x_vs_streamer_pct"
+    out_path = plots_dir / f"{station_name}_task_{TASK_ID}_{METADATA_TYPE}_{base_name}.{image_format}"
+    fig.savefig(out_path, dpi=dpi)
+    plt.close(fig)
+    return out_path
+
+
+def _plot_global_x_vs_purity(
+    *,
+    station_name: str,
+    plots_dir: Path,
+    correlation_df: pd.DataFrame,
+    plot_cfg: dict[str, Any],
+) -> Path | None:
+    corr_cfg = _correlation_plot_config(plot_cfg)
+    purity_cfg = corr_cfg.get("purity") if isinstance(corr_cfg.get("purity"), dict) else {}
+    if corr_cfg.get("enabled", True) is False or purity_cfg.get("enabled", True) is False:
+        return None
+
+    image_format = str(plot_cfg.get("format", "png")).strip().lower()
+    dpi = int(plot_cfg.get("dpi", 150))
+    cmap = str(corr_cfg.get("cmap", "viridis")).strip() or "viridis"
+    figsize = tuple(purity_cfg.get("figsize", [11, 8]))
+
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    color_values = correlation_df["__time_order__"]
+    scatter_ref = None
+    for ax, (label, task_id, _) in zip(axes.flat, PURITY_SOURCES):
+        scatter = _draw_scatter_with_trend(
+            ax=ax,
+            df=correlation_df,
+            x_col=f"task_{task_id}_data_purity_percentage",
+            y_col="global_x_scale_factor",
+            color_values=color_values,
+            cmap=cmap,
+            title=f"Global x scale vs {label} purity",
+            xlabel=f"{label} data purity [%]",
+            ylabel="Global x scale factor",
+        )
+        if scatter_ref is None and scatter is not None:
+            scatter_ref = scatter
+    if scatter_ref is not None:
+        cbar = fig.colorbar(scatter_ref, ax=axes.ravel().tolist(), fraction=0.025, pad=0.02)
+        cbar.set_label("file order")
+    fig.suptitle(f"TASK_{TASK_ID} {station_name} QA - global x scale vs data purity", fontsize=12)
+    fig.subplots_adjust(left=0.08, right=0.93, bottom=0.08, top=0.90, wspace=0.20, hspace=0.30)
+
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    base_name = str(purity_cfg.get("filename", "global_x_vs_purity")).strip() or "global_x_vs_purity"
+    out_path = plots_dir / f"{station_name}_task_{TASK_ID}_{METADATA_TYPE}_{base_name}.{image_format}"
+    fig.savefig(out_path, dpi=dpi)
+    plt.close(fig)
+    return out_path
 
 
 def _plot_sigmoid_matrix(
@@ -439,6 +847,7 @@ def _generate_station_plots(station_name: str, config: dict[str, Any], meta_df: 
 
     plot_cfg = config.get("plots") if isinstance(config.get("plots"), dict) else {}
     plots_dir = _output_plots_dir(station_name)
+    files_dir = _output_files_dir(station_name)
 
     created: list[Path] = []
 
@@ -535,6 +944,47 @@ def _generate_station_plots(station_name: str, config: dict[str, Any], meta_df: 
     )
     if ext_path is not None:
         created.append(ext_path)
+
+    if "timtrack_projection_scaling_factor_xproj_global" in df.columns:
+        correlation_df = _build_global_x_correlation_frame(station_name, df)
+        if not correlation_df.empty:
+            files_dir.mkdir(parents=True, exist_ok=True)
+            correlation_df.to_csv(
+                files_dir / f"{station_name}_task_{TASK_ID}_{METADATA_TYPE}_global_x_correlation_inputs.csv",
+                index=False,
+            )
+            summary_df = _build_global_x_correlation_summary(correlation_df)
+            summary_df.to_csv(
+                files_dir / f"{station_name}_task_{TASK_ID}_{METADATA_TYPE}_global_x_correlation_summary.csv",
+                index=False,
+            )
+
+            eff_path = _plot_global_x_vs_efficiencies(
+                station_name=station_name,
+                plots_dir=plots_dir,
+                correlation_df=correlation_df,
+                plot_cfg=plot_cfg,
+            )
+            if eff_path is not None:
+                created.append(eff_path)
+
+            streamer_path = _plot_global_x_vs_streamer(
+                station_name=station_name,
+                plots_dir=plots_dir,
+                correlation_df=correlation_df,
+                plot_cfg=plot_cfg,
+            )
+            if streamer_path is not None:
+                created.append(streamer_path)
+
+            purity_path = _plot_global_x_vs_purity(
+                station_name=station_name,
+                plots_dir=plots_dir,
+                correlation_df=correlation_df,
+                plot_cfg=plot_cfg,
+            )
+            if purity_path is not None:
+                created.append(purity_path)
 
     return created
 

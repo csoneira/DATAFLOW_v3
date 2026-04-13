@@ -28,6 +28,18 @@ plots:
   dpi: 150
   line_width: 0.8
   marker_size: 1.8
+  global_x_correlations:
+    enabled: true
+    cmap: viridis
+    efficiency:
+      enabled: true
+      filename: global_x_vs_plane_efficiency
+    streamer:
+      enabled: true
+      filename: global_x_vs_streamer_pct
+    purity:
+      enabled: true
+      filename: global_x_vs_purity
   sigmoid_fit:
     enabled: true
     filename: sigmoid_fit_matrix

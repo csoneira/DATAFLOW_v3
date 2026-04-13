@@ -8,23 +8,27 @@ pass_column_name: task_1_filtering_pass
 column_patterns:
   - 'filename_base'
   - 'execution_timestamp'
-  - 'q_front_back_zero_rows_pct'
-  - 'valid_lines_in_binary_file_percentage'
-  - 'all_components_zero_rows_removed_pct'
+  - 'param_hash'
+  - 'plane_combination_filter_rows_affected_pct'
+  - 'plane_combination_filter_rows_with_self_relation_failures_pct'
+  - 'plane_combination_filter_rows_with_same_strip_relation_failures_pct'
+  - 'plane_combination_filter_rows_with_same_plane_relation_failures_pct'
+  - 'plane_combination_filter_rows_with_any_relation_failures_pct'
   - 'clean_tt_lt_10_rows_removed_pct'
+  - 'valid_lines_in_binary_file_percentage'
   - 'data_purity_percentage'
-
 plots:
+  ncols: 3
   plot_groups:
     - name: filtering_core
       columns:
-        - q_front_back_zero_rows_pct
-        - valid_lines_in_binary_file_percentage
-        - all_components_zero_rows_removed_pct
-        - clean_tt_lt_10_rows_removed_pct
+        - 'plane_combination_filter_rows_affected_pct'
+        - 'plane_combination_filter_rows_with_self_relation_failures_pct'
+        - 'plane_combination_filter_rows_with_same_strip_relation_failures_pct'
+        - 'plane_combination_filter_rows_with_same_plane_relation_failures_pct'
+        - 'plane_combination_filter_rows_with_any_relation_failures_pct'
+        - 'clean_tt_lt_10_rows_removed_pct'
     - name: data_purity
       columns:
-        - data_purity_percentage
-  ncols: 2
-  dpi: 150
-  format: png
+        - 'valid_lines_in_binary_file_percentage'
+        - 'data_purity_percentage'

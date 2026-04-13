@@ -28,6 +28,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.lines import Line2D
 
 # ── Paths ────────────────────────────────────────────────────────────────
 STEP_DIR = Path(__file__).resolve().parent
@@ -56,13 +57,14 @@ _FIGURE_COUNTER = 0
 FIGURE_STEP_PREFIX = "1_1"
 
 
-def _save_figure(fig: plt.Figure, path: Path, **kwargs) -> None:
+def _save_figure(fig: plt.Figure, path: Path, **kwargs) -> Path:
     """Save figure with a per-script sequential numeric prefix."""
     global _FIGURE_COUNTER
     _FIGURE_COUNTER += 1
     out_path = Path(path)
     out_path = out_path.with_name(f"{FIGURE_STEP_PREFIX}_{_FIGURE_COUNTER}_{out_path.name}")
     fig.savefig(out_path, **kwargs)
+    return out_path
 
 
 _PLOT_EXTENSIONS = {
@@ -90,6 +92,226 @@ def _clear_plots_dir() -> None:
             except OSError as exc:
                 log.warning("Could not remove old plot file %s: %s", candidate, exc)
     log.info("Cleared %d plot file(s) from %s", removed, PLOTS_DIR)
+
+
+def _parameter_display_label(column: str) -> str:
+    labels = {
+        "flux_cm2_min": "Flux [cm^-2 min^-1]",
+        "cos_n": "cos(theta)",
+        "eff_p1": "Plane 1 eff",
+        "eff_p2": "Plane 2 eff",
+        "eff_p3": "Plane 3 eff",
+        "eff_p4": "Plane 4 eff",
+        "eff_sim_1": "Plane 1 eff",
+        "eff_sim_2": "Plane 2 eff",
+        "eff_sim_3": "Plane 3 eff",
+        "eff_sim_4": "Plane 4 eff",
+    }
+    return labels.get(column, column.replace("_", " "))
+
+
+def _compute_axis_limits(series: pd.Series) -> tuple[float, float] | None:
+    numeric = pd.to_numeric(series, errors="coerce").dropna()
+    if numeric.empty:
+        return None
+    lower = float(numeric.min())
+    upper = float(numeric.max())
+    if not np.isfinite(lower) or not np.isfinite(upper):
+        return None
+    if lower == upper:
+        pad = max(abs(lower) * 0.05, 0.05)
+        return lower - pad, upper + pad
+    pad = (upper - lower) * 0.04
+    return lower - pad, upper + pad
+
+
+def _plot_parameter_space_overview(
+    *,
+    collected: pd.DataFrame,
+    parameter_space_columns: list[str],
+    z_config: list[float],
+    cfg_11: dict,
+) -> Path | None:
+    if collected.empty or not parameter_space_columns:
+        return None
+
+    max_columns_raw = cfg_11.get("parameter_space_overview_max_columns", 6)
+    max_rows_raw = cfg_11.get("parameter_space_overview_max_rows", 4000)
+    point_size = float(cfg_11.get("parameter_space_overview_point_size", 16.0))
+    alpha = float(cfg_11.get("parameter_space_overview_alpha", 0.65))
+    hist_bins = max(8, int(cfg_11.get("parameter_space_overview_hist_bins", 18)))
+    enabled = _as_bool(cfg_11.get("parameter_space_overview_enabled", True), True)
+    if not enabled:
+        return None
+
+    try:
+        max_columns = max(1, int(max_columns_raw))
+    except (TypeError, ValueError):
+        max_columns = 6
+    try:
+        max_rows = max(0, int(max_rows_raw))
+    except (TypeError, ValueError):
+        max_rows = 4000
+
+    plot_columns = [column for column in parameter_space_columns if column in collected.columns][:max_columns]
+    if not plot_columns:
+        return None
+
+    if len(parameter_space_columns) > len(plot_columns):
+        log.info(
+            "Parameter-space overview plot limited to first %d column(s): %s",
+            len(plot_columns),
+            plot_columns,
+        )
+
+    plot_df = collected.loc[:, plot_columns].copy()
+    for column in plot_columns:
+        plot_df[column] = pd.to_numeric(plot_df[column], errors="coerce")
+    if "task_id" in collected.columns:
+        plot_df["task_id"] = pd.to_numeric(collected["task_id"], errors="coerce").astype("Int64")
+    plot_df = plot_df.dropna(how="all", subset=plot_columns).reset_index(drop=True)
+    if plot_df.empty:
+        return None
+
+    if max_rows > 0 and len(plot_df) > max_rows:
+        plot_df = plot_df.sample(n=max_rows, random_state=1234).sort_index().reset_index(drop=True)
+
+    axis_limits = {
+        column: _compute_axis_limits(plot_df[column])
+        for column in plot_columns
+    }
+    plot_columns = [column for column in plot_columns if axis_limits.get(column) is not None]
+    if not plot_columns:
+        return None
+
+    n = len(plot_columns)
+    task_ids = []
+    if "task_id" in plot_df.columns:
+        task_ids = [
+            int(task_id)
+            for task_id in sorted(plot_df["task_id"].dropna().astype(int).unique().tolist())
+        ]
+    cmap = plt.get_cmap("tab10")
+    task_colors = {
+        task_id: cmap(idx % cmap.N)
+        for idx, task_id in enumerate(task_ids)
+    }
+    single_color = "#4C78A8"
+
+    fig, axes = plt.subplots(
+        n,
+        n,
+        figsize=(2.45 * n + 1.8, 2.45 * n + 1.6),
+        dpi=130,
+    )
+    axes_arr = np.asarray(axes).reshape(n, n)
+
+    for row_idx in range(n):
+        for col_idx in range(n):
+            ax = axes_arr[row_idx, col_idx]
+            x_col = plot_columns[col_idx]
+            y_col = plot_columns[row_idx]
+
+            ax.grid(True, linestyle=":", linewidth=0.35, alpha=0.3)
+            for spine in ax.spines.values():
+                spine.set_linewidth(0.6)
+            ax.set_box_aspect(1.0)
+
+            if row_idx == col_idx:
+                for task_id in task_ids or [None]:
+                    if task_id is None:
+                        values = plot_df[y_col].dropna()
+                        color = single_color
+                        label = None
+                    else:
+                        values = plot_df.loc[plot_df["task_id"] == task_id, y_col].dropna()
+                        color = task_colors[task_id]
+                        label = f"Task {task_id}"
+                    if values.empty:
+                        continue
+                    ax.hist(
+                        values,
+                        bins=hist_bins,
+                        color=color,
+                        alpha=0.45,
+                        edgecolor="white",
+                        linewidth=0.4,
+                        label=label,
+                    )
+                ax.set_title(_parameter_display_label(y_col), fontsize=9, pad=4)
+                ax.autoscale_view(scalex=False, scaley=True)
+                ax.set_xlim(axis_limits[y_col])
+            elif row_idx > col_idx:
+                for task_id in task_ids or [None]:
+                    if task_id is None:
+                        subset = plot_df[[x_col, y_col]].dropna()
+                        color = single_color
+                    else:
+                        subset = plot_df.loc[plot_df["task_id"] == task_id, [x_col, y_col]].dropna()
+                        color = task_colors[task_id]
+                    if subset.empty:
+                        continue
+                    ax.scatter(
+                        subset[x_col],
+                        subset[y_col],
+                        s=point_size,
+                        alpha=alpha,
+                        color=color,
+                        edgecolors="none",
+                        rasterized=True,
+                    )
+                ax.set_xlim(axis_limits[x_col])
+                ax.set_ylim(axis_limits[y_col])
+            else:
+                ax.axis("off")
+
+            if row_idx < n - 1:
+                ax.tick_params(axis="x", labelbottom=False)
+            else:
+                ax.set_xlabel(_parameter_display_label(x_col), fontsize=8)
+            if col_idx > 0:
+                ax.tick_params(axis="y", labelleft=False)
+            else:
+                ax.set_ylabel(_parameter_display_label(y_col), fontsize=8)
+            ax.tick_params(axis="both", which="major", labelsize=7, width=0.75, length=2.6)
+
+    z_text = ", ".join(f"{float(value):g}" for value in z_config)
+    title = (
+        "STEP 1.1 parameter-space overview\n"
+        f"selected z = [{z_text}] | rows = {len(collected)}"
+    )
+    fig.suptitle(title, fontsize=11, y=0.98)
+
+    if len(task_ids) > 1:
+        handles = [
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                linestyle="None",
+                markersize=6,
+                markerfacecolor=task_colors[task_id],
+                markeredgecolor="none",
+                label=f"Task {task_id}",
+            )
+            for task_id in task_ids
+        ]
+        fig.legend(
+            handles=handles,
+            loc="upper right",
+            bbox_to_anchor=(0.98, 0.975),
+            framealpha=0.9,
+            fontsize=8,
+            title="Collected task",
+            title_fontsize=9,
+        )
+        fig.subplots_adjust(left=0.08, right=0.9, bottom=0.08, top=0.9, wspace=0.05, hspace=0.05)
+    else:
+        fig.subplots_adjust(left=0.08, right=0.98, bottom=0.08, top=0.9, wspace=0.05, hspace=0.05)
+
+    out_path = _save_figure(fig, PLOTS_DIR / "parameter_space_overview.png", dpi=170)
+    plt.close(fig)
+    return out_path
 
 # ── Logging ──────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -185,6 +407,19 @@ def _load_config(path: Path) -> dict:
         cfg = _merge_dicts(cfg, runtime_cfg)
         log.info("Loaded runtime overrides: %s", runtime_path)
     return cfg
+
+
+def _resolve_input_path(path_like: str | Path) -> Path:
+    path = Path(path_like).expanduser()
+    if path.is_absolute():
+        return path
+    candidate_pipeline = PIPELINE_DIR / path
+    if candidate_pipeline.exists():
+        return candidate_pipeline
+    candidate_step = STEP_DIR / path
+    if candidate_step.exists():
+        return candidate_step
+    return candidate_pipeline
 
 def _aggregate_latest(df: pd.DataFrame) -> pd.DataFrame:
     """Keep only the latest execution per filename_base."""
@@ -597,10 +832,10 @@ def main() -> int:
     sim_params_path = default_sim_params_path
     sim_params_cfg = config.get("simulation_params_csv", None)
     if sim_params_cfg not in (None, "", "null", "None"):
-        log.warning(
-            "Ignoring simulation_params_csv override (%r). STEP 1.1 always uses %s.",
-            sim_params_cfg,
-            default_sim_params_path,
+        sim_params_path = _resolve_input_path(str(sim_params_cfg))
+        log.info(
+            "Using simulation_params_csv override for STEP 1.1: %s",
+            sim_params_path,
         )
     param_mesh_cfg = config.get("param_mesh_csv", None)
     if param_mesh_cfg not in (None, "", "null", "None"):
@@ -871,6 +1106,15 @@ def main() -> int:
     )
     log.info("Wrote parameter-space selection: %s", parameter_space_path)
 
+    parameter_space_plot_path = _plot_parameter_space_overview(
+        collected=collected,
+        parameter_space_columns=parameter_space_columns,
+        z_config=z_config,
+        cfg_11=cfg_11,
+    )
+    if parameter_space_plot_path is not None:
+        log.info("Wrote plot: %s", parameter_space_plot_path)
+
     # Save the selected z configuration for downstream steps
     z_info = {
         "z_position_config": z_config,
@@ -903,6 +1147,9 @@ def main() -> int:
             "parameter_space_columns_downstream_preferred", parameter_space_columns
         ),
         "parameter_space_columns_json": str(parameter_space_path),
+        "parameter_space_plot": (
+            None if parameter_space_plot_path is None else str(parameter_space_plot_path)
+        ),
         "parameter_space_selection": parameter_space_info,
     }
     z_info_path = FILES_DIR / "z_config_selected.json"
@@ -923,9 +1170,9 @@ def main() -> int:
             ax.set_title(f"Event count distribution — {len(ev)} collected files")
             ax.grid(True, alpha=0.2)
             fig.tight_layout()
-            _save_figure(fig, PLOTS_DIR / "event_count_histogram.png", dpi=150)
+            histogram_path = _save_figure(fig, PLOTS_DIR / "event_count_histogram.png", dpi=150)
             plt.close(fig)
-            log.info("Wrote plot: %s", PLOTS_DIR / "event_count_histogram.png")
+            log.info("Wrote plot: %s", histogram_path)
 
     return 0
 

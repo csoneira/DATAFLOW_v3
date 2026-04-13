@@ -5,8 +5,9 @@ selection:
     - start: 2024-09-27
       end: 2024-10-01
 self_trigger: false
-complete_reanalysis: false
+complete_reanalysis: true
 # create_plots options: null | debug | usual | essential | all
 # Task 5 plot alias statuses live in config_plots_task_5.yaml
 create_plots: null
+keep_all_columns_output: false
 correct_angle: false

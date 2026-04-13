@@ -33,6 +33,8 @@ OPERATIONS_RUNTIME/LOG_THROTTLE/*.ts
 *.nc
 *.nc4
 .cdsapirc
+*.parquet
+*.index
 
 # ----------------------------------------------------------------------
 # Archives and compressed payloads

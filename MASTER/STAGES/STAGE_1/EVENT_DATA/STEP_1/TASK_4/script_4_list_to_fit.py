@@ -55,7 +55,7 @@ import pandas as pd
 import scipy.linalg as linalg
 from scipy.constants import c
 from scipy.interpolate import CubicSpline
-from scipy.ndimage import gaussian_filter1d
+from scipy.ndimage import gaussian_filter, gaussian_filter1d
 from scipy.optimize import brentq, curve_fit, minimize_scalar
 from scipy.special import erf
 from scipy.stats import norm, poisson, linregress, median_abs_deviation, skew
@@ -72,6 +72,8 @@ import matplotlib.pyplot as plt
 from matplotlib import gridspec
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.gridspec import GridSpec
+from matplotlib.lines import Line2D
+from matplotlib.patches import Ellipse
 from mpl_toolkits.mplot3d import Axes3D
 import seaborn as sns
 
@@ -122,6 +124,7 @@ from MASTER.common.reprocessing_utils import get_reprocessing_value
 from MASTER.common.simulated_data_utils import resolve_simulated_z_positions
 from MASTER.common.step1_shared import (
     add_normalized_count_metadata,
+    apply_step1_master_overrides,
     apply_step1_task_parameter_overrides,
     build_events_per_second_metadata,
     build_step1_cli_parser,
@@ -145,6 +148,21 @@ from MASTER.common.step1_shared import (
 )
 
 task_number = 4
+
+try:
+    import pyarrow as pa
+except Exception:  # pragma: no cover - pyarrow is already required for parquet IO here.
+    pa = None
+
+
+def _preferred_parquet_compression() -> str:
+    if pa is not None:
+        try:
+            if pa.Codec.is_available("snappy"):
+                return "snappy"
+        except Exception:
+            pass
+    return "zstd"
 
 # I want to chrono the execution time of the script
 start_execution_time_counting = datetime.now()
@@ -184,6 +202,13 @@ TASK4_PLOT_ALIASES: tuple[str, ...] = (
     "track_based_efficiency",
     "track_based_efficiency_tt_stability",
     "track_based_efficiency_vs_theta",
+    "timtrack_projection_ellipse_contours",
+    "timtrack_projection_scaled_angle_comparison",
+    "chi2_offender_populations",
+    "offender_angle_populations",
+    "offender_kinematics_populations",
+    "offender_tt_balance",
+    "offender_zigzag_populations",
     "chi2_charge_populations",
     "chi2_residuals_populations",
     "event_display_sample_3fold",
@@ -410,6 +435,104 @@ debug_mode = False
 
 home_path = str(resolve_home_path_from_config(config))
 REFERENCE_TABLES_DIR = Path(home_path) / "DATAFLOW_v3" / "MASTER" / "CONFIG_FILES" / "METADATA_REPRISE" / "REFERENCE_TABLES"
+
+
+def _coerce_config_bool(value: object, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
+
+
+def _coerce_nonnegative_int_tuple(raw_value: object, default: Iterable[int]) -> tuple[int, ...]:
+    if raw_value is None:
+        return tuple(int(x) for x in default)
+    if isinstance(raw_value, (int, np.integer)):
+        return (max(0, int(raw_value)),)
+    if isinstance(raw_value, str):
+        items = [chunk.strip() for chunk in raw_value.split(",") if chunk.strip()]
+    elif isinstance(raw_value, (list, tuple, set, np.ndarray, pd.Series)):
+        items = list(raw_value)
+    else:
+        return tuple(int(x) for x in default)
+
+    parsed: list[int] = []
+    for item in items:
+        try:
+            parsed.append(max(0, int(item)))
+        except (TypeError, ValueError):
+            continue
+    if not parsed:
+        return tuple(int(x) for x in default)
+    return tuple(sorted(set(parsed)))
+
+
+def _coerce_tt_label_tuple(raw_value: object, default: Iterable[object]) -> tuple[str, ...]:
+    source = list(default) if raw_value is None else raw_value
+    if isinstance(source, str):
+        source = [chunk.strip() for chunk in source.split(",") if chunk.strip()]
+    elif not isinstance(source, (list, tuple, set, np.ndarray, pd.Series)):
+        source = list(default)
+
+    labels: list[str] = []
+    for item in source:
+        label = normalize_tt_label(item, default="")
+        if label and label != "0" and label not in labels:
+            labels.append(label)
+    if labels:
+        return tuple(labels)
+    return tuple(normalize_tt_label(item, default="0") for item in default)
+
+
+def _coerce_probability_tuple(raw_value: object, default: Iterable[float]) -> tuple[float, ...]:
+    source = list(default) if raw_value is None else raw_value
+    if isinstance(source, str):
+        source = [chunk.strip() for chunk in source.split(",") if chunk.strip()]
+    elif not isinstance(source, (list, tuple, set, np.ndarray, pd.Series)):
+        source = list(default)
+
+    values: list[float] = []
+    for item in source:
+        try:
+            value = float(item)
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(value) or not (0.0 < value < 1.0):
+            continue
+        if not any(abs(value - existing) < 1e-12 for existing in values):
+            values.append(value)
+    if values:
+        return tuple(sorted(values))
+    return tuple(float(item) for item in default)
+
+
+_offender_plot_settings = config.get("offender_plot_settings", {})
+if not isinstance(_offender_plot_settings, dict):
+    _offender_plot_settings = {}
+OFFENDER_THETA_MIN_DEG = float(_offender_plot_settings.get("theta_min_deg", 0.0))
+OFFENDER_THETA_MAX_DEG = float(_offender_plot_settings.get("theta_max_deg", 90.0))
+if not np.isfinite(OFFENDER_THETA_MIN_DEG):
+    OFFENDER_THETA_MIN_DEG = 0.0
+if not np.isfinite(OFFENDER_THETA_MAX_DEG):
+    OFFENDER_THETA_MAX_DEG = 90.0
+if OFFENDER_THETA_MAX_DEG <= OFFENDER_THETA_MIN_DEG:
+    OFFENDER_THETA_MIN_DEG = 0.0
+    OFFENDER_THETA_MAX_DEG = 90.0
+OFFENDER_FOCUS_TTS_CFG = _coerce_tt_label_tuple(
+    _offender_plot_settings.get("focus_definitive_tt", None),
+    default=("123", "124", "134", "234", "1234"),
+)
+OFFENDER_TASK1_CUMULATIVE_THRESHOLDS = _coerce_nonnegative_int_tuple(
+    _offender_plot_settings.get("task1_cumulative_thresholds", None),
+    default=tuple(range(0, 11)),
+)
 
 def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.99, fit_gaussian=False):
     global fig_idx
@@ -927,6 +1050,11 @@ config = apply_step1_task_parameter_overrides(
     update_fn=update_config_with_parameters,
     log_fn=print,
 )
+config = apply_step1_master_overrides(
+    config_obj=config,
+    master_config_root=config_root,
+    log_fn=print,
+)
 
 selection_config = load_selection_for_paths(
     [config_file_path],
@@ -1112,6 +1240,10 @@ processing_files = set(_expected_input_files(os.listdir(processing_directory)))
 completed_files = set(_expected_input_files(os.listdir(completed_directory)))
 
 last_file_test = bool(config.get("last_file_test", False))
+keep_all_columns_output = _coerce_config_bool(
+    config.get("keep_all_columns_output", False),
+    default=False,
+)
 
 _t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
@@ -6370,16 +6502,14 @@ print("----------------------------------------------------------------------")
 print("----------------------- Calculating some stuff -----------------------")
 print("----------------------------------------------------------------------")
 
-df_plot_ancillary = working_df.copy()
-ancillary_before = len(df_plot_ancillary)
-
-cond = ( df_plot_ancillary['charge_1'] < charge_plot_limit_right ) &\
-    ( df_plot_ancillary['charge_2'] < charge_plot_limit_right ) &\
-    ( df_plot_ancillary['charge_3'] < charge_plot_limit_right ) &\
-    ( df_plot_ancillary['charge_4'] < charge_plot_limit_right ) &\
-    ( df_plot_ancillary['charge_event'] > charge_plot_limit_left )
-
-df_plot_ancillary = df_plot_ancillary.loc[cond].copy()
+cond = (
+    (working_df["charge_1"] < charge_plot_limit_right)
+    & (working_df["charge_2"] < charge_plot_limit_right)
+    & (working_df["charge_3"] < charge_plot_limit_right)
+    & (working_df["charge_4"] < charge_plot_limit_right)
+    & (working_df["charge_event"] > charge_plot_limit_left)
+)
+df_plot_ancillary = working_df.loc[cond]
 
 # -----------------------------------------------------------------------------------------------------------------------------
 
@@ -6837,6 +6967,66 @@ def _resolve_task4_efficiency_metadata_cfg(config_dict):
     }
 
 
+def _resolve_projection_ellipse_diagnostic_cfg(config_dict, default_half_range):
+    raw = config_dict.get("projection_ellipse_diagnostic", {})
+    if not isinstance(raw, dict):
+        raw = {}
+
+    default_half_range = float(default_half_range)
+    x_min = _safe_cfg_optional_float(raw.get("x_min", None))
+    x_max = _safe_cfg_optional_float(raw.get("x_max", None))
+    y_min = _safe_cfg_optional_float(raw.get("y_min", None))
+    y_max = _safe_cfg_optional_float(raw.get("y_max", None))
+    if x_min is None:
+        x_min = -default_half_range
+    if x_max is None:
+        x_max = default_half_range
+    if y_min is None:
+        y_min = -default_half_range
+    if y_max is None:
+        y_max = default_half_range
+    if x_max <= x_min:
+        x_min, x_max = -default_half_range, default_half_range
+    if y_max <= y_min:
+        y_min, y_max = -default_half_range, default_half_range
+
+    smoothing_sigma_bins = raw.get("smoothing_sigma_bins", 1.0)
+    try:
+        smoothing_sigma_bins = float(smoothing_sigma_bins)
+    except (TypeError, ValueError):
+        smoothing_sigma_bins = 1.0
+    if not np.isfinite(smoothing_sigma_bins) or smoothing_sigma_bins < 0.0:
+        smoothing_sigma_bins = 1.0
+
+    axis_quantile_min = _safe_cfg_optional_float(raw.get("axis_quantile_min", 0.01))
+    axis_quantile_max = _safe_cfg_optional_float(raw.get("axis_quantile_max", 0.99))
+    if axis_quantile_min is None:
+        axis_quantile_min = 0.01
+    if axis_quantile_max is None:
+        axis_quantile_max = 0.99
+
+    return {
+        "bin_count": max(24, _safe_cfg_int(raw.get("bin_count", 140), 140)),
+        "min_points": max(50, _safe_cfg_int(raw.get("min_points", 300), 300)),
+        "smoothing_sigma_bins": smoothing_sigma_bins,
+        "x_min": float(x_min),
+        "x_max": float(x_max),
+        "y_min": float(y_min),
+        "y_max": float(y_max),
+        "axis_quantile_min": min(max(float(axis_quantile_min), 0.0), 0.49),
+        "axis_quantile_max": max(min(float(axis_quantile_max), 1.0), 0.51),
+        "cmap": str(raw.get("cmap", "turbo")).strip() or "turbo",
+        "contour_fractions": _coerce_probability_tuple(
+            raw.get("contour_fractions", None),
+            default=(0.25, 0.5, 0.75),
+        ),
+        "focus_definitive_tt": _coerce_tt_label_tuple(
+            raw.get("focus_definitive_tt", None),
+            default=OFFENDER_FOCUS_TTS_CFG,
+        ),
+    }
+
+
 def _efficiency_center_field(axis_name):
     return "center_deg" if axis_name == "theta" else "center_mm"
 
@@ -7192,6 +7382,473 @@ def _flatten_track_based_efficiency_metadata(
     return row
 
 
+def _format_task4_efficiency_vector_title_line(payload) -> str:
+    if not isinstance(payload, dict):
+        return "Track-based efficiency vector (3-plane -> 4-plane): unavailable"
+
+    plane_results = payload.get("plane_results", {})
+    if not isinstance(plane_results, dict):
+        return "Track-based efficiency vector (3-plane -> 4-plane): unavailable"
+
+    fragments: list[str] = []
+    for plane in range(1, 5):
+        plane_result = plane_results.get(plane, {})
+        if not isinstance(plane_result, dict):
+            fragments.append(f"P{plane}=n/a")
+            continue
+        overall_eff = plane_result.get("overall_eff", np.nan)
+        n_denom = int(plane_result.get("n_denom", 0) or 0)
+        if np.isfinite(overall_eff) and n_denom > 0:
+            fragments.append(f"P{plane}={float(overall_eff):.1f}%")
+        else:
+            fragments.append(f"P{plane}=n/a")
+    return "Track-based efficiency vector (3-plane -> 4-plane): " + ", ".join(fragments)
+
+
+def _extract_projection_arrays(df_input: pd.DataFrame) -> tuple[np.ndarray | None, np.ndarray | None, str]:
+    if {"tim_xp", "tim_yp"}.issubset(df_input.columns):
+        return (
+            pd.to_numeric(df_input["tim_xp"], errors="coerce").to_numpy(dtype=float),
+            pd.to_numeric(df_input["tim_yp"], errors="coerce").to_numpy(dtype=float),
+            "tim_xp_tim_yp",
+        )
+
+    if {"xp", "yp"}.issubset(df_input.columns):
+        return (
+            pd.to_numeric(df_input["xp"], errors="coerce").to_numpy(dtype=float),
+            pd.to_numeric(df_input["yp"], errors="coerce").to_numpy(dtype=float),
+            "xp_yp",
+        )
+
+    if {"theta", "phi"}.issubset(df_input.columns):
+        theta_vals = pd.to_numeric(df_input["theta"], errors="coerce").to_numpy(dtype=float)
+        phi_vals = pd.to_numeric(df_input["phi"], errors="coerce").to_numpy(dtype=float)
+        tan_theta_vals = np.tan(theta_vals)
+        return (
+            tan_theta_vals * np.cos(phi_vals),
+            tan_theta_vals * np.sin(phi_vals),
+            "theta_phi_backcalc",
+        )
+
+    return None, None, "missing"
+
+
+def _ellipse_scale_for_peak_fraction(peak_fraction: float) -> float:
+    try:
+        value = float(peak_fraction)
+    except (TypeError, ValueError):
+        return float("nan")
+    if not np.isfinite(value) or not (0.0 < value < 1.0):
+        return float("nan")
+    return float(np.sqrt(max(0.0, -2.0 * np.log(value))))
+
+
+def _fit_elliptical_gaussian_to_density(
+    density: np.ndarray,
+    x_centers: np.ndarray,
+    y_centers: np.ndarray,
+) -> dict[str, object] | None:
+    density = np.asarray(density, dtype=float)
+    if density.ndim != 2 or density.size == 0:
+        return None
+
+    weights = np.where(np.isfinite(density) & (density > 0.0), density, 0.0)
+    total_weight = float(weights.sum())
+    if total_weight <= 0.0:
+        return None
+
+    xx, yy = np.meshgrid(np.asarray(x_centers, dtype=float), np.asarray(y_centers, dtype=float), indexing="ij")
+    x_flat = xx.ravel()
+    y_flat = yy.ravel()
+    w_flat = weights.ravel()
+    positive = w_flat > 0.0
+    if int(np.count_nonzero(positive)) < 6:
+        return None
+
+    x_vals = x_flat[positive]
+    y_vals = y_flat[positive]
+    w_vals = w_flat[positive]
+
+    center_x = float(np.average(x_vals, weights=w_vals))
+    center_y = float(np.average(y_vals, weights=w_vals))
+    dx = x_vals - center_x
+    dy = y_vals - center_y
+    cov_xx = float(np.average(dx * dx, weights=w_vals))
+    cov_xy = float(np.average(dx * dy, weights=w_vals))
+    cov_yy = float(np.average(dy * dy, weights=w_vals))
+    cov = np.array([[cov_xx, cov_xy], [cov_xy, cov_yy]], dtype=float)
+    if not np.all(np.isfinite(cov)):
+        return None
+
+    eigvals, eigvecs = np.linalg.eigh(cov)
+    order = np.argsort(eigvals)[::-1]
+    eigvals = np.asarray(eigvals[order], dtype=float)
+    eigvecs = np.asarray(eigvecs[:, order], dtype=float)
+    eigvals = np.clip(eigvals, 0.0, None)
+    if eigvals.size < 2 or eigvals[1] <= 0.0:
+        return None
+
+    sigma_major = float(np.sqrt(eigvals[0]))
+    sigma_minor = float(np.sqrt(eigvals[1]))
+    if not (np.isfinite(sigma_major) and np.isfinite(sigma_minor) and sigma_minor > 0.0):
+        return None
+
+    major_vector = eigvecs[:, 0]
+    minor_vector = eigvecs[:, 1]
+    rotation_deg = float(np.degrees(np.arctan2(major_vector[1], major_vector[0])))
+    while rotation_deg > 90.0:
+        rotation_deg -= 180.0
+    while rotation_deg <= -90.0:
+        rotation_deg += 180.0
+
+    return {
+        "center_x": center_x,
+        "center_y": center_y,
+        "cov_xx": cov_xx,
+        "cov_yy": cov_yy,
+        "sigma_x": float(np.sqrt(max(cov_xx, 0.0))),
+        "sigma_y": float(np.sqrt(max(cov_yy, 0.0))),
+        "sigma_major": sigma_major,
+        "sigma_minor": sigma_minor,
+        "major_vector": major_vector.astype(float),
+        "minor_vector": minor_vector.astype(float),
+        "rotation_deg": rotation_deg,
+        "covariance": cov,
+    }
+
+
+def _build_projection_ellipse_diagnostic_payload(
+    df_input: pd.DataFrame,
+    cfg: dict[str, object],
+) -> dict[str, object]:
+    required_columns = ("definitive_tt",)
+    if not all(column_name in df_input.columns for column_name in required_columns):
+        return {
+            "available": False,
+            "reason": "missing_definitive_tt",
+            "config": cfg,
+            "projection_source": "missing",
+            "tt_results": {},
+        }
+
+    xproj_all, yproj_all, projection_source = _extract_projection_arrays(df_input)
+    if xproj_all is None or yproj_all is None:
+        return {
+            "available": False,
+            "reason": "missing_projection_columns",
+            "config": cfg,
+            "projection_source": projection_source,
+            "tt_results": {},
+        }
+
+    definitive_tt_all = pd.to_numeric(df_input["definitive_tt"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
+    x_min = float(cfg["x_min"])
+    x_max = float(cfg["x_max"])
+    y_min = float(cfg["y_min"])
+    y_max = float(cfg["y_max"])
+    axis_quantile_min = float(cfg["axis_quantile_min"])
+    axis_quantile_max = float(cfg["axis_quantile_max"])
+    if axis_quantile_max <= axis_quantile_min:
+        axis_quantile_min = 0.01
+        axis_quantile_max = 0.99
+    bin_count = int(cfg["bin_count"])
+    fwhm_scale = _ellipse_scale_for_peak_fraction(0.5)
+
+    tt_results: dict[str, dict[str, object]] = {}
+    available_any = False
+    for tt_label in tuple(cfg.get("focus_definitive_tt", ())):
+        tt_int = int(normalize_tt_label(tt_label, default="0") or 0)
+        tt_mask = definitive_tt_all == tt_int
+        x_tt = np.asarray(xproj_all[tt_mask], dtype=float)
+        y_tt = np.asarray(yproj_all[tt_mask], dtype=float)
+        valid = (
+            np.isfinite(x_tt)
+            & np.isfinite(y_tt)
+            & (x_tt >= x_min)
+            & (x_tt <= x_max)
+            & (y_tt >= y_min)
+            & (y_tt <= y_max)
+        )
+        x_sel = x_tt[valid]
+        y_sel = y_tt[valid]
+
+        result: dict[str, object] = {
+            "available": False,
+            "reason": "insufficient_points",
+            "tt_label": tt_label,
+            "n_points": int(x_sel.size),
+            "projection_source": projection_source,
+        }
+        if x_sel.size < int(cfg["min_points"]):
+            tt_results[str(tt_label)] = result
+            continue
+
+        x_q_lo, x_q_hi = np.quantile(x_sel, [axis_quantile_min, axis_quantile_max])
+        y_q_lo, y_q_hi = np.quantile(y_sel, [axis_quantile_min, axis_quantile_max])
+        x_mid = 0.5 * float(x_q_lo + x_q_hi)
+        y_mid = 0.5 * float(y_q_lo + y_q_hi)
+        half_span = 0.5 * max(float(x_q_hi - x_q_lo), float(y_q_hi - y_q_lo))
+        min_half_span = 0.025 * max(float(x_max - x_min), float(y_max - y_min))
+        half_span = max(half_span, min_half_span)
+        plot_x_min = max(float(x_min), x_mid - half_span)
+        plot_x_max = min(float(x_max), x_mid + half_span)
+        plot_y_min = max(float(y_min), y_mid - half_span)
+        plot_y_max = min(float(y_max), y_mid + half_span)
+        x_edges = np.linspace(plot_x_min, plot_x_max, bin_count + 1)
+        y_edges = np.linspace(plot_y_min, plot_y_max, bin_count + 1)
+        x_centers = 0.5 * (x_edges[:-1] + x_edges[1:])
+        y_centers = 0.5 * (y_edges[:-1] + y_edges[1:])
+
+        hist, _, _ = np.histogram2d(x_sel, y_sel, bins=[x_edges, y_edges])
+        density = np.asarray(hist, dtype=float)
+        sigma_bins = float(cfg["smoothing_sigma_bins"])
+        if sigma_bins > 0.0:
+            density = gaussian_filter(density, sigma=sigma_bins, mode="nearest")
+
+        peak_density = float(np.nanmax(density)) if density.size > 0 else 0.0
+        if not np.isfinite(peak_density) or peak_density <= 0.0:
+            result["reason"] = "zero_density"
+            tt_results[str(tt_label)] = result
+            continue
+
+        ellipse_model = _fit_elliptical_gaussian_to_density(density, x_centers, y_centers)
+        if ellipse_model is None:
+            result["reason"] = "ellipse_fit_failed"
+            tt_results[str(tt_label)] = result
+            continue
+
+        sigma_major = float(ellipse_model["sigma_major"])
+        sigma_minor = float(ellipse_model["sigma_minor"])
+        major_vector = np.asarray(ellipse_model["major_vector"], dtype=float)
+        minor_vector = np.asarray(ellipse_model["minor_vector"], dtype=float)
+        fwhm_semiaxis_major = sigma_major * fwhm_scale
+        fwhm_semiaxis_minor = sigma_minor * fwhm_scale
+        fwhm_halfwidth_x = float(
+            np.sqrt(
+                (fwhm_semiaxis_major * major_vector[0]) ** 2
+                + (fwhm_semiaxis_minor * minor_vector[0]) ** 2
+            )
+        )
+        fwhm_halfwidth_y = float(
+            np.sqrt(
+                (fwhm_semiaxis_major * major_vector[1]) ** 2
+                + (fwhm_semiaxis_minor * minor_vector[1]) ** 2
+            )
+        )
+        fwhm_axis_ratio = (
+            float(fwhm_semiaxis_major / fwhm_semiaxis_minor)
+            if fwhm_semiaxis_minor > 0.0
+            else float("nan")
+        )
+        fwhm_halfwidth_x_over_y = (
+            float(fwhm_halfwidth_x / fwhm_halfwidth_y)
+            if fwhm_halfwidth_y > 0.0
+            else float("nan")
+        )
+
+        result.update(
+            {
+                "available": True,
+                "reason": "ok",
+                "peak_density": peak_density,
+                "density": density,
+                "normalized_density": density / peak_density,
+                "x_edges": x_edges,
+                "y_edges": y_edges,
+                "x_centers": x_centers,
+                "y_centers": y_centers,
+                "contour_fractions": np.asarray(cfg["contour_fractions"], dtype=float),
+                "ellipse_model": ellipse_model,
+                "plot_x_min": plot_x_min,
+                "plot_x_max": plot_x_max,
+                "plot_y_min": plot_y_min,
+                "plot_y_max": plot_y_max,
+                "fwhm_semiaxis_major": float(fwhm_semiaxis_major),
+                "fwhm_semiaxis_minor": float(fwhm_semiaxis_minor),
+                "fwhm_axis_ratio_major_over_minor": fwhm_axis_ratio,
+                "fwhm_halfwidth_xproj": fwhm_halfwidth_x,
+                "fwhm_halfwidth_yproj": fwhm_halfwidth_y,
+                "fwhm_halfwidth_x_over_y": fwhm_halfwidth_x_over_y,
+            }
+        )
+        tt_results[str(tt_label)] = result
+        available_any = True
+
+    return {
+        "available": available_any,
+        "reason": "ok" if available_any else "no_valid_tt_payloads",
+        "config": cfg,
+        "projection_source": projection_source,
+        "tt_results": tt_results,
+    }
+
+
+def _append_projection_ellipse_metadata(payload: dict[str, object]) -> None:
+    cfg = payload.get("config", {})
+    tt_results = payload.get("tt_results", {})
+    if not isinstance(cfg, dict):
+        cfg = {}
+    if not isinstance(tt_results, dict):
+        tt_results = {}
+
+    global_variables["timtrack_projection_ellipse_available"] = bool(payload.get("available", False))
+    global_variables["timtrack_projection_ellipse_reason"] = str(payload.get("reason", ""))
+    global_variables["timtrack_projection_ellipse_projection_source"] = str(
+        payload.get("projection_source", "missing")
+    )
+    global_variables["timtrack_projection_ellipse_bin_count"] = int(cfg.get("bin_count", 0) or 0)
+    global_variables["timtrack_projection_ellipse_min_points"] = int(cfg.get("min_points", 0) or 0)
+    global_variables["timtrack_projection_ellipse_smoothing_sigma_bins"] = float(
+        cfg.get("smoothing_sigma_bins", np.nan)
+    )
+    global_variables["timtrack_projection_ellipse_axis_quantile_min"] = float(
+        cfg.get("axis_quantile_min", np.nan)
+    )
+    global_variables["timtrack_projection_ellipse_axis_quantile_max"] = float(
+        cfg.get("axis_quantile_max", np.nan)
+    )
+    global_variables["timtrack_projection_ellipse_cmap"] = str(cfg.get("cmap", ""))
+    global_variables["timtrack_projection_ellipse_contour_fractions"] = ",".join(
+        f"{float(value):.2f}" for value in tuple(cfg.get("contour_fractions", ()))
+    )
+
+    for tt_label in tuple(cfg.get("focus_definitive_tt", ())):
+        result = tt_results.get(str(tt_label), {})
+        prefix = f"timtrack_projection_ellipse_tt_{tt_label}"
+        available = bool(isinstance(result, dict) and result.get("available", False))
+        global_variables[f"{prefix}_available"] = available
+        global_variables[f"{prefix}_reason"] = (
+            str(result.get("reason", "")) if isinstance(result, dict) else "missing"
+        )
+        global_variables[f"{prefix}_n_points"] = int(result.get("n_points", 0) or 0)
+        global_variables[f"{prefix}_peak_density"] = (
+            float(result.get("peak_density", np.nan)) if available else np.nan
+        )
+        if not available:
+            for suffix in (
+                "center_xproj",
+                "center_yproj",
+                "plot_x_min",
+                "plot_x_max",
+                "plot_y_min",
+                "plot_y_max",
+                "xproj_scaling_factor_to_match_y",
+                "rotation_deg",
+                "sigma_x",
+                "sigma_y",
+                "fwhm_semiaxis_major",
+                "fwhm_semiaxis_minor",
+                "fwhm_axis_ratio_major_over_minor",
+                "fwhm_halfwidth_xproj",
+                "fwhm_halfwidth_yproj",
+                "fwhm_halfwidth_x_over_y",
+            ):
+                global_variables[f"{prefix}_{suffix}"] = np.nan
+            continue
+
+        ellipse_model = result.get("ellipse_model", {})
+        if not isinstance(ellipse_model, dict):
+            ellipse_model = {}
+        global_variables[f"{prefix}_center_xproj"] = float(ellipse_model.get("center_x", np.nan))
+        global_variables[f"{prefix}_center_yproj"] = float(ellipse_model.get("center_y", np.nan))
+        global_variables[f"{prefix}_plot_x_min"] = float(result.get("plot_x_min", np.nan))
+        global_variables[f"{prefix}_plot_x_max"] = float(result.get("plot_x_max", np.nan))
+        global_variables[f"{prefix}_plot_y_min"] = float(result.get("plot_y_min", np.nan))
+        global_variables[f"{prefix}_plot_y_max"] = float(result.get("plot_y_max", np.nan))
+        _scaling_factor = (
+            float(result.get("fwhm_halfwidth_yproj", np.nan)) / float(result.get("fwhm_halfwidth_xproj", np.nan))
+            if np.isfinite(float(result.get("fwhm_halfwidth_xproj", np.nan)))
+            and float(result.get("fwhm_halfwidth_xproj", np.nan)) > 0.0
+            and np.isfinite(float(result.get("fwhm_halfwidth_yproj", np.nan)))
+            else np.nan
+        )
+        global_variables[f"{prefix}_xproj_scaling_factor_to_match_y"] = _scaling_factor
+        global_variables[f"{prefix}_rotation_deg"] = float(ellipse_model.get("rotation_deg", np.nan))
+        global_variables[f"{prefix}_sigma_x"] = float(ellipse_model.get("sigma_x", np.nan))
+        global_variables[f"{prefix}_sigma_y"] = float(ellipse_model.get("sigma_y", np.nan))
+        global_variables[f"{prefix}_fwhm_semiaxis_major"] = float(
+            result.get("fwhm_semiaxis_major", np.nan)
+        )
+        global_variables[f"{prefix}_fwhm_semiaxis_minor"] = float(
+            result.get("fwhm_semiaxis_minor", np.nan)
+        )
+        global_variables[f"{prefix}_fwhm_axis_ratio_major_over_minor"] = float(
+            result.get("fwhm_axis_ratio_major_over_minor", np.nan)
+        )
+        global_variables[f"{prefix}_fwhm_halfwidth_xproj"] = float(
+            result.get("fwhm_halfwidth_xproj", np.nan)
+        )
+        global_variables[f"{prefix}_fwhm_halfwidth_yproj"] = float(
+            result.get("fwhm_halfwidth_yproj", np.nan)
+        )
+        global_variables[f"{prefix}_fwhm_halfwidth_x_over_y"] = float(
+            result.get("fwhm_halfwidth_x_over_y", np.nan)
+        )
+
+
+def _select_projection_scaling_reference(
+    payload: dict[str, object],
+) -> tuple[str | None, dict[str, object] | None]:
+    tt_results = payload.get("tt_results", {})
+    if not isinstance(tt_results, dict):
+        return None, None
+
+    best_label: str | None = None
+    best_result: dict[str, object] | None = None
+    best_n = -1
+    for tt_label, result in tt_results.items():
+        if not isinstance(result, dict) or not bool(result.get("available", False)):
+            continue
+        n_points = int(result.get("n_points", 0) or 0)
+        if n_points > best_n:
+            best_label = str(tt_label)
+            best_result = result
+            best_n = n_points
+    return best_label, best_result
+
+
+def _summarize_projection_scaling(payload: dict[str, object]) -> dict[str, object]:
+    tt_results = payload.get("tt_results", {})
+    if not isinstance(tt_results, dict):
+        return {
+            "global_factor": np.nan,
+            "global_method": "weighted_mean_by_n_points",
+            "n_contributing_tts": 0,
+            "total_weight": 0.0,
+        }
+
+    factors: list[float] = []
+    weights: list[float] = []
+    for result in tt_results.values():
+        if not isinstance(result, dict) or not bool(result.get("available", False)):
+            continue
+        x_half = float(result.get("fwhm_halfwidth_xproj", np.nan))
+        y_half = float(result.get("fwhm_halfwidth_yproj", np.nan))
+        n_points = int(result.get("n_points", 0) or 0)
+        if not (np.isfinite(x_half) and x_half > 0.0 and np.isfinite(y_half) and n_points > 0):
+            continue
+        factors.append(float(y_half / x_half))
+        weights.append(float(n_points))
+
+    if not factors:
+        return {
+            "global_factor": np.nan,
+            "global_method": "weighted_mean_by_n_points",
+            "n_contributing_tts": 0,
+            "total_weight": 0.0,
+        }
+
+    factor_arr = np.asarray(factors, dtype=float)
+    weight_arr = np.asarray(weights, dtype=float)
+    global_factor = float(np.average(factor_arr, weights=weight_arr))
+    return {
+        "global_factor": global_factor,
+        "global_method": "weighted_mean_by_n_points",
+        "n_contributing_tts": int(len(factor_arr)),
+        "total_weight": float(np.sum(weight_arr)),
+    }
+
+
 efficiency_metadata_cfg = _resolve_task4_efficiency_metadata_cfg(config)
 efficiency_metadata_payload = _compute_track_based_efficiency_payload(
     df_plot_ancillary,
@@ -7209,6 +7866,45 @@ if not bool(efficiency_metadata_payload.get("available", False)):
         "[track_based_efficiency] metadata payload unavailable: "
         f"{efficiency_metadata_payload.get('reason', 'unknown')}"
     )
+task4_efficiency_vector_title_line = _format_task4_efficiency_vector_title_line(
+    efficiency_metadata_payload
+)
+projection_ellipse_cfg = _resolve_projection_ellipse_diagnostic_cfg(config, proj_filter)
+projection_ellipse_payload = _build_projection_ellipse_diagnostic_payload(
+    df_plot_ancillary,
+    projection_ellipse_cfg,
+)
+_append_projection_ellipse_metadata(projection_ellipse_payload)
+projection_scaling_reference_tt, projection_scaling_reference_result = _select_projection_scaling_reference(
+    projection_ellipse_payload
+)
+projection_scaling_summary = _summarize_projection_scaling(projection_ellipse_payload)
+global_variables["timtrack_projection_scaling_reference_tt"] = (
+    projection_scaling_reference_tt if projection_scaling_reference_tt is not None else ""
+)
+if isinstance(projection_scaling_reference_result, dict) and bool(
+    projection_scaling_reference_result.get("available", False)
+):
+    global_variables["timtrack_projection_scaling_reference_n_points"] = int(
+        projection_scaling_reference_result.get("n_points", 0) or 0
+    )
+else:
+    global_variables["timtrack_projection_scaling_reference_n_points"] = 0
+global_variables["timtrack_projection_scaling_factor_xproj"] = float(
+    projection_scaling_summary.get("global_factor", np.nan)
+)
+global_variables["timtrack_projection_scaling_factor_xproj_global"] = float(
+    projection_scaling_summary.get("global_factor", np.nan)
+)
+global_variables["timtrack_projection_scaling_global_method"] = str(
+    projection_scaling_summary.get("global_method", "")
+)
+global_variables["timtrack_projection_scaling_global_n_contributing_tts"] = int(
+    projection_scaling_summary.get("n_contributing_tts", 0) or 0
+)
+global_variables["timtrack_projection_scaling_global_total_weight"] = float(
+    projection_scaling_summary.get("total_weight", 0.0) or 0.0
+)
 
 # ---------------------------------------------------------------------------
 # Track-based single-plane efficiency (telescope method)
@@ -7318,6 +8014,366 @@ if (
     if show_plots:
         plt.show()
     plt.close()
+
+# ---------------------------------------------------------------------------
+# TimTrack projection contour diagnostic
+# Elliptical-Gaussian fit on the (xp, yp) density, with contour families
+# overlaid at fixed fractions of the local peak.
+# ---------------------------------------------------------------------------
+if (
+    (create_essential_plots or create_plots)
+    and task4_plot_enabled("timtrack_projection_ellipse_contours")
+    and bool(projection_ellipse_payload.get("tt_results", {}))
+):
+    _projection_tt_results = projection_ellipse_payload["tt_results"]
+    _projection_tt_labels = tuple(projection_ellipse_cfg["focus_definitive_tt"])
+    _n_projection_panels = max(1, len(_projection_tt_labels))
+    _n_projection_cols = 3 if _n_projection_panels > 3 else _n_projection_panels
+    _n_projection_rows = int(math.ceil(_n_projection_panels / _n_projection_cols))
+    _projection_fig, _projection_axes = plt.subplots(
+        _n_projection_rows,
+        _n_projection_cols,
+        figsize=(6.2 * _n_projection_cols, 5.7 * _n_projection_rows),
+        squeeze=False,
+    )
+    _projection_axes_flat = list(_projection_axes.ravel())
+    _projection_colors = ("#40c9ff", "#f4d35e", "#ff6b6b", "#70e000")
+    _projection_im = None
+
+    for _ax, _tt_label in zip(_projection_axes_flat, _projection_tt_labels):
+        _result = _projection_tt_results.get(str(_tt_label), {})
+        _ax.axhline(0.0, color="white", lw=0.55, ls=":", alpha=0.5)
+        _ax.axvline(0.0, color="white", lw=0.55, ls=":", alpha=0.5)
+        _ax.set_xlabel("xp", fontsize=9)
+        _ax.set_ylabel("yp", fontsize=9)
+        _ax.tick_params(labelsize=8)
+
+        if not isinstance(_result, dict) or not bool(_result.get("available", False)):
+            _reason = str(_result.get("reason", "unavailable")) if isinstance(_result, dict) else "unavailable"
+            _n_points = int(_result.get("n_points", 0) or 0) if isinstance(_result, dict) else 0
+            _ax.text(
+                0.5,
+                0.5,
+                f"TT {_tt_label}\nNo ellipse fit\nreason={_reason}\nn={_n_points}",
+                transform=_ax.transAxes,
+                ha="center",
+                va="center",
+                fontsize=9,
+                color="0.82",
+                bbox={"boxstyle": "round", "facecolor": "0.12", "edgecolor": "0.4", "alpha": 0.9},
+            )
+            _ax.set_title(f"definitive_tt = {_tt_label}", fontsize=10)
+            _ax.set_facecolor("0.05")
+            _ax.set_aspect("equal", adjustable="box")
+            continue
+
+        _norm_density = np.asarray(_result.get("normalized_density", np.empty((0, 0))), dtype=float)
+        _x_edges = np.asarray(_result.get("x_edges", np.empty(0)), dtype=float)
+        _y_edges = np.asarray(_result.get("y_edges", np.empty(0)), dtype=float)
+        _x_centers = np.asarray(_result.get("x_centers", np.empty(0)), dtype=float)
+        _y_centers = np.asarray(_result.get("y_centers", np.empty(0)), dtype=float)
+        _ellipse_model = _result.get("ellipse_model", {})
+        if not isinstance(_ellipse_model, dict):
+            _ellipse_model = {}
+
+        _projection_im = _ax.imshow(
+            _norm_density.T,
+            origin="lower",
+            aspect="equal",
+            extent=[float(_x_edges[0]), float(_x_edges[-1]), float(_y_edges[0]), float(_y_edges[-1])],
+            vmin=0.0,
+            vmax=1.0,
+            cmap=str(projection_ellipse_cfg["cmap"]),
+        )
+        _levels = np.asarray(_result.get("contour_fractions", np.empty(0)), dtype=float)
+        _level_colors = _projection_colors[: len(_levels)]
+        if _levels.size > 0:
+            _ax.contour(
+                _x_centers,
+                _y_centers,
+                _norm_density.T,
+                levels=_levels.tolist(),
+                colors=_level_colors,
+                linewidths=1.15,
+                alpha=0.95,
+            )
+
+        _center_x = float(_ellipse_model.get("center_x", np.nan))
+        _center_y = float(_ellipse_model.get("center_y", np.nan))
+        _sigma_major = float(_ellipse_model.get("sigma_major", np.nan))
+        _sigma_minor = float(_ellipse_model.get("sigma_minor", np.nan))
+        _rotation_deg = float(_ellipse_model.get("rotation_deg", np.nan))
+        for _level, _color in zip(_levels, _level_colors):
+            _scale = _ellipse_scale_for_peak_fraction(float(_level))
+            if not np.isfinite(_scale):
+                continue
+            _ellipse = Ellipse(
+                (_center_x, _center_y),
+                width=2.0 * _sigma_major * _scale,
+                height=2.0 * _sigma_minor * _scale,
+                angle=_rotation_deg,
+                fill=False,
+                lw=1.6,
+                ls="--",
+                ec=_color,
+                alpha=0.95,
+            )
+            _ax.add_patch(_ellipse)
+
+        _ax.scatter([_center_x], [_center_y], s=14, color="white", marker="x", linewidths=1.0)
+        _ax.set_facecolor("0.05")
+        _ax.set_xlim(float(_result.get("plot_x_min", projection_ellipse_cfg["x_min"])), float(_result.get("plot_x_max", projection_ellipse_cfg["x_max"])))
+        _ax.set_ylim(float(_result.get("plot_y_min", projection_ellipse_cfg["y_min"])), float(_result.get("plot_y_max", projection_ellipse_cfg["y_max"])))
+        _ax.set_aspect("equal", adjustable="box")
+        _ax.set_title(f"definitive_tt = {_tt_label}", fontsize=10)
+        _ax.text(
+            0.02,
+            0.98,
+            "\n".join(
+                (
+                    f"n={int(_result.get('n_points', 0)):,}",
+                    f"FWHM x/y={float(_result.get('fwhm_halfwidth_x_over_y', np.nan)):.3f}",
+                    f"FWHM a/b={float(_result.get('fwhm_axis_ratio_major_over_minor', np.nan)):.3f}",
+                    f"rot={_rotation_deg:.1f} deg",
+                )
+            ),
+            transform=_ax.transAxes,
+            va="top",
+            ha="left",
+            fontsize=8,
+            color="white",
+            bbox={"boxstyle": "round", "facecolor": "0.08", "edgecolor": "0.35", "alpha": 0.84},
+        )
+
+    for _ax in _projection_axes_flat[len(_projection_tt_labels):]:
+        _ax.axis("off")
+
+    if _projection_im is not None:
+        _projection_cax = _projection_fig.add_axes([0.90, 0.22, 0.016, 0.52])
+        _projection_cbar = _projection_fig.colorbar(_projection_im, cax=_projection_cax)
+        _projection_cbar.set_label("normalized density", fontsize=9)
+        _projection_cbar.ax.tick_params(labelsize=8)
+
+    _projection_legend_handles = [
+        Line2D([0], [0], color=color, lw=1.4, ls="-", label=f"{int(round(level * 100.0))}% contour")
+        for level, color in zip(tuple(projection_ellipse_cfg["contour_fractions"]), _projection_colors)
+    ]
+    _projection_legend_handles.extend(
+        [
+            Line2D([0], [0], color="white", lw=1.4, ls="--", label="ellipse fit"),
+            Line2D([0], [0], color="white", marker="x", lw=0.0, markersize=6, label="density center"),
+        ]
+    )
+    _projection_fig.legend(
+        handles=_projection_legend_handles,
+        loc="lower center",
+        ncol=min(5, len(_projection_legend_handles)),
+        fontsize=8,
+        bbox_to_anchor=(0.5, 0.01),
+        frameon=False,
+    )
+    _projection_fig.suptitle(
+        "TimTrack projection contours with ellipse fit by definitive_tt\n"
+        "Solid contours = smoothed xp/yp density at fixed peak fractions; dashed ellipses = matched elliptical-Gaussian family\n"
+        f"{task4_efficiency_vector_title_line}",
+        fontsize=11,
+    )
+    _projection_fig.subplots_adjust(left=0.06, right=0.87, bottom=0.11, top=0.84, wspace=0.22, hspace=0.26)
+    if save_plots:
+        _projection_filename = f"{fig_idx}_timtrack_projection_ellipse_contours.png"
+        fig_idx += 1
+        _projection_path = os.path.join(base_directories["figure_directory"], _projection_filename)
+        plot_list.append(_projection_path)
+        save_plot_figure(
+            _projection_path,
+            format="png",
+            alias="timtrack_projection_ellipse_contours",
+        )
+    if show_plots:
+        plt.show()
+    plt.close(_projection_fig)
+
+# ---------------------------------------------------------------------------
+# TimTrack projection scaling comparison
+# Compare the native projection/angle variables against a version where xp
+# is rescaled so its width matches yp, using the per-definitive_tt ellipse fit.
+# ---------------------------------------------------------------------------
+if (
+    (create_essential_plots or create_plots)
+    and task4_plot_enabled("timtrack_projection_scaled_angle_comparison")
+    and bool(projection_ellipse_payload.get("tt_results", {}))
+):
+    _xproj_all, _yproj_all, _projection_source_scaled = _extract_projection_arrays(df_plot_ancillary)
+    if (
+        _xproj_all is not None
+        and _yproj_all is not None
+        and "definitive_tt" in df_plot_ancillary.columns
+    ):
+        _def_tt_all_scaled = pd.to_numeric(
+            df_plot_ancillary["definitive_tt"],
+            errors="coerce",
+        ).fillna(0).to_numpy(dtype=np.int32)
+        def _combined_quantile_limits(*arrays, q_lo=0.01, q_hi=0.99, fallback=(-1.0, 1.0)):
+            _parts = []
+            for _arr in arrays:
+                _arr = np.asarray(_arr, dtype=float)
+                _arr = _arr[np.isfinite(_arr)]
+                if _arr.size > 0:
+                    _parts.append(_arr)
+            if not _parts:
+                return fallback
+            _merged = np.concatenate(_parts)
+            _lo, _hi = np.quantile(_merged, [q_lo, q_hi])
+            _lo = float(_lo)
+            _hi = float(_hi)
+            if not np.isfinite(_lo) or not np.isfinite(_hi) or _hi <= _lo:
+                return fallback
+            return (_lo, _hi)
+
+        _global_scale_factor = float(projection_scaling_summary.get("global_factor", np.nan))
+        _scaled_rows: list[dict[str, object]] = []
+        if np.isfinite(_global_scale_factor) and _global_scale_factor > 0.0:
+            for _tt_label in tuple(projection_ellipse_cfg.get("focus_definitive_tt", ())):
+                _tt_result = projection_ellipse_payload.get("tt_results", {}).get(str(_tt_label), {})
+                if not isinstance(_tt_result, dict) or not bool(_tt_result.get("available", False)):
+                    continue
+                _tt_x_half = float(_tt_result.get("fwhm_halfwidth_xproj", np.nan))
+                _tt_y_half = float(_tt_result.get("fwhm_halfwidth_yproj", np.nan))
+                _tt_scale_factor_local = (
+                    float(_tt_y_half / _tt_x_half)
+                    if np.isfinite(_tt_x_half)
+                    and _tt_x_half > 0.0
+                    and np.isfinite(_tt_y_half)
+                    else np.nan
+                )
+                if not np.isfinite(_tt_scale_factor_local) or _tt_scale_factor_local <= 0.0:
+                    continue
+
+                _tt_int = int(normalize_tt_label(_tt_label, default="0") or 0)
+                _tt_mask = (
+                    (_def_tt_all_scaled == _tt_int)
+                    & np.isfinite(_xproj_all)
+                    & np.isfinite(_yproj_all)
+                    & (_xproj_all >= float(_tt_result.get("plot_x_min", -np.inf)))
+                    & (_xproj_all <= float(_tt_result.get("plot_x_max", np.inf)))
+                    & (_yproj_all >= float(_tt_result.get("plot_y_min", -np.inf)))
+                    & (_yproj_all <= float(_tt_result.get("plot_y_max", np.inf)))
+                )
+                _xproj_ref = np.asarray(_xproj_all[_tt_mask], dtype=float)
+                _yproj_ref = np.asarray(_yproj_all[_tt_mask], dtype=float)
+                if _xproj_ref.size < int(projection_ellipse_cfg["min_points"]):
+                    continue
+
+                _xproj_scaled = _xproj_ref * _global_scale_factor
+                _theta_ref, _phi_ref = calculate_angles(_xproj_ref, _yproj_ref)
+                _theta_scaled, _phi_scaled = calculate_angles(_xproj_scaled, _yproj_ref)
+                _theta_ref_deg = np.degrees(np.asarray(_theta_ref, dtype=float))
+                _theta_scaled_deg = np.degrees(np.asarray(_theta_scaled, dtype=float))
+                _phi_ref_deg = np.degrees(np.asarray(_phi_ref, dtype=float))
+                _phi_scaled_deg = np.degrees(np.asarray(_phi_scaled, dtype=float))
+
+                _scaled_rows.append(
+                    {
+                        "tt_label": str(_tt_label),
+                        "n_points": int(_xproj_ref.size),
+                        "scale_factor_local": float(_tt_scale_factor_local),
+                        "scale_factor_global": float(_global_scale_factor),
+                        "xproj_original": _xproj_ref,
+                        "xproj_scaled": _xproj_scaled,
+                        "yproj_original": _yproj_ref,
+                        "yproj_scaled": _yproj_ref,
+                        "theta_original_deg": _theta_ref_deg,
+                        "theta_scaled_deg": _theta_scaled_deg,
+                        "phi_original_deg": _phi_ref_deg,
+                        "phi_scaled_deg": _phi_scaled_deg,
+                    }
+                )
+
+        if _scaled_rows:
+            _hist_bins = max(40, min(120, int(projection_ellipse_cfg["bin_count"])))
+            _scaled_fig, _scaled_axes = plt.subplots(
+                len(_scaled_rows),
+                4,
+                figsize=(15, 2.5 * len(_scaled_rows) + 1.5),
+                squeeze=False,
+            )
+            _column_defs = (
+                ("xproj_original", "xproj_scaled", "xproj", (-1.0, 1.0)),
+                ("yproj_original", "yproj_scaled", "yproj", (-1.0, 1.0)),
+                ("theta_original_deg", "theta_scaled_deg", r"$\theta$ (deg)", (0.0, 90.0)),
+                ("phi_original_deg", "phi_scaled_deg", r"$\phi$ (deg)", (-180.0, 180.0)),
+            )
+
+            for _row_idx, _row_payload in enumerate(_scaled_rows):
+                for _col_idx, (_orig_key, _scaled_key, _xlabel, _fallback) in enumerate(_column_defs):
+                    _ax = _scaled_axes[_row_idx][_col_idx]
+                    _vals_orig = np.asarray(_row_payload[_orig_key], dtype=float)
+                    _vals_scaled = np.asarray(_row_payload[_scaled_key], dtype=float)
+                    _limits = _combined_quantile_limits(_vals_orig, _vals_scaled, fallback=_fallback)
+                    _bins = np.linspace(_limits[0], _limits[1], _hist_bins + 1)
+                    _vals_orig = _vals_orig[np.isfinite(_vals_orig)]
+                    _vals_scaled = _vals_scaled[np.isfinite(_vals_scaled)]
+
+                    _ax.hist(
+                        _vals_orig,
+                        bins=_bins,
+                        histtype="step",
+                        density=True,
+                        linewidth=1.6,
+                        color="#1f77b4",
+                        label="original" if _row_idx == 0 else None,
+                    )
+                    _ax.hist(
+                        _vals_scaled,
+                        bins=_bins,
+                        histtype="step",
+                        density=True,
+                        linewidth=1.6,
+                        color="#d62728",
+                        label="xproj_scaled" if _row_idx == 0 else None,
+                    )
+                    _ax.set_xlim(float(_bins[0]), float(_bins[-1]))
+                    _ax.grid(True, alpha=0.25)
+                    _ax.tick_params(labelsize=8)
+                    if _row_idx == 0:
+                        _ax.set_title(_xlabel, fontsize=10)
+                    if _row_idx == len(_scaled_rows) - 1:
+                        _ax.set_xlabel(_xlabel, fontsize=9)
+                    if _col_idx == 0:
+                        _ax.set_ylabel("density", fontsize=9)
+                        _ax.text(
+                            0.02,
+                            0.95,
+                            f"TT {_row_payload['tt_label']}\nn={_row_payload['n_points']:,}\nlocal={_row_payload['scale_factor_local']:.3f}",
+                            transform=_ax.transAxes,
+                            va="top",
+                            ha="left",
+                            fontsize=8,
+                            bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.78, "edgecolor": "0.8"},
+                        )
+
+            _scaled_axes[0][0].legend(fontsize=8, loc="upper right")
+            _scaled_fig.suptitle(
+                "Original vs xproj-scaled projection/angle distributions by definitive_tt\n"
+                f"One row per plane combination; one global xproj scale is applied to all rows: {_global_scale_factor:.3f} "
+                f"({projection_scaling_summary.get('global_method', 'weighted_mean_by_n_points')})\n"
+                f"{task4_efficiency_vector_title_line}",
+                fontsize=11,
+            )
+            _scaled_fig.tight_layout(rect=[0, 0, 1, 0.94])
+            if save_plots:
+                _scaled_filename = f"{fig_idx}_timtrack_projection_scaled_angle_comparison.png"
+                fig_idx += 1
+                _scaled_path = os.path.join(base_directories["figure_directory"], _scaled_filename)
+                plot_list.append(_scaled_path)
+                save_plot_figure(
+                    _scaled_path,
+                    format="png",
+                    alias="timtrack_projection_scaled_angle_comparison",
+                )
+            if show_plots:
+                plt.show()
+            plt.close(_scaled_fig)
 
 # ---------------------------------------------------------------------------
 # Track-based efficiency: all events vs. tt-unchanged (raw_tt == list_tt)
@@ -7564,6 +8620,973 @@ if (
 # shared Y).  Bottom marginal: charge histogram (log count, shared X per col).
 # Hexbin (log-norm) per panel so density is visible even at large N.
 # -----------------------------------------------------------------------------
+_OFFENDER_PLOT_DEFS = (
+    ("task1_problematic_channel_count", "Task 1 channel offenders", "task1"),
+    ("task2_problematic_strip_count", "Task 2 strip offenders", "task2"),
+    ("task3_problematic_plane_count", "Task 3 plane offenders", "task3"),
+)
+_OFFENDER_FOCUS_TTS = OFFENDER_FOCUS_TTS_CFG
+_OFFENDER_EXACT_COUNT_CAP = 5
+_OFFENDER_ZERO_COLOR = "#1f77b4"
+_OFFENDER_NONZERO_COLOR = "#d62728"
+
+
+def _build_offender_tt_labels(values: pd.Series) -> np.ndarray:
+    return np.asarray(
+        [normalize_tt_label(value, default="0") for value in values],
+        dtype=object,
+    )
+
+
+def _resolve_offender_focus_tts(tt_labels: np.ndarray) -> tuple[str, ...]:
+    available = [tt_label for tt_label in _OFFENDER_FOCUS_TTS if np.any(tt_labels == tt_label)]
+    if available:
+        return tuple(available)
+    fallback = sorted(
+        {
+            str(tt_label)
+            for tt_label in tt_labels
+            if str(tt_label) not in ("", "0", "nan", "None")
+        },
+        key=lambda tt_label: (len(tt_label), tt_label),
+    )
+    return tuple(fallback[: min(5, len(fallback))])
+
+
+def _make_offender_hist_bins(
+    values: np.ndarray,
+    fallback: tuple[float, float],
+    *,
+    nbins: int = 55,
+    clip_percentiles: tuple[float, float] = (0.5, 99.5),
+    force_zero_left: bool = False,
+) -> np.ndarray:
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        left, right = fallback
+    else:
+        left = float(np.nanpercentile(arr, clip_percentiles[0]))
+        right = float(np.nanpercentile(arr, clip_percentiles[1]))
+        if force_zero_left:
+            left = 0.0
+        if not np.isfinite(left) or not np.isfinite(right):
+            left, right = fallback
+    if not np.isfinite(left) or not np.isfinite(right):
+        left, right = fallback
+    if right <= left:
+        span = float(abs(fallback[1] - fallback[0])) if np.isfinite(fallback[1] - fallback[0]) else 1.0
+        if span <= 0:
+            span = 1.0
+        right = left + span
+    return np.linspace(left, right, nbins)
+
+
+def _plot_offender_hist_panel(
+    ax: plt.Axes,
+    zero_values: np.ndarray,
+    nonzero_values: np.ndarray,
+    bins: np.ndarray,
+    *,
+    x_label: str,
+    panel_title: str = "",
+    show_legend: bool = False,
+) -> None:
+    zero_values = np.asarray(zero_values, dtype=float)
+    nonzero_values = np.asarray(nonzero_values, dtype=float)
+    zero_values = zero_values[np.isfinite(zero_values)]
+    nonzero_values = nonzero_values[np.isfinite(nonzero_values)]
+
+    plotted = False
+    for values, color, label in (
+        (zero_values, _OFFENDER_ZERO_COLOR, "0 offenders"),
+        (nonzero_values, _OFFENDER_NONZERO_COLOR, ">0 offenders"),
+    ):
+        if values.size == 0:
+            continue
+        ax.hist(
+            values,
+            bins=bins,
+            density=True,
+            histtype="stepfilled",
+            alpha=0.16,
+            color=color,
+        )
+        ax.hist(
+            values,
+            bins=bins,
+            density=True,
+            histtype="step",
+            lw=1.6,
+            color=color,
+            label=f"{label} (n={values.size:,})",
+        )
+        ax.axvline(float(np.median(values)), color=color, lw=1.0, ls="--", alpha=0.75)
+        plotted = True
+
+    if not plotted:
+        ax.text(
+            0.5,
+            0.5,
+            "No data",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=8,
+            color="0.45",
+        )
+
+    total_count = int(zero_values.size + nonzero_values.size)
+    nonzero_fraction = (
+        100.0 * float(nonzero_values.size) / float(total_count)
+        if total_count > 0
+        else float("nan")
+    )
+    summary_lines = [f"n={total_count:,}"]
+    if total_count > 0:
+        summary_lines.append(f">0={nonzero_fraction:.1f}%")
+    if zero_values.size > 0:
+        summary_lines.append(f"m0={float(np.median(zero_values)):.2f}")
+    if nonzero_values.size > 0:
+        summary_lines.append(f"m>0={float(np.median(nonzero_values)):.2f}")
+    ax.text(
+        0.02,
+        0.98,
+        "\n".join(summary_lines),
+        transform=ax.transAxes,
+        va="top",
+        ha="left",
+        fontsize=7,
+        bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.75, "edgecolor": "0.8"},
+    )
+
+    if panel_title:
+        ax.set_title(panel_title, fontsize=9)
+    ax.set_xlim(float(bins[0]), float(bins[-1]))
+    ax.set_xlabel(x_label, fontsize=8)
+    ax.set_ylabel("density", fontsize=8)
+    ax.grid(True, alpha=0.25)
+    ax.tick_params(labelsize=7)
+    if show_legend:
+        ax.legend(fontsize=7, loc="upper right")
+
+
+def _build_offender_zigzag_payload(
+    df_input: pd.DataFrame,
+    tt_labels: np.ndarray,
+) -> dict[str, dict[str, np.ndarray]]:
+    required = (
+        "x",
+        "y",
+        "theta",
+        "phi",
+        "P1_T_dif_final",
+        "P2_T_dif_final",
+        "P3_T_dif_final",
+        "P4_T_dif_final",
+        "P1_Y_final",
+        "P2_Y_final",
+        "P3_Y_final",
+        "P4_Y_final",
+    )
+    if not all(column_name in df_input.columns for column_name in required):
+        return {}
+
+    path_x_all = np.column_stack(
+        [
+            pd.to_numeric(df_input[f"P{plane}_T_dif_final"], errors="coerce").to_numpy(dtype=float)
+            for plane in range(1, 5)
+        ]
+    ) * float(tdiff_to_x)
+    path_y_all = np.column_stack(
+        [
+            pd.to_numeric(df_input[f"P{plane}_Y_final"], errors="coerce").to_numpy(dtype=float)
+            for plane in range(1, 5)
+        ]
+    )
+    x0_all = pd.to_numeric(df_input["x"], errors="coerce").to_numpy(dtype=float)
+    y0_all = pd.to_numeric(df_input["y"], errors="coerce").to_numpy(dtype=float)
+    theta_all = pd.to_numeric(df_input["theta"], errors="coerce").to_numpy(dtype=float)
+    phi_all = pd.to_numeric(df_input["phi"], errors="coerce").to_numpy(dtype=float)
+    tan_theta_all = np.tan(theta_all)
+    xp_all = tan_theta_all * np.cos(phi_all)
+    yp_all = tan_theta_all * np.sin(phi_all)
+    z_all = np.asarray(z_positions, dtype=float)
+
+    payload: dict[str, dict[str, np.ndarray]] = {}
+    for tt_label in _resolve_offender_focus_tts(tt_labels):
+        active_planes = [int(char) for char in str(tt_label) if char in "1234"]
+        if len(active_planes) < 3:
+            continue
+        active_idx = np.asarray([plane - 1 for plane in active_planes], dtype=int)
+        active_z = z_all[active_idx]
+        z_order = np.argsort(active_z)
+        active_idx = active_idx[z_order]
+        active_z = active_z[z_order]
+
+        path_x = path_x_all[:, active_idx]
+        path_y = path_y_all[:, active_idx]
+        path_dx = np.diff(path_x, axis=1)
+        path_dy = np.diff(path_y, axis=1)
+        path_dz = np.diff(active_z).astype(float)
+        measured_path_all = np.sum(
+            np.sqrt(path_dx ** 2 + path_dy ** 2 + path_dz[None, :] ** 2),
+            axis=1,
+        )
+
+        z_first = float(active_z[0])
+        z_last = float(active_z[-1])
+        fit_x_first_all = x0_all + xp_all * z_first
+        fit_y_first_all = y0_all + yp_all * z_first
+        fit_x_last_all = x0_all + xp_all * z_last
+        fit_y_last_all = y0_all + yp_all * z_last
+        fit_length_all = np.sqrt(
+            (fit_x_last_all - fit_x_first_all) ** 2
+            + (fit_y_last_all - fit_y_first_all) ** 2
+            + (z_last - z_first) ** 2
+        )
+
+        valid_mask = (
+            (tt_labels == tt_label)
+            & np.isfinite(path_x).all(axis=1)
+            & np.isfinite(path_y).all(axis=1)
+            & np.isfinite(x0_all)
+            & np.isfinite(y0_all)
+            & np.isfinite(theta_all)
+            & np.isfinite(phi_all)
+            & np.isfinite(xp_all)
+            & np.isfinite(yp_all)
+            & np.isfinite(measured_path_all)
+            & np.isfinite(fit_length_all)
+            & (measured_path_all > 0)
+        )
+        if int(np.count_nonzero(valid_mask)) < 5:
+            continue
+
+        theta_selected = theta_all[valid_mask]
+        measured_path = measured_path_all[valid_mask]
+        fit_length = fit_length_all[valid_mask]
+        zigzag_ratio = fit_length / (measured_path + 1e-9)
+        zigzag_excess = np.clip(measured_path - fit_length, 0.0, None)
+        projected_excess = zigzag_excess * np.clip(np.cos(theta_selected), 1e-6, None)
+        payload[tt_label] = {
+            "row_mask": valid_mask,
+            "theta_deg": np.degrees(theta_selected),
+            "zigzag_ratio": zigzag_ratio,
+            "projected_excess": projected_excess,
+            "measured_path": measured_path,
+            "fit_length": fit_length,
+        }
+    return payload
+
+
+if (create_essential_plots or create_plots) and task4_plot_enabled("chi2_offender_populations"):
+    _offender_required = ("tim_th_chi",)
+    _offender_missing = [
+        _col_name
+        for _col_name in _offender_required + tuple(_col for _col, _, _ in _OFFENDER_PLOT_DEFS)
+        if _col_name not in df_plot_ancillary.columns
+    ]
+    if _offender_missing:
+        print(
+            "[chi2_offender_populations] required columns not found, skipping: "
+            + ", ".join(_offender_missing)
+        )
+    else:
+        _offender_chi_raw = np.clip(
+            pd.to_numeric(df_plot_ancillary["tim_th_chi"], errors="coerce").to_numpy(dtype=float),
+            0.0,
+            None,
+        )
+        _offender_chi_log = np.log1p(_offender_chi_raw)
+        _offender_chi_finite = _offender_chi_log[np.isfinite(_offender_chi_log)]
+        _offender_xmax = (
+            float(np.nanpercentile(_offender_chi_finite, 99.5))
+            if _offender_chi_finite.size > 0
+            else 1.0
+        )
+        if not np.isfinite(_offender_xmax) or _offender_xmax <= 0:
+            _offender_xmax = 1.0
+        _offender_bins = np.linspace(0.0, _offender_xmax, 60)
+        _offender_zero_color = "#1f77b4"
+        _offender_nonzero_color = "#d62728"
+        _offender_zero_label = "0 offenders"
+        _offender_nonzero_label = ">0 offenders"
+
+        _offender_fig, _offender_axes = plt.subplots(
+            2,
+            len(_OFFENDER_PLOT_DEFS),
+            figsize=(5.8 * len(_OFFENDER_PLOT_DEFS), 8.2),
+            squeeze=False,
+            sharex="col",
+        )
+        _offender_fig.suptitle(
+            r"Task 4 fit quality by upstream offender count" + "\n"
+            + r"Comparison uses $\log(1+\mathrm{tim\_th\_chi})$ for events with exactly 0 offenders versus >0 offenders"
+            + "\n"
+            + task4_efficiency_vector_title_line,
+            fontsize=10,
+        )
+
+        for _offender_idx, (_offender_col, _offender_label, _) in enumerate(_OFFENDER_PLOT_DEFS):
+            _offender_counts = pd.to_numeric(
+                df_plot_ancillary[_offender_col],
+                errors="coerce",
+            ).fillna(0).to_numpy(dtype=float)
+            _offender_valid = np.isfinite(_offender_chi_log) & np.isfinite(_offender_counts)
+            _offender_zero_mask = _offender_valid & (_offender_counts == 0)
+            _offender_nonzero_mask = _offender_valid & (_offender_counts > 0)
+
+            _hist_ax = _offender_axes[0][_offender_idx]
+            _cdf_ax = _offender_axes[1][_offender_idx]
+
+            for _mask, _color, _label in (
+                (_offender_zero_mask, _offender_zero_color, _offender_zero_label),
+                (_offender_nonzero_mask, _offender_nonzero_color, _offender_nonzero_label),
+            ):
+                _values = _offender_chi_log[_mask]
+                if _values.size == 0:
+                    continue
+                _hist_ax.hist(
+                    _values,
+                    bins=_offender_bins,
+                    density=True,
+                    alpha=0.45,
+                    color=_color,
+                    histtype="stepfilled",
+                    label=f"{_label} (n={_values.size:,})",
+                )
+                _sorted_values = np.sort(_values)
+                _cdf_ax.step(
+                    _sorted_values,
+                    np.arange(1, _sorted_values.size + 1, dtype=float) / _sorted_values.size,
+                    where="post",
+                    color=_color,
+                    lw=1.8,
+                    label=f"{_label} (median={np.median(_values):.3f})",
+                )
+
+            _zero_n = int(np.count_nonzero(_offender_zero_mask))
+            _nonzero_n = int(np.count_nonzero(_offender_nonzero_mask))
+            _summary_lines = [
+                f"zero n={_zero_n:,}",
+                f"nonzero n={_nonzero_n:,}",
+            ]
+            if _zero_n > 0:
+                _summary_lines.append(
+                    f"zero median={float(np.median(_offender_chi_log[_offender_zero_mask])):.3f}"
+                )
+            if _nonzero_n > 0:
+                _summary_lines.append(
+                    f"nonzero median={float(np.median(_offender_chi_log[_offender_nonzero_mask])):.3f}"
+                )
+            _hist_ax.text(
+                0.02,
+                0.98,
+                "\n".join(_summary_lines),
+                transform=_hist_ax.transAxes,
+                va="top",
+                ha="left",
+                fontsize=7,
+                bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.75, "edgecolor": "0.8"},
+            )
+            _hist_ax.set_title(_offender_label, fontsize=9)
+            _hist_ax.set_ylabel("density", fontsize=8)
+            _hist_ax.set_xlim(0.0, _offender_xmax)
+            _hist_ax.grid(True, alpha=0.25)
+            _hist_ax.tick_params(labelsize=7)
+            if _offender_idx == 0:
+                _hist_ax.legend(fontsize=7, loc="upper right")
+
+            _cdf_ax.set_xlim(0.0, _offender_xmax)
+            _cdf_ax.set_ylim(0.0, 1.0)
+            _cdf_ax.set_xlabel(r"$\log(1+\mathrm{tim\_th\_chi})$", fontsize=8)
+            _cdf_ax.set_ylabel("ECDF", fontsize=8)
+            _cdf_ax.grid(True, alpha=0.25)
+            _cdf_ax.tick_params(labelsize=7)
+            if _offender_idx == 0:
+                _cdf_ax.legend(fontsize=7, loc="lower right")
+
+        _offender_fig.tight_layout(rect=(0, 0, 1, 0.95))
+        if save_plots:
+            _offender_fn = f"{fig_idx}_chi2_offender_populations.png"
+            fig_idx += 1
+            _offender_path = os.path.join(base_directories["figure_directory"], _offender_fn)
+            plot_list.append(_offender_path)
+            save_plot_figure(_offender_path, format="png", alias="chi2_offender_populations")
+        if show_plots:
+            plt.show()
+        plt.close(_offender_fig)
+
+if (create_essential_plots or create_plots) and task4_plot_enabled("offender_angle_populations"):
+    _offender_angle_required = ("definitive_tt", "theta", "phi")
+    _offender_angle_missing = [
+        _col_name
+        for _col_name in _offender_angle_required + tuple(_col for _col, _, _ in _OFFENDER_PLOT_DEFS)
+        if _col_name not in df_plot_ancillary.columns
+    ]
+    if _offender_angle_missing:
+        print(
+            "[offender_angle_populations] required columns not found, skipping: "
+            + ", ".join(_offender_angle_missing)
+        )
+    else:
+        _offender_tt_labels = _build_offender_tt_labels(df_plot_ancillary["definitive_tt"])
+        _offender_focus_tts = _resolve_offender_focus_tts(_offender_tt_labels)
+        if not _offender_focus_tts:
+            print("[offender_angle_populations] no definitive_tt combinations available, skipping.")
+        else:
+            _offender_theta_deg = np.degrees(
+                pd.to_numeric(df_plot_ancillary["theta"], errors="coerce").to_numpy(dtype=float)
+            )
+            _offender_phi_deg = np.degrees(
+                pd.to_numeric(df_plot_ancillary["phi"], errors="coerce").to_numpy(dtype=float)
+            )
+            _offender_focus_mask = np.isin(_offender_tt_labels, _offender_focus_tts)
+            _theta_bins = np.linspace(
+                OFFENDER_THETA_MIN_DEG,
+                OFFENDER_THETA_MAX_DEG,
+                55,
+            )
+            _phi_bins = _make_offender_hist_bins(
+                _offender_phi_deg[_offender_focus_mask],
+                (
+                    float(np.degrees(phi_left_filter)),
+                    float(np.degrees(phi_right_filter)),
+                ),
+            )
+            _offender_valid_angles = (
+                np.isfinite(_offender_theta_deg)
+                & np.isfinite(_offender_phi_deg)
+                & (_offender_theta_deg >= OFFENDER_THETA_MIN_DEG)
+                & (_offender_theta_deg <= OFFENDER_THETA_MAX_DEG)
+            )
+
+            for _offender_col, _offender_label, _offender_slug in _OFFENDER_PLOT_DEFS:
+                _offender_counts = pd.to_numeric(
+                    df_plot_ancillary[_offender_col],
+                    errors="coerce",
+                ).fillna(0).to_numpy(dtype=float)
+                _offender_valid = _offender_valid_angles & np.isfinite(_offender_counts)
+
+                _angle_fig, _angle_axes = plt.subplots(
+                    2,
+                    len(_offender_focus_tts),
+                    figsize=(4.0 * len(_offender_focus_tts), 7.0),
+                    squeeze=False,
+                    sharey="row",
+                )
+                _angle_fig.suptitle(
+                    f"{_offender_label}: angular populations by definitive_tt\n"
+                    "Each column keeps the same plane combination and compares 0 offenders versus >0 offenders\n"
+                    + task4_efficiency_vector_title_line,
+                    fontsize=10,
+                )
+
+                for _tt_idx, _tt_label in enumerate(_offender_focus_tts):
+                    _tt_mask = _offender_tt_labels == _tt_label
+                    _zero_mask = _offender_valid & _tt_mask & (_offender_counts == 0)
+                    _nonzero_mask = _offender_valid & _tt_mask & (_offender_counts > 0)
+
+                    _plot_offender_hist_panel(
+                        _angle_axes[0][_tt_idx],
+                        _offender_theta_deg[_zero_mask],
+                        _offender_theta_deg[_nonzero_mask],
+                        _theta_bins,
+                        x_label=r"$\theta$ (deg)",
+                        panel_title=f"TT {_tt_label}",
+                        show_legend=_tt_idx == 0,
+                    )
+                    _plot_offender_hist_panel(
+                        _angle_axes[1][_tt_idx],
+                        _offender_phi_deg[_zero_mask],
+                        _offender_phi_deg[_nonzero_mask],
+                        _phi_bins,
+                        x_label=r"$\phi$ (deg)",
+                    )
+                    _angle_axes[0][_tt_idx].set_ylabel(r"$\theta$ density", fontsize=8)
+                    _angle_axes[1][_tt_idx].set_ylabel(r"$\phi$ density", fontsize=8)
+
+                _angle_fig.tight_layout(rect=(0, 0, 1, 0.94))
+                if save_plots:
+                    _angle_fn = f"{fig_idx}_offender_angle_populations_{_offender_slug}.png"
+                    fig_idx += 1
+                    _angle_path = os.path.join(base_directories["figure_directory"], _angle_fn)
+                    plot_list.append(_angle_path)
+                    save_plot_figure(_angle_path, format="png", alias="offender_angle_populations")
+                if show_plots:
+                    plt.show()
+                plt.close(_angle_fig)
+
+if (create_essential_plots or create_plots) and task4_plot_enabled("offender_kinematics_populations"):
+    _offender_kin_required = ("definitive_tt", "x", "y", "charge_event", "s")
+    _offender_kin_missing = [
+        _col_name
+        for _col_name in _offender_kin_required + tuple(_col for _col, _, _ in _OFFENDER_PLOT_DEFS)
+        if _col_name not in df_plot_ancillary.columns
+    ]
+    if _offender_kin_missing:
+        print(
+            "[offender_kinematics_populations] required columns not found, skipping: "
+            + ", ".join(_offender_kin_missing)
+        )
+    else:
+        _offender_tt_labels = _build_offender_tt_labels(df_plot_ancillary["definitive_tt"])
+        _offender_focus_tts = _resolve_offender_focus_tts(_offender_tt_labels)
+        if not _offender_focus_tts:
+            print("[offender_kinematics_populations] no definitive_tt combinations available, skipping.")
+        else:
+            _offender_focus_mask = np.isin(_offender_tt_labels, _offender_focus_tts)
+            _offender_x = pd.to_numeric(df_plot_ancillary["x"], errors="coerce").to_numpy(dtype=float)
+            _offender_y = pd.to_numeric(df_plot_ancillary["y"], errors="coerce").to_numpy(dtype=float)
+            _offender_s = pd.to_numeric(df_plot_ancillary["s"], errors="coerce").to_numpy(dtype=float)
+            _offender_charge_log = np.log10(
+                1.0
+                + np.clip(
+                    pd.to_numeric(df_plot_ancillary["charge_event"], errors="coerce").to_numpy(dtype=float),
+                    0.0,
+                    None,
+                )
+            )
+            _offender_observable_specs = (
+                (
+                    "x",
+                    _offender_x,
+                    "x (mm)",
+                    _make_offender_hist_bins(_offender_x[_offender_focus_mask], (-1.0, 1.0)),
+                ),
+                (
+                    "y",
+                    _offender_y,
+                    "y (mm)",
+                    _make_offender_hist_bins(_offender_y[_offender_focus_mask], (-1.0, 1.0)),
+                ),
+                (
+                    "s",
+                    _offender_s,
+                    "s",
+                    _make_offender_hist_bins(_offender_s[_offender_focus_mask], (0.0, 1.0)),
+                ),
+                (
+                    "charge_event_log10",
+                    _offender_charge_log,
+                    r"$\log_{10}(1+\mathrm{charge\_event})$",
+                    _make_offender_hist_bins(
+                        _offender_charge_log[_offender_focus_mask],
+                        (0.0, 1.0),
+                        force_zero_left=True,
+                    ),
+                ),
+            )
+
+            for _offender_col, _offender_label, _offender_slug in _OFFENDER_PLOT_DEFS:
+                _offender_counts = pd.to_numeric(
+                    df_plot_ancillary[_offender_col],
+                    errors="coerce",
+                ).fillna(0).to_numpy(dtype=float)
+                _observable_valid = np.isfinite(_offender_counts)
+
+                _kin_fig, _kin_axes = plt.subplots(
+                    len(_offender_observable_specs),
+                    len(_offender_focus_tts),
+                    figsize=(4.0 * len(_offender_focus_tts), 2.45 * len(_offender_observable_specs) + 0.9),
+                    squeeze=False,
+                    sharey="row",
+                )
+                _kin_fig.suptitle(
+                    f"{_offender_label}: reconstructed observables by definitive_tt\n"
+                    "Same plane combinations are compared separately to expose offender-driven shifts\n"
+                    + task4_efficiency_vector_title_line,
+                    fontsize=10,
+                )
+
+                for _row_idx, (_, _observable_values, _observable_label, _observable_bins) in enumerate(_offender_observable_specs):
+                    _observable_valid_row = _observable_valid & np.isfinite(_observable_values)
+                    for _tt_idx, _tt_label in enumerate(_offender_focus_tts):
+                        _tt_mask = _offender_tt_labels == _tt_label
+                        _zero_mask = _observable_valid_row & _tt_mask & (_offender_counts == 0)
+                        _nonzero_mask = _observable_valid_row & _tt_mask & (_offender_counts > 0)
+                        _plot_offender_hist_panel(
+                            _kin_axes[_row_idx][_tt_idx],
+                            _observable_values[_zero_mask],
+                            _observable_values[_nonzero_mask],
+                            _observable_bins,
+                            x_label=_observable_label,
+                            panel_title=f"TT {_tt_label}" if _row_idx == 0 else "",
+                            show_legend=_row_idx == 0 and _tt_idx == 0,
+                        )
+                        _kin_axes[_row_idx][_tt_idx].set_ylabel("density", fontsize=8)
+
+                _kin_fig.tight_layout(rect=(0, 0, 1, 0.95))
+                if save_plots:
+                    _kin_fn = f"{fig_idx}_offender_kinematics_populations_{_offender_slug}.png"
+                    fig_idx += 1
+                    _kin_path = os.path.join(base_directories["figure_directory"], _kin_fn)
+                    plot_list.append(_kin_path)
+                    save_plot_figure(_kin_path, format="png", alias="offender_kinematics_populations")
+                if show_plots:
+                    plt.show()
+                plt.close(_kin_fig)
+
+if (create_essential_plots or create_plots) and task4_plot_enabled("offender_tt_balance"):
+    _offender_balance_required = ("definitive_tt", "tim_th_chi")
+    _offender_balance_missing = [
+        _col_name
+        for _col_name in _offender_balance_required + tuple(_col for _col, _, _ in _OFFENDER_PLOT_DEFS)
+        if _col_name not in df_plot_ancillary.columns
+    ]
+    if _offender_balance_missing:
+        print(
+            "[offender_tt_balance] required columns not found, skipping: "
+            + ", ".join(_offender_balance_missing)
+        )
+    else:
+        _offender_tt_labels = _build_offender_tt_labels(df_plot_ancillary["definitive_tt"])
+        _offender_focus_tts = _resolve_offender_focus_tts(_offender_tt_labels)
+        if not _offender_focus_tts:
+            print("[offender_tt_balance] no definitive_tt combinations available, skipping.")
+        else:
+            _offender_x_positions = np.arange(len(_offender_focus_tts), dtype=float)
+            _offender_chi_log = np.log1p(
+                np.clip(
+                    pd.to_numeric(df_plot_ancillary["tim_th_chi"], errors="coerce").to_numpy(dtype=float),
+                    0.0,
+                    None,
+                )
+            )
+            _offender_stack_colors = plt.cm.viridis(
+                np.linspace(0.12, 0.92, _OFFENDER_EXACT_COUNT_CAP + 1)
+            )
+
+            _balance_fig, _balance_axes = plt.subplots(
+                2,
+                len(_OFFENDER_PLOT_DEFS),
+                figsize=(6.1 * len(_OFFENDER_PLOT_DEFS), 8.4),
+                squeeze=False,
+            )
+            _balance_fig.suptitle(
+                "Upstream offender composition by definitive_tt\n"
+                "Top: exact offender-count fractions capped at 5+   |   Bottom: median "
+                + r"$\log(1+\mathrm{tim\_th\_chi})$"
+                + " for 0 offenders versus >0 offenders\n"
+                + task4_efficiency_vector_title_line,
+                fontsize=10,
+            )
+
+            for _offender_idx, (_offender_col, _offender_label, _) in enumerate(_OFFENDER_PLOT_DEFS):
+                _offender_counts = pd.to_numeric(
+                    df_plot_ancillary[_offender_col],
+                    errors="coerce",
+                ).fillna(0).to_numpy(dtype=float)
+                _stack_ax = _balance_axes[0][_offender_idx]
+                _median_ax = _balance_axes[1][_offender_idx]
+
+                _totals = np.zeros(len(_offender_focus_tts), dtype=float)
+                _nonzero_frac = np.full(len(_offender_focus_tts), np.nan, dtype=float)
+                _zero_medians = np.full(len(_offender_focus_tts), np.nan, dtype=float)
+                _nonzero_medians = np.full(len(_offender_focus_tts), np.nan, dtype=float)
+
+                _bottom = np.zeros(len(_offender_focus_tts), dtype=float)
+                for _level in range(_OFFENDER_EXACT_COUNT_CAP + 1):
+                    _fractions = np.zeros(len(_offender_focus_tts), dtype=float)
+                    for _tt_idx, _tt_label in enumerate(_offender_focus_tts):
+                        _tt_mask = (_offender_tt_labels == _tt_label) & np.isfinite(_offender_counts)
+                        _totals[_tt_idx] = float(np.count_nonzero(_tt_mask))
+                        if _totals[_tt_idx] <= 0:
+                            continue
+                        if _level < _OFFENDER_EXACT_COUNT_CAP:
+                            _level_mask = _tt_mask & (_offender_counts == _level)
+                        else:
+                            _level_mask = _tt_mask & (_offender_counts >= _OFFENDER_EXACT_COUNT_CAP)
+                        _fractions[_tt_idx] = float(np.count_nonzero(_level_mask)) / _totals[_tt_idx]
+                    if not np.any(_fractions > 0):
+                        continue
+                    _legend_label = (
+                        f"{_level}"
+                        if _level < _OFFENDER_EXACT_COUNT_CAP
+                        else f"{_OFFENDER_EXACT_COUNT_CAP}+"
+                    )
+                    _stack_ax.bar(
+                        _offender_x_positions,
+                        _fractions,
+                        bottom=_bottom,
+                        width=0.72,
+                        color=_offender_stack_colors[_level],
+                        label=_legend_label,
+                    )
+                    _bottom += _fractions
+
+                for _tt_idx, _tt_label in enumerate(_offender_focus_tts):
+                    _tt_mask = (_offender_tt_labels == _tt_label) & np.isfinite(_offender_counts)
+                    if _totals[_tt_idx] <= 0:
+                        continue
+                    _nonzero_frac[_tt_idx] = float(np.count_nonzero(_tt_mask & (_offender_counts > 0))) / _totals[_tt_idx]
+                    _zero_values = _offender_chi_log[_tt_mask & (_offender_counts == 0) & np.isfinite(_offender_chi_log)]
+                    _nonzero_values = _offender_chi_log[_tt_mask & (_offender_counts > 0) & np.isfinite(_offender_chi_log)]
+                    if _zero_values.size > 0:
+                        _zero_medians[_tt_idx] = float(np.median(_zero_values))
+                    if _nonzero_values.size > 0:
+                        _nonzero_medians[_tt_idx] = float(np.median(_nonzero_values))
+                    _stack_ax.text(
+                        _offender_x_positions[_tt_idx],
+                        1.02,
+                        f">0={100.0 * _nonzero_frac[_tt_idx]:.1f}%",
+                        ha="center",
+                        va="bottom",
+                        fontsize=7,
+                    )
+
+                _stack_ax.set_title(_offender_label, fontsize=9)
+                _stack_ax.set_ylim(0.0, 1.12)
+                _stack_ax.set_ylabel("fraction", fontsize=8)
+                _stack_ax.set_xticks(_offender_x_positions)
+                _stack_ax.set_xticklabels(
+                    [f"{_tt}\n(n={int(_total):,})" for _tt, _total in zip(_offender_focus_tts, _totals)]
+                )
+                _stack_ax.tick_params(labelsize=7)
+                _stack_ax.grid(True, alpha=0.2, axis="y")
+                if _offender_idx == 0:
+                    _stack_ax.legend(
+                        title="exact offenders",
+                        fontsize=7,
+                        title_fontsize=7,
+                        loc="upper left",
+                        ncol=2,
+                    )
+
+                _median_ax.plot(
+                    _offender_x_positions,
+                    _zero_medians,
+                    marker="o",
+                    lw=1.6,
+                    color=_OFFENDER_ZERO_COLOR,
+                    label="0 offenders",
+                )
+                _median_ax.plot(
+                    _offender_x_positions,
+                    _nonzero_medians,
+                    marker="s",
+                    lw=1.6,
+                    color=_OFFENDER_NONZERO_COLOR,
+                    label=">0 offenders",
+                )
+                _median_ax.set_ylabel(r"median $\log(1+\chi^2)$", fontsize=8)
+                _median_ax.set_xticks(_offender_x_positions)
+                _median_ax.set_xticklabels([f"{_tt}" for _tt in _offender_focus_tts])
+                _median_ax.tick_params(labelsize=7)
+                _median_ax.grid(True, alpha=0.25)
+                if _offender_idx == 0:
+                    _median_ax.legend(fontsize=7, loc="upper left")
+
+            _balance_fig.tight_layout(rect=(0, 0, 1, 0.95))
+            if save_plots:
+                _balance_fn = f"{fig_idx}_offender_tt_balance.png"
+                fig_idx += 1
+                _balance_path = os.path.join(base_directories["figure_directory"], _balance_fn)
+                plot_list.append(_balance_path)
+                save_plot_figure(_balance_path, format="png", alias="offender_tt_balance")
+            if show_plots:
+                plt.show()
+            plt.close(_balance_fig)
+
+if (create_essential_plots or create_plots) and task4_plot_enabled("offender_zigzag_populations"):
+    _offender_zigzag_required = ("definitive_tt", "task1_problematic_channel_count")
+    _offender_zigzag_missing = [
+        _col_name
+        for _col_name in _offender_zigzag_required
+        if _col_name not in df_plot_ancillary.columns
+    ]
+    if _offender_zigzag_missing:
+        print(
+            "[offender_zigzag_populations] required columns not found, skipping: "
+            + ", ".join(_offender_zigzag_missing)
+        )
+    else:
+        _offender_tt_labels = _build_offender_tt_labels(df_plot_ancillary["definitive_tt"])
+        _offender_zigzag_payload = _build_offender_zigzag_payload(df_plot_ancillary, _offender_tt_labels)
+        _offender_zigzag_tts = tuple(
+            tt_label
+            for tt_label in _resolve_offender_focus_tts(_offender_tt_labels)
+            if tt_label in _offender_zigzag_payload
+        )
+        if not _offender_zigzag_tts:
+            print("[offender_zigzag_populations] no valid zig-zag payloads for configured definitive_tt values, skipping.")
+        else:
+            _task1_offender_counts_all = pd.to_numeric(
+                df_plot_ancillary["task1_problematic_channel_count"],
+                errors="coerce",
+            ).to_numpy(dtype=float)
+            _thresholds = np.asarray(OFFENDER_TASK1_CUMULATIVE_THRESHOLDS, dtype=int)
+            _zigzag_summary: dict[str, dict[str, np.ndarray]] = {}
+            _zigzag_ratio_ylim = 1.0
+            _zigzag_proj_ylim = 1.0
+            _zigzag_count_ylim = 1.0
+
+            for _tt_label in _offender_zigzag_tts:
+                _payload = _offender_zigzag_payload[_tt_label]
+                _tt_counts = _task1_offender_counts_all[_payload["row_mask"]]
+                _valid_count_mask = np.isfinite(_tt_counts)
+                _ratio_median = np.full(_thresholds.shape, np.nan, dtype=float)
+                _ratio_p90 = np.full(_thresholds.shape, np.nan, dtype=float)
+                _proj_median = np.full(_thresholds.shape, np.nan, dtype=float)
+                _proj_p90 = np.full(_thresholds.shape, np.nan, dtype=float)
+                _selected_counts = np.zeros(_thresholds.shape, dtype=float)
+
+                for _thr_idx, _threshold in enumerate(_thresholds):
+                    _thr_mask = _valid_count_mask & (_tt_counts <= float(_threshold))
+                    _selected_counts[_thr_idx] = int(np.count_nonzero(_thr_mask))
+                    if _selected_counts[_thr_idx] < 5:
+                        continue
+                    _ratio_sel = _payload["zigzag_ratio"][_thr_mask]
+                    _proj_sel = _payload["projected_excess"][_thr_mask]
+                    _ratio_median[_thr_idx] = float(np.nanmedian(_ratio_sel))
+                    _ratio_p90[_thr_idx] = float(np.nanpercentile(_ratio_sel, 90.0))
+                    _proj_median[_thr_idx] = float(np.nanmedian(_proj_sel))
+                    _proj_p90[_thr_idx] = float(np.nanpercentile(_proj_sel, 90.0))
+
+                _base_count = max(int(np.nanmax(_selected_counts)), 1)
+                _zigzag_summary[_tt_label] = {
+                    "ratio_median": _ratio_median,
+                    "ratio_p90": _ratio_p90,
+                    "proj_median": _proj_median,
+                    "proj_p90": _proj_p90,
+                    "counts": _selected_counts,
+                    "fraction_pct": 100.0 * _selected_counts / float(_base_count),
+                    "base_count": np.asarray([_base_count], dtype=float),
+                }
+                _ratio_valid = np.concatenate(
+                    [
+                        _ratio_median[np.isfinite(_ratio_median)],
+                        _ratio_p90[np.isfinite(_ratio_p90)],
+                    ]
+                )
+                _proj_valid = np.concatenate(
+                    [
+                        _proj_median[np.isfinite(_proj_median)],
+                        _proj_p90[np.isfinite(_proj_p90)],
+                    ]
+                )
+                if _ratio_valid.size > 0:
+                    _zigzag_ratio_ylim = max(_zigzag_ratio_ylim, float(np.nanmax(_ratio_valid)))
+                if _proj_valid.size > 0:
+                    _zigzag_proj_ylim = max(_zigzag_proj_ylim, float(np.nanmax(_proj_valid)))
+                _zigzag_count_ylim = max(_zigzag_count_ylim, float(np.nanmax(_selected_counts)))
+
+            _zigzag_ratio_ylim = max(1.0, 1.05 * _zigzag_ratio_ylim)
+            _zigzag_proj_ylim = max(1.0, 1.10 * _zigzag_proj_ylim)
+            _zigzag_count_ylim = max(5.0, 1.10 * _zigzag_count_ylim)
+
+            _zigzag_fig, _zigzag_axes = plt.subplots(
+                3,
+                len(_offender_zigzag_tts),
+                figsize=(4.4 * len(_offender_zigzag_tts), 9.0),
+                squeeze=False,
+                sharex="col",
+            )
+            _zigzag_fig.suptitle(
+                "Task 1 cumulative offender thresholds versus zig-zag geometry by definitive_tt\n"
+                "Each point uses the population with task1_problematic_channel_count <= N, so the comparison keeps the same plane combination\n"
+                + task4_efficiency_vector_title_line,
+                fontsize=10,
+            )
+
+            for _tt_idx, _tt_label in enumerate(_offender_zigzag_tts):
+                _summary = _zigzag_summary[_tt_label]
+                _ax_ratio = _zigzag_axes[0][_tt_idx]
+                _ax_proj = _zigzag_axes[1][_tt_idx]
+                _ax_count = _zigzag_axes[2][_tt_idx]
+                _base_count = int(_summary["base_count"][0])
+
+                _ax_ratio.plot(
+                    _thresholds,
+                    _summary["ratio_median"],
+                    color="C0",
+                    marker="o",
+                    lw=1.8,
+                    label="median",
+                )
+                _ax_ratio.plot(
+                    _thresholds,
+                    _summary["ratio_p90"],
+                    color="C1",
+                    marker="s",
+                    lw=1.4,
+                    label="p90",
+                )
+                _ax_ratio.axhline(1.0, color="0.45", lw=0.8, ls="--", alpha=0.6)
+                _ax_ratio.set_ylim(0.0, _zigzag_ratio_ylim)
+                _ax_ratio.set_ylabel("straight / zig-zag", fontsize=8)
+                _ax_ratio.set_title(f"TT {_tt_label}  (base n={_base_count:,})", fontsize=9)
+                _ax_ratio.grid(True, alpha=0.25)
+                _ax_ratio.tick_params(labelsize=7)
+                if _tt_idx == 0:
+                    _ax_ratio.legend(fontsize=7, loc="lower right")
+
+                _ax_proj.plot(
+                    _thresholds,
+                    _summary["proj_median"],
+                    color="C3",
+                    marker="o",
+                    lw=1.8,
+                    label="median",
+                )
+                _ax_proj.plot(
+                    _thresholds,
+                    _summary["proj_p90"],
+                    color="C4",
+                    marker="s",
+                    lw=1.4,
+                    label="p90",
+                )
+                _ax_proj.set_ylim(0.0, _zigzag_proj_ylim)
+                _ax_proj.set_ylabel("projected zig-zag excess (mm)", fontsize=8)
+                _ax_proj.grid(True, alpha=0.25)
+                _ax_proj.tick_params(labelsize=7)
+                if _tt_idx == 0:
+                    _ax_proj.legend(fontsize=7, loc="upper left")
+
+                _ax_count.plot(
+                    _thresholds,
+                    _summary["counts"],
+                    color="0.20",
+                    marker="o",
+                    lw=1.8,
+                    label="n",
+                )
+                _ax_count.set_ylim(0.0, _zigzag_count_ylim)
+                _ax_count.set_ylabel("selected events", fontsize=8)
+                _ax_count.set_xlabel(r"Task 1 offenders threshold  $N$  for count $\leq N$", fontsize=8)
+                _ax_count.set_xticks(_thresholds)
+                _ax_count.grid(True, alpha=0.25)
+                _ax_count.tick_params(labelsize=7)
+                _ax_frac = _ax_count.twinx()
+                _ax_frac.plot(
+                    _thresholds,
+                    _summary["fraction_pct"],
+                    color="C2",
+                    marker="^",
+                    lw=1.3,
+                    alpha=0.85,
+                    label="retained %",
+                )
+                _ax_frac.set_ylim(0.0, 105.0)
+                _ax_frac.set_ylabel("retained (%)", fontsize=8)
+                _ax_frac.tick_params(labelsize=7, colors="C2")
+                if _tt_idx == 0:
+                    _ax_count.legend(fontsize=7, loc="lower right")
+                    _ax_frac.legend(fontsize=7, loc="center right")
+
+            _zigzag_fig.tight_layout(rect=(0, 0, 1, 0.95))
+            if save_plots:
+                _zigzag_fn = f"{fig_idx}_offender_zigzag_populations.png"
+                fig_idx += 1
+                _zigzag_path = os.path.join(base_directories["figure_directory"], _zigzag_fn)
+                plot_list.append(_zigzag_path)
+                save_plot_figure(_zigzag_path, format="png", alias="offender_zigzag_populations")
+            if show_plots:
+                plt.show()
+            plt.close(_zigzag_fig)
+
 if (create_essential_plots or create_plots) and task4_plot_enabled("chi2_charge_populations"):
     _chi2pop_need = ("tim_th_chi", "charge_event",
                      "charge_1", "charge_2", "charge_3", "charge_4",
@@ -11140,23 +13163,6 @@ print("-------------------------- Save and finish ---------------------------")
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 
-# Round to 4 significant digits -----------------------------------------------
-def round_array_to_significant_digits(values: np.ndarray, significant_digits: int = 4) -> np.ndarray:
-    rounded = values.astype(float, copy=True)
-    finite_nonzero = np.isfinite(rounded) & (rounded != 0)
-    if np.any(finite_nonzero):
-        magnitudes = np.floor(np.log10(np.abs(rounded[finite_nonzero]))).astype(int)
-        scales = np.power(10.0, significant_digits - 1 - magnitudes)
-        rounded[finite_nonzero] = np.round(rounded[finite_nonzero] * scales) / scales
-    return rounded
-
-print("Rounding the dataframe values.") 
-for col in working_df.select_dtypes(include=[np.floating]).columns:
-    original_dtype = working_df[col].dtype
-    column_values = working_df[col].to_numpy(dtype=float, copy=False)
-    rounded_values = round_array_to_significant_digits(column_values, significant_digits=4)
-    working_df.loc[:, col] = rounded_values.astype(original_dtype, copy=False)
-
 # Save the data ---------------------------------------------------------------
 # if save_full_data: # Save a full version of the data, for different studies and debugging
 #     working_df.to_csv(save_full_path, index=False, sep=',', float_format='%.5g')
@@ -11681,10 +13687,20 @@ else:
 tt_columns_desired = ['event_id', 'datetime', 'raw_tt', 'clean_tt', 'cal_tt', 'list_tt', 'tracking_tt', 'definitive_tt', 'fit_tt']
 tt_columns_present = [col for col in tt_columns_desired if col in working_df.columns]
 param_hash_cols = ["param_hash"] if "param_hash" in working_df.columns else []
+upstream_offender_count_cols = [
+    col_name
+    for col_name in (
+        "task1_problematic_channel_count",
+        "task2_problematic_strip_count",
+        "task3_problematic_plane_count",
+    )
+    if col_name in working_df.columns
+]
 
 columns_to_keep = (
     tt_columns_present
     + param_hash_cols
+    + upstream_offender_count_cols
     + [
         # New definitions
         'x', 'x_err', 'y', 'y_err', 'theta', 'theta_err', 'phi', 'phi_err', 's', 's_err',
@@ -11702,7 +13718,13 @@ columns_to_keep = (
     ]
 )
 
-working_df = working_df[columns_to_keep]
+if keep_all_columns_output:
+    print(
+        "Task 4 keep_all_columns_output enabled: "
+        f"retaining full dataframe with {len(working_df.columns)} columns."
+    )
+else:
+    working_df = working_df[columns_to_keep]
 
 # Path to save the cleaned dataframe
 # Create output directory if it does not exist.
@@ -11776,6 +13798,24 @@ if VERBOSE:
     print("Columns before saving list->fit parquet:")
     for col in working_df.columns:
         print(f" - {col}")
+
+
+def round_array_to_significant_digits(values: np.ndarray, significant_digits: int = 4) -> np.ndarray:
+    rounded = values.astype(float, copy=True)
+    finite_nonzero = np.isfinite(rounded) & (rounded != 0)
+    if np.any(finite_nonzero):
+        magnitudes = np.floor(np.log10(np.abs(rounded[finite_nonzero]))).astype(int)
+        scales = np.power(10.0, significant_digits - 1 - magnitudes)
+        rounded[finite_nonzero] = np.round(rounded[finite_nonzero] * scales) / scales
+    return rounded
+
+
+print("Rounding the final dataframe values.")
+for col in working_df.select_dtypes(include=[np.floating]).columns:
+    original_dtype = working_df[col].dtype
+    column_values = working_df[col].to_numpy(dtype=float, copy=False)
+    rounded_values = round_array_to_significant_digits(column_values, significant_digits=4)
+    working_df.loc[:, col] = rounded_values.astype(original_dtype, copy=False)
 
 # Data purity
 data_purity = final_number_of_events / original_number_of_events * 100
@@ -11954,7 +13994,12 @@ plt.close("all")
 
 # Save to HDF5 file
 
-working_df.to_parquet(OUT_PATH, engine="pyarrow", compression="zstd", index=False)
+working_df.to_parquet(
+    OUT_PATH,
+    engine="pyarrow",
+    compression=_preferred_parquet_compression(),
+    index=False,
+)
 print(f"Listed dataframe saved to: {OUT_PATH}")
 
 # Move the original datafile to COMPLETED -------------------------------------

@@ -27,6 +27,9 @@ from typing import Callable, Dict, Iterable, List, Mapping, Sequence, Tuple, Typ
 import numpy as np
 import pandas as pd
 
+from MASTER.common.path_config import get_master_config_root
+from MASTER.common.selection_config import MASTER_SELECTION_FILENAME, load_yaml_mapping
+
 DEFAULT_STATION_CHOICES: Tuple[str, ...] = ("0", "1", "2", "3", "4")
 DEFAULT_IMPORTANT_KEYWORDS: Tuple[str, ...] = (
     "error",
@@ -630,6 +633,45 @@ def apply_step1_task_parameter_overrides(
         config_obj = update_fn(config_obj, fallback_path, station_id)
     else:
         log_fn(f"Warning: No parameters file found for task {task_number}")
+    return config_obj
+
+
+def load_step1_master_overrides(
+    *,
+    master_config_root: str | Path | None = None,
+) -> tuple[Path, Dict[str, object]]:
+    root = Path(master_config_root).expanduser() if master_config_root is not None else get_master_config_root()
+    config_path = root / MASTER_SELECTION_FILENAME
+    loaded = load_yaml_mapping(config_path)
+
+    override_node = loaded.get("step_1_overrides")
+    if not isinstance(override_node, Mapping):
+        override_node = loaded.get("step1_overrides")
+    if not isinstance(override_node, Mapping):
+        return config_path, {}
+
+    overrides: Dict[str, object] = {}
+    for key in ("complete_reanalysis", "create_plots"):
+        if key in override_node:
+            overrides[key] = override_node.get(key)
+    return config_path, overrides
+
+
+def apply_step1_master_overrides(
+    config_obj: dict,
+    *,
+    master_config_root: str | Path | None = None,
+    log_fn: Callable[..., None] = builtins.print,
+) -> dict:
+    config_path, overrides = load_step1_master_overrides(
+        master_config_root=master_config_root,
+    )
+    if not overrides:
+        return config_obj
+
+    config_obj.update(overrides)
+    joined_overrides = ", ".join(f"{key}={value}" for key, value in overrides.items())
+    log_fn(f"Warning: Loaded Step 1 master overrides from {config_path}: {joined_overrides}")
     return config_obj
 
 

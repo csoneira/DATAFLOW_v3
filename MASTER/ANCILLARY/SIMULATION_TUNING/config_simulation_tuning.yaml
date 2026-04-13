@@ -50,3 +50,62 @@ charge_spectrum:
   alpha_min: 0.20
   alpha_max: 2.00
   alpha_grid_points: 161
+
+projection_axis_mismatch:
+  # Plane combinations already tracked in Task 4 ellipse metadata.
+  focus_definitive_tt: [123, 124, 134, 234, 1234]
+
+  # Ignore tiny per-file fits when aggregating the Task 4 evidence.
+  task4_min_points_per_tt: 1000
+
+  # Bridge Task 4 to the Task 2 calibrated T_dif width with this robust quantile.
+  task2_abs_quantile: 0.95
+
+  # Use the single-strip occupancy as the y-side sanity check by default.
+  strip_balance_mode: single_strip_only
+
+  # Decision thresholds used by the text report.
+  scale_agreement_tolerance: 0.08
+  strip_balance_jsd_warning_threshold: 0.08
+
+  # Simulation reference band for the per-file time series.
+  timeseries_reference_quantile_low: 0.25
+  timeseries_reference_quantile_high: 0.75
+
+efficiency_vector_tuning:
+  # Drop bins that only appear in a handful of files so the comparison stays stable.
+  min_valid_files_per_bin: 10
+
+  # Extra attention goes to bins where either group drops below this efficiency.
+  low_efficiency_threshold: 0.80
+
+  # Absolute REAL-SIM discrepancy thresholds.
+  warning_abs_difference: 0.08
+  severe_abs_difference: 0.12
+
+  # Low-efficiency bins are allowed a separate, stricter classification.
+  low_eff_warning_abs_difference: 0.10
+  low_eff_severe_abs_difference: 0.18
+
+  # Fiducial region used to match the simulated baseline to the real-data curve.
+  baseline_x_abs_max_mm: 100.0
+  baseline_y_abs_max_mm: 100.0
+  baseline_theta_max_deg: 30.0
+
+  # After the fiducial match, these thresholds decide whether the outer shape
+  # still disagrees strongly enough to require an explicit dependence.
+  outside_shape_warning_rmse: 0.05
+  outside_shape_severe_rmse: 0.08
+  outside_shape_warning_max_abs: 0.08
+  outside_shape_severe_max_abs: 0.12
+
+  # Per-file dictionary matching against the simulation family.
+  dictionary_match_top_k: 5
+  dictionary_match_weight_power: 2.0
+  dictionary_match_weight_epsilon: 0.0001
+  dictionary_match_min_fiducial_bins: 4
+  dictionary_match_min_outside_bins: 2
+
+  # Edge summaries use the outer XY bins and the largest-theta bins.
+  xy_edge_bin_fraction: 0.20
+  theta_high_bin_fraction: 0.25

@@ -3,7 +3,8 @@ plots:
   usual_suite: usual
   essential_suite: essential
   theta_phi_definitive_tt_2d: usual
-  polar_theta_phi_definitive_tt_2d_detail_pre: essential
+  polar_theta_phi_definitive_tt_2d_detail_pre: usual
   polar_theta_phi_definitive_tt_2d_detail_angle_correction: usual
-  polar_theta_phi_definitive_tt_2d_detail_final: essential
-  theta_efficiency_simple_3v4: essential
+  polar_theta_phi_definitive_tt_2d_detail_final: usual
+  theta_efficiency_simple_3v4: usual
+  channel_combination_filter_by_tt: essential

@@ -26,6 +26,16 @@ Current studies:
   files by similar empirical plane efficiency, with nearest-neighbour fallback
   when strict overlap is too sparse, and report both charge-scale and
   charge-shape recommendations.
+- `PROJECTION_AXIS_MISMATCH/`
+  Bridge the Task 4 `xp/yp` ellipse asymmetry to the Task 2 calibrated `T_dif`
+  width mismatch, plus a strip-balance sanity check, to decide whether the
+  dominant problem looks more like an `x`-side scaling issue or a `y`-side
+  strip-assignment issue.
+- `EFFICIENCY_VECTOR_TUNING/`
+  Compare the Task 4 efficiency vectors versus `x`, `y`, and `theta` directly
+  between simulation and real data, with explicit low-efficiency-bin
+  diagnostics, to decide whether the current efficiency modelling is already
+  acceptable or still needs retuning.
 
 The selection config is shared so the same real-data epoch and station set can
 be used consistently across tuning studies.

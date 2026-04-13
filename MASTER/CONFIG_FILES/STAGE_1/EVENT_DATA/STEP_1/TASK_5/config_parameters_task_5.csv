@@ -1,6 +1,6 @@
 parameter,default,station_1,station_2,station_3,station_4,source_task
-T_sum_RPC_left,,,,,,task_3
-T_sum_RPC_right,,,,,,task_3
+T_sum_RPC_left,,,,,,task_3_filter
+T_sum_RPC_right,,,,,,task_3_filter
 det_pos_filter,,,,,,task_4
 det_theta_left_filter,,,,,,task_4
 det_theta_right_filter,,,,,,task_4

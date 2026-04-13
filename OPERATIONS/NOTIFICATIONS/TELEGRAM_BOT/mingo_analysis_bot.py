@@ -61,7 +61,51 @@ PDF_TARGETS = {
         / "NOISE_CONTROL"
         / "PLOTS"
         / "noise_control_metadata_report.pdf",
-        "description": "Noise-control metadata report",
+        "description": "Noise-control offender percent report",
+    },
+    "noise_control_metadata_rate_report": {
+        "path": BASE_DIR
+        / "MASTER"
+        / "ANCILLARY"
+        / "PLOTTERS"
+        / "METADATA"
+        / "NOISE_CONTROL"
+        / "PLOTS"
+        / "noise_control_metadata_rate_report.pdf",
+        "description": "Noise-control offender rate report",
+    },
+    "noise_control_efficiency_report": {
+        "path": BASE_DIR
+        / "MASTER"
+        / "ANCILLARY"
+        / "PLOTTERS"
+        / "METADATA"
+        / "NOISE_CONTROL"
+        / "PLOTS"
+        / "noise_control_efficiency_report.pdf",
+        "description": "Noise-control cumulative efficiency report",
+    },
+    "noise_control_plane_combination_rate_report": {
+        "path": BASE_DIR
+        / "MASTER"
+        / "ANCILLARY"
+        / "PLOTTERS"
+        / "METADATA"
+        / "NOISE_CONTROL"
+        / "PLOTS"
+        / "noise_control_plane_combination_rate_report.pdf",
+        "description": "Noise-control plane-combination rate report",
+    },
+    "trigger_rate_metadata_report": {
+        "path": BASE_DIR
+        / "MASTER"
+        / "ANCILLARY"
+        / "PLOTTERS"
+        / "METADATA"
+        / "TRIGGER_RATES"
+        / "PLOTS"
+        / "trigger_rate_metadata_report.pdf",
+        "description": "Trigger-rate metadata report",
     },
     "rates_metadata_report": {
         "path": BASE_DIR
@@ -164,12 +208,18 @@ HELP_TEXT = (
     "ANALYSIS PDF Reports:\n"
     "  /definitive_execution_report - Definitive execution map PDF.\n"
     "  /filter_metadata_report - Filter metadata PDF.\n"
-    "  /noise_control_metadata_report - Noise-control metadata PDF.\n"
+    "  /noise_control_metadata_report - Noise-control offender percent PDF.\n"
+    "  /noise_control_metadata_rate_report - Noise-control offender rate PDF.\n"
+    "  /noise_control_efficiency_report - Noise-control cumulative efficiency PDF.\n"
+    "  /noise_control_plane_combination_rate_report - Noise-control plane-combination rate PDF.\n"
+    "  /trigger_rate_metadata_report - Trigger-rate metadata PDF.\n"
     "  /rates_metadata_report - Rates metadata PDF.\n"
     "  /execution_metadata_report - Execution metadata PDF.\n"
     "  /efficiency_metadata_report - Efficiency metadata PDF.\n"
     "  /efficiencies_three_to_four_report - Three-to-four efficiency metadata PDF.\n"
     "  /simulated_data_evolution_report - Simulated data evolution report PDF.\n\n"
+    "TASK PDFs:\n"
+    "  /task_pdfs - Ask for station and task, then send the latest PDF from that task PDF directory.\n\n"
     "Maintenance Tools:\n"
     "  /clean_dataflow_status - Run clean_dataflow.sh --compact to show disk usage.\n"
     "  /clean_dataflow_force - Run clean_dataflow.sh --force --compact (temps, plots, completed; never metadata).\n\n"
@@ -198,6 +248,9 @@ def load_token(token_path: Path) -> str:
 bot = telebot.TeleBot(load_token(TOKEN_PATH))
 TERMINAL_ACTIVE_CHATS: set[int] = set()
 TERMINAL_CHAT_CWDS: dict[int, Path] = {}
+TASK_PDF_PENDING_CHATS: dict[int, dict[str, object]] = {}
+TASK_PDF_STATION_IDS: tuple[int, ...] = (0, 1, 2, 3, 4)
+TASK_PDF_TASK_IDS: tuple[int, ...] = (1, 2, 3, 4, 5)
 
 
 def load_terminal_password(password_path: Path) -> str | None:
@@ -233,7 +286,72 @@ def register_static_pdf_command(command: str, path: Path, description: str) -> N
     def handler(message, pdf_path=path, caption=description):  # type: ignore[misc]
         if maybe_handle_terminal_message(message):
             return
+        clear_task_pdf_request(message.chat.id)
         send_pdf(message.chat.id, pdf_path, caption)
+
+
+def clear_task_pdf_request(chat_id: int) -> None:
+    TASK_PDF_PENDING_CHATS.pop(chat_id, None)
+
+
+def normalize_station_selection(raw_value: str) -> str | None:
+    text = (raw_value or "").strip().upper()
+    if not text:
+        return None
+    if text.startswith("MINGO"):
+        text = text[5:]
+    if not text.isdigit():
+        return None
+    station_id = int(text)
+    if station_id not in TASK_PDF_STATION_IDS:
+        return None
+    return f"MINGO{station_id:02d}"
+
+
+def normalize_task_selection(raw_value: str) -> int | None:
+    text = (raw_value or "").strip().upper()
+    if not text:
+        return None
+    if text.startswith("TASK_"):
+        text = text[5:]
+    elif text.startswith("TASK"):
+        text = text[4:]
+    if not text.isdigit():
+        return None
+    task_id = int(text)
+    if task_id not in TASK_PDF_TASK_IDS:
+        return None
+    return task_id
+
+
+def task_pdf_directory(station_label: str, task_id: int) -> Path:
+    return (
+        BASE_DIR
+        / "STATIONS"
+        / station_label
+        / "STAGE_1"
+        / "EVENT_DATA"
+        / "STEP_1"
+        / f"TASK_{task_id}"
+        / "PLOTS"
+        / "PDF_DIRECTORY"
+    )
+
+
+def latest_pdf_in_directory(pdf_dir: Path) -> Path | None:
+    if not pdf_dir.exists() or not pdf_dir.is_dir():
+        return None
+
+    pdf_candidates = sorted(
+        (
+            candidate
+            for candidate in pdf_dir.iterdir()
+            if candidate.is_file() and candidate.suffix.lower() == ".pdf"
+        ),
+        key=lambda candidate: (candidate.stat().st_mtime, candidate.name),
+        reverse=True,
+    )
+    return pdf_candidates[0] if pdf_candidates else None
 
 
 for command, payload in PDF_TARGETS.items():
@@ -244,7 +362,103 @@ for command, payload in PDF_TARGETS.items():
 def send_welcome(message):
     if maybe_handle_terminal_message(message):
         return
+    clear_task_pdf_request(message.chat.id)
     bot.send_message(message.chat.id, HELP_TEXT)
+
+
+@bot.message_handler(commands=["task_pdfs"])
+def handle_task_pdfs(message):  # type: ignore[misc]
+    if maybe_handle_terminal_message(message):
+        return
+
+    chat_id = message.chat.id
+    clear_task_pdf_request(chat_id)
+    TASK_PDF_PENDING_CHATS[chat_id] = {"step": "station"}
+    bot.send_message(
+        chat_id,
+        "Task PDFs\n"
+        "Send the station as `0-4` or `MINGO00-MINGO04`.\n"
+        "Send `cancel` to abort.",
+        parse_mode="Markdown",
+    )
+
+
+@bot.message_handler(func=lambda message: message.chat.id in TASK_PDF_PENDING_CHATS, content_types=["text"])
+def handle_task_pdf_prompt(message):  # type: ignore[misc]
+    if maybe_handle_terminal_message(message):
+        return
+
+    chat_id = message.chat.id
+    text = (message.text or "").strip()
+    if not text:
+        bot.send_message(chat_id, "Send a station/task value or `cancel`.")
+        return
+
+    if text.lower() in {"cancel", "/cancel"}:
+        clear_task_pdf_request(chat_id)
+        bot.send_message(chat_id, "Task PDF request cancelled.")
+        return
+
+    state = TASK_PDF_PENDING_CHATS.get(chat_id, {})
+    step = state.get("step")
+
+    if step == "station":
+        station_label = normalize_station_selection(text)
+        if station_label is None:
+            bot.send_message(
+                chat_id,
+                "Invalid station. Send `0-4` or `MINGO00-MINGO04`.",
+                parse_mode="Markdown",
+            )
+            return
+
+        TASK_PDF_PENDING_CHATS[chat_id] = {
+            "step": "task",
+            "station": station_label,
+        }
+        bot.send_message(
+            chat_id,
+            f"Station selected: `{station_label}`\n"
+            "Now send the task as `1-5` or `TASK_1-TASK_5`.",
+            parse_mode="Markdown",
+        )
+        return
+
+    if step == "task":
+        station_label = str(state.get("station", "")).strip()
+        task_id = normalize_task_selection(text)
+        if not station_label:
+            clear_task_pdf_request(chat_id)
+            bot.send_message(chat_id, "Task PDF request state was lost. Use /task_pdfs again.")
+            return
+        if task_id is None:
+            bot.send_message(
+                chat_id,
+                "Invalid task. Send `1-5` or `TASK_1-TASK_5`.",
+                parse_mode="Markdown",
+            )
+            return
+
+        clear_task_pdf_request(chat_id)
+        pdf_dir = task_pdf_directory(station_label, task_id)
+        latest_pdf = latest_pdf_in_directory(pdf_dir)
+        if latest_pdf is None:
+            bot.send_message(
+                chat_id,
+                f"No PDFs found for `{station_label}` `TASK_{task_id}` in:\n`{pdf_dir}`",
+                parse_mode="Markdown",
+            )
+            return
+
+        send_pdf(
+            chat_id,
+            latest_pdf,
+            f"Latest PDF for {station_label} TASK_{task_id}\nFile: {latest_pdf.name}",
+        )
+        return
+
+    clear_task_pdf_request(chat_id)
+    bot.send_message(chat_id, "Task PDF request state was invalid. Use /task_pdfs again.")
 
 
 def truncate_message(text: str) -> str:
@@ -413,6 +627,7 @@ def maybe_handle_terminal_message(message) -> bool:
 
 
 def _handle_cleaner_command(message, force: bool) -> None:
+    clear_task_pdf_request(message.chat.id)
     try:
         response = run_cleaner(force)
     except Exception as exc:  # pragma: no cover
@@ -440,6 +655,7 @@ def handle_clean_dataflow_force(message):  # type: ignore[misc]
 @bot.message_handler(commands=["terminal"])
 def handle_terminal(message):  # type: ignore[misc]
     chat_id = message.chat.id
+    clear_task_pdf_request(chat_id)
     terminal_password = load_terminal_password(TERMINAL_PASSWORD_PATH)
     if terminal_password is None:
         bot.send_message(chat_id, "Terminal mode is disabled because no password is configured.")
@@ -467,6 +683,7 @@ def handle_terminal(message):  # type: ignore[misc]
 @bot.message_handler(commands=["exit"])
 def handle_exit(message):  # type: ignore[misc]
     chat_id = message.chat.id
+    clear_task_pdf_request(chat_id)
     if chat_id in TERMINAL_ACTIVE_CHATS:
         TERMINAL_ACTIVE_CHATS.discard(chat_id)
         TERMINAL_CHAT_CWDS.pop(chat_id, None)
@@ -480,6 +697,7 @@ def handle_restart_bot(message):  # type: ignore[misc]
     if maybe_handle_terminal_message(message):
         return
     chat_id = message.chat.id
+    clear_task_pdf_request(chat_id)
     bot.send_message(chat_id, "Restart command received. Attempting to restart bot...")
     try:
         trigger_restart()
@@ -505,6 +723,7 @@ def handle_unknown_text(message):
         {
             "/start",
             "/help",
+            "/task_pdfs",
             "/clean_dataflow_status",
             "/clean_dataflow_force",
             "/terminal",

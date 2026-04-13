@@ -65,6 +65,14 @@ def _resolve_reference_path(base_csv_path: Path, source_task: str) -> Optional[P
         if not ref_path.is_absolute():
             ref_path = base_csv_path.parent / ref_path
         return ref_path
+    task_filter_match = re.fullmatch(r"task_(\d+)_filter", source_task)
+    if task_filter_match:
+        task_number = task_filter_match.group(1)
+        if base_csv_path.parent.name.startswith("TASK_"):
+            step_1_dir = base_csv_path.parent.parent
+        else:
+            step_1_dir = base_csv_path.parent
+        return step_1_dir / f"TASK_{task_number}" / f"config_filter_parameters_task_{task_number}.csv"
     task_match = re.fullmatch(r"task_(\d+)", source_task)
     if task_match:
         task_number = task_match.group(1)

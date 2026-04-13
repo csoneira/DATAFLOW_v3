@@ -134,6 +134,7 @@ from MASTER.common.step1_activation import (
 )
 from MASTER.common.step1_shared import (
     add_normalized_count_metadata,
+    apply_step1_master_overrides,
     apply_step1_task_parameter_overrides,
     build_events_per_second_metadata,
     build_step1_cli_parser,
@@ -544,9 +545,12 @@ fallback_parameter_config_file_path = (
 )
 print(f"Using config file: {config_file_path}")
 print(f"Using plot catalog file: {plot_catalog_file_path}")
-print(f"Using filter parameter config file: {filter_parameter_config_file_path}")
 with config_file_path.open("r", encoding="utf-8") as config_file:
     config = yaml.safe_load(config_file)
+filter_parameter_config_file_path = filter_parameter_config_file_path.with_name(
+    str(config.get("filter_parameter_config_csv", filter_parameter_config_file_path.name))
+)
+print(f"Using filter parameter config file: {filter_parameter_config_file_path}")
 task2_plot_status_by_alias = load_step1_task_plot_catalog(
     plot_catalog_file_path,
     TASK2_PLOT_ALIASES,
@@ -587,10 +591,29 @@ config = apply_step1_task_parameter_overrides(
     update_fn=update_config_with_parameters,
     log_fn=print,
 )
+config = apply_step1_master_overrides(
+    config_obj=config,
+    master_config_root=config_root,
+    log_fn=print,
+)
 
 def _optional_config_float(config_dict: dict, key: str) -> float | None:
     """Return a float config value, or None when the key is unset/blank/NaN."""
     raw_value = config_dict.get(key, None)
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, str) and not raw_value.strip():
+        return None
+    try:
+        if pd.isna(raw_value):
+            return None
+    except TypeError:
+        pass
+    return float(raw_value)
+
+
+def _optional_float(raw_value) -> float | None:
+    """Return float(raw_value), or None when the value is unset/blank/NaN."""
     if raw_value is None:
         return None
     if isinstance(raw_value, str) and not raw_value.strip():
@@ -1101,6 +1124,10 @@ track_removed_rows_task2 = _coerce_config_bool(
     config.get("track_removed_rows_task2", False),
     default=False,
 )
+keep_all_columns_output = _coerce_config_bool(
+    config.get("keep_all_columns_output", False),
+    default=False,
+)
 removed_marker = str(config.get("removed_marker", "x"))
 removed_marker_size = int(config.get("removed_marker_size", 30))
 removed_marker_alpha = float(config.get("removed_marker_alpha", 0.9))
@@ -1150,38 +1177,285 @@ Q_sum_semisum_right = config["Q_sum_semisum_right"]
 T_sum_corrected_dif_abs = abs(float(config.get("T_sum_corrected_dif_abs", config.get("T_sum_corrected_dif_right", 5))))
 T_sum_corrected_dif_right = T_sum_corrected_dif_abs
 T_sum_corrected_dif_left = -T_sum_corrected_dif_abs
-strip_combination_q_sum_sum_left = float(
-    config.get("strip_combination_q_sum_sum_left", Q_sum_semisum_left)
-)
-strip_combination_q_sum_sum_right = float(
-    config.get("strip_combination_q_sum_sum_right", Q_sum_semisum_right)
-)
-strip_combination_q_sum_dif_threshold = abs(
-    float(config.get("strip_combination_q_sum_dif_threshold", Q_sum_semidiff_abs))
-)
-strip_combination_q_dif_sum_threshold = abs(
-    float(config.get("strip_combination_q_dif_sum_threshold", q_dif_abs))
-)
-strip_combination_q_dif_dif_threshold = abs(
-    float(config.get("strip_combination_q_dif_dif_threshold", q_dif_abs))
-)
-strip_combination_t_sum_sum_left = _optional_config_float(
-    config,
-    "strip_combination_t_sum_sum_left",
-)
-strip_combination_t_sum_sum_right = _optional_config_float(
-    config,
-    "strip_combination_t_sum_sum_right",
-)
-strip_combination_t_sum_dif_threshold = abs(
-    float(config.get("strip_combination_t_sum_dif_threshold", T_sum_corrected_dif_abs))
-)
-strip_combination_t_dif_sum_threshold = abs(
-    float(config.get("strip_combination_t_dif_sum_threshold", T_dif_cal_threshold))
-)
-strip_combination_t_dif_dif_threshold = abs(
-    float(config.get("strip_combination_t_dif_dif_threshold", T_dif_cal_threshold))
-)
+def _task2_relation_limit_value(
+    config_dict: dict,
+    relation_type: str,
+    suffix: str,
+    default,
+    *,
+    cast_fn=float,
+    absolute: bool = False,
+):
+    normalized_relation = {
+        "strip": "same_strip",
+        "plane": "same_plane",
+        "detector": "any",
+        "same_strip": "same_strip",
+        "same_plane": "same_plane",
+        "any": "any",
+        "self": "same_strip",
+    }.get(relation_type, relation_type)
+    candidate_keys = []
+    if normalized_relation == "same_strip":
+        candidate_keys.extend(
+            [
+                f"strip_combination_strip_{suffix}",
+                f"strip_combination_same_strip_{suffix}",
+            ]
+        )
+        candidate_keys.append(f"strip_combination_self_{suffix}")
+    elif normalized_relation == "same_plane":
+        candidate_keys.extend(
+            [
+                f"strip_combination_plane_{suffix}",
+                f"strip_combination_same_plane_{suffix}",
+            ]
+        )
+    elif normalized_relation == "any":
+        candidate_keys.extend(
+            [
+                f"strip_combination_detector_{suffix}",
+                f"strip_combination_any_{suffix}",
+            ]
+        )
+    else:
+        candidate_keys.append(f"strip_combination_{normalized_relation}_{suffix}")
+    if normalized_relation in {"same_plane", "any"}:
+        candidate_keys.append(f"strip_combination_{suffix}")
+    selected_value = default
+    for key in candidate_keys:
+        candidate_value = config_dict.get(key, None)
+        if candidate_value not in (None, ""):
+            selected_value = candidate_value
+            break
+    if cast_fn is None:
+        return selected_value
+    converted_value = cast_fn(selected_value)
+    return abs(converted_value) if absolute else converted_value
+
+
+task2_strip_combination_limits_by_relation = {
+    "same_strip": {
+        "q_sum_sum_left": _task2_relation_limit_value(
+            config,
+            "same_strip",
+            "q_sum_sum_left",
+            Q_sum_left_cal,
+        ),
+        "q_sum_sum_right": _task2_relation_limit_value(
+            config,
+            "same_strip",
+            "q_sum_sum_right",
+            Q_sum_right_cal,
+        ),
+        "q_sum_dif_threshold": _task2_relation_limit_value(
+            config,
+            "same_strip",
+            "q_sum_dif_threshold",
+            0.0,
+            absolute=True,
+        ),
+        "q_dif_sum_threshold": _task2_relation_limit_value(
+            config,
+            "same_strip",
+            "q_dif_sum_threshold",
+            Q_dif_cal_threshold,
+            absolute=True,
+        ),
+        "q_dif_dif_threshold": _task2_relation_limit_value(
+            config,
+            "same_strip",
+            "q_dif_dif_threshold",
+            0.0,
+            absolute=True,
+        ),
+        "t_sum_sum_left": _task2_relation_limit_value(
+            config,
+            "same_strip",
+            "t_sum_sum_left",
+            _optional_config_float(config, "strip_combination_t_sum_sum_left"),
+            cast_fn=_optional_float,
+        ),
+        "t_sum_sum_right": _task2_relation_limit_value(
+            config,
+            "same_strip",
+            "t_sum_sum_right",
+            _optional_config_float(config, "strip_combination_t_sum_sum_right"),
+            cast_fn=_optional_float,
+        ),
+        "t_sum_dif_threshold": _task2_relation_limit_value(
+            config,
+            "same_strip",
+            "t_sum_dif_threshold",
+            0.0,
+            absolute=True,
+        ),
+        "t_dif_sum_threshold": _task2_relation_limit_value(
+            config,
+            "same_strip",
+            "t_dif_sum_threshold",
+            T_dif_cal_threshold,
+            absolute=True,
+        ),
+        "t_dif_dif_threshold": _task2_relation_limit_value(
+            config,
+            "same_strip",
+            "t_dif_dif_threshold",
+            0.0,
+            absolute=True,
+        ),
+    },
+    "same_plane": {
+        "q_sum_sum_left": _task2_relation_limit_value(
+            config,
+            "same_plane",
+            "q_sum_sum_left",
+            Q_sum_semisum_left,
+        ),
+        "q_sum_sum_right": _task2_relation_limit_value(
+            config,
+            "same_plane",
+            "q_sum_sum_right",
+            Q_sum_semisum_right,
+        ),
+        "q_sum_dif_threshold": _task2_relation_limit_value(
+            config,
+            "same_plane",
+            "q_sum_dif_threshold",
+            Q_sum_semidiff_abs,
+            absolute=True,
+        ),
+        "q_dif_sum_threshold": _task2_relation_limit_value(
+            config,
+            "same_plane",
+            "q_dif_sum_threshold",
+            q_dif_abs,
+            absolute=True,
+        ),
+        "q_dif_dif_threshold": _task2_relation_limit_value(
+            config,
+            "same_plane",
+            "q_dif_dif_threshold",
+            q_dif_abs,
+            absolute=True,
+        ),
+        "t_sum_sum_left": _task2_relation_limit_value(
+            config,
+            "same_plane",
+            "t_sum_sum_left",
+            _optional_config_float(config, "strip_combination_t_sum_sum_left"),
+            cast_fn=_optional_float,
+        ),
+        "t_sum_sum_right": _task2_relation_limit_value(
+            config,
+            "same_plane",
+            "t_sum_sum_right",
+            _optional_config_float(config, "strip_combination_t_sum_sum_right"),
+            cast_fn=_optional_float,
+        ),
+        "t_sum_dif_threshold": _task2_relation_limit_value(
+            config,
+            "same_plane",
+            "t_sum_dif_threshold",
+            T_sum_corrected_dif_abs,
+            absolute=True,
+        ),
+        "t_dif_sum_threshold": _task2_relation_limit_value(
+            config,
+            "same_plane",
+            "t_dif_sum_threshold",
+            T_dif_cal_threshold,
+            absolute=True,
+        ),
+        "t_dif_dif_threshold": _task2_relation_limit_value(
+            config,
+            "same_plane",
+            "t_dif_dif_threshold",
+            T_dif_cal_threshold,
+            absolute=True,
+        ),
+    },
+    "any": {
+        "q_sum_sum_left": _task2_relation_limit_value(
+            config,
+            "any",
+            "q_sum_sum_left",
+            Q_sum_semisum_left,
+        ),
+        "q_sum_sum_right": _task2_relation_limit_value(
+            config,
+            "any",
+            "q_sum_sum_right",
+            Q_sum_semisum_right,
+        ),
+        "q_sum_dif_threshold": _task2_relation_limit_value(
+            config,
+            "any",
+            "q_sum_dif_threshold",
+            Q_sum_semidiff_abs,
+            absolute=True,
+        ),
+        "q_dif_sum_threshold": _task2_relation_limit_value(
+            config,
+            "any",
+            "q_dif_sum_threshold",
+            q_dif_abs,
+            absolute=True,
+        ),
+        "q_dif_dif_threshold": _task2_relation_limit_value(
+            config,
+            "any",
+            "q_dif_dif_threshold",
+            q_dif_abs,
+            absolute=True,
+        ),
+        "t_sum_sum_left": _task2_relation_limit_value(
+            config,
+            "any",
+            "t_sum_sum_left",
+            _optional_config_float(config, "strip_combination_t_sum_sum_left"),
+            cast_fn=_optional_float,
+        ),
+        "t_sum_sum_right": _task2_relation_limit_value(
+            config,
+            "any",
+            "t_sum_sum_right",
+            _optional_config_float(config, "strip_combination_t_sum_sum_right"),
+            cast_fn=_optional_float,
+        ),
+        "t_sum_dif_threshold": _task2_relation_limit_value(
+            config,
+            "any",
+            "t_sum_dif_threshold",
+            T_sum_corrected_dif_abs,
+            absolute=True,
+        ),
+        "t_dif_sum_threshold": _task2_relation_limit_value(
+            config,
+            "any",
+            "t_dif_sum_threshold",
+            T_dif_cal_threshold,
+            absolute=True,
+        ),
+        "t_dif_dif_threshold": _task2_relation_limit_value(
+            config,
+            "any",
+            "t_dif_dif_threshold",
+            T_dif_cal_threshold,
+            absolute=True,
+        ),
+    },
+}
+strip_combination_q_sum_sum_left = task2_strip_combination_limits_by_relation["any"]["q_sum_sum_left"]
+strip_combination_q_sum_sum_right = task2_strip_combination_limits_by_relation["any"]["q_sum_sum_right"]
+strip_combination_q_sum_dif_threshold = task2_strip_combination_limits_by_relation["any"]["q_sum_dif_threshold"]
+strip_combination_q_dif_sum_threshold = task2_strip_combination_limits_by_relation["any"]["q_dif_sum_threshold"]
+strip_combination_q_dif_dif_threshold = task2_strip_combination_limits_by_relation["any"]["q_dif_dif_threshold"]
+strip_combination_t_sum_sum_left = task2_strip_combination_limits_by_relation["any"]["t_sum_sum_left"]
+strip_combination_t_sum_sum_right = task2_strip_combination_limits_by_relation["any"]["t_sum_sum_right"]
+strip_combination_t_sum_dif_threshold = task2_strip_combination_limits_by_relation["any"]["t_sum_dif_threshold"]
+strip_combination_t_dif_sum_threshold = task2_strip_combination_limits_by_relation["any"]["t_dif_sum_threshold"]
+strip_combination_t_dif_dif_threshold = task2_strip_combination_limits_by_relation["any"]["t_dif_dif_threshold"]
 slewing_residual_range = config["slewing_residual_range"]
 
 t_comparison_lim = config["t_comparison_lim"]
@@ -1370,7 +1644,7 @@ def refresh_global_count_metadata(df: pd.DataFrame, column_names: Iterable[str])
             tt_label = normalize_tt_label(tt_value)
             global_variables[f"{column_name}_{tt_label}_count"] = int(count)
 
-TASK2_SELECTED_OFFENDER_CARDINALITY_VALUES: tuple[int, ...] = tuple(range(1, 17))
+TASK2_SELECTED_OFFENDER_CARDINALITY_VALUES: tuple[int, ...] = tuple(range(0, 17))
 
 FILTER_METRIC_NAMES: tuple[str, ...] = (
     "clean_tt_nan_rows_removed_pct",
@@ -1842,10 +2116,32 @@ TASK2_STRIP_KEYS: tuple[tuple[int, int], ...] = tuple(
     for plane in range(1, 5)
     for strip in range(1, 5)
 )
+TASK2_STRIP_COMBINATION_RELATION_TYPES: tuple[str, ...] = ("same_strip", "same_plane", "any")
 
 
 def _task2_strip_order_key(strip_key: tuple[int, int]) -> tuple[int, int]:
     return strip_key
+
+
+def _task2_strip_relation_type(
+    strip_a: tuple[int, int],
+    strip_b: tuple[int, int],
+) -> str:
+    if strip_a == strip_b:
+        return "same_strip"
+    if strip_a[0] == strip_b[0]:
+        return "same_plane"
+    return "any"
+
+
+def _iter_task2_strip_relation_pairs(
+    strip_map: dict[tuple[int, int], dict[str, str]],
+) -> Iterable[tuple[tuple[int, int], tuple[int, int], str]]:
+    ordered_strips = sorted(strip_map, key=_task2_strip_order_key)
+    for idx, strip_a in enumerate(ordered_strips):
+        yield strip_a, strip_a, "same_strip"
+        for strip_b in ordered_strips[idx + 1 :]:
+            yield strip_a, strip_b, _task2_strip_relation_type(strip_a, strip_b)
 
 
 def _task2_strip_offender_metric_key(strip_key: tuple[int, int]) -> str:
@@ -1861,9 +2157,25 @@ def _task2_selected_offender_cardinality_rate_metric_key(selected_count: int) ->
     return f"{_task2_selected_offender_cardinality_metric_key(selected_count)}_rate_hz"
 
 
+def _task2_normalize_relation_type(relation_type: str) -> str:
+    normalized_relation = {
+        "strip": "same_strip",
+        "plane": "same_plane",
+        "detector": "any",
+        "same_strip": "same_strip",
+        "same_plane": "same_plane",
+        "any": "any",
+        "self": "same_strip",
+    }.get(relation_type)
+    if normalized_relation is None:
+        raise ValueError(f"Unsupported Task 2 strip-combination relation type: {relation_type}")
+    return normalized_relation
+
+
 def apply_task2_strip_combination_filter(
     df_input: pd.DataFrame,
     *,
+    relation_type: str,
     q_sum_sum_left: float,
     q_sum_sum_right: float,
     q_sum_dif_threshold: float,
@@ -1879,13 +2191,12 @@ def apply_task2_strip_combination_filter(
     """
     Apply a final strip-combination filter from already-built strip observables.
 
-    Distinct strip pairs are evaluated only when both strips carry non-zero
-    `Q_sum`, `Q_dif`, `T_sum`, and `T_dif`. Failed strip pairs are flagged
-    first. Then, per event, the exact minimum-cardinality set of offending
-    strips is zeroed so the full set of flagged strip pairs is covered.
+    Apply one Task 2 strip-combination relation filter.
     """
     strip_map = _task2_strip_component_columns_map(df_input)
-    if len(strip_map) < 2:
+    relation_type = _task2_normalize_relation_type(relation_type)
+    min_relations = 1 if relation_type == "same_strip" else 2
+    if len(strip_map) < min_relations:
         return {
             "input_rows": len(df_input),
             "tracked_strip_count": len(strip_map),
@@ -1913,6 +2224,7 @@ def apply_task2_strip_combination_filter(
             "selected_offender_counts": {
                 strip_key: 0 for strip_key in TASK2_STRIP_KEYS
             },
+            "selected_offender_count_by_row": pd.Series(0, index=df_input.index, dtype=int),
         }
 
     strip_fail_masks = {
@@ -1945,53 +2257,77 @@ def apply_task2_strip_combination_filter(
         },
     }
     row_failed_edges: dict[int, list[tuple[tuple[int, int], tuple[int, int], float]]] = {}
+    row_forced_strips: dict[int, set[tuple[int, int]]] = {}
     offender_hit_counts = {
         strip_key: 0
         for strip_key in TASK2_STRIP_KEYS
     }
+    selected_offender_count_by_row = np.zeros(len(df_input), dtype=int)
 
-    for strip_a, strip_b in combinations(sorted(strip_map), 2):
+    for strip_a, strip_b, current_relation_type in _iter_task2_strip_relation_pairs(strip_map):
+        if current_relation_type != relation_type:
+            continue
         cols_a = strip_map[strip_a]
-        cols_b = strip_map[strip_b]
         q_sum_a = pd.to_numeric(df_input[cols_a["Q_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        q_sum_b = pd.to_numeric(df_input[cols_b["Q_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
         q_dif_a = pd.to_numeric(df_input[cols_a["Q_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        q_dif_b = pd.to_numeric(df_input[cols_b["Q_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
         t_sum_a = pd.to_numeric(df_input[cols_a["T_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        t_sum_b = pd.to_numeric(df_input[cols_b["T_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
         t_dif_a = pd.to_numeric(df_input[cols_a["T_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        t_dif_b = pd.to_numeric(df_input[cols_b["T_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        if relation_type == "same_strip":
+            valid_mask = (
+                np.isfinite(q_sum_a)
+                & np.isfinite(q_dif_a)
+                & np.isfinite(t_sum_a)
+                & np.isfinite(t_dif_a)
+                & (q_sum_a != 0)
+                & (q_dif_a != 0)
+                & (t_sum_a != 0)
+                & (t_dif_a != 0)
+            )
+            pair_q_sum_sum = q_sum_a
+            pair_q_sum_dif = np.zeros_like(q_sum_a, dtype=float)
+            pair_q_dif_sum = q_dif_a
+            pair_q_dif_dif = np.zeros_like(q_dif_a, dtype=float)
+            pair_t_sum_sum = t_sum_a
+            pair_t_sum_dif = np.zeros_like(t_sum_a, dtype=float)
+            pair_t_dif_sum = t_dif_a
+            pair_t_dif_dif = np.zeros_like(t_dif_a, dtype=float)
+        else:
+            cols_b = strip_map[strip_b]
+            q_sum_b = pd.to_numeric(df_input[cols_b["Q_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+            q_dif_b = pd.to_numeric(df_input[cols_b["Q_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+            t_sum_b = pd.to_numeric(df_input[cols_b["T_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+            t_dif_b = pd.to_numeric(df_input[cols_b["T_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
 
-        valid_mask = (
-            np.isfinite(q_sum_a)
-            & np.isfinite(q_sum_b)
-            & np.isfinite(q_dif_a)
-            & np.isfinite(q_dif_b)
-            & np.isfinite(t_sum_a)
-            & np.isfinite(t_sum_b)
-            & np.isfinite(t_dif_a)
-            & np.isfinite(t_dif_b)
-            & (q_sum_a != 0)
-            & (q_sum_b != 0)
-            & (q_dif_a != 0)
-            & (q_dif_b != 0)
-            & (t_sum_a != 0)
-            & (t_sum_b != 0)
-            & (t_dif_a != 0)
-            & (t_dif_b != 0)
-        )
+            valid_mask = (
+                np.isfinite(q_sum_a)
+                & np.isfinite(q_sum_b)
+                & np.isfinite(q_dif_a)
+                & np.isfinite(q_dif_b)
+                & np.isfinite(t_sum_a)
+                & np.isfinite(t_sum_b)
+                & np.isfinite(t_dif_a)
+                & np.isfinite(t_dif_b)
+                & (q_sum_a != 0)
+                & (q_sum_b != 0)
+                & (q_dif_a != 0)
+                & (q_dif_b != 0)
+                & (t_sum_a != 0)
+                & (t_sum_b != 0)
+                & (t_dif_a != 0)
+                & (t_dif_b != 0)
+            )
+            pair_q_sum_sum = 0.5 * (q_sum_a + q_sum_b)
+            pair_q_sum_dif = 0.5 * (q_sum_a - q_sum_b)
+            pair_q_dif_sum = 0.5 * (q_dif_a + q_dif_b)
+            pair_q_dif_dif = 0.5 * (q_dif_a - q_dif_b)
+            pair_t_sum_sum = 0.5 * (t_sum_a + t_sum_b)
+            pair_t_sum_dif = 0.5 * (t_sum_a - t_sum_b)
+            pair_t_dif_sum = 0.5 * (t_dif_a + t_dif_b)
+            pair_t_dif_dif = 0.5 * (t_dif_a - t_dif_b)
         if not np.any(valid_mask):
             continue
 
         summary["valid_pair_observations"] += int(np.count_nonzero(valid_mask))
-        pair_q_sum_sum = 0.5 * (q_sum_a + q_sum_b)
-        pair_q_sum_dif = 0.5 * (q_sum_a - q_sum_b)
-        pair_q_dif_sum = 0.5 * (q_dif_a + q_dif_b)
-        pair_q_dif_dif = 0.5 * (q_dif_a - q_dif_b)
-        pair_t_sum_sum = 0.5 * (t_sum_a + t_sum_b)
-        pair_t_sum_dif = 0.5 * (t_sum_a - t_sum_b)
-        pair_t_dif_sum = 0.5 * (t_dif_a + t_dif_b)
-        pair_t_dif_dif = 0.5 * (t_dif_a - t_dif_b)
 
         fail_q_sum_sum = valid_mask & (
             (pair_q_sum_sum < float(q_sum_sum_left))
@@ -2099,20 +2435,35 @@ def apply_task2_strip_combination_filter(
             pair_severity = np.where(fail_any, pair_severity, 0.0)
             pair_severity = np.where(fail_any & (pair_severity <= 0), 1.0, pair_severity)
             for row_pos in np.flatnonzero(fail_any):
-                row_failed_edges.setdefault(int(row_pos), []).append(
-                    (strip_a, strip_b, float(pair_severity[row_pos]))
-                )
+                row_pos_int = int(row_pos)
+                if relation_type == "same_strip":
+                    row_forced_strips.setdefault(row_pos_int, set()).add(strip_a)
+                else:
+                    row_failed_edges.setdefault(row_pos_int, []).append(
+                        (strip_a, strip_b, float(pair_severity[row_pos]))
+                    )
 
-    summary["flagged_rows"] = len(row_failed_edges)
-    for row_pos, edge_list in row_failed_edges.items():
-        selected_strips = select_exact_minimum_vertex_cover(
-            edge_list,
+    flagged_row_positions = sorted(set(row_failed_edges) | set(row_forced_strips))
+    summary["flagged_rows"] = len(flagged_row_positions)
+    for row_pos in flagged_row_positions:
+        forced_strips = sorted(
+            row_forced_strips.get(row_pos, set()),
+            key=_task2_strip_order_key,
+        )
+        edge_list = row_failed_edges.get(row_pos, [])
+        uncovered_edges = [
+            (strip_a, strip_b, severity)
+            for strip_a, strip_b, severity in edge_list
+            if strip_a not in forced_strips and strip_b not in forced_strips
+        ]
+        selected_strips = forced_strips + select_exact_minimum_vertex_cover(
+            uncovered_edges,
             _task2_strip_order_key,
         )
 
         summary["max_failed_pairs_in_row"] = max(
             summary["max_failed_pairs_in_row"],
-            len(edge_list),
+            len(edge_list) + len(forced_strips),
         )
         summary["max_selected_offenders_in_row"] = max(
             summary["max_selected_offenders_in_row"],
@@ -2124,9 +2475,15 @@ def apply_task2_strip_combination_filter(
         summary["selected_offender_cardinality_counts"][len(selected_strips)] = (
             int(summary["selected_offender_cardinality_counts"].get(len(selected_strips), 0)) + 1
         )
+        selected_offender_count_by_row[row_pos] = len(selected_strips)
         for strip_key in selected_strips:
             strip_fail_masks[strip_key][row_pos] = True
             offender_hit_counts[strip_key] += 1
+
+    summary["selected_offender_cardinality_counts"][0] = max(
+        int(summary["input_rows"]) - int(summary["flagged_rows"]),
+        0,
+    )
 
     changed_columns: list[str] = []
     any_row_affected = np.zeros(len(df_input), dtype=bool)
@@ -2177,6 +2534,11 @@ def apply_task2_strip_combination_filter(
         strip_key: int(offender_hit_counts.get(strip_key, 0))
         for strip_key in TASK2_STRIP_KEYS
     }
+    summary["selected_offender_count_by_row"] = pd.Series(
+        selected_offender_count_by_row,
+        index=df_input.index,
+        dtype=int,
+    )
     return summary
 
 
@@ -2187,6 +2549,12 @@ TASK2_STRIP_VAR_LABELS: dict[str, str] = {
     "T_sum": "T_sum",
     "T_dif": "T_dif",
 }
+TASK2_STRIP_COMBINATION_SELF_OBSERVABLES: tuple[tuple[str, str], ...] = (
+    ("q_sum_sum", "Q_sum"),
+    ("q_dif_sum", "Q_dif"),
+    ("t_sum_sum", "T_sum"),
+    ("t_dif_sum", "T_dif"),
+)
 TASK2_PLANE_PAIRS: tuple[tuple[int, int], ...] = (
     (1, 1),
     (2, 2),
@@ -2266,62 +2634,100 @@ def _task2_original_series(df: pd.DataFrame, column_name: str) -> pd.Series:
 def collect_task2_strip_combination_histogram_payload(
     df_input: pd.DataFrame,
     tt_series: pd.Series,
+    *,
+    relation_type: str = "any",
 ) -> pd.DataFrame:
     payload_rows: list[pd.DataFrame] = []
     strip_map = _task2_strip_component_columns_map(df_input)
-    if len(strip_map) < 2:
-        return pd.DataFrame(columns=["tt", *[observable for observable, _ in TASK2_STRIP_COMBINATION_OBSERVABLES]])
+    relation_type = _task2_normalize_relation_type(relation_type)
+    payload_columns = [
+        "row_index",
+        "tt",
+        "combo",
+        *[observable for observable, _ in TASK2_STRIP_COMBINATION_OBSERVABLES],
+    ]
+    min_relations = 1 if relation_type == "same_strip" else 2
+    if len(strip_map) < min_relations:
+        return pd.DataFrame(columns=payload_columns)
 
     tt_series = tt_series.reindex(df_input.index).fillna("0").astype(str)
-    for strip_a, strip_b in combinations(sorted(strip_map), 2):
-        combo_label = f"P{strip_a[0]}s{strip_a[1]}-P{strip_b[0]}s{strip_b[1]}"
-        cols_a = strip_map[strip_a]
-        cols_b = strip_map[strip_b]
-        q_sum_a = pd.to_numeric(df_input[cols_a["Q_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        q_sum_b = pd.to_numeric(df_input[cols_b["Q_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        q_dif_a = pd.to_numeric(df_input[cols_a["Q_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        q_dif_b = pd.to_numeric(df_input[cols_b["Q_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        t_sum_a = pd.to_numeric(df_input[cols_a["T_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        t_sum_b = pd.to_numeric(df_input[cols_b["T_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        t_dif_a = pd.to_numeric(df_input[cols_a["T_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        t_dif_b = pd.to_numeric(df_input[cols_b["T_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-
-        valid_mask = (
-            np.isfinite(q_sum_a)
-            & np.isfinite(q_sum_b)
-            & np.isfinite(q_dif_a)
-            & np.isfinite(q_dif_b)
-            & np.isfinite(t_sum_a)
-            & np.isfinite(t_sum_b)
-            & np.isfinite(t_dif_a)
-            & np.isfinite(t_dif_b)
-            & (q_sum_a != 0)
-            & (q_sum_b != 0)
-            & (q_dif_a != 0)
-            & (q_dif_b != 0)
-            & (t_sum_a != 0)
-            & (t_sum_b != 0)
-            & (t_dif_a != 0)
-            & (t_dif_b != 0)
+    for strip_a, strip_b, current_relation_type in _iter_task2_strip_relation_pairs(strip_map):
+        if current_relation_type != relation_type:
+            continue
+        combo_label = (
+            f"P{strip_a[0]}s{strip_a[1]}"
+            if relation_type == "same_strip"
+            else f"P{strip_a[0]}s{strip_a[1]}-P{strip_b[0]}s{strip_b[1]}"
         )
+        cols_a = strip_map[strip_a]
+        q_sum_a = pd.to_numeric(df_input[cols_a["Q_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        q_dif_a = pd.to_numeric(df_input[cols_a["Q_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_sum_a = pd.to_numeric(df_input[cols_a["T_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_dif_a = pd.to_numeric(df_input[cols_a["T_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        if relation_type == "same_strip":
+            valid_mask = (
+                np.isfinite(q_sum_a)
+                & np.isfinite(q_dif_a)
+                & np.isfinite(t_sum_a)
+                & np.isfinite(t_dif_a)
+                & (q_sum_a != 0)
+                & (q_dif_a != 0)
+                & (t_sum_a != 0)
+                & (t_dif_a != 0)
+            )
+            derived_values = {
+                "q_sum_sum": q_sum_a,
+                "q_sum_dif": np.zeros_like(q_sum_a, dtype=float),
+                "q_dif_sum": q_dif_a,
+                "q_dif_dif": np.zeros_like(q_dif_a, dtype=float),
+                "t_sum_sum": t_sum_a,
+                "t_sum_dif": np.zeros_like(t_sum_a, dtype=float),
+                "t_dif_sum": t_dif_a,
+                "t_dif_dif": np.zeros_like(t_dif_a, dtype=float),
+            }
+        else:
+            cols_b = strip_map[strip_b]
+            q_sum_b = pd.to_numeric(df_input[cols_b["Q_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+            q_dif_b = pd.to_numeric(df_input[cols_b["Q_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+            t_sum_b = pd.to_numeric(df_input[cols_b["T_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+            t_dif_b = pd.to_numeric(df_input[cols_b["T_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+            valid_mask = (
+                np.isfinite(q_sum_a)
+                & np.isfinite(q_sum_b)
+                & np.isfinite(q_dif_a)
+                & np.isfinite(q_dif_b)
+                & np.isfinite(t_sum_a)
+                & np.isfinite(t_sum_b)
+                & np.isfinite(t_dif_a)
+                & np.isfinite(t_dif_b)
+                & (q_sum_a != 0)
+                & (q_sum_b != 0)
+                & (q_dif_a != 0)
+                & (q_dif_b != 0)
+                & (t_sum_a != 0)
+                & (t_sum_b != 0)
+                & (t_dif_a != 0)
+                & (t_dif_b != 0)
+            )
+            derived_values = {
+                "q_sum_sum": 0.5 * (q_sum_a + q_sum_b),
+                "q_sum_dif": 0.5 * (q_sum_a - q_sum_b),
+                "q_dif_sum": 0.5 * (q_dif_a + q_dif_b),
+                "q_dif_dif": 0.5 * (q_dif_a - q_dif_b),
+                "t_sum_sum": 0.5 * (t_sum_a + t_sum_b),
+                "t_sum_dif": 0.5 * (t_sum_a - t_sum_b),
+                "t_dif_sum": 0.5 * (t_dif_a + t_dif_b),
+                "t_dif_dif": 0.5 * (t_dif_a - t_dif_b),
+            }
         if not np.any(valid_mask):
             continue
 
         valid_index = df_input.index[valid_mask]
         tt_values = tt_series.loc[valid_index].to_numpy(dtype=str)
-        derived_values = {
-            "q_sum_sum": 0.5 * (q_sum_a + q_sum_b),
-            "q_sum_dif": 0.5 * (q_sum_a - q_sum_b),
-            "q_dif_sum": 0.5 * (q_dif_a + q_dif_b),
-            "q_dif_dif": 0.5 * (q_dif_a - q_dif_b),
-            "t_sum_sum": 0.5 * (t_sum_a + t_sum_b),
-            "t_sum_dif": 0.5 * (t_sum_a - t_sum_b),
-            "t_dif_sum": 0.5 * (t_dif_a + t_dif_b),
-            "t_dif_dif": 0.5 * (t_dif_a - t_dif_b),
-        }
         payload_rows.append(
             pd.DataFrame(
                 {
+                    "row_index": valid_index.to_numpy(dtype=int, copy=False),
                     "tt": tt_values,
                     "combo": combo_label,
                     **{
@@ -2333,8 +2739,27 @@ def collect_task2_strip_combination_histogram_payload(
         )
 
     if not payload_rows:
-        return pd.DataFrame(columns=["tt", *[observable for observable, _ in TASK2_STRIP_COMBINATION_OBSERVABLES]])
+        return pd.DataFrame(columns=payload_columns)
     return pd.concat(payload_rows, ignore_index=True)
+
+
+def subtract_task2_strip_combination_payload(
+    left_payload: pd.DataFrame,
+    right_payload: pd.DataFrame,
+) -> pd.DataFrame:
+    if left_payload.empty:
+        return left_payload.copy()
+    if right_payload.empty or not {"row_index", "combo"}.issubset(left_payload.columns) or not {"row_index", "combo"}.issubset(right_payload.columns):
+        return left_payload.copy()
+
+    reduced_right = right_payload.loc[:, ["row_index", "combo"]].drop_duplicates()
+    removed_payload = left_payload.merge(
+        reduced_right,
+        on=["row_index", "combo"],
+        how="left",
+        indicator=True,
+    )
+    return removed_payload.loc[removed_payload["_merge"] == "left_only"].drop(columns="_merge")
 
 
 def _task2_hist_range(
@@ -2376,56 +2801,118 @@ def _task2_population_color(label: str) -> tuple[float, float, float, float]:
 
 
 def plot_task2_strip_combination_filter_by_tt(
+    original_payload: pd.DataFrame,
     before_payload: pd.DataFrame,
     after_payload: pd.DataFrame,
     basename_no_ext_value: str,
     fig_idx_value: int,
+    base_dir: str,
+    *,
+    show_plots: bool,
+    save_plots: bool,
+    plot_list: list[str] | None,
     limits_by_observable: dict[str, tuple[float | None, float | None]],
+    relation_label: str,
+    observable_definitions: tuple[tuple[str, str], ...] = TASK2_STRIP_COMBINATION_OBSERVABLES,
 ) -> int:
+    original_payload = original_payload.copy()
+    before_payload = before_payload.copy()
+    after_payload = after_payload.copy()
     tt_labels = []
-    for payload in (before_payload, after_payload):
+    for payload in (original_payload, before_payload, after_payload):
         if "tt" in payload.columns:
             tt_labels.extend(payload["tt"].astype(str).tolist())
     ordered_tts = [
         tt_label for tt_label in TT_COLOR_LABELS
         if tt_label != "0" and tt_label in set(tt_labels)
     ]
-    observable_names = [observable for observable, _ in TASK2_STRIP_COMBINATION_OBSERVABLES]
-    observable_labels = {observable: label for observable, label in TASK2_STRIP_COMBINATION_OBSERVABLES}
+    observable_names = [observable for observable, _ in observable_definitions]
+    observable_labels = {observable: label for observable, label in observable_definitions}
     scatter_max_points = 5000
     rng = np.random.default_rng(0)
 
     for tt_label in ordered_tts:
-        before_tt = before_payload.loc[before_payload.get("tt", pd.Series(dtype=str)).astype(str) == tt_label].copy()
-        after_tt = after_payload.loc[after_payload.get("tt", pd.Series(dtype=str)).astype(str) == tt_label].copy()
-        if before_tt.empty and after_tt.empty:
+        original_tt_all = original_payload.loc[
+            original_payload.get("tt", pd.Series(dtype=str)).astype(str) == tt_label
+        ].copy()
+        before_tt_all = before_payload.loc[
+            before_payload.get("tt", pd.Series(dtype=str)).astype(str) == tt_label
+        ].copy()
+        after_tt_all = after_payload.loc[
+            after_payload.get("tt", pd.Series(dtype=str)).astype(str) == tt_label
+        ].copy()
+        if original_tt_all.empty and before_tt_all.empty and after_tt_all.empty:
             continue
 
-        if len(before_tt) > scatter_max_points:
-            before_tt = before_tt.iloc[rng.choice(len(before_tt), size=scatter_max_points, replace=False)].copy()
-        if len(after_tt) > scatter_max_points:
-            after_tt = after_tt.iloc[rng.choice(len(after_tt), size=scatter_max_points, replace=False)].copy()
+        reference_counts = before_tt_all.groupby("combo").size().sort_values(ascending=False)
+        if reference_counts.empty:
+            reference_counts = original_tt_all.groupby("combo").size().sort_values(ascending=False)
+        if reference_counts.empty:
+            reference_counts = after_tt_all.groupby("combo").size().sort_values(ascending=False)
+        combo_labels = [label for label in reference_counts.index.tolist() if label and label != "nan"]
+        if not combo_labels:
+            continue
 
-        combo_labels = sorted(
-            set(before_tt.get("combo", pd.Series(dtype=str)).astype(str))
-            | set(after_tt.get("combo", pd.Series(dtype=str)).astype(str))
+        original_tt_full = original_tt_all.loc[original_tt_all["combo"].isin(combo_labels)].copy()
+        before_tt_full = before_tt_all.loc[before_tt_all["combo"].isin(combo_labels)].copy()
+        after_tt_full = after_tt_all.loc[after_tt_all["combo"].isin(combo_labels)].copy()
+        if original_tt_full.empty and before_tt_full.empty and after_tt_full.empty:
+            continue
+
+        prefilter_removed_tt_full = subtract_task2_strip_combination_payload(
+            original_tt_full,
+            before_tt_full,
         )
-        combo_labels = [label for label in combo_labels if label and label != "nan"]
+        removed_tt_full = subtract_task2_strip_combination_payload(
+            before_tt_full,
+            after_tt_full,
+        )
+
+        def _sample_scatter_payload(payload: pd.DataFrame) -> pd.DataFrame:
+            if len(payload) <= scatter_max_points:
+                return payload.copy()
+            return payload.iloc[
+                rng.choice(len(payload), size=scatter_max_points, replace=False)
+            ].copy()
+
+        after_tt = _sample_scatter_payload(after_tt_full)
+        prefilter_removed_tt = _sample_scatter_payload(prefilter_removed_tt_full)
+        removed_tt = _sample_scatter_payload(removed_tt_full)
         combo_color_map = {label: _task2_population_color(label) for label in combo_labels}
-        before_combo_data = {
+        after_combo_data = {
             label: {
                 observable: pd.to_numeric(
-                    before_tt.loc[before_tt["combo"] == label, observable],
+                    after_tt_full.loc[after_tt_full["combo"] == label, observable],
                     errors="coerce",
                 ).to_numpy(dtype=float)
                 for observable in observable_names
             }
             for label in combo_labels
         }
-        after_combo_data = {
+        removed_combo_data = {
+            label: {
+                observable: pd.to_numeric(
+                    removed_tt_full.loc[removed_tt_full["combo"] == label, observable],
+                    errors="coerce",
+                ).to_numpy(dtype=float)
+                for observable in observable_names
+            }
+            for label in combo_labels
+        }
+        after_scatter_combo_data = {
             label: {
                 observable: pd.to_numeric(
                     after_tt.loc[after_tt["combo"] == label, observable],
+                    errors="coerce",
+                ).to_numpy(dtype=float)
+                for observable in observable_names
+            }
+            for label in combo_labels
+        }
+        removed_scatter_combo_data = {
+            label: {
+                observable: pd.to_numeric(
+                    removed_tt.loc[removed_tt["combo"] == label, observable],
                     errors="coerce",
                 ).to_numpy(dtype=float)
                 for observable in observable_names
@@ -2439,8 +2926,8 @@ def plot_task2_strip_combination_filter_by_tt(
 
         axis_ranges: dict[str, tuple[float, float]] = {}
         for observable in observable_names:
-            before_values = pd.to_numeric(before_tt.get(observable, pd.Series(dtype=float)), errors="coerce").dropna().to_numpy(dtype=float)
-            after_values = pd.to_numeric(after_tt.get(observable, pd.Series(dtype=float)), errors="coerce").dropna().to_numpy(dtype=float)
+            before_values = pd.to_numeric(original_tt_full.get(observable, pd.Series(dtype=float)), errors="coerce").dropna().to_numpy(dtype=float)
+            after_values = pd.to_numeric(after_tt_full.get(observable, pd.Series(dtype=float)), errors="coerce").dropna().to_numpy(dtype=float)
             axis_ranges[observable] = _task2_hist_range(
                 before_values,
                 after_values,
@@ -2454,22 +2941,38 @@ def plot_task2_strip_combination_filter_by_tt(
                     ax.set_axis_off()
                     continue
 
-                before_x = pd.to_numeric(before_tt.get(x_name, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
-                before_y = pd.to_numeric(before_tt.get(y_name, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
                 after_x = pd.to_numeric(after_tt.get(x_name, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
                 after_y = pd.to_numeric(after_tt.get(y_name, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
 
                 if row_idx == col_idx:
-                    before_values = before_x[np.isfinite(before_x)]
+                    before_values = pd.to_numeric(
+                        original_tt_full.get(x_name, pd.Series(dtype=float)),
+                        errors="coerce",
+                    ).dropna().to_numpy(dtype=float)
                     after_values = after_x[np.isfinite(after_x)]
-                    if before_values.size == 0 and after_values.size == 0:
+                    prefilter_removed_values = pd.to_numeric(
+                        prefilter_removed_tt_full.get(x_name, pd.Series(dtype=float)),
+                        errors="coerce",
+                    ).dropna().to_numpy(dtype=float)
+                    prefilter_removed_values = prefilter_removed_values[np.isfinite(prefilter_removed_values)]
+                    if before_values.size == 0 and after_values.size == 0 and prefilter_removed_values.size == 0:
                         ax.set_axis_off()
                         continue
                     any_panel_data = True
                     x_low, x_high = axis_ranges[x_name]
                     bins = np.linspace(x_low, x_high, 60)
+                    if prefilter_removed_values.size:
+                        ax.hist(
+                            prefilter_removed_values,
+                            bins=bins,
+                            histtype="step",
+                            linestyle="--",
+                            linewidth=1.0,
+                            alpha=0.55,
+                            color="lightgrey",
+                        )
                     for combo_label in combo_labels:
-                        combo_before = before_combo_data[combo_label][x_name]
+                        combo_before = removed_combo_data[combo_label][x_name]
                         combo_after = after_combo_data[combo_label][x_name]
                         combo_before = combo_before[np.isfinite(combo_before)]
                         combo_after = combo_after[np.isfinite(combo_after)]
@@ -2502,27 +3005,55 @@ def plot_task2_strip_combination_filter_by_tt(
                     ax.set_yscale("log", nonpositive="clip")
                     ax.set_title(observable_labels[x_name], fontsize=9)
                 else:
-                    before_mask = np.isfinite(before_x) & np.isfinite(before_y)
+                    prefilter_removed_x = pd.to_numeric(
+                        prefilter_removed_tt.get(x_name, pd.Series(dtype=float)),
+                        errors="coerce",
+                    ).to_numpy(dtype=float)
+                    prefilter_removed_y = pd.to_numeric(
+                        prefilter_removed_tt.get(y_name, pd.Series(dtype=float)),
+                        errors="coerce",
+                    ).to_numpy(dtype=float)
+                    removed_x = pd.to_numeric(
+                        removed_tt.get(x_name, pd.Series(dtype=float)),
+                        errors="coerce",
+                    ).to_numpy(dtype=float)
+                    removed_y = pd.to_numeric(
+                        removed_tt.get(y_name, pd.Series(dtype=float)),
+                        errors="coerce",
+                    ).to_numpy(dtype=float)
+                    prefilter_removed_mask = np.isfinite(prefilter_removed_x) & np.isfinite(prefilter_removed_y)
+                    removed_mask = np.isfinite(removed_x) & np.isfinite(removed_y)
                     after_mask = np.isfinite(after_x) & np.isfinite(after_y)
-                    if not np.any(before_mask) and not np.any(after_mask):
+                    if not np.any(prefilter_removed_mask) and not np.any(removed_mask) and not np.any(after_mask):
                         ax.set_axis_off()
                         continue
                     any_panel_data = True
+                    if np.any(prefilter_removed_mask):
+                        ax.scatter(
+                            prefilter_removed_x[prefilter_removed_mask],
+                            prefilter_removed_y[prefilter_removed_mask],
+                            s=max(3, int(round(0.25 * removed_marker_size))),
+                            alpha=0.08,
+                            color="grey",
+                            edgecolors="none",
+                            rasterized=True,
+                        )
                     for combo_label in combo_labels:
-                        combo_before_x = before_combo_data[combo_label][x_name]
-                        combo_before_y = before_combo_data[combo_label][y_name]
-                        combo_after_x = after_combo_data[combo_label][x_name]
-                        combo_after_y = after_combo_data[combo_label][y_name]
+                        combo_before_x = removed_scatter_combo_data[combo_label][x_name]
+                        combo_before_y = removed_scatter_combo_data[combo_label][y_name]
+                        combo_after_x = after_scatter_combo_data[combo_label][x_name]
+                        combo_after_y = after_scatter_combo_data[combo_label][y_name]
                         combo_before_mask = np.isfinite(combo_before_x) & np.isfinite(combo_before_y)
                         combo_after_mask = np.isfinite(combo_after_x) & np.isfinite(combo_after_y)
                         if np.any(combo_before_mask):
                             ax.scatter(
                                 combo_before_x[combo_before_mask],
                                 combo_before_y[combo_before_mask],
-                                s=5,
-                                alpha=0.05,
+                                s=max(8, int(round(0.6 * removed_marker_size))),
+                                marker=removed_marker,
+                                alpha=removed_marker_alpha,
+                                linewidths=1.0,
                                 color=combo_color_map[combo_label],
-                                edgecolors="none",
                                 rasterized=True,
                             )
                         if np.any(combo_after_mask):
@@ -2566,36 +3097,49 @@ def plot_task2_strip_combination_filter_by_tt(
             plt.close(fig)
             continue
 
-        if combo_labels:
-            style_handles = [
-                mpl.lines.Line2D([0], [0], color="black", linestyle="--", linewidth=1.0, label="Before"),
-                mpl.lines.Line2D([0], [0], color="black", linestyle="-", linewidth=1.4, label="After"),
-            ]
-            combo_handles = [
-                mpl.lines.Line2D([0], [0], color=combo_color_map[label], linestyle="-", linewidth=1.6, label=label)
-                for label in combo_labels
-            ]
-            fig.legend(
-                handles=style_handles + combo_handles,
-                loc="upper center",
-                bbox_to_anchor=(0.5, 0.995),
-                ncol=min(6, max(2, len(combo_handles) + 2)),
-                fontsize=6,
-                frameon=False,
-                handlelength=1.8,
-                columnspacing=0.8,
-            )
+        relation_title = relation_label.replace("_", " ").title()
+        style_handles = [
+            mpl.lines.Line2D([0], [0], color="lightgrey", linestyle="--", linewidth=1.0, label="Removed Before Current Filter"),
+            mpl.lines.Line2D([0], [0], color="black", linestyle="--", linewidth=1.0, label="Removed By Current Filter"),
+            mpl.lines.Line2D([0], [0], color="black", linestyle="-", linewidth=1.4, label="Retained"),
+            mpl.lines.Line2D(
+                [0],
+                [0],
+                color="black",
+                marker=removed_marker,
+                linestyle="None",
+                markersize=6,
+                markerfacecolor="none",
+                label=f"{relation_title} Filter Rejection",
+            ),
+        ]
+        combo_handles = [
+            mpl.lines.Line2D([0], [0], color=combo_color_map[label], linestyle="-", linewidth=1.6, label=label)
+            for label in combo_labels
+        ]
+        fig.legend(
+            handles=style_handles + combo_handles,
+            loc="upper center",
+            bbox_to_anchor=(0.5, 0.995),
+            ncol=min(6, max(2, len(combo_handles) + 2)),
+            fontsize=6,
+            frameon=False,
+            handlelength=1.8,
+            columnspacing=0.8,
+        )
 
         fig.suptitle(
-            f"Task 2 strip-combination filter by TT {tt_label}\n{basename_no_ext_value}",
+            f"Task 2 {relation_title} strip-comparison filter by TT {tt_label}\n{basename_no_ext_value}",
             fontsize=11,
             y=0.94,
         )
-        final_filename = f"{fig_idx_value}_strip_combination_filter_by_tt_TT_{tt_label}.png"
-        fig_idx_value += 1
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        save_plot_figure(save_fig_path, fig=fig, alias="strip_combination_filter_by_tt", format="png", dpi=150)
+        if save_plots:
+            final_filename = f"{fig_idx_value}_strip_combination_filter_by_tt_{relation_label}_TT_{tt_label}.png"
+            fig_idx_value += 1
+            save_fig_path = os.path.join(base_dir, final_filename)
+            if plot_list is not None:
+                plot_list.append(save_fig_path)
+            save_plot_figure(save_fig_path, fig=fig, alias="strip_combination_filter_by_tt", format="png", dpi=150)
         if show_plots:
             plt.show()
         plt.close(fig)
@@ -7869,42 +8413,194 @@ if self_trigger:
 
 # Drop legacy front/back columns without logging every column
 fb_columns = [col for col in working_df.columns if "_F_" in col or "_B_" in col]
-if fb_columns:
+if fb_columns and not keep_all_columns_output:
     working_df.drop(columns=fb_columns, inplace=True)
     print(f"Removed {len(fb_columns)} legacy _F_/_B_ columns.")
+elif fb_columns:
+    print(
+        "Task 2 keep_all_columns_output enabled: "
+        f"retaining {len(fb_columns)} legacy _F_/_B_ columns."
+    )
 _prof["s_crosstalk_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
 
 print("----------------------------------------------------------------------")
-print("---------- Final strip-combination consistency filter -----------------")
+print("------------- Final strip / plane / detector filters ------------------")
 print("----------------------------------------------------------------------")
 
-# Final Task 2 filter: evaluate distinct strip pairs only when both strips keep
-# all four calibrated observables non-zero, and zero both strip blocks if the
-# derived strip-combination observables fall outside the configured limits.
+# Task 2 strip-comparison filtering is staged by relation:
+# 1. strip (single strip block)
+# 2. plane (different strips in the same plane)
+# 3. detector (different planes)
 _plot_strip_combination_filter_by_tt = task2_plot_requested("strip_combination_filter_by_tt", essential=True)
+strip_combination_stage_input_columns = collect_strip_component_columns(working_df.columns)
+strip_combination_stage_input_df = (
+    working_df.loc[:, strip_combination_stage_input_columns].copy()
+    if strip_combination_stage_input_columns
+    else pd.DataFrame(index=working_df.index)
+)
 if _plot_strip_combination_filter_by_tt:
-    strip_combination_tt_before = _task2_filter_tt_series(working_df).copy()
-    strip_combination_hist_before = collect_task2_strip_combination_histogram_payload(
+    strip_combination_tt_original = _task2_filter_tt_series(working_df).copy()
+    strip_combination_self_hist_original = collect_task2_strip_combination_histogram_payload(
         working_df,
-        strip_combination_tt_before,
+        strip_combination_tt_original,
+        relation_type="strip",
+    )
+    strip_combination_same_plane_hist_original = collect_task2_strip_combination_histogram_payload(
+        working_df,
+        strip_combination_tt_original,
+        relation_type="plane",
+    )
+    strip_combination_any_hist_original = collect_task2_strip_combination_histogram_payload(
+        working_df,
+        strip_combination_tt_original,
+        relation_type="detector",
     )
 else:
+    strip_combination_tt_original = pd.Series(dtype=str)
+    strip_combination_self_hist_original = pd.DataFrame()
+    strip_combination_same_plane_hist_original = pd.DataFrame()
+    strip_combination_any_hist_original = pd.DataFrame()
+
+strip_combination_self_summary = apply_task2_strip_combination_filter(
+    working_df,
+    relation_type="strip",
+    q_sum_sum_left=task2_strip_combination_limits_by_relation["same_strip"]["q_sum_sum_left"],
+    q_sum_sum_right=task2_strip_combination_limits_by_relation["same_strip"]["q_sum_sum_right"],
+    q_sum_dif_threshold=task2_strip_combination_limits_by_relation["same_strip"]["q_sum_dif_threshold"],
+    q_dif_sum_threshold=task2_strip_combination_limits_by_relation["same_strip"]["q_dif_sum_threshold"],
+    q_dif_dif_threshold=task2_strip_combination_limits_by_relation["same_strip"]["q_dif_dif_threshold"],
+    t_sum_sum_left=task2_strip_combination_limits_by_relation["same_strip"]["t_sum_sum_left"],
+    t_sum_sum_right=task2_strip_combination_limits_by_relation["same_strip"]["t_sum_sum_right"],
+    t_sum_dif_threshold=task2_strip_combination_limits_by_relation["same_strip"]["t_sum_dif_threshold"],
+    t_dif_sum_threshold=task2_strip_combination_limits_by_relation["same_strip"]["t_dif_sum_threshold"],
+    t_dif_dif_threshold=task2_strip_combination_limits_by_relation["same_strip"]["t_dif_dif_threshold"],
+    snapshot_originals=snapshot_original_columns_once,
+)
+record_activity_metric(
+    "strip_combination_filter_strip_failed_pct",
+    strip_combination_self_summary["failed_pair_any"],
+    strip_combination_self_summary["valid_pair_observations"],
+    label="failed strip comparisons",
+)
+record_activity_metric(
+    "strip_combination_filter_rows_with_strip_failures_pct",
+    strip_combination_self_summary["rows_affected"],
+    len(working_df) if len(working_df) else 0,
+    label="rows with strip failures",
+)
+record_activity_metric(
+    "strip_combination_filter_same_strip_failed_pct",
+    strip_combination_self_summary["failed_pair_any"],
+    strip_combination_self_summary["valid_pair_observations"],
+    label="failed same-strip comparisons",
+)
+record_activity_metric(
+    "strip_combination_filter_rows_with_same_strip_failures_pct",
+    strip_combination_self_summary["rows_affected"],
+    len(working_df) if len(working_df) else 0,
+    label="rows with same-strip failures",
+)
+record_activity_metric(
+    "strip_combination_filter_self_failed_pct",
+    strip_combination_self_summary["failed_pair_any"],
+    strip_combination_self_summary["valid_pair_observations"],
+    label="failed self strip comparisons",
+)
+record_activity_metric(
+    "strip_combination_filter_rows_with_self_failures_pct",
+    strip_combination_self_summary["rows_affected"],
+    len(working_df) if len(working_df) else 0,
+    label="rows with self strip failures",
+)
+
+if _plot_strip_combination_filter_by_tt:
+    strip_combination_self_hist_after = collect_task2_strip_combination_histogram_payload(
+        working_df,
+        strip_combination_tt_original,
+        relation_type="strip",
+    )
+    strip_combination_tt_same_plane_before = _task2_filter_tt_series(working_df).copy()
+    strip_combination_same_plane_hist_before = collect_task2_strip_combination_histogram_payload(
+        working_df,
+        strip_combination_tt_same_plane_before,
+        relation_type="plane",
+    )
+else:
+    strip_combination_self_hist_after = pd.DataFrame()
+    strip_combination_tt_same_plane_before = pd.Series(dtype=str)
+    strip_combination_same_plane_hist_before = pd.DataFrame()
+
+strip_combination_same_plane_summary = apply_task2_strip_combination_filter(
+    working_df,
+    relation_type="plane",
+    q_sum_sum_left=task2_strip_combination_limits_by_relation["same_plane"]["q_sum_sum_left"],
+    q_sum_sum_right=task2_strip_combination_limits_by_relation["same_plane"]["q_sum_sum_right"],
+    q_sum_dif_threshold=task2_strip_combination_limits_by_relation["same_plane"]["q_sum_dif_threshold"],
+    q_dif_sum_threshold=task2_strip_combination_limits_by_relation["same_plane"]["q_dif_sum_threshold"],
+    q_dif_dif_threshold=task2_strip_combination_limits_by_relation["same_plane"]["q_dif_dif_threshold"],
+    t_sum_sum_left=task2_strip_combination_limits_by_relation["same_plane"]["t_sum_sum_left"],
+    t_sum_sum_right=task2_strip_combination_limits_by_relation["same_plane"]["t_sum_sum_right"],
+    t_sum_dif_threshold=task2_strip_combination_limits_by_relation["same_plane"]["t_sum_dif_threshold"],
+    t_dif_sum_threshold=task2_strip_combination_limits_by_relation["same_plane"]["t_dif_sum_threshold"],
+    t_dif_dif_threshold=task2_strip_combination_limits_by_relation["same_plane"]["t_dif_dif_threshold"],
+    snapshot_originals=snapshot_original_columns_once,
+)
+record_activity_metric(
+    "strip_combination_filter_plane_failed_pct",
+    strip_combination_same_plane_summary["failed_pair_any"],
+    strip_combination_same_plane_summary["valid_pair_observations"],
+    label="failed plane comparisons",
+)
+record_activity_metric(
+    "strip_combination_filter_rows_with_plane_failures_pct",
+    strip_combination_same_plane_summary["rows_affected"],
+    len(working_df) if len(working_df) else 0,
+    label="rows with plane failures",
+)
+record_activity_metric(
+    "strip_combination_filter_same_plane_failed_pct",
+    strip_combination_same_plane_summary["failed_pair_any"],
+    strip_combination_same_plane_summary["valid_pair_observations"],
+    label="failed same-plane strip comparisons",
+)
+record_activity_metric(
+    "strip_combination_filter_rows_with_same_plane_failures_pct",
+    strip_combination_same_plane_summary["rows_affected"],
+    len(working_df) if len(working_df) else 0,
+    label="rows with same-plane strip failures",
+)
+
+if _plot_strip_combination_filter_by_tt:
+    strip_combination_same_plane_hist_after = collect_task2_strip_combination_histogram_payload(
+        working_df,
+        strip_combination_tt_same_plane_before,
+        relation_type="plane",
+    )
+    strip_combination_tt_before = _task2_filter_tt_series(working_df).copy()
+    strip_combination_any_hist_before = collect_task2_strip_combination_histogram_payload(
+        working_df,
+        strip_combination_tt_before,
+        relation_type="detector",
+    )
+else:
+    strip_combination_same_plane_hist_after = pd.DataFrame()
     strip_combination_tt_before = pd.Series(dtype=str)
-    strip_combination_hist_before = {}
+    strip_combination_any_hist_before = pd.DataFrame()
 
 strip_combination_summary = apply_task2_strip_combination_filter(
     working_df,
-    q_sum_sum_left=strip_combination_q_sum_sum_left,
-    q_sum_sum_right=strip_combination_q_sum_sum_right,
-    q_sum_dif_threshold=strip_combination_q_sum_dif_threshold,
-    q_dif_sum_threshold=strip_combination_q_dif_sum_threshold,
-    q_dif_dif_threshold=strip_combination_q_dif_dif_threshold,
-    t_sum_sum_left=strip_combination_t_sum_sum_left,
-    t_sum_sum_right=strip_combination_t_sum_sum_right,
-    t_sum_dif_threshold=strip_combination_t_sum_dif_threshold,
-    t_dif_sum_threshold=strip_combination_t_dif_sum_threshold,
-    t_dif_dif_threshold=strip_combination_t_dif_dif_threshold,
+    relation_type="detector",
+    q_sum_sum_left=task2_strip_combination_limits_by_relation["any"]["q_sum_sum_left"],
+    q_sum_sum_right=task2_strip_combination_limits_by_relation["any"]["q_sum_sum_right"],
+    q_sum_dif_threshold=task2_strip_combination_limits_by_relation["any"]["q_sum_dif_threshold"],
+    q_dif_sum_threshold=task2_strip_combination_limits_by_relation["any"]["q_dif_sum_threshold"],
+    q_dif_dif_threshold=task2_strip_combination_limits_by_relation["any"]["q_dif_dif_threshold"],
+    t_sum_sum_left=task2_strip_combination_limits_by_relation["any"]["t_sum_sum_left"],
+    t_sum_sum_right=task2_strip_combination_limits_by_relation["any"]["t_sum_sum_right"],
+    t_sum_dif_threshold=task2_strip_combination_limits_by_relation["any"]["t_sum_dif_threshold"],
+    t_dif_sum_threshold=task2_strip_combination_limits_by_relation["any"]["t_dif_sum_threshold"],
+    t_dif_dif_threshold=task2_strip_combination_limits_by_relation["any"]["t_dif_dif_threshold"],
     snapshot_originals=snapshot_original_columns_once,
 )
 record_activity_metric(
@@ -7920,6 +8616,12 @@ record_activity_metric(
     if (len(working_df) and strip_combination_summary["tracked_strip_count"])
     else 0,
     label="strip Q/T values zeroed by strip-combination filter",
+)
+record_activity_metric(
+    "strip_combination_filter_detector_failed_pct",
+    strip_combination_summary["failed_pair_any"],
+    strip_combination_summary["valid_pair_observations"],
+    label="failed detector comparisons",
 )
 record_activity_metric(
     "strip_combination_filter_any_failed_pct",
@@ -7983,6 +8685,12 @@ print(
     f"flagged_rows={strip_combination_summary['flagged_rows']} "
     f"selected_offenders={strip_combination_summary['selected_offender_strips']}"
 )
+working_df.loc[:, "task2_problematic_strip_count"] = (
+    strip_combination_summary["selected_offender_count_by_row"]
+    .reindex(working_df.index, fill_value=0)
+    .astype(int)
+    .to_numpy()
+)
 global_variables["strip_combination_filter_flagged_rows"] = int(
     strip_combination_summary["flagged_rows"]
 )
@@ -8008,12 +8716,78 @@ for selected_count in TASK2_SELECTED_OFFENDER_CARDINALITY_VALUES:
     global_variables[_task2_selected_offender_cardinality_metric_key(selected_count)] = selected_rows
 for strip_key, offender_count in strip_combination_summary["selected_offender_counts"].items():
     global_variables[_task2_strip_offender_metric_key(strip_key)] = int(offender_count)
+if not strip_combination_stage_input_df.empty:
+    task2_problematic_strip_count = np.zeros(len(working_df), dtype=int)
+    stage_strip_map = _task2_strip_component_columns_map(working_df)
+    for strip_key, cols in stage_strip_map.items():
+        component_cols = list(cols.values())
+        before_values = strip_combination_stage_input_df.loc[:, component_cols].to_numpy(copy=False)
+        after_values = working_df.loc[:, component_cols].to_numpy(copy=False)
+        before_active = np.all(np.isfinite(before_values) & (before_values != 0), axis=1)
+        after_zeroed = np.any(~np.isfinite(after_values) | (after_values == 0), axis=1)
+        task2_problematic_strip_count += (before_active & after_zeroed).astype(int)
+    working_df.loc[:, "task2_problematic_strip_count"] = task2_problematic_strip_count
+else:
+    working_df.loc[:, "task2_problematic_strip_count"] = 0
 if _plot_strip_combination_filter_by_tt:
-    strip_combination_hist_after = collect_task2_strip_combination_histogram_payload(
+    strip_combination_any_hist_after = collect_task2_strip_combination_histogram_payload(
         working_df,
         strip_combination_tt_before,
+        relation_type="detector",
     )
-    strip_combination_limits = {
+    strip_combination_self_limits = {
+        "q_sum_sum": (
+            task2_strip_combination_limits_by_relation["same_strip"]["q_sum_sum_left"],
+            task2_strip_combination_limits_by_relation["same_strip"]["q_sum_sum_right"],
+        ),
+        "q_dif_sum": (
+            -abs(task2_strip_combination_limits_by_relation["same_strip"]["q_dif_sum_threshold"]),
+            abs(task2_strip_combination_limits_by_relation["same_strip"]["q_dif_sum_threshold"]),
+        ),
+        "t_sum_sum": (
+            task2_strip_combination_limits_by_relation["same_strip"]["t_sum_sum_left"],
+            task2_strip_combination_limits_by_relation["same_strip"]["t_sum_sum_right"],
+        ),
+        "t_dif_sum": (
+            -abs(task2_strip_combination_limits_by_relation["same_strip"]["t_dif_sum_threshold"]),
+            abs(task2_strip_combination_limits_by_relation["same_strip"]["t_dif_sum_threshold"]),
+        ),
+    }
+    strip_combination_same_plane_limits = {
+        "q_sum_sum": (
+            task2_strip_combination_limits_by_relation["same_plane"]["q_sum_sum_left"],
+            task2_strip_combination_limits_by_relation["same_plane"]["q_sum_sum_right"],
+        ),
+        "q_sum_dif": (
+            -abs(task2_strip_combination_limits_by_relation["same_plane"]["q_sum_dif_threshold"]),
+            abs(task2_strip_combination_limits_by_relation["same_plane"]["q_sum_dif_threshold"]),
+        ),
+        "q_dif_sum": (
+            -abs(task2_strip_combination_limits_by_relation["same_plane"]["q_dif_sum_threshold"]),
+            abs(task2_strip_combination_limits_by_relation["same_plane"]["q_dif_sum_threshold"]),
+        ),
+        "q_dif_dif": (
+            -abs(task2_strip_combination_limits_by_relation["same_plane"]["q_dif_dif_threshold"]),
+            abs(task2_strip_combination_limits_by_relation["same_plane"]["q_dif_dif_threshold"]),
+        ),
+        "t_sum_sum": (
+            task2_strip_combination_limits_by_relation["same_plane"]["t_sum_sum_left"],
+            task2_strip_combination_limits_by_relation["same_plane"]["t_sum_sum_right"],
+        ),
+        "t_sum_dif": (
+            -abs(task2_strip_combination_limits_by_relation["same_plane"]["t_sum_dif_threshold"]),
+            abs(task2_strip_combination_limits_by_relation["same_plane"]["t_sum_dif_threshold"]),
+        ),
+        "t_dif_sum": (
+            -abs(task2_strip_combination_limits_by_relation["same_plane"]["t_dif_sum_threshold"]),
+            abs(task2_strip_combination_limits_by_relation["same_plane"]["t_dif_sum_threshold"]),
+        ),
+        "t_dif_dif": (
+            -abs(task2_strip_combination_limits_by_relation["same_plane"]["t_dif_dif_threshold"]),
+            abs(task2_strip_combination_limits_by_relation["same_plane"]["t_dif_dif_threshold"]),
+        ),
+    }
+    strip_combination_any_limits = {
         "q_sum_sum": (strip_combination_q_sum_sum_left, strip_combination_q_sum_sum_right),
         "q_sum_dif": (-abs(strip_combination_q_sum_dif_threshold), abs(strip_combination_q_sum_dif_threshold)),
         "q_dif_sum": (-abs(strip_combination_q_dif_sum_threshold), abs(strip_combination_q_dif_sum_threshold)),
@@ -8024,11 +8798,44 @@ if _plot_strip_combination_filter_by_tt:
         "t_dif_dif": (-abs(strip_combination_t_dif_dif_threshold), abs(strip_combination_t_dif_dif_threshold)),
     }
     fig_idx = plot_task2_strip_combination_filter_by_tt(
-        strip_combination_hist_before,
-        strip_combination_hist_after,
+        strip_combination_self_hist_original,
+        strip_combination_self_hist_original,
+        strip_combination_self_hist_after,
         basename_no_ext,
         fig_idx,
-        strip_combination_limits,
+        base_directories["figure_directory"],
+        show_plots=show_plots,
+        save_plots=save_plots,
+        plot_list=plot_list,
+        limits_by_observable=strip_combination_self_limits,
+        relation_label="strip",
+        observable_definitions=TASK2_STRIP_COMBINATION_SELF_OBSERVABLES,
+    )
+    fig_idx = plot_task2_strip_combination_filter_by_tt(
+        strip_combination_same_plane_hist_original,
+        strip_combination_same_plane_hist_before,
+        strip_combination_same_plane_hist_after,
+        basename_no_ext,
+        fig_idx,
+        base_directories["figure_directory"],
+        show_plots=show_plots,
+        save_plots=save_plots,
+        plot_list=plot_list,
+        limits_by_observable=strip_combination_same_plane_limits,
+        relation_label="plane",
+    )
+    fig_idx = plot_task2_strip_combination_filter_by_tt(
+        strip_combination_any_hist_original,
+        strip_combination_any_hist_before,
+        strip_combination_any_hist_after,
+        basename_no_ext,
+        fig_idx,
+        base_directories["figure_directory"],
+        show_plots=show_plots,
+        save_plots=save_plots,
+        plot_list=plot_list,
+        limits_by_observable=strip_combination_any_limits,
+        relation_label="detector",
     )
 _prof["s_strip_combination_filter_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()

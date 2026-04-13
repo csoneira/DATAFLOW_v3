@@ -18,6 +18,7 @@ Notes: Keep behavior configuration-driven and reproducible.
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import io
 import subprocess
@@ -25,6 +26,13 @@ from datetime import datetime
 
 import matplotlib.pyplot as plt
 import pandas as pd
+
+SCRIPT_PATH = Path(__file__).resolve()
+NOISE_CONTROL_PLANE_COMBINATION_REPORT_CANDIDATES = (
+    SCRIPT_PATH.parents[3] / "MASTER" / "ANCILLARY" / "PLOTTERS" / "METADATA" / "NOISE_CONTROL" / "PLOTS" / "noise_control_plane_combination_rate_report.pdf",
+    Path("/home/rpcuser/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/METADATA/NOISE_CONTROL/PLOTS/noise_control_plane_combination_rate_report.pdf"),
+    Path("/home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/METADATA/NOISE_CONTROL/PLOTS/noise_control_plane_combination_rate_report.pdf"),
+)
 
 # Check if a station number is provided
 if len(sys.argv) < 2:
@@ -59,8 +67,42 @@ else:
 
 # Initialize the bot with the API key
 import telebot
+from telebot import types as telebot_types
 bot = telebot.TeleBot(api_key)
 #bot = telebot.TeleBot("8012230734:AAFN1MH_9zbQ3RRoXnKBqalhkJSiEB3V3DE")
+
+BOT_COMMAND_SPECS = [
+    ("start", "Welcome message"),
+    ("get_username", "Show your Telegram username and ID"),
+    ("get_chat_id", "Show the current chat ID"),
+    ("send_voltage", "Send current high voltage"),
+    ("send_gas_flow", "Send latest gas flow values"),
+    ("send_internal_environment", "Send internal environment readings"),
+    ("send_external_environment", "Send external environment readings"),
+    ("send_TRB_rates", "Send latest TRB rates"),
+    ("send_original_report", "Send the original PDF report"),
+    ("send_daq_report", "Send the latest DAQ report"),
+    ("send_results_vs_time_report", "Send the results-vs-time report"),
+    ("send_weekly_results_report", "Send the weekly results report"),
+    ("send_monitoring_report", "Send the monitoring report"),
+    ("send_noise_control_plane_combination_report", "Send the noise-control plane-combination PDF"),
+    ("plot_temperature", "Plot internal and external temperature"),
+    ("plot_pressure", "Plot internal and external pressure"),
+    ("plot_RH", "Plot internal and external humidity"),
+    ("plot_asserted_edge_accepted", "Plot TRB asserted, edge, accepted"),
+    ("plot_multiplexers", "Plot multiplexer rates"),
+    ("plot_coincidence_modules", "Plot coincidence-module rates"),
+    ("plot_all_trb_rates", "Plot all TRB rates"),
+    ("restart_tunnel", "Restart the tunnel"),
+    ("gas_weight_measurement", "Log a gas-bottle weight measurement"),
+]
+
+try:
+    bot.set_my_commands(
+        [telebot_types.BotCommand(command, description) for command, description in BOT_COMMAND_SPECS]
+    )
+except Exception as exc:
+    print(f"Warning: failed to publish Telegram command menu: {exc}")
 
 passwords = {
     '6445882713': 'mingo@1234', # Cayetano
@@ -116,6 +158,27 @@ def check_password(message, expected_password, func):
         func(message)
     else:
         bot.send_message(user_id, "Incorrect password. Action canceled.")
+
+
+def _first_existing_file(candidates):
+    for candidate in candidates:
+        path = Path(candidate)
+        if path.exists() and path.is_file():
+            return path
+    return None
+
+
+def _send_document_from_candidates(message, candidates, *, missing_label: str, caption: str | None = None):
+    document_path = _first_existing_file(candidates)
+    if document_path is None:
+        bot.send_message(message.chat.id, f"{missing_label} is not available right now.")
+        return
+
+    try:
+        with document_path.open('rb') as document:
+            bot.send_document(message.chat.id, document, caption=caption)
+    except Exception as exc:
+        bot.send_message(message.chat.id, f"Error sending {missing_label}: {exc}")
 
 
 # Monitoring --------------------------------------------------------------------
@@ -389,12 +452,22 @@ def send_weekly_results_report(message):
 
 @bot.message_handler(commands=['send_monitoring_report'])
 def send_monitoring_report(message):
-	current_date = datetime.now()
-	one_day_ago = current_date - timedelta(days=1)
-	report_day = one_day_ago.strftime('20%y-%m-%d')
+		current_date = datetime.now()
+		one_day_ago = current_date - timedelta(days=1)
+		report_day = one_day_ago.strftime('20%y-%m-%d')
 
-	with open(f'/home/rpcuser/caye_software/reports/final_diagnosis_report_at_{report_day}.pdf', 'rb') as document:
-		bot.send_document(message.chat.id, document)
+		with open(f'/home/rpcuser/caye_software/reports/final_diagnosis_report_at_{report_day}.pdf', 'rb') as document:
+			bot.send_document(message.chat.id, document)
+
+
+@bot.message_handler(commands=['send_noise_control_plane_combination_report'])
+def send_noise_control_plane_combination_report(message):
+	_send_document_from_candidates(
+		message,
+		NOISE_CONTROL_PLANE_COMBINATION_REPORT_CANDIDATES,
+		missing_label="Noise-control plane-combination report",
+		caption="Noise-control plane-combination rate report",
+	)
 
 
 # Emergency and assistance --------------------------------------------------------------------------------------
@@ -897,6 +970,7 @@ def echo_all(message):
     Logging Tools:
     -----------------
     - /gas_weight_measurement: Manually log the weight of the gas bottle in kilograms (ensure it includes at least one decimal place).
+    - /send_noise_control_plane_combination_report: Send the PDF with clean trigger-type rates by plane combination, coloured by offender rate.
 
     ===========================================
     '''

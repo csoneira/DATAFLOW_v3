@@ -126,6 +126,7 @@ from MASTER.common.reprocessing_utils import get_reprocessing_value
 from MASTER.common.simulated_data_utils import resolve_simulated_z_positions
 from MASTER.common.step1_shared import (
     add_normalized_count_metadata,
+    apply_step1_master_overrides,
     apply_step1_task_parameter_overrides,
     build_events_per_second_metadata,
     build_step1_cli_parser,
@@ -150,6 +151,21 @@ from MASTER.common.step1_shared import (
 
 task_number = 5
 
+try:
+    import pyarrow as pa
+except Exception:  # pragma: no cover - pyarrow is already required for parquet IO here.
+    pa = None
+
+
+def _preferred_parquet_compression() -> str:
+    if pa is not None:
+        try:
+            if pa.Codec.is_available("snappy"):
+                return "snappy"
+        except Exception:
+            pass
+    return "zstd"
+
 # I want to chrono the execution time of the script
 start_execution_time_counting = datetime.now()
 _prof_t0 = time.perf_counter()
@@ -165,6 +181,7 @@ TASK5_PLOT_ALIASES: tuple[str, ...] = (
     "polar_theta_phi_definitive_tt_2d_detail_angle_correction",
     "polar_theta_phi_definitive_tt_2d_detail_final",
     "theta_efficiency_simple_3v4",
+    "channel_combination_filter_by_tt",
 )
 task5_plot_status_by_alias: dict[str, str] = {}
 
@@ -195,6 +212,20 @@ def apply_task5_plot_catalog_modes() -> None:
     create_debug_plots = create_debug_plots and task5_plot_enabled("debug_suite")
     save_plots = bool(create_plots or create_essential_plots or create_debug_plots)
     create_pdf = save_plots
+
+
+def _coerce_config_bool(value: object, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
 
 CLI_PARSER = build_step1_cli_parser("Run Stage 1 STEP_1 TASK_5 (FIT->CORR).", STATION_CHOICES)
 CLI_ARGS = CLI_PARSER.parse_args()
@@ -385,6 +416,11 @@ config = apply_step1_task_parameter_overrides(
     fallback_parameter_path=str(fallback_parameter_config_file_path),
     task_number=task_number,
     update_fn=update_config_with_parameters,
+    log_fn=print,
+)
+config = apply_step1_master_overrides(
+    config_obj=config,
+    master_config_root=config_root,
     log_fn=print,
 )
 
@@ -821,6 +857,10 @@ if date_ranges:
             f"[DATE_RANGE] Ignoring {skipped_completed} out-of-range file(s) in COMPLETED_DIRECTORY."
         )
 last_file_test = bool(config.get("last_file_test", False))
+keep_all_columns_output = _coerce_config_bool(
+    config.get("keep_all_columns_output", False),
+    default=False,
+)
 
 if user_file_selection:
     processing_file_path = user_file_path
@@ -1083,10 +1123,597 @@ TT_COUNT_VALUES: tuple[int, ...] = (
     0, 1, 2, 3, 4, 12, 13, 14, 23, 24, 34, 123, 124, 134, 234, 1234
 )
 
+TASK5_CHANNEL_COMBINATION_RELATION_TYPES: tuple[str, ...] = (
+    "self",
+    "same_strip",
+    "same_plane",
+    "any",
+)
+TASK5_CHANNEL_COMBINATION_OBSERVABLES: tuple[tuple[str, str], ...] = (
+    ("q_sum", "Q semisum"),
+    ("q_dif", "Q semidifference"),
+    ("t_sum", "T semisum"),
+    ("t_dif", "T semidifference"),
+)
+TASK5_CHANNEL_COMBINATION_SCATTER_MAX_POINTS = 5000
+
 def ensure_global_count_keys(prefixes: Iterable[str]) -> None:
     for prefix in prefixes:
         for tt_value in TT_COUNT_VALUES:
             global_variables.setdefault(f"{prefix}_{tt_value}_count", 0)
+
+
+def _task5_channel_order_key(channel_key: tuple[int, str, int]) -> tuple[int, int, int]:
+    plane, side, strip = channel_key
+    return (plane, 0 if side == "F" else 1, strip)
+
+
+def _task5_channel_relation_type(
+    channel_a: tuple[int, str, int],
+    channel_b: tuple[int, str, int],
+) -> str:
+    if channel_a == channel_b:
+        return "self"
+    if channel_a[0] == channel_b[0] and channel_a[2] == channel_b[2]:
+        return "same_strip"
+    if channel_a[0] == channel_b[0]:
+        return "same_plane"
+    return "any"
+
+
+def collect_task5_channel_qt_map(
+    df_input: pd.DataFrame,
+) -> dict[tuple[int, str, int], dict[str, str]]:
+    channel_map: dict[tuple[int, str, int], dict[str, str]] = {}
+    for plane in range(1, 5):
+        for side in ("F", "B"):
+            for strip in range(1, 5):
+                q_col = f"Q{plane}_{side}_{strip}"
+                t_col = f"T{plane}_{side}_{strip}"
+                if q_col in df_input.columns and t_col in df_input.columns:
+                    channel_map[(plane, side, strip)] = {"Q": q_col, "T": t_col}
+    return channel_map
+
+
+def _iter_task5_channel_relation_pairs(
+    channel_map: dict[tuple[int, str, int], dict[str, str]],
+) -> Iterable[tuple[tuple[int, str, int], tuple[int, str, int], str]]:
+    ordered_channels = sorted(channel_map, key=_task5_channel_order_key)
+    for idx, channel_a in enumerate(ordered_channels):
+        yield channel_a, channel_a, "self"
+        for channel_b in ordered_channels[idx + 1 :]:
+            yield channel_a, channel_b, _task5_channel_relation_type(channel_a, channel_b)
+
+
+def _task5_channel_hist_range(
+    values: np.ndarray,
+    limits: tuple[float | None, float | None],
+) -> tuple[float, float]:
+    finite_values = values[np.isfinite(values)]
+    lower_limit, upper_limit = limits
+    if finite_values.size:
+        low = float(np.nanpercentile(finite_values, 1))
+        high = float(np.nanpercentile(finite_values, 99))
+        if not np.isfinite(low) or not np.isfinite(high) or low == high:
+            low = float(np.nanmin(finite_values))
+            high = float(np.nanmax(finite_values))
+    else:
+        low, high = -1.0, 1.0
+    if lower_limit is not None:
+        low = min(low, float(lower_limit))
+    if upper_limit is not None:
+        high = max(high, float(upper_limit))
+    if not np.isfinite(low) or not np.isfinite(high) or low == high:
+        center = float(low if np.isfinite(low) else 0.0)
+        low, high = center - 1.0, center + 1.0
+    span = high - low
+    padding = 0.08 * span if span > 0 else 1.0
+    return low - padding, high + padding
+
+
+def _task5_load_channel_combination_relation_limits(
+    task1_config: dict,
+) -> dict[str, dict[str, tuple[float | None, float | None]]]:
+    q_side_left_default = float(task1_config.get("Q_side_left_pre_cal_default", 0.0))
+    q_side_right_default = float(task1_config.get("Q_side_right_pre_cal_default", 0.0))
+    t_side_left_default = float(task1_config.get("T_side_left_pre_cal_default", 0.0))
+    t_side_right_default = float(task1_config.get("T_side_right_pre_cal_default", 0.0))
+    t_dif_threshold = float(task1_config.get("T_dif_pre_cal_threshold", 20.0))
+
+    base_q_sum_left = float(
+        task1_config.get(
+            "channel_combination_q_sum_left",
+            task1_config.get("plane_combination_q_sum_left", q_side_left_default),
+        )
+    )
+    base_q_sum_right = float(
+        task1_config.get(
+            "channel_combination_q_sum_right",
+            task1_config.get("plane_combination_q_sum_right", q_side_right_default),
+        )
+    )
+    base_q_dif_threshold = float(
+        task1_config.get(
+            "channel_combination_q_dif_threshold",
+            task1_config.get("plane_combination_q_dif_threshold", 200.0),
+        )
+    )
+    base_t_sum_left = float(
+        task1_config.get(
+            "channel_combination_t_sum_left",
+            task1_config.get("plane_combination_t_sum_left", t_side_left_default),
+        )
+    )
+    base_t_sum_right = float(
+        task1_config.get(
+            "channel_combination_t_sum_right",
+            task1_config.get("plane_combination_t_sum_right", t_side_right_default),
+        )
+    )
+    base_t_dif_threshold = float(
+        task1_config.get(
+            "channel_combination_t_dif_threshold",
+            task1_config.get("plane_combination_t_dif_threshold", t_dif_threshold),
+        )
+    )
+
+    relation_limits: dict[str, dict[str, tuple[float | None, float | None]]] = {}
+    for relation_type in TASK5_CHANNEL_COMBINATION_RELATION_TYPES:
+        q_sum_left = float(
+            task1_config.get(f"channel_combination_{relation_type}_q_sum_left", base_q_sum_left)
+        )
+        q_sum_right = float(
+            task1_config.get(f"channel_combination_{relation_type}_q_sum_right", base_q_sum_right)
+        )
+        q_dif_abs = float(
+            task1_config.get(
+                f"channel_combination_{relation_type}_q_dif_threshold",
+                base_q_dif_threshold,
+            )
+        )
+        t_sum_left = float(
+            task1_config.get(f"channel_combination_{relation_type}_t_sum_left", base_t_sum_left)
+        )
+        t_sum_right = float(
+            task1_config.get(f"channel_combination_{relation_type}_t_sum_right", base_t_sum_right)
+        )
+        t_dif_abs = float(
+            task1_config.get(
+                f"channel_combination_{relation_type}_t_dif_threshold",
+                base_t_dif_threshold,
+            )
+        )
+        relation_limits[relation_type] = {
+            "q_sum": (q_sum_left, q_sum_right),
+            "q_dif": (-q_dif_abs, q_dif_abs),
+            "t_sum": (t_sum_left, t_sum_right),
+            "t_dif": (-t_dif_abs, t_dif_abs),
+        }
+    return relation_limits
+
+
+def _task5_parse_optional_top_n(raw_value: object, default: int | None) -> int | None:
+    if raw_value in (None, "", "null", "None"):
+        return None
+    try:
+        return max(1, int(raw_value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _task5_load_task1_channel_combination_settings() -> tuple[
+    dict[str, dict[str, tuple[float | None, float | None]]],
+    dict[str, int | None],
+]:
+    try:
+        task1_config_path = (
+            config_root
+            / "STAGE_1"
+            / "EVENT_DATA"
+            / "STEP_1"
+            / "TASK_1"
+            / "config_task_1.yaml"
+        )
+        task1_parameter_config_path = (
+            config_root
+            / "STAGE_1"
+            / "EVENT_DATA"
+            / "STEP_1"
+            / "TASK_1"
+            / "config_parameters_task_1.csv"
+        )
+        task1_fallback_parameter_config_path = (
+            config_root
+            / "STAGE_1"
+            / "EVENT_DATA"
+            / "STEP_1"
+            / "config_parameters.csv"
+        )
+        with task1_config_path.open("r", encoding="utf-8") as task1_config_file:
+            task1_config = yaml.safe_load(task1_config_file) or {}
+        task1_filter_parameter_config_path = task1_config_path.with_name(
+            str(task1_config.get("filter_parameter_config_csv", "config_filter_parameters_task_1.csv"))
+        )
+        if task1_filter_parameter_config_path.exists():
+            task1_config = update_config_with_parameters(
+                task1_config,
+                task1_filter_parameter_config_path,
+                station,
+            )
+        task1_config = apply_step1_task_parameter_overrides(
+            config_obj=task1_config,
+            station_id=station,
+            task_parameter_path=str(task1_parameter_config_path),
+            fallback_parameter_path=str(task1_fallback_parameter_config_path),
+            task_number=1,
+            update_fn=update_config_with_parameters,
+            log_fn=lambda *_args, **_kwargs: None,
+        )
+        base_top_n = _task5_parse_optional_top_n(
+            task1_config.get("channel_combination_plot_top_n", 10),
+            10,
+        )
+        top_n_by_relation = {
+            relation_type: _task5_parse_optional_top_n(
+                task1_config.get(f"channel_combination_plot_top_n_{relation_type}", base_top_n),
+                base_top_n,
+            )
+            for relation_type in TASK5_CHANNEL_COMBINATION_RELATION_TYPES
+        }
+        return _task5_load_channel_combination_relation_limits(task1_config), top_n_by_relation
+    except Exception as exc:
+        print(
+            "Warning: failed to load Task 1 channel-combination limits for Task 5 audit: "
+            f"{exc}"
+        )
+        return (
+            {
+                relation_type: {
+                    observable: (None, None)
+                    for observable, _ in TASK5_CHANNEL_COMBINATION_OBSERVABLES
+                }
+                for relation_type in TASK5_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            {relation_type: 10 for relation_type in TASK5_CHANNEL_COMBINATION_RELATION_TYPES},
+        )
+
+
+def _task5_resolve_audit_tt_column(df_input: pd.DataFrame) -> str | None:
+    for candidate in ("raw_tt", "clean_tt", "cal_tt", "list_tt", CORR_TT_COLUMN, "definitive_tt"):
+        if candidate in df_input.columns:
+            return candidate
+    return None
+
+
+def collect_task5_channel_combination_payload(
+    df_input: pd.DataFrame,
+    tt_column: str,
+) -> pd.DataFrame:
+    if tt_column not in df_input.columns:
+        return pd.DataFrame(
+            columns=["tt", "combo", "relation_type", "q_sum", "q_dif", "t_sum", "t_dif"]
+        )
+
+    channel_map = collect_task5_channel_qt_map(df_input)
+    if not channel_map:
+        return pd.DataFrame(
+            columns=["tt", "combo", "relation_type", "q_sum", "q_dif", "t_sum", "t_dif"]
+        )
+
+    tt_series = df_input[tt_column].apply(normalize_tt_label).astype(str)
+    payload_rows: list[pd.DataFrame] = []
+    for channel_a, channel_b, relation_type in _iter_task5_channel_relation_pairs(channel_map):
+        cols_a = channel_map[channel_a]
+        cols_b = channel_map[channel_b]
+        q_a = pd.to_numeric(df_input[cols_a["Q"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        q_b = pd.to_numeric(df_input[cols_b["Q"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_a = pd.to_numeric(df_input[cols_a["T"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_b = pd.to_numeric(df_input[cols_b["T"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+
+        if relation_type == "self":
+            valid_mask = np.isfinite(q_a) & np.isfinite(t_a) & ((q_a != 0) | (t_a != 0))
+            q_sum = q_a
+            q_dif = np.zeros_like(q_a, dtype=float)
+            t_sum = t_a
+            t_dif = np.zeros_like(t_a, dtype=float)
+        else:
+            valid_mask = (
+                np.isfinite(q_a)
+                & np.isfinite(q_b)
+                & np.isfinite(t_a)
+                & np.isfinite(t_b)
+                & (q_a != 0)
+                & (q_b != 0)
+                & (t_a != 0)
+                & (t_b != 0)
+            )
+            q_sum = 0.5 * (q_a + q_b)
+            q_dif = 0.5 * (q_a - q_b)
+            t_sum = 0.5 * (t_a + t_b)
+            t_dif = 0.5 * (t_a - t_b)
+
+        if not np.any(valid_mask):
+            continue
+
+        valid_index = df_input.index[valid_mask]
+        payload_rows.append(
+            pd.DataFrame(
+                {
+                    "tt": tt_series.loc[valid_index].to_numpy(dtype=str),
+                    "combo": (
+                        f"P{channel_a[0]}S{channel_a[2]}{channel_a[1]}-"
+                        f"P{channel_b[0]}S{channel_b[2]}{channel_b[1]}"
+                    ),
+                    "relation_type": relation_type,
+                    "q_sum": q_sum[valid_mask],
+                    "q_dif": q_dif[valid_mask],
+                    "t_sum": t_sum[valid_mask],
+                    "t_dif": t_dif[valid_mask],
+                }
+            )
+        )
+
+    if not payload_rows:
+        return pd.DataFrame(
+            columns=["tt", "combo", "relation_type", "q_sum", "q_dif", "t_sum", "t_dif"]
+        )
+    return pd.concat(payload_rows, ignore_index=True)
+
+
+def plot_task5_channel_combination_filter_by_tt(
+    df_input: pd.DataFrame,
+    basename_no_ext_value: str,
+    fig_idx_value: int,
+    *,
+    show_plots: bool,
+    save_plots: bool,
+    plot_list: list[str] | None,
+) -> int:
+    channel_map = collect_task5_channel_qt_map(df_input)
+    if not channel_map:
+        print(
+            "Warning: Task 5 channel_combination_filter_by_tt requires the surviving "
+            "channel Q*/T* columns to still be present. Re-run with "
+            "keep_all_columns_output=true from Task 2 onward."
+        )
+        return fig_idx_value
+
+    tt_column = _task5_resolve_audit_tt_column(df_input)
+    if tt_column is None:
+        print("Warning: Task 5 channel_combination_filter_by_tt found no TT column to group by.")
+        return fig_idx_value
+
+    relation_limits, top_n_by_relation = _task5_load_task1_channel_combination_settings()
+    relation_label_map = {
+        "self": "self",
+        "same_strip": "same strip",
+        "same_plane": "same plane",
+        "any": "any",
+    }
+    observable_labels = {
+        observable: label for observable, label in TASK5_CHANNEL_COMBINATION_OBSERVABLES
+    }
+    payload = collect_task5_channel_combination_payload(df_input, tt_column)
+    tt_counts = (
+        pd.to_numeric(df_input[tt_column], errors="coerce").fillna(0).astype(int).value_counts()
+    )
+    ordered_tts = [
+        normalize_tt_label(tt_value)
+        for tt_value in TT_COUNT_VALUES
+        if tt_value >= 10 and int(tt_counts.get(int(tt_value), 0)) > 0
+    ]
+    if not ordered_tts:
+        print(f"Warning: no {tt_column}>=10 populations available for Task 5 channel audit plot.")
+        return fig_idx_value
+
+    rng = np.random.default_rng(0)
+    for tt_label in ordered_tts:
+        for relation_type in TASK5_CHANNEL_COMBINATION_RELATION_TYPES:
+            current_tt_all = payload.loc[
+                (payload["tt"] == tt_label) & (payload["relation_type"] == relation_type)
+            ].copy()
+            if current_tt_all.empty:
+                continue
+
+            top_n = top_n_by_relation.get(relation_type)
+            combo_counts = current_tt_all["combo"].value_counts()
+            combo_labels = combo_counts.index.tolist() if top_n is None else combo_counts.index[:top_n].tolist()
+            current_tt = current_tt_all.loc[current_tt_all["combo"].isin(combo_labels)].copy()
+            if current_tt.empty:
+                continue
+
+            n_obs = len(TASK5_CHANNEL_COMBINATION_OBSERVABLES)
+            fig, axes = plt.subplots(
+                n_obs,
+                n_obs,
+                figsize=(2.4 * n_obs, 2.4 * n_obs),
+                constrained_layout=True,
+            )
+            combo_color_map = {
+                label: plt.get_cmap("turbo")(
+                    0.08 + 0.84 * idx / max(1, len(combo_labels) - 1)
+                )
+                for idx, label in enumerate(combo_labels)
+            }
+            axis_ranges: dict[str, tuple[float, float]] = {}
+            for observable_name, _observable_label in TASK5_CHANNEL_COMBINATION_OBSERVABLES:
+                values = pd.to_numeric(
+                    current_tt_all.get(observable_name, pd.Series(dtype=float)),
+                    errors="coerce",
+                ).to_numpy(dtype=float)
+                values = values[np.isfinite(values)]
+                axis_ranges[observable_name] = _task5_channel_hist_range(
+                    values,
+                    relation_limits.get(relation_type, {}).get(observable_name, (None, None)),
+                )
+
+            any_panel_data = False
+            for row_idx, (y_name, y_label) in enumerate(TASK5_CHANNEL_COMBINATION_OBSERVABLES):
+                for col_idx, (x_name, x_label) in enumerate(TASK5_CHANNEL_COMBINATION_OBSERVABLES):
+                    ax = axes[row_idx, col_idx]
+                    if col_idx > row_idx:
+                        ax.set_axis_off()
+                        continue
+
+                    x_low, x_high = axis_ranges[x_name]
+                    if row_idx == col_idx:
+                        bins = np.linspace(x_low, x_high, 60)
+                        panel_has_data = False
+                        for combo_label in combo_labels:
+                            values = pd.to_numeric(
+                                current_tt.loc[current_tt["combo"] == combo_label, x_name],
+                                errors="coerce",
+                            ).to_numpy(dtype=float)
+                            values = values[np.isfinite(values)]
+                            if not values.size:
+                                continue
+                            panel_has_data = True
+                            ax.hist(
+                                values,
+                                bins=bins,
+                                histtype="step",
+                                linewidth=1.3,
+                                alpha=0.95,
+                                color=combo_color_map[combo_label],
+                            )
+                        if not panel_has_data:
+                            ax.set_axis_off()
+                            continue
+                        any_panel_data = True
+                        lower_limit, upper_limit = relation_limits.get(relation_type, {}).get(
+                            x_name,
+                            (None, None),
+                        )
+                        if lower_limit is not None:
+                            ax.axvline(float(lower_limit), color="red", linestyle="--", linewidth=1.0)
+                        if upper_limit is not None:
+                            ax.axvline(float(upper_limit), color="red", linestyle="--", linewidth=1.0)
+                        ax.set_xlim(x_low, x_high)
+                        ax.set_yscale("log", nonpositive="clip")
+                        ax.set_ylabel("Counts", fontsize=8)
+                        ax.set_title(x_label, fontsize=9)
+                    else:
+                        y_low, y_high = axis_ranges[y_name]
+                        panel_has_data = False
+                        for combo_label in combo_labels:
+                            combo_df = current_tt.loc[current_tt["combo"] == combo_label]
+                            x_values = pd.to_numeric(combo_df[x_name], errors="coerce").to_numpy(dtype=float)
+                            y_values = pd.to_numeric(combo_df[y_name], errors="coerce").to_numpy(dtype=float)
+                            mask = np.isfinite(x_values) & np.isfinite(y_values)
+                            if not np.any(mask):
+                                continue
+                            x_values = x_values[mask]
+                            y_values = y_values[mask]
+                            if x_values.size > TASK5_CHANNEL_COMBINATION_SCATTER_MAX_POINTS:
+                                selection = rng.choice(
+                                    x_values.size,
+                                    size=TASK5_CHANNEL_COMBINATION_SCATTER_MAX_POINTS,
+                                    replace=False,
+                                )
+                                x_values = x_values[selection]
+                                y_values = y_values[selection]
+                            panel_has_data = True
+                            ax.scatter(
+                                x_values,
+                                y_values,
+                                s=6,
+                                alpha=0.18,
+                                color=combo_color_map[combo_label],
+                                edgecolors="none",
+                                rasterized=True,
+                            )
+                        if not panel_has_data:
+                            ax.set_axis_off()
+                            continue
+                        any_panel_data = True
+                        x_limits = relation_limits.get(relation_type, {}).get(x_name, (None, None))
+                        y_limits = relation_limits.get(relation_type, {}).get(y_name, (None, None))
+                        if x_limits[0] is not None:
+                            ax.axvline(float(x_limits[0]), color="red", linestyle="--", linewidth=0.9)
+                        if x_limits[1] is not None:
+                            ax.axvline(float(x_limits[1]), color="red", linestyle="--", linewidth=0.9)
+                        if y_limits[0] is not None:
+                            ax.axhline(float(y_limits[0]), color="red", linestyle="--", linewidth=0.9)
+                        if y_limits[1] is not None:
+                            ax.axhline(float(y_limits[1]), color="red", linestyle="--", linewidth=0.9)
+                        ax.set_xlim(x_low, x_high)
+                        ax.set_ylim(y_low, y_high)
+
+                    if row_idx == n_obs - 1:
+                        ax.set_xlabel(x_label, fontsize=8)
+                    else:
+                        ax.set_xticklabels([])
+                    if col_idx == 0 and row_idx != col_idx:
+                        ax.set_ylabel(y_label, fontsize=8)
+                    elif col_idx != 0:
+                        ax.set_yticklabels([])
+                    ax.grid(alpha=0.12)
+                    ax.tick_params(labelsize=6)
+
+            if not any_panel_data:
+                plt.close(fig)
+                continue
+
+            style_handles = [
+                mpl.lines.Line2D(
+                    [0],
+                    [0],
+                    color="red",
+                    linestyle="--",
+                    linewidth=1.2,
+                    label="Task 1 configured limits",
+                )
+            ]
+            combo_handles = [
+                mpl.lines.Line2D(
+                    [0],
+                    [0],
+                    color=combo_color_map[label],
+                    linestyle="-",
+                    linewidth=1.6,
+                    label=f"{label} (N={int(combo_counts.get(label, 0))})",
+                )
+                for label in combo_labels
+            ]
+            fig.legend(
+                handles=style_handles + combo_handles,
+                loc="upper center",
+                bbox_to_anchor=(0.5, 0.995),
+                ncol=min(5, max(2, len(combo_handles) + 1)),
+                fontsize=6,
+                frameon=False,
+                handlelength=1.8,
+                columnspacing=0.8,
+            )
+            combo_mode_label = "all pairs" if top_n is None else f"top {int(top_n)} pairs"
+            fig.suptitle(
+                f"Task 5 channel-combination state by {tt_column} {tt_label}\n"
+                f"{basename_no_ext_value} · {relation_label_map[relation_type]} · "
+                f"{combo_mode_label} · post-filter surviving values only",
+                fontsize=11,
+                y=0.94,
+            )
+            if save_plots:
+                final_filename = (
+                    f"{fig_idx_value}_channel_combination_filter_by_tt_"
+                    f"{relation_type}_TT_{tt_label}.png"
+                )
+                fig_idx_value += 1
+                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                if plot_list is not None:
+                    plot_list.append(save_fig_path)
+                save_plot_figure(
+                    save_fig_path,
+                    fig=fig,
+                    format="png",
+                    dpi=150,
+                    alias="channel_combination_filter_by_tt",
+                )
+            if show_plots:
+                plt.show()
+            plt.close(fig)
+
+    return fig_idx_value
 
 if simulated_param_hash:
     global_variables["param_hash"] = simulated_param_hash
@@ -1166,6 +1793,18 @@ post_tt_counts_initial = working_df[POST_TT_COLUMN].value_counts()
 for tt_value, count in post_tt_counts_initial.items():
     tt_label = normalize_tt_label(tt_value)
     global_variables[f"{POST_TT_COLUMN}_{tt_label}_count"] = int(count)
+
+fig_idx, plot_list = ensure_plot_state(globals())
+if task5_plot_enabled("channel_combination_filter_by_tt"):
+    print("----------- Task 1 channel-combination audit in Task 5 ------------")
+    fig_idx = plot_task5_channel_combination_filter_by_tt(
+        working_df,
+        basename_no_ext,
+        fig_idx,
+        show_plots=show_plots,
+        save_plots=save_plots,
+        plot_list=plot_list,
+    )
 
 # Change 'Time' column to 'datetime' ------------------------------------------
 if 'Time' in working_df.columns:
@@ -2070,9 +2709,8 @@ correct_angle = bool(config.get("correct_angle", False))
 global_variables['correct_angle'] = correct_angle
 
 df = working_df.copy()
-main_df = working_df.copy()
-main_df['Theta_fit'] = main_df['theta']
-main_df['Phi_fit'] = main_df['phi']
+df['Theta_fit'] = df['theta']
+df['Phi_fit'] = df['phi']
 
 if task5_plot_enabled("theta_phi_definitive_tt_2d"):
 
@@ -2349,19 +2987,18 @@ if correct_angle:
         df_out["Phi_pred"] = phi_pred
         return df_out
 
-    print(main_df.columns.to_list())
+    if VERBOSE:
+        print(df.columns.to_list())
 
     #%%
 
-    df_input = main_df
-    df_pred = sample_true_angles_nearest(
-                df_fit=df_input,
-                matrices=matrices,
-                n_bins=n_bins,
-                rng=np.random.default_rng(),
-                show_progress=True )
-
-    df = df_pred.copy()
+    df = sample_true_angles_nearest(
+        df_fit=df,
+        matrices=matrices,
+        n_bins=n_bins,
+        rng=np.random.default_rng(),
+        show_progress=True,
+    )
     
     df['theta'] = df['Theta_pred']
     df['phi'] = df['Phi_pred']
@@ -2423,13 +3060,13 @@ if correct_angle:
 
 else:
     print("Angle correction is disabled.")
-    df['Theta_pred'] = main_df['Theta_fit']
-    df['Phi_pred'] = main_df['Phi_fit']
+    df['Theta_pred'] = df['Theta_fit']
+    df['Phi_pred'] = df['Phi_fit']
     
     df['theta'] = df['Theta_pred']
     df['phi'] = df['Phi_pred']
+    df.drop(columns=["Theta_fit", "Phi_fit"], inplace=True, errors="ignore")
 
-del main_df
 gc.collect()
 
 if task5_plot_enabled("polar_theta_phi_definitive_tt_2d_detail_final"):
@@ -2760,7 +3397,7 @@ if task5_plot_enabled("theta_efficiency_simple_3v4"):
 df['region'] = "all"
 print(df['region'].value_counts())
 
-working_df = df.copy()
+working_df = df
 
 # -----------------------------------------------------------------------------
 # Create and save the PDF -----------------------------------------------------
@@ -2823,10 +3460,11 @@ os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
 # (Here, you would have your data cleaning code before saving)
 # working_df = ...
 
-# Print all column names in the dataframe
-print("Columns in the cleaned dataframe:")
-for col in working_df.columns:
-    print(f" - {col}")
+# Detailed column dumps are only useful while debugging.
+if VERBOSE:
+    print("Columns in the cleaned dataframe:")
+    for col in working_df.columns:
+        print(f" - {col}")
 
 # Remove the columns in the form "T*_T_sum_*", "T*_T_dif_*", "Q*_Q_sum_*", "Q*_Q_dif_*", do a loop from 1 to 4
 cols_to_remove = []
@@ -2836,12 +3474,18 @@ for i_plane in range(1, 5):
         cols_to_remove.append(f'T{i_plane}_T_dif_{strip}')
         cols_to_remove.append(f'Q{i_plane}_Q_sum_{strip}')
         cols_to_remove.append(f'Q{i_plane}_Q_dif_{strip}')
-working_df.drop(columns=cols_to_remove, inplace=True, errors='ignore')
+if keep_all_columns_output:
+    print(
+        "Task 5 keep_all_columns_output enabled: "
+        f"retaining {len(cols_to_remove)} strip-summary columns."
+    )
+else:
+    working_df.drop(columns=cols_to_remove, inplace=True, errors='ignore')
 
-# Print all column names in the dataframe
-print("Columns in the final dataframe:")
-for col in working_df.columns:
-    print(f" - {col}")
+if VERBOSE:
+    print("Columns in the final dataframe:")
+    for col in working_df.columns:
+        print(f" - {col}")
     
     
 
@@ -3089,7 +3733,12 @@ print(f"Metadata (specific) CSV updated at: {metadata_specific_csv_path}")
 plt.close("all")
 
 # Save to HDF5 file
-working_df.to_parquet(OUT_PATH, engine="pyarrow", compression="zstd", index=False)
+working_df.to_parquet(
+    OUT_PATH,
+    engine="pyarrow",
+    compression=_preferred_parquet_compression(),
+    index=False,
+)
 # working_df.to_csv(OUT_PATH.replace('.h5', '.csv'), index=False)
 print(f"Listed dataframe saved to: {OUT_PATH}")
 

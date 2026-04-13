@@ -129,6 +129,7 @@ from MASTER.common.step1_activation import (
 )
 from MASTER.common.step1_shared import (
     add_normalized_count_metadata,
+    apply_step1_master_overrides,
     apply_step1_task_parameter_overrides,
     build_events_per_second_metadata,
     build_step1_cli_parser,
@@ -150,6 +151,21 @@ from MASTER.common.step1_shared import (
 )
 
 task_number = 3
+
+try:
+    import pyarrow as pa
+except Exception:  # pragma: no cover - pyarrow is already required for parquet IO here.
+    pa = None
+
+
+def _preferred_parquet_compression() -> str:
+    if pa is not None:
+        try:
+            if pa.Codec.is_available("snappy"):
+                return "snappy"
+        except Exception:
+            pass
+    return "zstd"
 
 # I want to chrono the execution time of the script
 start_execution_time_counting = datetime.now()
@@ -297,6 +313,17 @@ def normalize_task3_plot_catalog_status(raw_value: object) -> str:
     if status in {"debug", "usual", "essential"}:
         return status
     return status
+
+
+def _task3_optional_float(raw_value: object) -> float | None:
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, str) and raw_value.strip().lower() in {"", "none", "null"}:
+        return None
+    try:
+        return float(raw_value)
+    except (TypeError, ValueError):
+        return None
 
 
 def resolve_task3_plot_options(config_obj: Dict[str, object]) -> tuple[str, bool, bool, bool, bool, bool, bool]:
@@ -636,9 +663,12 @@ fallback_parameter_config_file_path = (
 )
 print(f"Using config file: {config_file_path}")
 print(f"Using plot catalog file: {plot_catalog_file_path}")
-print(f"Using filter parameter config file: {filter_parameter_config_file_path}")
 with config_file_path.open("r", encoding="utf-8") as config_file:
     config = yaml.safe_load(config_file)
+filter_parameter_config_file_path = filter_parameter_config_file_path.with_name(
+    str(config.get("filter_parameter_config_csv", filter_parameter_config_file_path.name))
+)
+print(f"Using filter parameter config file: {filter_parameter_config_file_path}")
 task3_plot_status_by_alias = load_task3_plot_catalog(plot_catalog_file_path)
 debug_mode = False
 home_path = str(resolve_home_path_from_config(config))
@@ -661,6 +691,11 @@ config = apply_step1_task_parameter_overrides(
     update_fn=update_config_with_parameters,
     log_fn=print,
 )
+config = apply_step1_master_overrides(
+    config_obj=config,
+    master_config_root=config_root,
+    log_fn=print,
+)
 selection_config = load_selection_for_paths(
     [config_file_path],
     master_config_root=config_root,
@@ -670,6 +705,20 @@ if not station_is_selected(station, selection_config.stations):
     sys.exit(0)
 home_path = str(resolve_home_path_from_config(config))
 REFERENCE_TABLES_DIR = Path(home_path) / "DATAFLOW_v3" / "MASTER" / "CONFIG_FILES" / "METADATA_REPRISE" / "REFERENCE_TABLES"
+
+
+def _coerce_config_bool(value: object, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
 
 # Round execution time to seconds and format it in YYYY-MM-DD_HH.MM.SS
 execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
@@ -685,6 +734,10 @@ stratos_save = config["stratos_save"]
 fast_mode = False
 debug_mode = False
 last_file_test = config["last_file_test"]
+keep_all_columns_output = _coerce_config_bool(
+    config.get("keep_all_columns_output", False),
+    default=False,
+)
 
 # Accessing all the variables from the configuration
 (
@@ -714,6 +767,9 @@ limit = limit_number is not None
 # RPC variables
 y_new_method = config["y_new_method"]
 streamer_high_charge_factor = float(config.get("streamer_high_charge_factor", 0.2))
+streamer_charge_sum_threshold = _task3_optional_float(
+    config.get("streamer_charge_sum_threshold", None)
+)
 
 # Alternative
 
@@ -754,32 +810,176 @@ Q_dif_RPC_left = -Q_dif_RPC_abs
 Y_RPC_abs = abs(float(config.get("Y_RPC_abs", config.get("Y_RPC_right", 200))))
 Y_RPC_right = Y_RPC_abs
 Y_RPC_left = -Y_RPC_abs
-plane_combination_q_sum_sum_left = float(config.get("plane_combination_q_sum_sum_left", Q_RPC_left))
-plane_combination_q_sum_sum_right = float(config.get("plane_combination_q_sum_sum_right", Q_RPC_right))
-plane_combination_q_sum_dif_threshold = abs(
-    float(config.get("plane_combination_q_sum_dif_threshold", Q_RPC_right))
+plane_combination_plane_q_sum_sum_left = float(
+    config.get(
+        "plane_combination_plane_q_sum_sum_left",
+        config.get(
+            "plane_combination_same_plane_q_sum_sum_left",
+            config.get("plane_combination_self_q_sum_sum_left", Q_RPC_left),
+        ),
+    )
 )
-plane_combination_q_dif_sum_threshold = abs(
-    float(config.get("plane_combination_q_dif_sum_threshold", Q_dif_RPC_abs))
+plane_combination_plane_q_sum_sum_right = float(
+    config.get(
+        "plane_combination_plane_q_sum_sum_right",
+        config.get(
+            "plane_combination_same_plane_q_sum_sum_right",
+            config.get("plane_combination_self_q_sum_sum_right", Q_RPC_right),
+        ),
+    )
 )
-plane_combination_q_dif_dif_threshold = abs(
-    float(config.get("plane_combination_q_dif_dif_threshold", Q_dif_RPC_abs))
+plane_combination_plane_q_dif_sum_threshold = abs(
+    float(
+        config.get(
+            "plane_combination_plane_q_dif_sum_threshold",
+            config.get(
+                "plane_combination_same_plane_q_dif_sum_threshold",
+                config.get("plane_combination_self_q_dif_sum_threshold", Q_dif_RPC_abs),
+            ),
+        )
+    )
 )
-plane_combination_t_sum_sum_left = float(config.get("plane_combination_t_sum_sum_left", T_sum_RPC_left))
-plane_combination_t_sum_sum_right = float(config.get("plane_combination_t_sum_sum_right", T_sum_RPC_right))
-plane_combination_t_sum_dif_threshold = abs(
-    float(config.get("plane_combination_t_sum_dif_threshold", max(abs(T_sum_RPC_left), abs(T_sum_RPC_right))))
+plane_combination_plane_t_sum_sum_left = float(
+    config.get(
+        "plane_combination_plane_t_sum_sum_left",
+        config.get(
+            "plane_combination_same_plane_t_sum_sum_left",
+            config.get("plane_combination_self_t_sum_sum_left", T_sum_RPC_left),
+        ),
+    )
 )
-plane_combination_t_dif_sum_threshold = abs(
-    float(config.get("plane_combination_t_dif_sum_threshold", T_dif_RPC_abs))
+plane_combination_plane_t_sum_sum_right = float(
+    config.get(
+        "plane_combination_plane_t_sum_sum_right",
+        config.get(
+            "plane_combination_same_plane_t_sum_sum_right",
+            config.get("plane_combination_self_t_sum_sum_right", T_sum_RPC_right),
+        ),
+    )
 )
-plane_combination_t_dif_dif_threshold = abs(
-    float(config.get("plane_combination_t_dif_dif_threshold", T_dif_RPC_abs))
+plane_combination_plane_t_dif_sum_threshold = abs(
+    float(
+        config.get(
+            "plane_combination_plane_t_dif_sum_threshold",
+            config.get(
+                "plane_combination_same_plane_t_dif_sum_threshold",
+                config.get("plane_combination_self_t_dif_sum_threshold", T_dif_RPC_abs),
+            ),
+        )
+    )
 )
-plane_combination_y_sum_left = float(config.get("plane_combination_y_sum_left", Y_RPC_left))
-plane_combination_y_sum_right = float(config.get("plane_combination_y_sum_right", Y_RPC_right))
-plane_combination_y_dif_threshold = abs(
-    float(config.get("plane_combination_y_dif_threshold", Y_RPC_abs))
+plane_combination_plane_y_sum_left = float(
+    config.get(
+        "plane_combination_plane_y_sum_left",
+        config.get(
+            "plane_combination_same_plane_y_sum_left",
+            config.get("plane_combination_self_y_sum_left", Y_RPC_left),
+        ),
+    )
+)
+plane_combination_plane_y_sum_right = float(
+    config.get(
+        "plane_combination_plane_y_sum_right",
+        config.get(
+            "plane_combination_same_plane_y_sum_right",
+            config.get("plane_combination_self_y_sum_right", Y_RPC_right),
+        ),
+    )
+)
+plane_combination_detector_q_sum_sum_left = float(
+    config.get(
+        "plane_combination_detector_q_sum_sum_left",
+        config.get("plane_combination_any_q_sum_sum_left", config.get("plane_combination_q_sum_sum_left", Q_RPC_left)),
+    )
+)
+plane_combination_detector_q_sum_sum_right = float(
+    config.get(
+        "plane_combination_detector_q_sum_sum_right",
+        config.get("plane_combination_any_q_sum_sum_right", config.get("plane_combination_q_sum_sum_right", Q_RPC_right)),
+    )
+)
+plane_combination_detector_q_sum_dif_threshold = abs(
+    float(
+        config.get(
+            "plane_combination_detector_q_sum_dif_threshold",
+            config.get("plane_combination_any_q_sum_dif_threshold", config.get("plane_combination_q_sum_dif_threshold", Q_RPC_right)),
+        )
+    )
+)
+plane_combination_detector_q_dif_sum_threshold = abs(
+    float(
+        config.get(
+            "plane_combination_detector_q_dif_sum_threshold",
+            config.get("plane_combination_any_q_dif_sum_threshold", config.get("plane_combination_q_dif_sum_threshold", Q_dif_RPC_abs)),
+        )
+    )
+)
+plane_combination_detector_q_dif_dif_threshold = abs(
+    float(
+        config.get(
+            "plane_combination_detector_q_dif_dif_threshold",
+            config.get("plane_combination_any_q_dif_dif_threshold", config.get("plane_combination_q_dif_dif_threshold", Q_dif_RPC_abs)),
+        )
+    )
+)
+plane_combination_detector_t_sum_sum_left = float(
+    config.get(
+        "plane_combination_detector_t_sum_sum_left",
+        config.get("plane_combination_any_t_sum_sum_left", config.get("plane_combination_t_sum_sum_left", T_sum_RPC_left)),
+    )
+)
+plane_combination_detector_t_sum_sum_right = float(
+    config.get(
+        "plane_combination_detector_t_sum_sum_right",
+        config.get("plane_combination_any_t_sum_sum_right", config.get("plane_combination_t_sum_sum_right", T_sum_RPC_right)),
+    )
+)
+plane_combination_detector_t_sum_dif_threshold = abs(
+    float(
+        config.get(
+            "plane_combination_detector_t_sum_dif_threshold",
+            config.get(
+                "plane_combination_any_t_sum_dif_threshold",
+                config.get("plane_combination_t_sum_dif_threshold", max(abs(T_sum_RPC_left), abs(T_sum_RPC_right))),
+            ),
+        )
+    )
+)
+plane_combination_detector_t_dif_sum_threshold = abs(
+    float(
+        config.get(
+            "plane_combination_detector_t_dif_sum_threshold",
+            config.get("plane_combination_any_t_dif_sum_threshold", config.get("plane_combination_t_dif_sum_threshold", T_dif_RPC_abs)),
+        )
+    )
+)
+plane_combination_detector_t_dif_dif_threshold = abs(
+    float(
+        config.get(
+            "plane_combination_detector_t_dif_dif_threshold",
+            config.get("plane_combination_any_t_dif_dif_threshold", config.get("plane_combination_t_dif_dif_threshold", T_dif_RPC_abs)),
+        )
+    )
+)
+plane_combination_detector_y_sum_left = float(
+    config.get(
+        "plane_combination_detector_y_sum_left",
+        config.get("plane_combination_any_y_sum_left", config.get("plane_combination_y_sum_left", Y_RPC_left)),
+    )
+)
+plane_combination_detector_y_sum_right = float(
+    config.get(
+        "plane_combination_detector_y_sum_right",
+        config.get("plane_combination_any_y_sum_right", config.get("plane_combination_y_sum_right", Y_RPC_right)),
+    )
+)
+plane_combination_detector_y_dif_threshold = abs(
+    float(
+        config.get(
+            "plane_combination_detector_y_dif_threshold",
+            config.get("plane_combination_any_y_dif_threshold", config.get("plane_combination_y_dif_threshold", Y_RPC_abs)),
+        )
+    )
 )
 
 # Alternative fitter filter
@@ -988,7 +1188,7 @@ def refresh_global_count_metadata(df: pd.DataFrame, column_names: Iterable[str])
             global_variables[f"{column_name}_{tt_label}_count"] = int(count)
 
 TASK3_ACTIVE_STRIP_COLUMNS: tuple[str, ...] = tuple(f"active_strips_P{plane}" for plane in range(1, 5))
-TASK3_SELECTED_OFFENDER_CARDINALITY_VALUES: tuple[int, ...] = tuple(range(1, 5))
+TASK3_SELECTED_OFFENDER_CARDINALITY_VALUES: tuple[int, ...] = tuple(range(0, 5))
 
 FILTER_METRIC_NAMES: tuple[str, ...] = (
     "plane_rpc_window_rows_affected_pct",
@@ -1223,6 +1423,7 @@ def store_task3_plane_activation_snapshot(
     snapshot_label: str,
     tt_series: pd.Series,
     streamer_high_charge_factor_value: float,
+    streamer_threshold_override: float | None = None,
 ) -> dict[str, object]:
     labels, charge_arrays = _task3_plane_charge_arrays(df)
     signal_arrays = [np.isfinite(arr) & (arr > 0) for arr in charge_arrays]
@@ -1257,7 +1458,11 @@ def store_task3_plane_activation_snapshot(
     )
 
     q_sum_cols = [f"P{plane}_Q_sum_final" for plane in range(1, 5)]
-    streamer_threshold = detect_streamer_threshold(df, q_sum_cols)
+    streamer_threshold, _ = select_task3_streamer_threshold(
+        df,
+        q_sum_cols,
+        streamer_threshold_override,
+    )
     threshold_key = f"streamer_threshold_selected_{snapshot_label}"
     _store_activation_scalar(
         activation_meta,
@@ -1670,6 +1875,229 @@ def compute_empirical_efficiency_from_tt_counts(
     return results
 
 
+def select_task3_streamer_threshold(
+    df: pd.DataFrame,
+    q_sum_cols: list[str],
+    configured_threshold: float | None = None,
+) -> tuple[float | None, str]:
+    if configured_threshold is not None and np.isfinite(configured_threshold) and configured_threshold > 0:
+        return float(configured_threshold), "config"
+
+    detected_threshold = detect_streamer_threshold(df, q_sum_cols)
+    if detected_threshold is not None and np.isfinite(detected_threshold) and detected_threshold > 0:
+        return float(detected_threshold), "auto"
+
+    return None, "unavailable"
+
+
+def compute_task3_charge_topology_codes(
+    df: pd.DataFrame,
+    streamer_threshold: float,
+) -> tuple[pd.Series, dict[int, np.ndarray]]:
+    topology_digits_by_plane: dict[int, np.ndarray] = {}
+    topology_code_arrays: list[np.ndarray] = []
+
+    for plane in range(1, 5):
+        q_sum_col = f"P{plane}_Q_sum_final"
+        if q_sum_col in df.columns:
+            q_sum_values = pd.to_numeric(df[q_sum_col], errors="coerce").to_numpy(dtype=float)
+        else:
+            q_sum_values = np.full(len(df), np.nan, dtype=float)
+
+        plane_has_charge = np.isfinite(q_sum_values) & (q_sum_values > 0)
+        plane_is_streamer = plane_has_charge & (q_sum_values > float(streamer_threshold))
+        plane_digits = np.where(plane_is_streamer, 2, np.where(plane_has_charge, 1, 0)).astype(np.int8)
+
+        topology_digits_by_plane[plane] = plane_digits
+        topology_code_arrays.append(plane_digits.astype(str))
+
+    if not topology_code_arrays:
+        return pd.Series(index=df.index, dtype="object"), topology_digits_by_plane
+
+    topology_code = topology_code_arrays[0]
+    for next_digits in topology_code_arrays[1:]:
+        topology_code = np.char.add(topology_code, next_digits)
+
+    return pd.Series(topology_code, index=df.index, dtype="object"), topology_digits_by_plane
+
+
+def compute_task3_tt_from_topology_codes(
+    topology_digits_by_plane: dict[int, np.ndarray],
+    *,
+    streamers_count_as_active: bool,
+    exclude_streamer_events: bool = False,
+    index: pd.Index,
+) -> pd.Series:
+    tt_series = pd.Series("", index=index, dtype="object")
+    any_streamer = np.zeros(len(index), dtype=bool)
+
+    for plane in range(1, 5):
+        plane_digits = topology_digits_by_plane.get(plane)
+        if plane_digits is None:
+            continue
+        any_streamer |= plane_digits == 2
+        plane_active = plane_digits >= 1 if streamers_count_as_active else plane_digits == 1
+        tt_series = tt_series.where(~plane_active, tt_series + str(plane))
+
+    tt_series = tt_series.replace("", "0")
+    if exclude_streamer_events:
+        tt_series = tt_series.mask(any_streamer, pd.NA)
+    return pd.to_numeric(tt_series, errors="coerce").astype("Int64")
+
+
+def store_task3_charge_topology_metadata(
+    metadata: dict[str, object],
+    df: pd.DataFrame,
+    topology_codes: pd.Series,
+    topology_digits_by_plane: dict[int, np.ndarray],
+    tt_reference: pd.Series,
+    tt_streamer_as_avalanche: pd.Series,
+    tt_streamer_as_invalid: pd.Series,
+    tt_streamer_as_invalid_no_transference: pd.Series,
+    streamer_threshold: float | None,
+) -> None:
+    total_events = int(len(df))
+    metadata["charge_topology_total_events"] = total_events
+    metadata["charge_topology_streamer_threshold_qsum"] = (
+        round(float(streamer_threshold), 6)
+        if streamer_threshold is not None and np.isfinite(streamer_threshold)
+        else ""
+    )
+
+    phase_meta = build_events_per_second_metadata(df)
+    try:
+        denominator_seconds = float(phase_meta.get("events_per_second_total_seconds", 0) or 0)
+    except (TypeError, ValueError):
+        denominator_seconds = 0.0
+
+    topology_counts = topology_codes.value_counts()
+    for topology_code, count in topology_counts.items():
+        key_base = f"charge_topology_code_{topology_code}"
+        count_int = int(count)
+        metadata[f"{key_base}_count"] = count_int
+        metadata[f"{key_base}_fraction"] = round(count_int / total_events, 6) if total_events > 0 else ""
+        metadata[f"{key_base}_rate_hz"] = round(count_int / denominator_seconds, 6) if denominator_seconds > 0 else 0.0
+
+    any_streamer = np.zeros(total_events, dtype=bool)
+    streamer_plane_multiplicity = np.zeros(total_events, dtype=int)
+    state_name_by_digit = {
+        0: "no_charge",
+        1: "avalanche",
+        2: "streamer",
+    }
+    for plane in range(1, 5):
+        plane_digits = topology_digits_by_plane.get(plane, np.zeros(total_events, dtype=np.int8))
+        plane_is_streamer = plane_digits == 2
+        any_streamer |= plane_is_streamer
+        streamer_plane_multiplicity += plane_is_streamer.astype(int)
+
+        for state_digit, state_name in state_name_by_digit.items():
+            state_count = int(np.count_nonzero(plane_digits == state_digit))
+            metric_base = f"charge_topology_plane_{plane}_{state_name}"
+            metadata[f"{metric_base}_count"] = state_count
+            metadata[f"{metric_base}_fraction"] = round(state_count / total_events, 6) if total_events > 0 else ""
+            metadata[f"{metric_base}_rate_hz"] = round(state_count / denominator_seconds, 6) if denominator_seconds > 0 else 0.0
+
+    any_streamer_count = int(np.count_nonzero(any_streamer))
+    metadata["charge_topology_any_streamer_count"] = any_streamer_count
+    metadata["charge_topology_any_streamer_fraction"] = (
+        round(any_streamer_count / total_events, 6) if total_events > 0 else ""
+    )
+    metadata["charge_topology_any_streamer_rate_hz"] = (
+        round(any_streamer_count / denominator_seconds, 6) if denominator_seconds > 0 else 0.0
+    )
+
+    streamer_free_count = total_events - any_streamer_count
+    metadata["charge_topology_global_rate_hz_with_streamers"] = (
+        round(any_streamer_count / denominator_seconds, 6) if denominator_seconds > 0 else 0.0
+    )
+    metadata["charge_topology_global_rate_hz_without_streamers"] = (
+        round(streamer_free_count / denominator_seconds, 6) if denominator_seconds > 0 else 0.0
+    )
+
+    tt_reference_series = pd.to_numeric(tt_reference, errors="coerce").astype("Int64")
+    subset_specs = (
+        ("with_streamers", tt_reference_series[any_streamer]),
+        ("without_streamers", tt_reference_series[~any_streamer]),
+    )
+    missing_plane_tt = {1: 234, 2: 134, 3: 124, 4: 123}
+    for subset_name, subset_tt_series in subset_specs:
+        subset_tt_counts = subset_tt_series.value_counts()
+        n_four_subset = int(subset_tt_counts.get(1234, 0))
+        metadata[f"charge_topology_tt_1234_count_{subset_name}"] = n_four_subset
+        metadata[f"charge_topology_tt_1234_rate_hz_{subset_name}"] = (
+            round(n_four_subset / denominator_seconds, 6) if denominator_seconds > 0 else 0.0
+        )
+
+        per_plane_efficiency_subset = compute_empirical_efficiency_from_tt_counts(subset_tt_counts)
+        for plane in range(1, 5):
+            eff_value, eff_error, n_three, _ = per_plane_efficiency_subset.get(
+                plane,
+                (np.nan, np.nan, 0, n_four_subset),
+            )
+            tt_missing = missing_plane_tt[plane]
+            metadata[f"charge_topology_eff_{subset_name}_plane_{plane}"] = (
+                round(float(eff_value), 6) if np.isfinite(eff_value) else ""
+            )
+            metadata[f"charge_topology_eff_err_{subset_name}_plane_{plane}"] = (
+                round(float(eff_error), 6) if np.isfinite(eff_error) else ""
+            )
+            metadata[f"charge_topology_tt_{tt_missing}_count_{subset_name}_plane_{plane}"] = int(n_three)
+            metadata[f"charge_topology_tt_{tt_missing}_rate_hz_{subset_name}_plane_{plane}"] = (
+                round(int(n_three) / denominator_seconds, 6) if denominator_seconds > 0 else 0.0
+            )
+
+    for multiplicity in range(0, 5):
+        multiplicity_count = int(np.count_nonzero(streamer_plane_multiplicity == multiplicity))
+        metric_base = f"charge_topology_streamer_plane_multiplicity_{multiplicity}"
+        metadata[f"{metric_base}_count"] = multiplicity_count
+        metadata[f"{metric_base}_fraction"] = (
+            round(multiplicity_count / total_events, 6) if total_events > 0 else ""
+        )
+        metadata[f"{metric_base}_rate_hz"] = (
+            round(multiplicity_count / denominator_seconds, 6) if denominator_seconds > 0 else 0.0
+        )
+
+    policy_specs = (
+        ("streamer_as_avalanche", tt_streamer_as_avalanche),
+        ("streamer_as_invalid", tt_streamer_as_invalid),
+        ("streamer_as_invalid_no_transference", tt_streamer_as_invalid_no_transference),
+    )
+    for policy_name, tt_series in policy_specs:
+        excluded_count = int(tt_series.isna().sum())
+        metadata[f"charge_topology_excluded_count_{policy_name}"] = excluded_count
+        metadata[f"charge_topology_excluded_fraction_{policy_name}"] = (
+            round(excluded_count / total_events, 6) if total_events > 0 else ""
+        )
+        metadata[f"charge_topology_excluded_rate_hz_{policy_name}"] = (
+            round(excluded_count / denominator_seconds, 6) if denominator_seconds > 0 else 0.0
+        )
+        tt_counts = tt_series.value_counts()
+        n_four = int(tt_counts.get(1234, 0))
+        metadata[f"charge_topology_tt_1234_count_{policy_name}"] = n_four
+        metadata[f"charge_topology_tt_1234_rate_hz_{policy_name}"] = (
+            round(n_four / denominator_seconds, 6) if denominator_seconds > 0 else 0.0
+        )
+
+        per_plane_efficiency = compute_empirical_efficiency_from_tt_counts(tt_counts)
+        for plane in range(1, 5):
+            eff_value, eff_error, n_three, _ = per_plane_efficiency.get(
+                plane,
+                (np.nan, np.nan, 0, n_four),
+            )
+            tt_missing = missing_plane_tt[plane]
+            metadata[f"charge_topology_eff_{policy_name}_plane_{plane}"] = (
+                round(float(eff_value), 6) if np.isfinite(eff_value) else ""
+            )
+            metadata[f"charge_topology_eff_err_{policy_name}_plane_{plane}"] = (
+                round(float(eff_error), 6) if np.isfinite(eff_error) else ""
+            )
+            metadata[f"charge_topology_tt_{tt_missing}_count_{policy_name}_plane_{plane}"] = int(n_three)
+            metadata[f"charge_topology_tt_{tt_missing}_rate_hz_{policy_name}_plane_{plane}"] = (
+                round(int(n_three) / denominator_seconds, 6) if denominator_seconds > 0 else 0.0
+            )
+
+
 def detect_streamer_threshold(
     df: pd.DataFrame,
     q_sum_cols: list[str],
@@ -2039,6 +2467,7 @@ def apply_task3_plane_combination_filter(
             "selected_offender_counts": {
                 plane_key: 0 for plane_key in TASK3_PLANE_KEYS
             },
+            "selected_offender_count_by_row": pd.Series(0, index=df_input.index, dtype=int),
         }
 
     plane_fail_masks = {
@@ -2077,6 +2506,7 @@ def apply_task3_plane_combination_filter(
         plane_key: 0
         for plane_key in TASK3_PLANE_KEYS
     }
+    selected_offender_count_by_row = np.zeros(len(df_input), dtype=int)
 
     for plane_a, plane_b in combinations(sorted(plane_map), 2):
         cols_a = plane_map[plane_a]
@@ -2275,9 +2705,15 @@ def apply_task3_plane_combination_filter(
         summary["selected_offender_cardinality_counts"][len(selected_planes)] = (
             int(summary["selected_offender_cardinality_counts"].get(len(selected_planes), 0)) + 1
         )
+        selected_offender_count_by_row[row_pos] = len(selected_planes)
         for plane_key in selected_planes:
             plane_fail_masks[plane_key][row_pos] = True
             offender_hit_counts[plane_key] += 1
+
+    summary["selected_offender_cardinality_counts"][0] = max(
+        int(summary["input_rows"]) - int(summary["flagged_rows"]),
+        0,
+    )
 
     for plane_key in plane_map:
         fail_mask = plane_fail_masks[plane_key]
@@ -2317,6 +2753,11 @@ def apply_task3_plane_combination_filter(
         plane_key: int(offender_hit_counts.get(plane_key, 0))
         for plane_key in TASK3_PLANE_KEYS
     }
+    summary["selected_offender_count_by_row"] = pd.Series(
+        selected_offender_count_by_row,
+        index=df_input.index,
+        dtype=int,
+    )
     return summary
 
 
@@ -2332,6 +2773,13 @@ TASK3_PLANE_COMBINATION_OBSERVABLES: tuple[tuple[str, str], ...] = (
     ("y_sum", "Y semisum"),
     ("y_dif", "Y semidifference"),
 )
+TASK3_PLANE_COMBINATION_SELF_OBSERVABLES: tuple[tuple[str, str], ...] = (
+    ("q_sum_sum", "Q_sum"),
+    ("q_dif_sum", "Q_dif"),
+    ("t_sum_sum", "T_sum"),
+    ("t_dif_sum", "T_dif"),
+    ("y_sum", "Y"),
+)
 
 
 def _task3_filter_tt_series(df: pd.DataFrame) -> pd.Series:
@@ -2344,83 +2792,175 @@ def _task3_filter_tt_series(df: pd.DataFrame) -> pd.Series:
 def collect_task3_plane_combination_histogram_payload(
     df_input: pd.DataFrame,
     tt_series: pd.Series,
+    *,
+    relation_type: str = "any",
 ) -> pd.DataFrame:
+    relation_type = {
+        "plane": "same_plane",
+        "detector": "any",
+        "same_plane": "same_plane",
+        "self": "same_plane",
+        "any": "any",
+    }.get(relation_type, relation_type)
     payload_rows: list[pd.DataFrame] = []
     plane_map = collect_task3_plane_final_map(df_input)
-    if len(plane_map) < 2:
-        return pd.DataFrame(columns=["tt", *[observable for observable, _ in TASK3_PLANE_COMBINATION_OBSERVABLES]])
+    payload_columns = [
+        "row_index",
+        "tt",
+        "combo",
+        *[observable for observable, _ in TASK3_PLANE_COMBINATION_OBSERVABLES],
+    ]
+    if relation_type not in {"self", "same_plane", "any"}:
+        raise ValueError(f"Unsupported Task 3 plane-combination relation type: {relation_type}")
+    if relation_type in {"self", "same_plane"} and len(plane_map) < 1:
+        return pd.DataFrame(columns=payload_columns)
+    if relation_type == "any" and len(plane_map) < 2:
+        return pd.DataFrame(columns=payload_columns)
 
     tt_series = tt_series.reindex(df_input.index).fillna("0").astype(str)
-    for plane_a, plane_b in combinations(sorted(plane_map), 2):
-        combo_label = f"{plane_a}{plane_b}"
-        cols_a = plane_map[plane_a]
-        cols_b = plane_map[plane_b]
-        q_sum_a = pd.to_numeric(df_input[cols_a["Q_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        q_sum_b = pd.to_numeric(df_input[cols_b["Q_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        q_dif_a = pd.to_numeric(df_input[cols_a["Q_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        q_dif_b = pd.to_numeric(df_input[cols_b["Q_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        t_sum_a = pd.to_numeric(df_input[cols_a["T_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        t_sum_b = pd.to_numeric(df_input[cols_b["T_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        t_dif_a = pd.to_numeric(df_input[cols_a["T_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        t_dif_b = pd.to_numeric(df_input[cols_b["T_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        y_a = pd.to_numeric(df_input[cols_a["Y"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        y_b = pd.to_numeric(df_input[cols_b["Y"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+    if relation_type in {"self", "same_plane"}:
+        for plane_key in sorted(plane_map):
+            combo_label = f"P{plane_key}"
+            cols = plane_map[plane_key]
+            q_sum = pd.to_numeric(df_input[cols["Q_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+            q_dif = pd.to_numeric(df_input[cols["Q_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+            t_sum = pd.to_numeric(df_input[cols["T_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+            t_dif = pd.to_numeric(df_input[cols["T_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+            y_value = pd.to_numeric(df_input[cols["Y"]], errors="coerce").fillna(0).to_numpy(dtype=float)
 
-        valid_mask = (
-            np.isfinite(q_sum_a)
-            & np.isfinite(q_sum_b)
-            & np.isfinite(q_dif_a)
-            & np.isfinite(q_dif_b)
-            & np.isfinite(t_sum_a)
-            & np.isfinite(t_sum_b)
-            & np.isfinite(t_dif_a)
-            & np.isfinite(t_dif_b)
-            & np.isfinite(y_a)
-            & np.isfinite(y_b)
-            & (q_sum_a != 0)
-            & (q_sum_b != 0)
-            & (q_dif_a != 0)
-            & (q_dif_b != 0)
-            & (t_sum_a != 0)
-            & (t_sum_b != 0)
-            & (t_dif_a != 0)
-            & (t_dif_b != 0)
-            & (y_a != 0)
-            & (y_b != 0)
-        )
-        if not np.any(valid_mask):
-            continue
-
-        valid_index = df_input.index[valid_mask]
-        tt_values = tt_series.loc[valid_index].to_numpy(dtype=str)
-        derived_values = {
-            "q_sum_sum": 0.5 * (q_sum_a + q_sum_b),
-            "q_sum_dif": 0.5 * (q_sum_a - q_sum_b),
-            "q_dif_sum": 0.5 * (q_dif_a + q_dif_b),
-            "q_dif_dif": 0.5 * (q_dif_a - q_dif_b),
-            "t_sum_sum": 0.5 * (t_sum_a + t_sum_b),
-            "t_sum_dif": 0.5 * (t_sum_a - t_sum_b),
-            "t_dif_sum": 0.5 * (t_dif_a + t_dif_b),
-            "t_dif_dif": 0.5 * (t_dif_a - t_dif_b),
-            "y_sum": 0.5 * (y_a + y_b),
-            "y_dif": 0.5 * (y_a - y_b),
-        }
-        payload_rows.append(
-            pd.DataFrame(
-                {
-                    "tt": tt_values,
-                    "combo": combo_label,
-                    **{
-                        observable: values[valid_mask]
-                        for observable, values in derived_values.items()
-                    },
-                }
+            valid_mask = (
+                np.isfinite(q_sum)
+                & np.isfinite(q_dif)
+                & np.isfinite(t_sum)
+                & np.isfinite(t_dif)
+                & np.isfinite(y_value)
+                & (q_sum != 0)
+                & (q_dif != 0)
+                & (t_sum != 0)
+                & (t_dif != 0)
+                & (y_value != 0)
             )
-        )
+            if not np.any(valid_mask):
+                continue
+
+            valid_index = df_input.index[valid_mask]
+            zeros = np.zeros_like(q_sum, dtype=float)
+            derived_values = {
+                "q_sum_sum": q_sum,
+                "q_sum_dif": zeros,
+                "q_dif_sum": q_dif,
+                "q_dif_dif": zeros,
+                "t_sum_sum": t_sum,
+                "t_sum_dif": zeros,
+                "t_dif_sum": t_dif,
+                "t_dif_dif": zeros,
+                "y_sum": y_value,
+                "y_dif": zeros,
+            }
+            payload_rows.append(
+                pd.DataFrame(
+                    {
+                        "row_index": valid_index.to_numpy(dtype=int, copy=False),
+                        "tt": tt_series.loc[valid_index].to_numpy(dtype=str),
+                        "combo": combo_label,
+                        **{
+                            observable: values[valid_mask]
+                            for observable, values in derived_values.items()
+                        },
+                    }
+                )
+            )
+    else:
+        for plane_a, plane_b in combinations(sorted(plane_map), 2):
+            combo_label = f"{plane_a}{plane_b}"
+            cols_a = plane_map[plane_a]
+            cols_b = plane_map[plane_b]
+            q_sum_a = pd.to_numeric(df_input[cols_a["Q_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+            q_sum_b = pd.to_numeric(df_input[cols_b["Q_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+            q_dif_a = pd.to_numeric(df_input[cols_a["Q_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+            q_dif_b = pd.to_numeric(df_input[cols_b["Q_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+            t_sum_a = pd.to_numeric(df_input[cols_a["T_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+            t_sum_b = pd.to_numeric(df_input[cols_b["T_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+            t_dif_a = pd.to_numeric(df_input[cols_a["T_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+            t_dif_b = pd.to_numeric(df_input[cols_b["T_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+            y_a = pd.to_numeric(df_input[cols_a["Y"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+            y_b = pd.to_numeric(df_input[cols_b["Y"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+
+            valid_mask = (
+                np.isfinite(q_sum_a)
+                & np.isfinite(q_sum_b)
+                & np.isfinite(q_dif_a)
+                & np.isfinite(q_dif_b)
+                & np.isfinite(t_sum_a)
+                & np.isfinite(t_sum_b)
+                & np.isfinite(t_dif_a)
+                & np.isfinite(t_dif_b)
+                & np.isfinite(y_a)
+                & np.isfinite(y_b)
+                & (q_sum_a != 0)
+                & (q_sum_b != 0)
+                & (q_dif_a != 0)
+                & (q_dif_b != 0)
+                & (t_sum_a != 0)
+                & (t_sum_b != 0)
+                & (t_dif_a != 0)
+                & (t_dif_b != 0)
+                & (y_a != 0)
+                & (y_b != 0)
+            )
+            if not np.any(valid_mask):
+                continue
+
+            valid_index = df_input.index[valid_mask]
+            tt_values = tt_series.loc[valid_index].to_numpy(dtype=str)
+            derived_values = {
+                "q_sum_sum": 0.5 * (q_sum_a + q_sum_b),
+                "q_sum_dif": 0.5 * (q_sum_a - q_sum_b),
+                "q_dif_sum": 0.5 * (q_dif_a + q_dif_b),
+                "q_dif_dif": 0.5 * (q_dif_a - q_dif_b),
+                "t_sum_sum": 0.5 * (t_sum_a + t_sum_b),
+                "t_sum_dif": 0.5 * (t_sum_a - t_sum_b),
+                "t_dif_sum": 0.5 * (t_dif_a + t_dif_b),
+                "t_dif_dif": 0.5 * (t_dif_a - t_dif_b),
+                "y_sum": 0.5 * (y_a + y_b),
+                "y_dif": 0.5 * (y_a - y_b),
+            }
+            payload_rows.append(
+                pd.DataFrame(
+                    {
+                        "row_index": valid_index.to_numpy(dtype=int, copy=False),
+                        "tt": tt_values,
+                        "combo": combo_label,
+                        **{
+                            observable: values[valid_mask]
+                            for observable, values in derived_values.items()
+                        },
+                    }
+                )
+            )
 
     if not payload_rows:
-        return pd.DataFrame(columns=["tt", *[observable for observable, _ in TASK3_PLANE_COMBINATION_OBSERVABLES]])
+        return pd.DataFrame(columns=payload_columns)
     return pd.concat(payload_rows, ignore_index=True)
+
+
+def subtract_task3_plane_combination_payload(
+    left_payload: pd.DataFrame,
+    right_payload: pd.DataFrame,
+) -> pd.DataFrame:
+    if left_payload.empty:
+        return left_payload.copy()
+    if right_payload.empty or not {"row_index", "combo"}.issubset(left_payload.columns) or not {"row_index", "combo"}.issubset(right_payload.columns):
+        return left_payload.copy()
+
+    reduced_right = right_payload.loc[:, ["row_index", "combo"]].drop_duplicates()
+    removed_payload = left_payload.merge(
+        reduced_right,
+        on=["row_index", "combo"],
+        how="left",
+        indicator=True,
+    )
+    return removed_payload.loc[removed_payload["_merge"] == "left_only"].drop(columns="_merge")
 
 
 def _task3_hist_range(
@@ -2462,6 +3002,7 @@ def _task3_population_color(label: str) -> tuple[float, float, float, float]:
 
 
 def plot_task3_plane_combination_filter_by_tt(
+    original_payload: pd.DataFrame,
     before_payload: pd.DataFrame,
     after_payload: pd.DataFrame,
     basename_no_ext_value: str,
@@ -2472,51 +3013,113 @@ def plot_task3_plane_combination_filter_by_tt(
     save_plots: bool,
     plot_list: list[str] | None,
     limits_by_observable: dict[str, tuple[float | None, float | None]],
+    relation_label: str,
+    observable_definitions: tuple[tuple[str, str], ...] = TASK3_PLANE_COMBINATION_OBSERVABLES,
 ) -> int:
+    original_payload = original_payload.copy()
+    before_payload = before_payload.copy()
+    after_payload = after_payload.copy()
+    removed_marker = str(config.get("removed_marker", "x"))
+    removed_marker_size = int(config.get("removed_marker_size", 20))
+    removed_marker_alpha = float(config.get("removed_marker_alpha", 0.9))
     tt_labels = []
-    for payload in (before_payload, after_payload):
+    for payload in (original_payload, before_payload, after_payload):
         if "tt" in payload.columns:
             tt_labels.extend(payload["tt"].astype(str).tolist())
     ordered_tts = [
         tt_label for tt_label in TT_COLOR_LABELS
         if tt_label != "0" and tt_label in set(tt_labels)
     ]
-    observable_names = [observable for observable, _ in TASK3_PLANE_COMBINATION_OBSERVABLES]
-    observable_labels = {observable: label for observable, label in TASK3_PLANE_COMBINATION_OBSERVABLES}
+    observable_names = [observable for observable, _ in observable_definitions]
+    observable_labels = {observable: label for observable, label in observable_definitions}
     scatter_max_points = 5000
+    prefilter_scatter_size = max(3, int(round(0.25 * removed_marker_size)))
+    removed_scatter_marker_size = max(8, int(round(0.6 * removed_marker_size)))
     rng = np.random.default_rng(0)
 
     for tt_label in ordered_tts:
-        before_tt = before_payload.loc[before_payload.get("tt", pd.Series(dtype=str)).astype(str) == tt_label].copy()
-        after_tt = after_payload.loc[after_payload.get("tt", pd.Series(dtype=str)).astype(str) == tt_label].copy()
-        if before_tt.empty and after_tt.empty:
+        original_tt_all = original_payload.loc[
+            original_payload.get("tt", pd.Series(dtype=str)).astype(str) == tt_label
+        ].copy()
+        before_tt_all = before_payload.loc[
+            before_payload.get("tt", pd.Series(dtype=str)).astype(str) == tt_label
+        ].copy()
+        after_tt_all = after_payload.loc[
+            after_payload.get("tt", pd.Series(dtype=str)).astype(str) == tt_label
+        ].copy()
+        if original_tt_all.empty and before_tt_all.empty and after_tt_all.empty:
             continue
 
-        if len(before_tt) > scatter_max_points:
-            before_tt = before_tt.iloc[rng.choice(len(before_tt), size=scatter_max_points, replace=False)].copy()
-        if len(after_tt) > scatter_max_points:
-            after_tt = after_tt.iloc[rng.choice(len(after_tt), size=scatter_max_points, replace=False)].copy()
+        reference_counts = before_tt_all.groupby("combo").size().sort_values(ascending=False)
+        if reference_counts.empty:
+            reference_counts = original_tt_all.groupby("combo").size().sort_values(ascending=False)
+        if reference_counts.empty:
+            reference_counts = after_tt_all.groupby("combo").size().sort_values(ascending=False)
+        combo_labels = [label for label in reference_counts.index.tolist() if label and label != "nan"]
+        if not combo_labels:
+            continue
 
-        combo_labels = sorted(
-            set(before_tt.get("combo", pd.Series(dtype=str)).astype(str))
-            | set(after_tt.get("combo", pd.Series(dtype=str)).astype(str))
+        original_tt_full = original_tt_all.loc[original_tt_all["combo"].isin(combo_labels)].copy()
+        before_tt_full = before_tt_all.loc[before_tt_all["combo"].isin(combo_labels)].copy()
+        after_tt_full = after_tt_all.loc[after_tt_all["combo"].isin(combo_labels)].copy()
+        if original_tt_full.empty and before_tt_full.empty and after_tt_full.empty:
+            continue
+
+        prefilter_removed_tt_full = subtract_task3_plane_combination_payload(
+            original_tt_full,
+            before_tt_full,
         )
-        combo_labels = [label for label in combo_labels if label and label != "nan"]
+        removed_tt_full = subtract_task3_plane_combination_payload(
+            before_tt_full,
+            after_tt_full,
+        )
+
+        def _sample_scatter_payload(payload: pd.DataFrame) -> pd.DataFrame:
+            if len(payload) <= scatter_max_points:
+                return payload.copy()
+            return payload.iloc[
+                rng.choice(len(payload), size=scatter_max_points, replace=False)
+            ].copy()
+
+        after_tt = _sample_scatter_payload(after_tt_full)
+        prefilter_removed_tt = _sample_scatter_payload(prefilter_removed_tt_full)
+        removed_tt = _sample_scatter_payload(removed_tt_full)
+
         combo_color_map = {label: _task3_population_color(label) for label in combo_labels}
-        before_combo_data = {
+        after_combo_data = {
             label: {
                 observable: pd.to_numeric(
-                    before_tt.loc[before_tt["combo"] == label, observable],
+                    after_tt_full.loc[after_tt_full["combo"] == label, observable],
                     errors="coerce",
                 ).to_numpy(dtype=float)
                 for observable in observable_names
             }
             for label in combo_labels
         }
-        after_combo_data = {
+        removed_combo_data = {
+            label: {
+                observable: pd.to_numeric(
+                    removed_tt_full.loc[removed_tt_full["combo"] == label, observable],
+                    errors="coerce",
+                ).to_numpy(dtype=float)
+                for observable in observable_names
+            }
+            for label in combo_labels
+        }
+        after_scatter_combo_data = {
             label: {
                 observable: pd.to_numeric(
                     after_tt.loc[after_tt["combo"] == label, observable],
+                    errors="coerce",
+                ).to_numpy(dtype=float)
+                for observable in observable_names
+            }
+            for label in combo_labels
+        }
+        removed_scatter_combo_data = {
+            label: {
+                observable: pd.to_numeric(
+                    removed_tt.loc[removed_tt["combo"] == label, observable],
                     errors="coerce",
                 ).to_numpy(dtype=float)
                 for observable in observable_names
@@ -2530,8 +3133,14 @@ def plot_task3_plane_combination_filter_by_tt(
 
         axis_ranges: dict[str, tuple[float, float]] = {}
         for observable in observable_names:
-            before_values = pd.to_numeric(before_tt.get(observable, pd.Series(dtype=float)), errors="coerce").dropna().to_numpy(dtype=float)
-            after_values = pd.to_numeric(after_tt.get(observable, pd.Series(dtype=float)), errors="coerce").dropna().to_numpy(dtype=float)
+            before_values = pd.to_numeric(
+                original_tt_full.get(observable, pd.Series(dtype=float)),
+                errors="coerce",
+            ).dropna().to_numpy(dtype=float)
+            after_values = pd.to_numeric(
+                after_tt_full.get(observable, pd.Series(dtype=float)),
+                errors="coerce",
+            ).dropna().to_numpy(dtype=float)
             axis_ranges[observable] = _task3_hist_range(
                 before_values,
                 after_values,
@@ -2545,22 +3154,38 @@ def plot_task3_plane_combination_filter_by_tt(
                     ax.set_axis_off()
                     continue
 
-                before_x = pd.to_numeric(before_tt.get(x_name, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
-                before_y = pd.to_numeric(before_tt.get(y_name, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
                 after_x = pd.to_numeric(after_tt.get(x_name, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
                 after_y = pd.to_numeric(after_tt.get(y_name, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
 
                 if row_idx == col_idx:
-                    before_values = before_x[np.isfinite(before_x)]
+                    original_values = pd.to_numeric(
+                        original_tt_full.get(x_name, pd.Series(dtype=float)),
+                        errors="coerce",
+                    ).dropna().to_numpy(dtype=float)
                     after_values = after_x[np.isfinite(after_x)]
-                    if before_values.size == 0 and after_values.size == 0:
+                    prefilter_removed_values = pd.to_numeric(
+                        prefilter_removed_tt_full.get(x_name, pd.Series(dtype=float)),
+                        errors="coerce",
+                    ).dropna().to_numpy(dtype=float)
+                    prefilter_removed_values = prefilter_removed_values[np.isfinite(prefilter_removed_values)]
+                    if original_values.size == 0 and after_values.size == 0 and prefilter_removed_values.size == 0:
                         ax.set_axis_off()
                         continue
                     any_panel_data = True
                     x_low, x_high = axis_ranges[x_name]
                     bins = np.linspace(x_low, x_high, 60)
+                    if prefilter_removed_values.size:
+                        ax.hist(
+                            prefilter_removed_values,
+                            bins=bins,
+                            histtype="step",
+                            linestyle="--",
+                            linewidth=1.0,
+                            alpha=0.55,
+                            color="lightgrey",
+                        )
                     for combo_label in combo_labels:
-                        combo_before = before_combo_data[combo_label][x_name]
+                        combo_before = removed_combo_data[combo_label][x_name]
                         combo_after = after_combo_data[combo_label][x_name]
                         combo_before = combo_before[np.isfinite(combo_before)]
                         combo_after = combo_after[np.isfinite(combo_after)]
@@ -2593,29 +3218,46 @@ def plot_task3_plane_combination_filter_by_tt(
                     ax.set_yscale("log", nonpositive="clip")
                     ax.set_title(observable_labels[x_name], fontsize=9)
                 else:
-                    before_mask = np.isfinite(before_x) & np.isfinite(before_y)
                     after_mask = np.isfinite(after_x) & np.isfinite(after_y)
-                    if not np.any(before_mask) and not np.any(after_mask):
+                    prefilter_removed_x = pd.to_numeric(
+                        prefilter_removed_tt.get(x_name, pd.Series(dtype=float)),
+                        errors="coerce",
+                    ).to_numpy(dtype=float)
+                    prefilter_removed_y = pd.to_numeric(
+                        prefilter_removed_tt.get(y_name, pd.Series(dtype=float)),
+                        errors="coerce",
+                    ).to_numpy(dtype=float)
+                    removed_x = pd.to_numeric(
+                        removed_tt.get(x_name, pd.Series(dtype=float)),
+                        errors="coerce",
+                    ).to_numpy(dtype=float)
+                    removed_y = pd.to_numeric(
+                        removed_tt.get(y_name, pd.Series(dtype=float)),
+                        errors="coerce",
+                    ).to_numpy(dtype=float)
+                    prefilter_removed_mask = np.isfinite(prefilter_removed_x) & np.isfinite(prefilter_removed_y)
+                    removed_mask = np.isfinite(removed_x) & np.isfinite(removed_y)
+                    if not np.any(prefilter_removed_mask) and not np.any(removed_mask) and not np.any(after_mask):
                         ax.set_axis_off()
                         continue
                     any_panel_data = True
+                    if np.any(prefilter_removed_mask):
+                        ax.scatter(
+                            prefilter_removed_x[prefilter_removed_mask],
+                            prefilter_removed_y[prefilter_removed_mask],
+                            s=prefilter_scatter_size,
+                            alpha=0.08,
+                            color="grey",
+                            edgecolors="none",
+                            rasterized=True,
+                        )
                     for combo_label in combo_labels:
-                        combo_before_x = before_combo_data[combo_label][x_name]
-                        combo_before_y = before_combo_data[combo_label][y_name]
-                        combo_after_x = after_combo_data[combo_label][x_name]
-                        combo_after_y = after_combo_data[combo_label][y_name]
-                        combo_before_mask = np.isfinite(combo_before_x) & np.isfinite(combo_before_y)
+                        combo_after_x = after_scatter_combo_data[combo_label][x_name]
+                        combo_after_y = after_scatter_combo_data[combo_label][y_name]
+                        combo_removed_x = removed_scatter_combo_data[combo_label][x_name]
+                        combo_removed_y = removed_scatter_combo_data[combo_label][y_name]
                         combo_after_mask = np.isfinite(combo_after_x) & np.isfinite(combo_after_y)
-                        if np.any(combo_before_mask):
-                            ax.scatter(
-                                combo_before_x[combo_before_mask],
-                                combo_before_y[combo_before_mask],
-                                s=5,
-                                alpha=0.05,
-                                color=combo_color_map[combo_label],
-                                edgecolors="none",
-                                rasterized=True,
-                            )
+                        combo_removed_mask = np.isfinite(combo_removed_x) & np.isfinite(combo_removed_y)
                         if np.any(combo_after_mask):
                             ax.scatter(
                                 combo_after_x[combo_after_mask],
@@ -2624,6 +3266,17 @@ def plot_task3_plane_combination_filter_by_tt(
                                 alpha=0.16,
                                 color=combo_color_map[combo_label],
                                 edgecolors="none",
+                                rasterized=True,
+                            )
+                        if np.any(combo_removed_mask):
+                            ax.scatter(
+                                combo_removed_x[combo_removed_mask],
+                                combo_removed_y[combo_removed_mask],
+                                s=removed_scatter_marker_size,
+                                marker=removed_marker,
+                                alpha=removed_marker_alpha,
+                                linewidths=1.0,
+                                color=combo_color_map[combo_label],
                                 rasterized=True,
                             )
                     x_low, x_high = axis_ranges[x_name]
@@ -2657,33 +3310,44 @@ def plot_task3_plane_combination_filter_by_tt(
             plt.close(fig)
             continue
 
-        if combo_labels:
-            style_handles = [
-                mpl.lines.Line2D([0], [0], color="black", linestyle="--", linewidth=1.0, label="Before"),
-                mpl.lines.Line2D([0], [0], color="black", linestyle="-", linewidth=1.4, label="After"),
-            ]
-            combo_handles = [
-                mpl.lines.Line2D([0], [0], color=combo_color_map[label], linestyle="-", linewidth=1.6, label=label)
-                for label in combo_labels
-            ]
-            fig.legend(
-                handles=style_handles + combo_handles,
-                loc="upper center",
-                bbox_to_anchor=(0.5, 0.995),
-                ncol=min(6, max(2, len(combo_handles) + 2)),
-                fontsize=6,
-                frameon=False,
-                handlelength=1.8,
-                columnspacing=0.8,
-            )
+        relation_title = relation_label.replace("_", " ").title()
+        style_handles = [
+            mpl.lines.Line2D([0], [0], color="lightgrey", linestyle="--", linewidth=1.0, label="Removed Before Current Filter"),
+            mpl.lines.Line2D([0], [0], color="black", linestyle="--", linewidth=1.0, label="Removed By Current Filter"),
+            mpl.lines.Line2D([0], [0], color="black", linestyle="-", linewidth=1.4, label="Retained"),
+            mpl.lines.Line2D(
+                [0],
+                [0],
+                color="black",
+                marker=removed_marker,
+                linestyle="None",
+                markersize=6,
+                markerfacecolor="none",
+                label=f"{relation_title} Filter Rejection",
+            ),
+        ]
+        combo_handles = [
+            mpl.lines.Line2D([0], [0], color=combo_color_map[label], linestyle="-", linewidth=1.6, label=label)
+            for label in combo_labels
+        ]
+        fig.legend(
+            handles=style_handles + combo_handles,
+            loc="upper center",
+            bbox_to_anchor=(0.5, 0.995),
+            ncol=min(6, max(2, len(combo_handles) + 2)),
+            fontsize=6,
+            frameon=False,
+            handlelength=1.8,
+            columnspacing=0.8,
+        )
 
         fig.suptitle(
-            f"Task 3 plane-combination filter by TT {tt_label}\n{basename_no_ext_value}",
+            f"Task 3 {relation_title} plane-comparison filter by TT {tt_label}\n{basename_no_ext_value}",
             fontsize=11,
             y=0.94,
         )
         if save_plots:
-            final_filename = f"{fig_idx_value}_plane_combination_filter_by_tt_TT_{tt_label}.png"
+            final_filename = f"{fig_idx_value}_plane_combination_filter_by_tt_{relation_label}_TT_{tt_label}.png"
             fig_idx_value += 1
             save_fig_path = os.path.join(base_dir, final_filename)
             if plot_list is not None:
@@ -5895,10 +6559,33 @@ if filter6_cols and task3_any_plot_enabled(
         )
 
 record_filter6_counts(working_df, "before_filter6")
+plane_combination_stage_input_df = (
+    working_df.loc[:, filter6_cols].copy()
+    if filter6_cols
+    else pd.DataFrame(index=working_df.index)
+)
+
+_plot_plane_combination_filter_by_tt = task3_plot_enabled("plane_combination_filter_by_tt")
+if _plot_plane_combination_filter_by_tt:
+    plane_combination_tt_original = _task3_filter_tt_series(working_df).copy()
+    plane_combination_self_hist_original = collect_task3_plane_combination_histogram_payload(
+        working_df,
+        plane_combination_tt_original,
+        relation_type="plane",
+    )
+    plane_combination_any_hist_original = collect_task3_plane_combination_histogram_payload(
+        working_df,
+        plane_combination_tt_original,
+        relation_type="detector",
+    )
+else:
+    plane_combination_tt_original = pd.Series(dtype=str)
+    plane_combination_self_hist_original = pd.DataFrame()
+    plane_combination_any_hist_original = pd.DataFrame()
 
 _prof["s_tsum_ref_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
-print("----------- Sequential per-plane variable filtering ------------------")
+print("-------------- Sequential per-plane plane filtering ------------------")
 
 plane_dead_masks: dict[int, np.ndarray] = {
     i_plane: np.zeros(len(working_df), dtype=bool)
@@ -5995,44 +6682,65 @@ if filter6_cols and filter6_before_zero_mask is not None:
         newly_zeroed,
         len(working_df) if len(working_df) else 0,
     )
+    record_filter_metric(
+        "plane_combination_plane_rows_affected_pct",
+        newly_zeroed,
+        len(working_df) if len(working_df) else 0,
+    )
+    record_filter_metric(
+        "plane_combination_self_rows_affected_pct",
+        newly_zeroed,
+        len(working_df) if len(working_df) else 0,
+    )
+    record_filter_metric(
+        "plane_combination_same_plane_rows_affected_pct",
+        newly_zeroed,
+        len(working_df) if len(working_df) else 0,
+    )
 
 record_filter6_counts(working_df, "after_filter6")
 _prof["s_filter6_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
 
 print("----------------------------------------------------------------------")
-print("-------- Final plane-combination consistency filter -------------------")
+print("----------- Final inter-plane detector consistency filter ------------")
 print("----------------------------------------------------------------------")
 
-# Final Task 3 filter: evaluate distinct plane pairs only when both plane
+# Final Task 3 any-filter: evaluate distinct plane pairs only when both plane
 # blocks are fully populated, then zero both planes when any derived
-# plane-combination observable falls outside the configured limits.
-_plot_plane_combination_filter_by_tt = task3_plot_enabled("plane_combination_filter_by_tt")
+# inter-plane observable falls outside the configured limits.
 if _plot_plane_combination_filter_by_tt:
+    plane_combination_self_hist_after = collect_task3_plane_combination_histogram_payload(
+        working_df,
+        plane_combination_tt_original,
+        relation_type="plane",
+    )
     plane_combination_tt_before = _task3_filter_tt_series(working_df).copy()
-    plane_combination_hist_before = collect_task3_plane_combination_histogram_payload(
+    plane_combination_any_hist_before = collect_task3_plane_combination_histogram_payload(
         working_df,
         plane_combination_tt_before,
+        relation_type="detector",
     )
 else:
+    plane_combination_self_hist_after = pd.DataFrame()
     plane_combination_tt_before = pd.Series(dtype=str)
-    plane_combination_hist_before = {}
+    plane_combination_any_hist_before = pd.DataFrame()
 
 plane_combination_summary = apply_task3_plane_combination_filter(
     working_df,
-    q_sum_sum_left=plane_combination_q_sum_sum_left,
-    q_sum_sum_right=plane_combination_q_sum_sum_right,
-    q_sum_dif_threshold=plane_combination_q_sum_dif_threshold,
-    q_dif_sum_threshold=plane_combination_q_dif_sum_threshold,
-    q_dif_dif_threshold=plane_combination_q_dif_dif_threshold,
-    t_sum_sum_left=plane_combination_t_sum_sum_left,
-    t_sum_sum_right=plane_combination_t_sum_sum_right,
-    t_sum_dif_threshold=plane_combination_t_sum_dif_threshold,
-    t_dif_sum_threshold=plane_combination_t_dif_sum_threshold,
-    t_dif_dif_threshold=plane_combination_t_dif_dif_threshold,
-    y_sum_left=plane_combination_y_sum_left,
-    y_sum_right=plane_combination_y_sum_right,
-    y_dif_threshold=plane_combination_y_dif_threshold,
+    q_sum_sum_left=plane_combination_detector_q_sum_sum_left,
+    q_sum_sum_right=plane_combination_detector_q_sum_sum_right,
+    q_sum_dif_threshold=plane_combination_detector_q_sum_dif_threshold,
+    q_dif_sum_threshold=plane_combination_detector_q_dif_sum_threshold,
+    q_dif_dif_threshold=plane_combination_detector_q_dif_dif_threshold,
+    t_sum_sum_left=plane_combination_detector_t_sum_sum_left,
+    t_sum_sum_right=plane_combination_detector_t_sum_sum_right,
+    t_sum_dif_threshold=plane_combination_detector_t_sum_dif_threshold,
+    t_dif_sum_threshold=plane_combination_detector_t_dif_sum_threshold,
+    t_dif_dif_threshold=plane_combination_detector_t_dif_dif_threshold,
+    y_sum_left=plane_combination_detector_y_sum_left,
+    y_sum_right=plane_combination_detector_y_sum_right,
+    y_dif_threshold=plane_combination_detector_y_dif_threshold,
 )
 record_activity_metric(
     "plane_combination_filter_rows_affected_pct",
@@ -6047,6 +6755,12 @@ record_activity_metric(
     if (len(working_df) and plane_combination_summary["tracked_plane_count"])
     else 0,
     label="plane values zeroed by plane-combination filter",
+)
+record_activity_metric(
+    "plane_combination_filter_detector_failed_pct",
+    plane_combination_summary["failed_pair_any"],
+    plane_combination_summary["valid_pair_observations"],
+    label="failed detector comparisons",
 )
 record_activity_metric(
     "plane_combination_filter_any_failed_pct",
@@ -6147,33 +6861,70 @@ for selected_count in TASK3_SELECTED_OFFENDER_CARDINALITY_VALUES:
     global_variables[_task3_selected_offender_cardinality_metric_key(selected_count)] = selected_rows
 for plane_key, offender_count in plane_combination_summary["selected_offender_counts"].items():
     global_variables[_task3_plane_offender_metric_key(plane_key)] = int(offender_count)
+if not plane_combination_stage_input_df.empty:
+    task3_problematic_plane_count = np.zeros(len(working_df), dtype=int)
+    stage_plane_map = collect_task3_plane_final_map(working_df)
+    for plane_key, cols in stage_plane_map.items():
+        component_cols = list(cols.values())
+        before_values = plane_combination_stage_input_df.loc[:, component_cols].to_numpy(copy=False)
+        after_values = working_df.loc[:, component_cols].to_numpy(copy=False)
+        before_active = np.all(np.isfinite(before_values) & (before_values != 0), axis=1)
+        after_zeroed = np.any(~np.isfinite(after_values) | (after_values == 0), axis=1)
+        task3_problematic_plane_count += (before_active & after_zeroed).astype(int)
+    working_df.loc[:, "task3_problematic_plane_count"] = task3_problematic_plane_count
+else:
+    working_df.loc[:, "task3_problematic_plane_count"] = 0
 if _plot_plane_combination_filter_by_tt:
-    plane_combination_hist_after = collect_task3_plane_combination_histogram_payload(
+    plane_combination_any_hist_after = collect_task3_plane_combination_histogram_payload(
         working_df,
         plane_combination_tt_before,
+        relation_type="detector",
     )
-    plane_combination_limits = {
-        "q_sum_sum": (plane_combination_q_sum_sum_left, plane_combination_q_sum_sum_right),
-        "q_sum_dif": (-abs(plane_combination_q_sum_dif_threshold), abs(plane_combination_q_sum_dif_threshold)),
-        "q_dif_sum": (-abs(plane_combination_q_dif_sum_threshold), abs(plane_combination_q_dif_sum_threshold)),
-        "q_dif_dif": (-abs(plane_combination_q_dif_dif_threshold), abs(plane_combination_q_dif_dif_threshold)),
-        "t_sum_sum": (plane_combination_t_sum_sum_left, plane_combination_t_sum_sum_right),
-        "t_sum_dif": (-abs(plane_combination_t_sum_dif_threshold), abs(plane_combination_t_sum_dif_threshold)),
-        "t_dif_sum": (-abs(plane_combination_t_dif_sum_threshold), abs(plane_combination_t_dif_sum_threshold)),
-        "t_dif_dif": (-abs(plane_combination_t_dif_dif_threshold), abs(plane_combination_t_dif_dif_threshold)),
-        "y_sum": (plane_combination_y_sum_left, plane_combination_y_sum_right),
-        "y_dif": (-abs(plane_combination_y_dif_threshold), abs(plane_combination_y_dif_threshold)),
+    plane_combination_same_plane_limits = {
+        "q_sum_sum": (plane_combination_plane_q_sum_sum_left, plane_combination_plane_q_sum_sum_right),
+        "q_dif_sum": (-abs(plane_combination_plane_q_dif_sum_threshold), abs(plane_combination_plane_q_dif_sum_threshold)),
+        "t_sum_sum": (plane_combination_plane_t_sum_sum_left, plane_combination_plane_t_sum_sum_right),
+        "t_dif_sum": (-abs(plane_combination_plane_t_dif_sum_threshold), abs(plane_combination_plane_t_dif_sum_threshold)),
+        "y_sum": (plane_combination_plane_y_sum_left, plane_combination_plane_y_sum_right),
+    }
+    plane_combination_any_limits = {
+        "q_sum_sum": (plane_combination_detector_q_sum_sum_left, plane_combination_detector_q_sum_sum_right),
+        "q_sum_dif": (-abs(plane_combination_detector_q_sum_dif_threshold), abs(plane_combination_detector_q_sum_dif_threshold)),
+        "q_dif_sum": (-abs(plane_combination_detector_q_dif_sum_threshold), abs(plane_combination_detector_q_dif_sum_threshold)),
+        "q_dif_dif": (-abs(plane_combination_detector_q_dif_dif_threshold), abs(plane_combination_detector_q_dif_dif_threshold)),
+        "t_sum_sum": (plane_combination_detector_t_sum_sum_left, plane_combination_detector_t_sum_sum_right),
+        "t_sum_dif": (-abs(plane_combination_detector_t_sum_dif_threshold), abs(plane_combination_detector_t_sum_dif_threshold)),
+        "t_dif_sum": (-abs(plane_combination_detector_t_dif_sum_threshold), abs(plane_combination_detector_t_dif_sum_threshold)),
+        "t_dif_dif": (-abs(plane_combination_detector_t_dif_dif_threshold), abs(plane_combination_detector_t_dif_dif_threshold)),
+        "y_sum": (plane_combination_detector_y_sum_left, plane_combination_detector_y_sum_right),
+        "y_dif": (-abs(plane_combination_detector_y_dif_threshold), abs(plane_combination_detector_y_dif_threshold)),
     }
     fig_idx = plot_task3_plane_combination_filter_by_tt(
-        plane_combination_hist_before,
-        plane_combination_hist_after,
+        plane_combination_self_hist_original,
+        plane_combination_self_hist_original,
+        plane_combination_self_hist_after,
         basename_no_ext,
         fig_idx,
         base_directories["figure_directory"],
         show_plots=show_plots,
         save_plots=save_plots,
         plot_list=plot_list,
-        limits_by_observable=plane_combination_limits,
+        limits_by_observable=plane_combination_same_plane_limits,
+        relation_label="plane",
+        observable_definitions=TASK3_PLANE_COMBINATION_SELF_OBSERVABLES,
+    )
+    fig_idx = plot_task3_plane_combination_filter_by_tt(
+        plane_combination_any_hist_original,
+        plane_combination_any_hist_before,
+        plane_combination_any_hist_after,
+        basename_no_ext,
+        fig_idx,
+        base_directories["figure_directory"],
+        show_plots=show_plots,
+        save_plots=save_plots,
+        plot_list=plot_list,
+        limits_by_observable=plane_combination_any_limits,
+        relation_label="detector",
     )
 _prof["s_plane_combination_filter_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
@@ -6280,7 +7031,13 @@ for i_plane in range(1, 5):
         cols_to_remove.append(f'T{i_plane}_T_dif_{strip}')
         cols_to_remove.append(f'Q{i_plane}_Q_sum_{strip}')
         cols_to_remove.append(f'Q{i_plane}_Q_dif_{strip}')
-working_df.drop(columns=cols_to_remove, inplace=True, errors='ignore')
+if keep_all_columns_output:
+    print(
+        "Task 3 keep_all_columns_output enabled: "
+        f"retaining {len(cols_to_remove)} strip-summary columns."
+    )
+else:
+    working_df.drop(columns=cols_to_remove, inplace=True, errors='ignore')
     
     
 
@@ -6351,6 +7108,7 @@ task3_plane_activation_initial = store_task3_plane_activation_snapshot(
     snapshot_label="initial",
     tt_series=pd.to_numeric(working_df["list_tt"], errors="coerce"),
     streamer_high_charge_factor_value=streamer_high_charge_factor,
+    streamer_threshold_override=streamer_charge_sum_threshold,
 )
 list_tt_total = len(working_df)
 if "list_tt" in working_df.columns and task3_plot_enabled("prefilter_list_tt_debug"):
@@ -6386,7 +7144,50 @@ task3_plane_activation_filtered = store_task3_plane_activation_snapshot(
     snapshot_label="filtered",
     tt_series=pd.to_numeric(working_df["list_tt"], errors="coerce"),
     streamer_high_charge_factor_value=streamer_high_charge_factor,
+    streamer_threshold_override=streamer_charge_sum_threshold,
 )
+
+task3_q_sum_final_cols = [
+    f"P{i_plane}_Q_sum_final" for i_plane in range(1, 5) if f"P{i_plane}_Q_sum_final" in working_df.columns
+]
+task3_streamer_threshold, task3_streamer_threshold_source = select_task3_streamer_threshold(
+    working_df,
+    task3_q_sum_final_cols,
+    streamer_charge_sum_threshold,
+)
+task3_topology_digits_by_plane: dict[int, np.ndarray] = {
+    plane: np.zeros(len(working_df), dtype=np.int8) for plane in range(1, 5)
+}
+task3_topology_tt_streamer_as_avalanche = pd.Series(0, index=working_df.index, dtype="Int64")
+task3_topology_tt_streamer_as_invalid = pd.Series(0, index=working_df.index, dtype="Int64")
+task3_topology_tt_streamer_as_invalid_no_transference = pd.Series(0, index=working_df.index, dtype="Int64")
+if task3_streamer_threshold is not None:
+    (
+        task3_topology_code_series,
+        task3_topology_digits_by_plane,
+    ) = compute_task3_charge_topology_codes(
+        working_df,
+        task3_streamer_threshold,
+    )
+    task3_topology_tt_streamer_as_avalanche = compute_task3_tt_from_topology_codes(
+        task3_topology_digits_by_plane,
+        streamers_count_as_active=True,
+        index=working_df.index,
+    )
+    task3_topology_tt_streamer_as_invalid = compute_task3_tt_from_topology_codes(
+        task3_topology_digits_by_plane,
+        streamers_count_as_active=False,
+        index=working_df.index,
+    )
+    task3_topology_tt_streamer_as_invalid_no_transference = compute_task3_tt_from_topology_codes(
+        task3_topology_digits_by_plane,
+        streamers_count_as_active=False,
+        exclude_streamer_events=True,
+        index=working_df.index,
+    )
+    working_df.loc[:, "plane_charge_topology_code"] = task3_topology_code_series
+else:
+    working_df.loc[:, "plane_charge_topology_code"] = "0000"
 
 if "list_tt" in working_df.columns and task3_any_plot_enabled(
     "list_tt_qsum_pairgrid",
@@ -6414,13 +7215,16 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
         f"P{i_plane}_Q_sum_final" for i_plane in range(1, 5) if f"P{i_plane}_Q_sum_final" in working_df.columns
     ]
     if q_sum_final_cols:
-        streamer_thr_auto = detect_streamer_threshold(working_df, q_sum_final_cols)
         list_tt_charge_limit_effective_runtime = list_tt_charge_limit_effective
-        if streamer_thr_auto is not None and np.isfinite(streamer_thr_auto) and streamer_thr_auto > 0:
-            list_tt_charge_limit_effective_runtime = float(streamer_thr_auto)
+        if (
+            task3_streamer_threshold is not None
+            and np.isfinite(task3_streamer_threshold)
+            and task3_streamer_threshold > 0
+        ):
+            list_tt_charge_limit_effective_runtime = float(task3_streamer_threshold)
             print(
-                "Task 3: using auto-detected streamer threshold as charge-threshold cap: "
-                f"{float(streamer_thr_auto):.3g}"
+                f"Task 3: using {task3_streamer_threshold_source}-selected streamer threshold "
+                f"as charge-threshold cap: {float(task3_streamer_threshold):.3g}"
             )
 
         if list_tt_charge_threshold_mode in {"auto", "quantile"}:
@@ -8132,7 +8936,7 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
             f"P{p}_Q_sum_final" for p in range(1, 5)
             if f"P{p}_Q_sum_final" in working_df.columns
         ]
-        streamer_thr = detect_streamer_threshold(working_df, streamer_q_cols)
+        streamer_thr = task3_streamer_threshold
 
         plane_q_arr: dict[int, np.ndarray] = {}
         plane_is_active: dict[int, np.ndarray] = {}
@@ -8152,7 +8956,10 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
             if streamer_thr is None:
                 continue
 
-            plane_streamer = plane_active & (arr > streamer_thr)
+            plane_streamer = task3_topology_digits_by_plane.get(
+                p,
+                np.zeros(len(working_df), dtype=np.int8),
+            ) == 2
             plane_is_streamer[p] = plane_streamer
             any_streamer |= plane_streamer
             n_streamer_planes += plane_streamer.astype(int)
@@ -8174,7 +8981,10 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
 
         if streamer_plots_requested:
             if streamer_thr is not None:
-                print(f"Auto-detected streamer threshold: {streamer_thr:.1f}")
+                print(
+                    f"Task 3 streamer threshold ({task3_streamer_threshold_source}) "
+                    f"= {streamer_thr:.1f}"
+                )
 
                 # --- Plot 0: Per-plane charge histogram with streamer line ---
                 if task3_plot_enabled("streamer_charge_histograms"):
@@ -8211,7 +9021,7 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                         ax.legend(fontsize=9)
                         ax.grid(True, alpha=0.2, which="both")
                     fig_sh.suptitle(
-                        f"Per-plane charge spectrum with auto-detected streamer boundary",
+                        "Per-plane charge spectrum with streamer boundary",
                         fontsize=14,
                     )
                     fig_sh.tight_layout(rect=[0, 0, 1, 0.95])
@@ -8349,52 +9159,134 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
 
                 # --- Plot 4: Efficiency with vs without streamers ---
                 if task3_plot_enabled("streamer_efficiency_comparison"):
-                    no_streamer_mask = ~any_streamer
                     plane_colors_e = {1: "tab:blue", 2: "tab:orange", 3: "tab:green", 4: "tab:red"}
+                    policy_specs = (
+                        (
+                            "Streamers counted as avalanche",
+                            "streamer_as_avalanche",
+                            task3_topology_tt_streamer_as_avalanche,
+                            "tab:blue",
+                        ),
+                        (
+                            "Streamers counted as invalid",
+                            "streamer_as_invalid",
+                            task3_topology_tt_streamer_as_invalid,
+                            "tab:red",
+                        ),
+                        (
+                            "Streamers invalid, no transference",
+                            "streamer_as_invalid_no_transference",
+                            task3_topology_tt_streamer_as_invalid_no_transference,
+                            "tab:green",
+                        ),
+                    )
                     missing_plane_tt_label = {1: "234", 2: "134", 3: "124", 4: "123"}
+                    fig_se, axes_se = plt.subplots(1, 2, figsize=(12, 5.5), sharey=False)
+                    x_positions = np.arange(1, 5, dtype=float)
+                    offsets = {
+                        "streamer_as_avalanche": -0.18,
+                        "streamer_as_invalid": 0.0,
+                        "streamer_as_invalid_no_transference": 0.18,
+                    }
+                    efficiency_by_policy: dict[str, list[float]] = {}
+                    excluded_count_by_policy: dict[str, int] = {}
 
-                    fig_se, axes_se = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
-                    for ax_idx, (label, mask_sel) in enumerate([
-                        ("All events", np.ones(len(working_df), dtype=bool)),
-                        ("Streamer-free events", no_streamer_mask),
-                    ]):
-                        ax = axes_se[ax_idx]
-                        subset_df = working_df.loc[mask_sel, streamer_q_cols]
-                        for plane in (1, 2, 3, 4):
-                            thrs_plot = []
-                            effs_plot = []
-                            errs_plot = []
-                            for thr in sorted(list_tt_charge_thresholds):
-                                tt_series = compute_qsum_threshold_tt(subset_df, thr)
-                                tt_counts = tt_series.value_counts()
-                                per_plane = compute_empirical_efficiency_from_tt_counts(tt_counts)
-                                eff, err, _, _ = per_plane[plane]
-                                thrs_plot.append(float(thr))
-                                effs_plot.append(float(eff))
-                                errs_plot.append(float(err))
-                            x = np.asarray(thrs_plot)
-                            y = np.asarray(effs_plot)
-                            ye = np.asarray(errs_plot)
-                            valid = np.isfinite(y) & np.isfinite(ye)
-                            if np.any(valid):
-                                ax.errorbar(
-                                    x[valid], y[valid], yerr=ye[valid],
-                                    fmt="o-", linewidth=1.5, markersize=4,
-                                    capsize=3, color=plane_colors_e[plane],
-                                    label=f"eff_{plane} = 1-N({missing_plane_tt_label[plane]})/N(1234)",
+                    for label, policy_name, tt_series, color in policy_specs:
+                        tt_counts = tt_series.value_counts()
+                        excluded_count_by_policy[policy_name] = int(tt_series.isna().sum())
+                        per_plane_eff = compute_empirical_efficiency_from_tt_counts(tt_counts)
+                        eff_values: list[float] = []
+                        err_values: list[float] = []
+                        n_four = int(tt_counts.get(1234, 0))
+                        for plane in range(1, 5):
+                            eff_value, eff_error, n_three, _ = per_plane_eff[plane]
+                            eff_values.append(float(eff_value))
+                            err_values.append(float(eff_error))
+                            if np.isfinite(eff_value):
+                                axes_se[0].errorbar(
+                                    [plane + offsets[policy_name]],
+                                    [eff_value],
+                                    yerr=[eff_error] if np.isfinite(eff_error) else None,
+                                    fmt="o",
+                                    markersize=7,
+                                    capsize=4,
+                                    color=color,
+                                    label=label if plane == 1 else None,
                                 )
-                        ax.set_xlabel("Charge threshold")
-                        ax.set_ylabel("Empirical efficiency")
-                        n_sel = int(mask_sel.sum())
-                        ax.set_title(f"{label} (N={n_sel})")
-                        ax.grid(True, alpha=0.25)
-                        ax.legend(fontsize=8)
-                        ax.set_ylim(0, 1.05)
+                                axes_se[0].annotate(
+                                    f"N({missing_plane_tt_label[plane]})={n_three}\nN(1234)={n_four}",
+                                    (plane + offsets[policy_name], eff_value),
+                                    xytext=(
+                                        0,
+                                        11 if policy_name == "streamer_as_avalanche"
+                                        else (-30 if policy_name == "streamer_as_invalid" else 14),
+                                    ),
+                                    textcoords="offset points",
+                                    ha="center",
+                                    fontsize=7,
+                                    color=color,
+                                )
+                        efficiency_by_policy[policy_name] = eff_values
+                        axes_se[0].plot(
+                            x_positions + offsets[policy_name],
+                            eff_values,
+                            "-",
+                            color=color,
+                            linewidth=1.5,
+                            alpha=0.85,
+                        )
+
+                    delta_eff_invalid = (
+                        np.asarray(efficiency_by_policy.get("streamer_as_avalanche", [np.nan] * 4), dtype=float)
+                        - np.asarray(efficiency_by_policy.get("streamer_as_invalid", [np.nan] * 4), dtype=float)
+                    )
+                    delta_eff_no_transfer = (
+                        np.asarray(efficiency_by_policy.get("streamer_as_avalanche", [np.nan] * 4), dtype=float)
+                        - np.asarray(
+                            efficiency_by_policy.get("streamer_as_invalid_no_transference", [np.nan] * 4),
+                            dtype=float,
+                        )
+                    )
+                    axes_se[1].bar(
+                        x_positions - 0.12,
+                        delta_eff_invalid,
+                        width=0.22,
+                        color="tab:red",
+                        alpha=0.75,
+                        label="Avalanche - invalid",
+                    )
+                    axes_se[1].bar(
+                        x_positions + 0.12,
+                        delta_eff_no_transfer,
+                        width=0.22,
+                        color="tab:green",
+                        alpha=0.75,
+                        label="Avalanche - invalid no transfer",
+                    )
+                    axes_se[1].axhline(0, color="black", linestyle="--", linewidth=0.8)
+
+                    axes_se[0].set_xlabel("Plane")
+                    axes_se[0].set_ylabel("Empirical efficiency")
+                    axes_se[0].set_xticks([1, 2, 3, 4])
+                    axes_se[0].set_ylim(0, 1.05)
+                    axes_se[0].grid(True, alpha=0.25)
+                    axes_se[0].legend(fontsize=8)
+                    axes_se[0].set_title("Per-plane efficiency by streamer policy")
+
+                    axes_se[1].set_xlabel("Plane")
+                    axes_se[1].set_ylabel("Efficiency difference")
+                    axes_se[1].set_xticks([1, 2, 3, 4])
+                    axes_se[1].grid(True, alpha=0.25, axis="y")
+                    axes_se[1].legend(fontsize=8)
+                    axes_se[1].set_title("Delta relative to avalanche policy")
 
                     fig_se.suptitle(
-                        f"Efficiency threshold scan: all vs streamer-free\n"
-                        f"(auto streamer threshold = {streamer_thr:.1f})",
-                        fontsize=14,
+                        "Efficiency from topology code under streamer treatment\n"
+                        f"(streamer threshold = {streamer_thr:.1f}, source = {task3_streamer_threshold_source}, "
+                        f"events with any streamer = {int(np.sum(any_streamer))}/{len(working_df)}, "
+                        f"excluded in no-transfer = "
+                        f"{excluded_count_by_policy.get('streamer_as_invalid_no_transference', 0)})",
+                        fontsize=13,
                     )
                     fig_se.tight_layout(rect=[0, 0, 1, 0.93])
                     if save_plots:
@@ -8833,6 +9725,19 @@ print(f"Metadata (pattern) CSV updated at: {metadata_pattern_csv_path}")
 # -------------------------------------------------------------------------------
 
 global_variables.update(build_events_per_second_metadata(working_df))
+global_variables["charge_topology_code_column"] = "plane_charge_topology_code"
+global_variables["charge_topology_streamer_threshold_source"] = task3_streamer_threshold_source
+store_task3_charge_topology_metadata(
+    global_variables,
+    working_df,
+    working_df["plane_charge_topology_code"].astype(str),
+    task3_topology_digits_by_plane,
+    pd.to_numeric(working_df["list_tt"], errors="coerce").astype("Int64"),
+    task3_topology_tt_streamer_as_avalanche,
+    task3_topology_tt_streamer_as_invalid,
+    task3_topology_tt_streamer_as_invalid_no_transference,
+    task3_streamer_threshold,
+)
 ensure_global_count_keys(("cal_tt", "list_tt", "cal_to_list_tt"))
 add_normalized_count_metadata(
     global_variables,
@@ -8911,7 +9816,12 @@ print(f"Metadata (specific) CSV updated at: {metadata_specific_csv_path}")
 plt.close("all")
 
 # Save to HDF5 file
-working_df.to_parquet(OUT_PATH, engine="pyarrow", compression="zstd", index=False)
+working_df.to_parquet(
+    OUT_PATH,
+    engine="pyarrow",
+    compression=_preferred_parquet_compression(),
+    index=False,
+)
 print(f"Listed dataframe saved to: {OUT_PATH}")
 
 # Move the original datafile to COMPLETED -------------------------------------

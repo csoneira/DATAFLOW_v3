@@ -4,16 +4,17 @@ selection:
   date_ranges:
     - start: 2024-09-27
       end: 2024-10-01
-complete_reanalysis: false
+complete_reanalysis: true
 article_format: false
 # create_plots options: null | debug | usual | essential | all
 # Task 2 plot alias statuses live in config_plots_task_2.yaml
 create_plots: null
+keep_all_columns_output: false
 filter_parameter_config_csv: config_filter_parameters_task_2.csv
 strip_pair_min_events: 10
 track_removed_rows_task2: false
 removed_marker: x
-removed_marker_size: 30
+removed_marker_size: 20
 removed_marker_alpha: 0.9
 touched_marker: +
 touched_marker_size: 24

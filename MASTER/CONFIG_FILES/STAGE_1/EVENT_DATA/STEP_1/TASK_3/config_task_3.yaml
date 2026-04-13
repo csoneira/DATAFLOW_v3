@@ -1,4 +1,4 @@
-last_file_test: true
+last_file_test: false
 selection:
   stations: [0, 1]
   date_ranges:
@@ -9,11 +9,15 @@ default_z_positions:
 - 150
 - 300
 - 450
-complete_reanalysis: false
+complete_reanalysis: true
 stratos_save: false
 # create_plots options: null | debug | usual | essential | all
 # Task 3 plot statuses by alias live in config_plots_task_3.yaml
 create_plots: null
+keep_all_columns_output: false
+removed_marker: x
+removed_marker_size: 20
+removed_marker_alpha: 0.9
 filter_parameter_config_csv: config_filter_parameters_task_3.csv
 # list_tt_qsum_pair_plot_mode options: hexbin | scatter
 list_tt_qsum_pair_plot_mode: scatter
@@ -40,3 +44,6 @@ charge_asymmetry_x_high_quantile: 99.5
 list_tt_charge_thresholds: [0, 5, 10, 20, 50]
 limit_number: null
 y_new_method: true
+# Fixed Q_sum boundary for topology coding:
+# 0 = no charge, 1 = avalanche, 2 = streamer. Set null to fall back to auto-detection.
+streamer_charge_sum_threshold: 100.0

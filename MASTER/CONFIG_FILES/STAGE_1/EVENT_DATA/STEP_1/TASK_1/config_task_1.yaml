@@ -1,4 +1,4 @@
-last_file_test: true
+last_file_test: false
 selection:
   stations: [0, 1]
   date_ranges:
@@ -10,6 +10,10 @@ article_format: false
 # create_plots options: null | debug | usual | essential | all
 # Task 1 plot alias statuses live in config_plots_task_1.yaml
 create_plots: null
+keep_all_columns_output: false
+removed_marker: x
+removed_marker_size: 20
+removed_marker_alpha: 0.9
 filter_parameter_config_csv: config_filter_parameters_task_1.csv
 limit_number: null
 EXPECTED_COLUMNS_config: 71
@@ -17,6 +21,11 @@ time_window_filtering: false
 channel_pair_plot_top_n: 5
 channel_combination_plot_top_n: 20
 channel_combination_plot_include_same_strip_pairs: false
+channel_combination_plot_top_n_self: 10
+channel_combination_plot_top_n_same_strip: 10
+channel_combination_plot_top_n_same_plane: 10
+channel_combination_plot_top_n_any: 10
+noise_control_efficiency_max_selected_offenders: 5
 recalculate_noise_charge_limit: false
 noise_charge_limit_by_channel:
   P1S1F: null
