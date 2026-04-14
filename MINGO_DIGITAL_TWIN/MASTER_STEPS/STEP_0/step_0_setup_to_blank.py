@@ -42,7 +42,11 @@ from STEP_SHARED.sim_utils import (
     write_csv_atomic,
     write_text_atomic,
 )
-from MASTER.common.selection_config import SelectionConfig, load_master_selection
+from MASTER.common.selection_config import (
+    SelectionConfig,
+    effective_date_ranges_for_station,
+    load_master_selection,
+)
 
 
 def _max_existing_step1_id(intersteps_dir: Path) -> int:
@@ -341,10 +345,24 @@ def _selected_station_ids_for_z_adaptation(
     return selected_real or available_real
 
 
+def _effective_step0_date_ranges(
+    station_id: int,
+    *,
+    selection: SelectionConfig | None = None,
+    date_ranges: Iterable[tuple[datetime | None, datetime | None]] | None = None,
+) -> tuple[tuple[datetime | None, datetime | None], ...] | None:
+    if selection is not None:
+        return effective_date_ranges_for_station(station_id, selection)
+    if date_ranges is None:
+        return None
+    return tuple(date_ranges)
+
+
 def _collect_z_positions(
     station_files: dict[int, Path],
     *,
     selected_station_ids: Iterable[int] | None = None,
+    selection: SelectionConfig | None = None,
     date_ranges: Iterable[tuple[datetime | None, datetime | None]] | None = None,
 ) -> pd.DataFrame:
     if selected_station_ids is None:
@@ -355,7 +373,12 @@ def _collect_z_positions(
     for station_id in selected_ids:
         df = read_station_config(station_files[station_id]).copy()
         df["station"] = station_id
-        mask = _date_range_overlap_mask(df, date_ranges)
+        station_ranges = _effective_step0_date_ranges(
+            station_id,
+            selection=selection,
+            date_ranges=date_ranges,
+        )
+        mask = _date_range_overlap_mask(df, station_ranges)
         filtered = df.loc[mask].copy()
         if not filtered.empty:
             station_dfs.append(filtered)
@@ -373,6 +396,7 @@ def _collect_geometry_trigger_rows(
     station_files: dict[int, Path],
     *,
     selected_station_ids: Iterable[int] | None = None,
+    selection: SelectionConfig | None = None,
     date_ranges: Iterable[tuple[datetime | None, datetime | None]] | None = None,
 ) -> pd.DataFrame:
     if selected_station_ids is None:
@@ -383,7 +407,12 @@ def _collect_geometry_trigger_rows(
     for station_id in selected_ids:
         df = read_station_config(station_files[station_id]).copy()
         df["station"] = station_id
-        mask = _date_range_overlap_mask(df, date_ranges)
+        station_ranges = _effective_step0_date_ranges(
+            station_id,
+            selection=selection,
+            date_ranges=date_ranges,
+        )
+        mask = _date_range_overlap_mask(df, station_ranges)
         filtered = df.loc[mask].copy()
         if not filtered.empty:
             station_dfs.append(filtered)
@@ -811,6 +840,10 @@ def main() -> None:
     if adapt_z_positions or adapt_trigger_combinations:
         selection = load_master_selection(REPO_ROOT / "MASTER" / "CONFIG_FILES")
         selected_station_ids = _selected_station_ids_for_z_adaptation(station_files, selection)
+        effective_ranges_by_station = {
+            station_id: list(_effective_step0_date_ranges(station_id, selection=selection) or ())
+            for station_id in selected_station_ids
+        }
         if not z_override.empty:
             _log_info(
                 "Ignoring z_positions_override_mm because "
@@ -819,7 +852,7 @@ def main() -> None:
         geometry_rows = _collect_geometry_trigger_rows(
             station_files,
             selected_station_ids=selected_station_ids,
-            date_ranges=selection.date_ranges,
+            selection=selection,
         )
         if geometry_rows.empty:
             _log_info(
@@ -835,7 +868,7 @@ def main() -> None:
         _log_info(
             "Unique geometry/trigger rows (from selected station configs/date ranges): "
             f"{len(geometry_rows)}; unique z rows={len(z_positions)} stations={selected_station_ids} "
-            f"date_ranges={list(selection.date_ranges) if selection.date_ranges else 'all'}"
+            f"effective_date_ranges={effective_ranges_by_station if any(effective_ranges_by_station.values()) else 'all'}"
         )
     elif z_override.empty:
         z_positions = _collect_z_positions(station_files)

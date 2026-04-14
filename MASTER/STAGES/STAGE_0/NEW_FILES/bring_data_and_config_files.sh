@@ -176,7 +176,7 @@ try:
     )
     from MASTER.common.selection_config import effective_date_ranges_for_station
 
-    ranges = effective_date_ranges_for_station(station_raw, selection.date_ranges)
+    ranges = effective_date_ranges_for_station(station_raw, selection)
     epochs, labels = serialize_date_ranges_for_shell(ranges)
 except Exception:
     pass

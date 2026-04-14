@@ -26,6 +26,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
 from MASTER.common.execution_logger import start_timer
+from MASTER.common.step1_shared import should_write_step1_metadata
 
 start_timer(__file__)
 
@@ -98,6 +99,9 @@ def initialize_status_row(
     path = Path(status_csv_path)
     if execution_date is None:
         execution_date = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
+    metadata_write_enabled, _, _ = should_write_step1_metadata(path)
+    if not metadata_write_enabled:
+        return execution_date
 
     rows = _load_status_rows(path)
     rows.append(
@@ -122,6 +126,9 @@ def update_status_progress(
     """Update completion for the matching ``filename_base`` + ``execution_date`` row."""
 
     path = Path(status_csv_path)
+    metadata_write_enabled, _, _ = should_write_step1_metadata(path)
+    if not metadata_write_enabled:
+        return True
     if not path.exists():
         return False
 
@@ -147,8 +154,11 @@ def append_status_row(status_csv_path: Path | str) -> str:
     """
 
     path = Path(status_csv_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_write_enabled, _, _ = should_write_step1_metadata(path)
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if not metadata_write_enabled:
+        return timestamp
+    path.parent.mkdir(parents=True, exist_ok=True)
     file_exists = path.exists() and path.stat().st_size > 0
     with path.open("a", newline="") as handle:
         writer = csv.writer(handle)
@@ -166,6 +176,9 @@ def mark_status_complete(status_csv_path: Path | str, timestamp: str) -> bool:
     """
 
     path = Path(status_csv_path)
+    metadata_write_enabled, _, _ = should_write_step1_metadata(path)
+    if not metadata_write_enabled:
+        return True
     if not path.exists():
         return False
 

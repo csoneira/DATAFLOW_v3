@@ -130,10 +130,9 @@ def load_date_ranges_from_config(
         [config],
         master_config_root=master_config_root,
     )
-    ranges = selection.date_ranges
-    if station_id is not None:
-        ranges = effective_date_ranges_for_station(station_id, ranges)
-    return list(ranges)
+    if station_id is None:
+        return list(selection.date_ranges)
+    return list(effective_date_ranges_for_station(station_id, selection))
 
 
 def load_date_range_from_config(

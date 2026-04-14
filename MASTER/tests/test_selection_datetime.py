@@ -11,7 +11,9 @@ if str(REPO_ROOT) not in sys.path:
 from MASTER.common.file_selection import file_name_in_any_date_range
 from MASTER.common.selection_config import (
     date_in_ranges,
+    effective_date_ranges_for_station,
     extract_selection,
+    resolve_selection_from_configs,
     serialize_date_ranges_for_shell,
 )
 
@@ -84,3 +86,126 @@ def test_day_overlap_and_shell_serialization_support_partial_days() -> None:
 
     assert epochs == f"{expected_start},{expected_end}"
     assert labels == "2024-09-28|2024-09-28 08:00:00"
+
+
+def test_extract_selection_supports_station_specific_ranges() -> None:
+    selection = extract_selection(
+        {
+            "selection": {
+                "date_ranges": [
+                    {
+                        "start": "2024-09-01",
+                        "end": "2024-09-05",
+                    },
+                    {
+                        "stations": [2],
+                        "start": "2026-01-03",
+                        "end": "2026-01-14",
+                    },
+                    {
+                        "station": "MINGO04",
+                        "start": "2025-02-25",
+                        "end": "2025-03-10",
+                    },
+                ]
+            }
+        }
+    )
+
+    assert selection.date_ranges == (
+        (
+            datetime(2024, 9, 1, 0, 0, 0),
+            datetime.combine(date(2024, 9, 5), time.max),
+        ),
+    )
+    assert selection.station_date_ranges == {
+        2: (
+            (
+                datetime(2026, 1, 3, 0, 0, 0),
+                datetime.combine(date(2026, 1, 14), time.max),
+            ),
+        ),
+        4: (
+            (
+                datetime(2025, 2, 25, 0, 0, 0),
+                datetime.combine(date(2025, 3, 10), time.max),
+            ),
+        ),
+    }
+
+
+def test_effective_date_ranges_merge_common_and_station_specific() -> None:
+    selection = extract_selection(
+        {
+            "selection": {
+                "date_ranges": [
+                    {
+                        "start": "2024-09-17",
+                        "end": "2024-10-05",
+                    },
+                    {
+                        "stations": [2],
+                        "start": "2026-01-03",
+                        "end": "2026-01-14",
+                    },
+                ]
+            }
+        }
+    )
+
+    assert effective_date_ranges_for_station(1, selection) == (
+        (
+            datetime(2024, 9, 17, 0, 0, 0),
+            datetime.combine(date(2024, 10, 5), time.max),
+        ),
+    )
+    assert effective_date_ranges_for_station(2, selection) == (
+        (
+            datetime(2024, 9, 17, 0, 0, 0),
+            datetime.combine(date(2024, 10, 5), time.max),
+        ),
+        (
+            datetime(2026, 1, 3, 0, 0, 0),
+            datetime.combine(date(2026, 1, 14), time.max),
+        ),
+    )
+
+
+def test_master_station_specific_ranges_override_local_ranges(tmp_path: Path) -> None:
+    (tmp_path / "config_selection.yaml").write_text(
+        "\n".join(
+            [
+                "selection:",
+                "  date_ranges:",
+                "    - stations: [2]",
+                "      start: 2026-01-03",
+                "      end: 2026-01-14",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    selection = resolve_selection_from_configs(
+        [
+            {
+                "selection": {
+                    "date_ranges": [
+                        {
+                            "start": "2024-09-17",
+                            "end": "2024-10-05",
+                        }
+                    ]
+                }
+            }
+        ],
+        master_config_root=tmp_path,
+    )
+
+    assert effective_date_ranges_for_station(1, selection) == ()
+    assert effective_date_ranges_for_station(2, selection) == (
+        (
+            datetime(2026, 1, 3, 0, 0, 0),
+            datetime.combine(date(2026, 1, 14), time.max),
+        ),
+    )

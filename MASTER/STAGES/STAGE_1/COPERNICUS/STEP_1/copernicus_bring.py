@@ -348,9 +348,7 @@ def main() -> int:
     existing_days = parse_existing_days(output_root)
 
     end_day = (datetime.now() - timedelta(days=5)).date()
-    configured_ranges = list(
-        effective_date_ranges_for_station(station, selection.date_ranges)
-    )
+    configured_ranges = list(effective_date_ranges_for_station(station, selection))
     if configured_ranges:
         print(
             "Date range filtering enabled for Copernicus: "

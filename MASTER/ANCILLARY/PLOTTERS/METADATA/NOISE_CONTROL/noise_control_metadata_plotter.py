@@ -55,8 +55,12 @@ PLOTS_DIR = PLOTTER_DIR / "PLOTS"
 DEFAULT_CONFIG_PATH = PLOTTER_DIR / "noise_control_metadata_config.json"
 DEFAULT_PERCENT_OUTPUT_FILENAME = "noise_control_metadata_report.pdf"
 DEFAULT_RATE_OUTPUT_FILENAME = "noise_control_metadata_rate_report.pdf"
-DEFAULT_EFFICIENCY_OUTPUT_FILENAME = "noise_control_efficiency_report.pdf"
 DEFAULT_PLANE_COMBINATION_OUTPUT_FILENAME = "noise_control_plane_combination_rate_report.pdf"
+DEFAULT_EFFICIENCY_OUTPUT_FILENAMES = {
+    1: "task_1_noise_control_efficiency_report.pdf",
+    2: "task_2_noise_control_efficiency_report.pdf",
+    3: "task_3_noise_control_efficiency_report.pdf",
+}
 
 TASK_IDS: Tuple[int, ...] = (1, 2, 3)
 DEFAULT_LAST_HOURS = 2.0
@@ -76,7 +80,7 @@ SELECTED_OFFENDER_RATE_COLUMN_PATTERN = re.compile(
     r"plane_combination_filter_rows_with_(?P<count>\d+)_selected_offenders_rate_hz$"
 )
 EFFICIENCY_COLUMN_PATTERN = re.compile(
-    r"plane_combination_filter_eff_p(?P<plane>\d+)_selected_offenders_le_(?P<threshold>\d+)$"
+    r"(?P<prefix>plane|strip)_combination_filter_eff_p(?P<plane>\d+)_selected_offenders_le_(?P<threshold>\d+)$"
 )
 EXCLUDED_COLUMNS: Set[str] = {
     "filename_base",
@@ -91,8 +95,11 @@ EXCLUDED_COLUMNS: Set[str] = {
 DEFAULT_OUTPUTS = {
     "selected_offenders_percent": PLOTS_DIR / DEFAULT_PERCENT_OUTPUT_FILENAME,
     "selected_offenders_rate_hz": PLOTS_DIR / DEFAULT_RATE_OUTPUT_FILENAME,
-    "efficiency_thresholds": PLOTS_DIR / DEFAULT_EFFICIENCY_OUTPUT_FILENAME,
     "plane_combination_rates": PLOTS_DIR / DEFAULT_PLANE_COMBINATION_OUTPUT_FILENAME,
+    **{
+        f"task_{task_id}_efficiency_thresholds": PLOTS_DIR / filename
+        for task_id, filename in DEFAULT_EFFICIENCY_OUTPUT_FILENAMES.items()
+    },
 }
 PLANE_COMBINATION_RATE_GROUPS: Tuple[Tuple[str, Tuple[Tuple[str, str], ...]], ...] = (
     ("1234", (("1234", "clean_tt_1234_rate_hz"),)),
@@ -281,7 +288,7 @@ def _coerce_output_path(output_value: object) -> Path:
 
 def default_output_path(report_kind: str, metric_mode: Optional[str] = None) -> Path:
     if report_kind == "efficiency_thresholds":
-        return DEFAULT_OUTPUTS["efficiency_thresholds"]
+        return DEFAULT_OUTPUTS["task_1_efficiency_thresholds"]
     if report_kind == "plane_combination_rates":
         return DEFAULT_OUTPUTS["plane_combination_rates"]
     if metric_mode == "percent":
@@ -294,8 +301,11 @@ def resolve_output_path(
     *,
     report_kind: str,
     metric_mode: Optional[str] = None,
+    task_id: Optional[int] = None,
 ) -> Path:
     if output_value is None:
+        if report_kind == "efficiency_thresholds" and task_id in TASK_IDS:
+            return DEFAULT_OUTPUTS[f"task_{task_id}_efficiency_thresholds"]
         return default_output_path(report_kind, metric_mode)
     return _coerce_output_path(output_value)
 
@@ -544,6 +554,14 @@ def efficiency_column_label(column_name: str) -> str:
     if match:
         return f"<= {match.group('threshold')} offender(s)"
     return column_name
+
+
+def efficiency_report_title(task_id: int) -> str:
+    return f"Task {task_id} cumulative three-to-four efficiency vs max selected offenders"
+
+
+def efficiency_legend_title(task_id: int) -> str:
+    return f"Task {task_id} threshold"
 
 
 def plot_task_axis(
@@ -1089,13 +1107,13 @@ def plot_station_efficiency_page(
     task_data: Dict[int, pd.DataFrame],
     pdf: PdfPages,
     *,
+    task_id: int,
     last_hours: float,
     panel_width_ratios: Tuple[float, float],
     marker_size: float,
     max_fill_gap_hours: float,
     eff_y_min: float,
 ) -> bool:
-    task_id = 1
     df = task_data.get(task_id, pd.DataFrame())
     columns_by_plane = detect_efficiency_columns(df)
     if not columns_by_plane:
@@ -1115,7 +1133,7 @@ def plot_station_efficiency_page(
         axes = np.array([axes])
 
     fig.suptitle(
-        f"{station} - Task 1 cumulative three-to-four efficiency vs max selected offenders",
+        f"{station} - {efficiency_report_title(task_id)}",
         fontsize=13,
     )
 
@@ -1184,8 +1202,9 @@ def plot_station_efficiency_legend_page(
     station: str,
     task_data: Dict[int, pd.DataFrame],
     pdf: PdfPages,
+    *,
+    task_id: int,
 ) -> bool:
-    task_id = 1
     df = task_data.get(task_id, pd.DataFrame())
     columns_by_plane = detect_efficiency_columns(df)
     if not columns_by_plane:
@@ -1206,7 +1225,7 @@ def plot_station_efficiency_legend_page(
 
     fig, ax = plt.subplots(figsize=(14, 6), constrained_layout=True)
     ax.axis("off")
-    fig.suptitle(f"{station} - Task 1 efficiency threshold legend", fontsize=13)
+    fig.suptitle(f"{station} - Task {task_id} efficiency threshold legend", fontsize=13)
     if not handles:
         ax.text(
             0.0,
@@ -1229,7 +1248,7 @@ def plot_station_efficiency_legend_page(
             fontsize=9,
             framealpha=0.85,
             ncol=ncol,
-            title="Task 1 threshold",
+            title=efficiency_legend_title(task_id),
             title_fontsize=10,
             columnspacing=1.2,
             handletextpad=0.5,
@@ -1322,6 +1341,7 @@ def render_efficiency_report(
     output_path: Path,
     station_task_data: Dict[str, Dict[int, pd.DataFrame]],
     *,
+    task_id: int,
     last_hours: float,
     panel_width_ratios: Tuple[float, float],
     marker_size: float,
@@ -1337,6 +1357,7 @@ def render_efficiency_report(
                 station,
                 task_data,
                 pdf,
+                task_id=task_id,
                 last_hours=last_hours,
                 panel_width_ratios=panel_width_ratios,
                 marker_size=marker_size,
@@ -1345,14 +1366,14 @@ def render_efficiency_report(
             )
             if not station_page_written:
                 continue
-            plot_station_efficiency_legend_page(station, task_data, pdf)
+            plot_station_efficiency_legend_page(station, task_data, pdf, task_id=task_id)
             wrote_any = True
 
         if not wrote_any and allow_placeholder:
             plot_placeholder_page(
                 pdf,
-                "Noise-control efficiency thresholds",
-                "No Task 1 cumulative efficiency metadata is available yet.",
+                f"Noise-control Task {task_id} efficiency thresholds",
+                f"No Task {task_id} cumulative efficiency metadata is available yet.",
             )
             wrote_any = True
 
@@ -1480,8 +1501,31 @@ def main() -> int:
             allow_placeholder=True,
         )
         ok &= render_efficiency_report(
-            outputs["efficiency_thresholds"],
+            outputs["task_1_efficiency_thresholds"],
             station_task_data,
+            task_id=1,
+            last_hours=last_hours,
+            panel_width_ratios=panel_width_ratios,
+            marker_size=marker_size,
+            max_fill_gap_hours=max_fill_gap_hours,
+            eff_y_min=eff_y_min,
+            allow_placeholder=True,
+        )
+        ok &= render_efficiency_report(
+            outputs["task_2_efficiency_thresholds"],
+            station_task_data,
+            task_id=2,
+            last_hours=last_hours,
+            panel_width_ratios=panel_width_ratios,
+            marker_size=marker_size,
+            max_fill_gap_hours=max_fill_gap_hours,
+            eff_y_min=eff_y_min,
+            allow_placeholder=True,
+        )
+        ok &= render_efficiency_report(
+            outputs["task_3_efficiency_thresholds"],
+            station_task_data,
+            task_id=3,
             last_hours=last_hours,
             panel_width_ratios=panel_width_ratios,
             marker_size=marker_size,
@@ -1524,6 +1568,7 @@ def main() -> int:
         ok = render_efficiency_report(
             output_path,
             station_task_data,
+            task_id=tasks[0] if tasks else 1,
             last_hours=last_hours,
             panel_width_ratios=panel_width_ratios,
             marker_size=marker_size,

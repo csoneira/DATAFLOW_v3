@@ -19,7 +19,9 @@ from common import (
     PLOTS_DIR,
     apply_lut_fallback_matches,
     cfg_path,
+    derive_trigger_rate_features,
     ensure_output_dirs,
+    format_selected_rate_name,
     get_rate_column_name,
     load_config,
     quantize_efficiency_series,
@@ -34,23 +36,25 @@ def _configure_logging() -> None:
     logging.basicConfig(format="[%(levelname)s] STEP_3 - %(message)s", level=logging.INFO, force=True)
 
 
-def _rename_relevant_columns(dataframe: pd.DataFrame, config: dict) -> pd.DataFrame:
-    eff_columns = list(config["columns"]["efficiencies"])
+def _prepare_synthetic_dataframe(dataframe: pd.DataFrame, config: dict) -> tuple[pd.DataFrame, dict]:
     z_columns = list(config["columns"]["z_positions"])
-    rate_column = get_rate_column_name(config)
+    work, trigger_info = derive_trigger_rate_features(
+        dataframe,
+        config,
+        allow_plain_fallback=True,
+    )
     rename_map = {
-        eff_columns[0]: CANONICAL_EFF_COLUMNS[0],
-        eff_columns[1]: CANONICAL_EFF_COLUMNS[1],
-        eff_columns[2]: CANONICAL_EFF_COLUMNS[2],
-        eff_columns[3]: CANONICAL_EFF_COLUMNS[3],
+        "eff_empirical_1": CANONICAL_EFF_COLUMNS[0],
+        "eff_empirical_2": CANONICAL_EFF_COLUMNS[1],
+        "eff_empirical_3": CANONICAL_EFF_COLUMNS[2],
+        "eff_empirical_4": CANONICAL_EFF_COLUMNS[3],
         z_columns[0]: "z_pos_1",
         z_columns[1]: "z_pos_2",
         z_columns[2]: "z_pos_3",
         z_columns[3]: "z_pos_4",
-        rate_column: "rate_hz",
         str(config["columns"]["simulated_flux"]): "sim_flux_cm2_min",
     }
-    return dataframe.rename(columns=rename_map)
+    return work.rename(columns=rename_map), trigger_info
 
 
 def _resolve_lut_match_settings(config: dict) -> tuple[str, int | None, float]:
@@ -218,14 +222,15 @@ def run(config_path: str | Path | None = None) -> Path:
     meta_path = cfg_path(config, "paths", "step3_meta_json")
 
     synthetic_dataframe = pd.read_csv(synthetic_input_path)
-    rate_column_name = get_rate_column_name(config)
-    required_columns = [rate_column_name, str(config["columns"]["simulated_flux"])]
-    missing_source_columns = [column for column in required_columns if column not in synthetic_dataframe.columns]
-    if missing_source_columns:
-        raise ValueError(
-            "Synthetic dataset is missing required columns: " + ", ".join(missing_source_columns)
-        )
-    work = _rename_relevant_columns(synthetic_dataframe.copy(), config)
+    work, trigger_info = _prepare_synthetic_dataframe(synthetic_dataframe.copy(), config)
+    rate_column_name = format_selected_rate_name(
+        stage_prefix=str(trigger_info["stage_prefix"]),
+        rate_family_column=str(trigger_info["rate_family_column"]),
+        offender_threshold=trigger_info.get("used_offender_threshold"),
+    )
+    renamed_required_columns = [column for column in ["rate_hz", "sim_flux_cm2_min", *CANONICAL_EFF_COLUMNS] if column not in work.columns]
+    if renamed_required_columns:
+        raise ValueError("Synthetic dataset is missing derived trigger-feature columns: " + ", ".join(renamed_required_columns))
     lut_dataframe, lut_comments = read_ascii_lut(lut_path)
 
     lut_meta = {}
@@ -273,6 +278,22 @@ def run(config_path: str | Path | None = None) -> Path:
         merged["selected_z_vector_match"] = z_match
 
     output_dataframe = synthetic_dataframe.copy()
+    for column in [
+        "two_plane_rate_hz",
+        "three_plane_rate_hz",
+        "four_plane_rate_hz",
+        "three_and_four_plane_rate_hz",
+        "two_and_three_plane_rate_hz",
+        "total_rate_hz",
+        "selected_rate_hz",
+        "selected_rate_count",
+        "eff_empirical_1",
+        "eff_empirical_2",
+        "eff_empirical_3",
+        "eff_empirical_4",
+    ]:
+        if column in merged.columns:
+            output_dataframe[column] = merged[column]
     for column in query_columns:
         output_dataframe[column] = merged[column]
     for column in CANONICAL_EFF_COLUMNS:
@@ -314,6 +335,7 @@ def run(config_path: str | Path | None = None) -> Path:
         "unmatched_rows": int(output_dataframe["lut_scale_factor"].isna().sum()),
         "rows_matching_selected_z_vector": int(output_dataframe["selected_z_vector_match"].sum()),
         "rate_input_column": rate_column_name,
+        "trigger_type_selection": trigger_info,
         "time_axis_column_used_for_plots": _resolve_time_axis(merged)[2],
     }
     write_json(meta_path, metadata)

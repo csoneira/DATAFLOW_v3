@@ -17,10 +17,52 @@ DEFAULT_CONFIG_PATH = ROOT_DIR / "config.json"
 
 CANONICAL_EFF_COLUMNS = ["emp_eff_1", "emp_eff_2", "emp_eff_3", "emp_eff_4"]
 CANONICAL_Z_COLUMNS = ["z_pos_1", "z_pos_2", "z_pos_3", "z_pos_4"]
+TT_TWO_PLANE_LABELS = ["12", "13", "14", "23", "24", "34"]
+TT_THREE_PLANE_LABELS = ["123", "124", "134", "234"]
+TT_FOUR_PLANE_LABEL = "1234"
+TT_RATE_LABELS = TT_TWO_PLANE_LABELS + TT_THREE_PLANE_LABELS + [TT_FOUR_PLANE_LABEL]
+TT_THREE_TO_FOUR_MISSING_BY_PLANE = {1: "234", 2: "134", 3: "124", 4: "123"}
+TASK_FINAL_STAGE_PREFIX = {1: "clean_tt", 2: "cal_tt", 3: "list_tt", 4: "fit_tt", 5: "post_tt"}
+TRIGGER_RATE_FAMILY_TO_COLUMN = {
+    "total": "total_rate_hz",
+    "four_plane": "four_plane_rate_hz",
+    "three_plane": "three_plane_rate_hz",
+    "two_plane": "two_plane_rate_hz",
+    "three_and_four_plane": "three_and_four_plane_rate_hz",
+    "two_and_three_plane": "two_and_three_plane_rate_hz",
+}
+TRIGGER_RATE_FAMILY_ALIASES = {
+    "global": "total",
+    "all": "total",
+    "1234": "four_plane",
+    "4": "four_plane",
+    "3": "three_plane",
+    "2": "two_plane",
+    "34": "three_and_four_plane",
+    "23": "two_and_three_plane",
+}
+DERIVED_RATE_COLUMNS = [
+    "two_plane_rate_hz",
+    "three_plane_rate_hz",
+    "four_plane_rate_hz",
+    "three_and_four_plane_rate_hz",
+    "two_and_three_plane_rate_hz",
+    "total_rate_hz",
+]
+DERIVED_COUNT_COLUMNS = [
+    "two_plane_count",
+    "three_plane_count",
+    "four_plane_count",
+    "three_and_four_plane_count",
+    "two_and_three_plane_count",
+    "total_count",
+]
 STEP1_OUTPUT_COLUMNS = (
     CANONICAL_Z_COLUMNS
     + CANONICAL_EFF_COLUMNS
-    + ["rate_hz", "sim_flux_cm2_min", "num_events"]
+    + DERIVED_RATE_COLUMNS
+    + DERIVED_COUNT_COLUMNS
+    + ["selected_rate_hz", "selected_rate_count", "rate_hz", "sim_flux_cm2_min", "num_events"]
 )
 
 
@@ -52,6 +94,14 @@ def cfg_path(config: dict[str, Any], *keys: str) -> Path:
 
 
 def get_rate_column_name(config: dict[str, Any]) -> str:
+    trigger_config = config.get("trigger_type_selection", {})
+    if isinstance(trigger_config, dict) and trigger_config:
+        selection = get_trigger_type_selection(config)
+        return format_selected_rate_name(
+            stage_prefix=str(selection["stage_prefix"]),
+            rate_family_column=str(selection["rate_family_column"]),
+            offender_threshold=selection["offender_threshold"],
+        )
     columns = config.get("columns", {})
     if not isinstance(columns, dict):
         raise ValueError("Config is missing the 'columns' object.")
@@ -59,6 +109,186 @@ def get_rate_column_name(config: dict[str, Any]) -> str:
     if raw_value in (None, "", "null", "None"):
         raise ValueError("Config must define columns.rate or columns.global_rate.")
     return str(raw_value)
+
+
+def _normalize_optional_int(value: Any) -> int | None:
+    if value in (None, "", "null", "None"):
+        return None
+    return int(value)
+
+
+def get_trigger_type_selection(config: dict[str, Any]) -> dict[str, Any]:
+    raw = config.get("trigger_type_selection", {})
+    if not isinstance(raw, dict):
+        raw = {}
+
+    task_id = int(raw.get("task_id", 5))
+    stage_prefix_raw = raw.get("stage_prefix")
+    if stage_prefix_raw in (None, "", "null", "None"):
+        stage_prefix = TASK_FINAL_STAGE_PREFIX.get(task_id)
+        if stage_prefix is None:
+            raise ValueError(f"Unsupported trigger_type_selection.task_id: {task_id}")
+    else:
+        stage_prefix = str(stage_prefix_raw).strip()
+
+    offender_threshold = _normalize_optional_int(raw.get("offender_threshold"))
+    rate_family_raw = str(raw.get("rate_family", "total")).strip().lower()
+    rate_family = TRIGGER_RATE_FAMILY_ALIASES.get(rate_family_raw, rate_family_raw)
+    if rate_family not in TRIGGER_RATE_FAMILY_TO_COLUMN:
+        raise ValueError(
+            "Unsupported trigger_type_selection.rate_family: "
+            f"{raw.get('rate_family')!r}. Supported values are: "
+            + ", ".join(sorted(TRIGGER_RATE_FAMILY_TO_COLUMN))
+        )
+
+    return {
+        "task_id": task_id,
+        "stage_prefix": stage_prefix,
+        "offender_threshold": offender_threshold,
+        "rate_family": rate_family,
+        "rate_family_column": TRIGGER_RATE_FAMILY_TO_COLUMN[rate_family],
+    }
+
+
+def format_selected_rate_name(
+    *,
+    stage_prefix: str,
+    rate_family_column: str,
+    offender_threshold: int | None,
+) -> str:
+    if offender_threshold is None:
+        return f"{stage_prefix}_{rate_family_column}"
+    return f"{stage_prefix}_total_offenders_le_{int(offender_threshold)}_{rate_family_column}"
+
+
+def trigger_rate_source_column(stage_prefix: str, tt_label: str, offender_threshold: int | None) -> str:
+    if offender_threshold is None:
+        return f"{stage_prefix}_{tt_label}_rate_hz"
+    return f"{stage_prefix}_total_offenders_le_{int(offender_threshold)}_{tt_label}_rate_hz"
+
+
+def trigger_count_source_column(stage_prefix: str, tt_label: str, offender_threshold: int | None) -> str | None:
+    if offender_threshold is None:
+        return None
+    return f"{stage_prefix}_total_offenders_le_{int(offender_threshold)}_{tt_label}_count"
+
+
+def required_trigger_rate_columns(stage_prefix: str, offender_threshold: int | None) -> list[str]:
+    return [trigger_rate_source_column(stage_prefix, label, offender_threshold) for label in TT_RATE_LABELS]
+
+
+def _safe_sum_series(dataframe: pd.DataFrame, columns: list[str]) -> pd.Series:
+    if not columns:
+        return pd.Series(np.nan, index=dataframe.index, dtype=float)
+    numeric = dataframe[columns].apply(pd.to_numeric, errors="coerce")
+    return numeric.sum(axis=1, min_count=1)
+
+
+def _resolved_count_series(
+    dataframe: pd.DataFrame,
+    *,
+    rate_column: str,
+    count_column: str | None,
+    denominator_column: str | None = "count_rate_denominator_seconds",
+) -> pd.Series:
+    if count_column and count_column in dataframe.columns:
+        return pd.to_numeric(dataframe[count_column], errors="coerce")
+    rate_series = pd.to_numeric(dataframe.get(rate_column), errors="coerce")
+    if denominator_column is None or denominator_column not in dataframe.columns:
+        return pd.Series(np.nan, index=dataframe.index, dtype=float)
+    denominator = pd.to_numeric(dataframe[denominator_column], errors="coerce")
+    return rate_series * denominator
+
+
+def derive_trigger_rate_features(
+    dataframe: pd.DataFrame,
+    config: dict[str, Any],
+    *,
+    allow_plain_fallback: bool = False,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    selection = get_trigger_type_selection(config)
+    stage_prefix = str(selection["stage_prefix"])
+    requested_threshold = selection["offender_threshold"]
+
+    source_columns = {
+        label: trigger_rate_source_column(stage_prefix, label, requested_threshold)
+        for label in TT_RATE_LABELS
+    }
+    missing = [column for column in source_columns.values() if column not in dataframe.columns]
+
+    used_threshold = requested_threshold
+    if missing and requested_threshold is not None and allow_plain_fallback:
+        fallback_columns = {
+            label: trigger_rate_source_column(stage_prefix, label, None)
+            for label in TT_RATE_LABELS
+        }
+        fallback_missing = [column for column in fallback_columns.values() if column not in dataframe.columns]
+        if not fallback_missing:
+            source_columns = fallback_columns
+            used_threshold = None
+            missing = []
+    if missing:
+        raise KeyError(
+            "Missing trigger-type rate columns required by trigger_type_selection: "
+            + ", ".join(sorted(missing))
+        )
+
+    count_columns = {
+        label: trigger_count_source_column(stage_prefix, label, used_threshold)
+        for label in TT_RATE_LABELS
+    }
+
+    out = dataframe.copy()
+    component_rates = {
+        label: pd.to_numeric(out[source_columns[label]], errors="coerce")
+        for label in TT_RATE_LABELS
+    }
+    component_counts = {
+        label: _resolved_count_series(
+            out,
+            rate_column=source_columns[label],
+            count_column=count_columns[label],
+        )
+        for label in TT_RATE_LABELS
+    }
+
+    out["two_plane_rate_hz"] = _safe_sum_series(out.assign(**{f"__{k}": v for k, v in component_rates.items()}), [f"__{label}" for label in TT_TWO_PLANE_LABELS])
+    out["three_plane_rate_hz"] = _safe_sum_series(out.assign(**{f"__{k}": v for k, v in component_rates.items()}), [f"__{label}" for label in TT_THREE_PLANE_LABELS])
+    out["four_plane_rate_hz"] = component_rates[TT_FOUR_PLANE_LABEL]
+    out["three_and_four_plane_rate_hz"] = out["three_plane_rate_hz"] + out["four_plane_rate_hz"]
+    out["two_and_three_plane_rate_hz"] = out["two_plane_rate_hz"] + out["three_plane_rate_hz"]
+    out["total_rate_hz"] = out["two_plane_rate_hz"] + out["three_plane_rate_hz"] + out["four_plane_rate_hz"]
+
+    out["two_plane_count"] = _safe_sum_series(out.assign(**{f"__{k}": v for k, v in component_counts.items()}), [f"__{label}" for label in TT_TWO_PLANE_LABELS])
+    out["three_plane_count"] = _safe_sum_series(out.assign(**{f"__{k}": v for k, v in component_counts.items()}), [f"__{label}" for label in TT_THREE_PLANE_LABELS])
+    out["four_plane_count"] = component_counts[TT_FOUR_PLANE_LABEL]
+    out["three_and_four_plane_count"] = out["three_plane_count"] + out["four_plane_count"]
+    out["two_and_three_plane_count"] = out["two_plane_count"] + out["three_plane_count"]
+    out["total_count"] = out["two_plane_count"] + out["three_plane_count"] + out["four_plane_count"]
+
+    valid_denominator = out["four_plane_rate_hz"].where(pd.to_numeric(out["four_plane_rate_hz"], errors="coerce") > 0.0)
+    for plane_idx in range(1, 5):
+        numerator_label = TT_THREE_TO_FOUR_MISSING_BY_PLANE[plane_idx]
+        out[f"eff_empirical_{plane_idx}"] = component_rates[numerator_label] / valid_denominator
+
+    selected_rate_column = selection["rate_family_column"]
+    selected_count_column = selected_rate_column.replace("_rate_hz", "_count")
+    out["selected_rate_hz"] = out[selected_rate_column]
+    out["selected_rate_count"] = out[selected_count_column]
+    out["rate_hz"] = out["selected_rate_hz"]
+
+    metadata = {
+        "task_id": int(selection["task_id"]),
+        "stage_prefix": stage_prefix,
+        "requested_offender_threshold": requested_threshold,
+        "used_offender_threshold": used_threshold,
+        "rate_family": selection["rate_family"],
+        "rate_family_column": selected_rate_column,
+        "plain_column_fallback_used": bool(requested_threshold is not None and used_threshold is None),
+        "source_rate_columns": source_columns,
+        "source_count_columns": count_columns,
+    }
+    return out, metadata
 
 
 def write_json(path: str | Path, payload: dict[str, Any]) -> None:
@@ -241,6 +471,12 @@ def apply_lut_fallback_matches(
     interpolation_k: int | None = None,
     interpolation_power: float = 2.0,
 ) -> pd.DataFrame:
+    if lut_dataframe.empty:
+        raise ValueError(
+            "The LUT is empty. Step 2 did not produce any usable support rows for the selected "
+            "task/offender/rate configuration."
+        )
+
     work = dataframe.copy()
 
     for column in CANONICAL_EFF_COLUMNS:

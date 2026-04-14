@@ -124,6 +124,7 @@ from MASTER.common.reprocessing_utils import get_reprocessing_value
 from MASTER.common.simulated_data_utils import resolve_simulated_z_positions
 from MASTER.common.step1_shared import (
     add_normalized_count_metadata,
+    add_trigger_type_total_offender_threshold_metadata,
     apply_step1_master_overrides,
     apply_step1_task_parameter_overrides,
     build_events_per_second_metadata,
@@ -533,6 +534,17 @@ OFFENDER_TASK1_CUMULATIVE_THRESHOLDS = _coerce_nonnegative_int_tuple(
     _offender_plot_settings.get("task1_cumulative_thresholds", None),
     default=tuple(range(0, 11)),
 )
+OFFENDER_TOTAL_CUMULATIVE_THRESHOLDS = _coerce_nonnegative_int_tuple(
+    _offender_plot_settings.get(
+        "total_cumulative_thresholds",
+        _offender_plot_settings.get("task1_cumulative_thresholds", None),
+    ),
+    default=tuple(range(0, 11)),
+)
+if 0 not in OFFENDER_TOTAL_CUMULATIVE_THRESHOLDS:
+    OFFENDER_TOTAL_CUMULATIVE_THRESHOLDS = tuple(
+        sorted((0, *OFFENDER_TOTAL_CUMULATIVE_THRESHOLDS))
+    )
 
 def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.99, fit_gaussian=False):
     global fig_idx
@@ -1213,6 +1225,10 @@ csv_path_trigger_type = os.path.join(
     f"task_{task_number}_metadata_trigger_type.csv",
 )
 csv_path_filter = os.path.join(metadata_directory, f"task_{task_number}_metadata_filter.csv")
+csv_path_deep_fiter = os.path.join(
+    metadata_directory,
+    f"task_{task_number}_metadata_deep_fiter.csv",
+)
 csv_path_status = os.path.join(metadata_directory, f"task_{task_number}_metadata_status.csv")
 csv_path_profiling = os.path.join(metadata_directory, f"task_{task_number}_metadata_profiling.csv")
 status_filename_base = ""
@@ -8682,6 +8698,122 @@ def _make_offender_hist_bins(
     return np.linspace(left, right, nbins)
 
 
+def _resolve_total_offender_counts(df_input: pd.DataFrame) -> tuple[np.ndarray | None, str]:
+    if "total_problematic_offender_count" in df_input.columns:
+        counts = pd.to_numeric(
+            df_input["total_problematic_offender_count"],
+            errors="coerce",
+        ).to_numpy(dtype=float)
+        counts = np.clip(counts, 0.0, None)
+        return counts, "total_problematic_offender_count"
+
+    component_columns = [
+        column_name
+        for column_name in (
+            "task1_problematic_channel_count",
+            "task2_problematic_strip_count",
+            "task3_problematic_plane_count",
+        )
+        if column_name in df_input.columns
+    ]
+    if not component_columns:
+        return None, ""
+
+    total_counts = np.zeros(len(df_input), dtype=float)
+    finite_any = np.zeros(len(df_input), dtype=bool)
+    for column_name in component_columns:
+        raw_values = pd.to_numeric(df_input[column_name], errors="coerce").to_numpy(dtype=float)
+        finite = np.isfinite(raw_values)
+        finite_any |= finite
+        safe_values = np.where(finite, raw_values, 0.0)
+        total_counts += np.clip(safe_values, 0.0, None)
+
+    total_counts[~finite_any] = np.nan
+    source = " + ".join(component_columns)
+    return total_counts, source
+
+
+def _plot_offender_cumulative_hist_panel(
+    ax: plt.Axes,
+    observable_values: np.ndarray,
+    offender_counts: np.ndarray,
+    thresholds: Iterable[int],
+    bins: np.ndarray,
+    *,
+    x_label: str,
+    panel_title: str = "",
+    show_legend: bool = False,
+) -> None:
+    observable = np.asarray(observable_values, dtype=float)
+    counts = np.asarray(offender_counts, dtype=float)
+    valid = np.isfinite(observable) & np.isfinite(counts)
+
+    threshold_values = sorted({max(0, int(value)) for value in thresholds})
+    if not threshold_values:
+        threshold_values = [0]
+    colors = plt.cm.viridis(np.linspace(0.10, 0.92, len(threshold_values)))
+
+    plotted = False
+    selected_at_max = 0
+    for idx, threshold in enumerate(threshold_values):
+        selected = valid & (counts <= float(threshold))
+        values = observable[selected]
+        if values.size == 0:
+            continue
+        ax.hist(
+            values,
+            bins=bins,
+            density=True,
+            histtype="step",
+            lw=1.45,
+            color=colors[idx],
+            label=f"<= {threshold} (n={values.size:,})",
+        )
+        ax.axvline(float(np.median(values)), color=colors[idx], lw=0.9, ls="--", alpha=0.65)
+        plotted = True
+        if threshold == threshold_values[-1]:
+            selected_at_max = int(values.size)
+
+    if not plotted:
+        ax.text(
+            0.5,
+            0.5,
+            "No data",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=8,
+            color="0.45",
+        )
+
+    total_count = int(np.count_nonzero(valid))
+    summary_lines = [f"n={total_count:,}"]
+    if total_count > 0:
+        summary_lines.append(
+            f"<= {threshold_values[-1]}: {100.0 * float(selected_at_max) / float(total_count):.1f}%"
+        )
+    ax.text(
+        0.02,
+        0.98,
+        "\n".join(summary_lines),
+        transform=ax.transAxes,
+        va="top",
+        ha="left",
+        fontsize=7,
+        bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.75, "edgecolor": "0.8"},
+    )
+
+    if panel_title:
+        ax.set_title(panel_title, fontsize=9)
+    ax.set_xlim(float(bins[0]), float(bins[-1]))
+    ax.set_xlabel(x_label, fontsize=8)
+    ax.set_ylabel("density", fontsize=8)
+    ax.grid(True, alpha=0.25)
+    ax.tick_params(labelsize=7)
+    if show_legend:
+        ax.legend(fontsize=7, loc="upper right")
+
+
 def _plot_offender_hist_panel(
     ax: plt.Axes,
     zero_values: np.ndarray,
@@ -9021,10 +9153,13 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("chi2_offende
 if (create_essential_plots or create_plots) and task4_plot_enabled("offender_angle_populations"):
     _offender_angle_required = ("definitive_tt", "theta", "phi")
     _offender_angle_missing = [
-        _col_name
-        for _col_name in _offender_angle_required + tuple(_col for _col, _, _ in _OFFENDER_PLOT_DEFS)
-        if _col_name not in df_plot_ancillary.columns
+        _col_name for _col_name in _offender_angle_required if _col_name not in df_plot_ancillary.columns
     ]
+    _offender_total_counts, _offender_total_source = _resolve_total_offender_counts(df_plot_ancillary)
+    if _offender_total_counts is None:
+        _offender_angle_missing.append(
+            "total_problematic_offender_count or task{1,2,3}_problematic_*_count"
+        )
     if _offender_angle_missing:
         print(
             "[offender_angle_populations] required columns not found, skipping: "
@@ -9061,62 +9196,58 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("offender_ang
                 & (_offender_theta_deg >= OFFENDER_THETA_MIN_DEG)
                 & (_offender_theta_deg <= OFFENDER_THETA_MAX_DEG)
             )
+            _offender_thresholds = np.asarray(OFFENDER_TOTAL_CUMULATIVE_THRESHOLDS, dtype=int)
 
-            for _offender_col, _offender_label, _offender_slug in _OFFENDER_PLOT_DEFS:
-                _offender_counts = pd.to_numeric(
-                    df_plot_ancillary[_offender_col],
-                    errors="coerce",
-                ).fillna(0).to_numpy(dtype=float)
-                _offender_valid = _offender_valid_angles & np.isfinite(_offender_counts)
+            _angle_fig, _angle_axes = plt.subplots(
+                2,
+                len(_offender_focus_tts),
+                figsize=(4.0 * len(_offender_focus_tts), 7.0),
+                squeeze=False,
+                sharey="row",
+            )
+            _angle_fig.suptitle(
+                "Total offender cumulative populations by definitive_tt\n"
+                + "Each column keeps the same plane combination and compares cumulative thresholds "
+                + "(0, <=1, <=2, ... total offenders)\n"
+                + f"Total source: {_offender_total_source}\n"
+                + task4_efficiency_vector_title_line,
+                fontsize=10,
+            )
 
-                _angle_fig, _angle_axes = plt.subplots(
-                    2,
-                    len(_offender_focus_tts),
-                    figsize=(4.0 * len(_offender_focus_tts), 7.0),
-                    squeeze=False,
-                    sharey="row",
+            for _tt_idx, _tt_label in enumerate(_offender_focus_tts):
+                _tt_mask = (_offender_tt_labels == _tt_label) & _offender_valid_angles
+
+                _plot_offender_cumulative_hist_panel(
+                    _angle_axes[0][_tt_idx],
+                    _offender_theta_deg[_tt_mask],
+                    _offender_total_counts[_tt_mask],
+                    _offender_thresholds,
+                    _theta_bins,
+                    x_label=r"$\theta$ (deg)",
+                    panel_title=f"TT {_tt_label}",
+                    show_legend=_tt_idx == 0,
                 )
-                _angle_fig.suptitle(
-                    f"{_offender_label}: angular populations by definitive_tt\n"
-                    "Each column keeps the same plane combination and compares 0 offenders versus >0 offenders\n"
-                    + task4_efficiency_vector_title_line,
-                    fontsize=10,
+                _plot_offender_cumulative_hist_panel(
+                    _angle_axes[1][_tt_idx],
+                    _offender_phi_deg[_tt_mask],
+                    _offender_total_counts[_tt_mask],
+                    _offender_thresholds,
+                    _phi_bins,
+                    x_label=r"$\phi$ (deg)",
                 )
+                _angle_axes[0][_tt_idx].set_ylabel(r"$\theta$ density", fontsize=8)
+                _angle_axes[1][_tt_idx].set_ylabel(r"$\phi$ density", fontsize=8)
 
-                for _tt_idx, _tt_label in enumerate(_offender_focus_tts):
-                    _tt_mask = _offender_tt_labels == _tt_label
-                    _zero_mask = _offender_valid & _tt_mask & (_offender_counts == 0)
-                    _nonzero_mask = _offender_valid & _tt_mask & (_offender_counts > 0)
-
-                    _plot_offender_hist_panel(
-                        _angle_axes[0][_tt_idx],
-                        _offender_theta_deg[_zero_mask],
-                        _offender_theta_deg[_nonzero_mask],
-                        _theta_bins,
-                        x_label=r"$\theta$ (deg)",
-                        panel_title=f"TT {_tt_label}",
-                        show_legend=_tt_idx == 0,
-                    )
-                    _plot_offender_hist_panel(
-                        _angle_axes[1][_tt_idx],
-                        _offender_phi_deg[_zero_mask],
-                        _offender_phi_deg[_nonzero_mask],
-                        _phi_bins,
-                        x_label=r"$\phi$ (deg)",
-                    )
-                    _angle_axes[0][_tt_idx].set_ylabel(r"$\theta$ density", fontsize=8)
-                    _angle_axes[1][_tt_idx].set_ylabel(r"$\phi$ density", fontsize=8)
-
-                _angle_fig.tight_layout(rect=(0, 0, 1, 0.94))
-                if save_plots:
-                    _angle_fn = f"{fig_idx}_offender_angle_populations_{_offender_slug}.png"
-                    fig_idx += 1
-                    _angle_path = os.path.join(base_directories["figure_directory"], _angle_fn)
-                    plot_list.append(_angle_path)
-                    save_plot_figure(_angle_path, format="png", alias="offender_angle_populations")
-                if show_plots:
-                    plt.show()
-                plt.close(_angle_fig)
+            _angle_fig.tight_layout(rect=(0, 0, 1, 0.94))
+            if save_plots:
+                _angle_fn = f"{fig_idx}_offender_angle_populations_total.png"
+                fig_idx += 1
+                _angle_path = os.path.join(base_directories["figure_directory"], _angle_fn)
+                plot_list.append(_angle_path)
+                save_plot_figure(_angle_path, format="png", alias="offender_angle_populations")
+            if show_plots:
+                plt.show()
+            plt.close(_angle_fig)
 
 if (create_essential_plots or create_plots) and task4_plot_enabled("offender_kinematics_populations"):
     _offender_kin_required = ("definitive_tt", "x", "y", "charge_event", "s")
@@ -13863,6 +13994,26 @@ metadata_filter_csv_path = save_metadata(
 )
 print(f"Metadata (filter) CSV updated at: {metadata_filter_csv_path}")
 
+deep_fiter_row = {
+    "filename_base": filename_base,
+    "execution_timestamp": execution_timestamp,
+    "param_hash": param_hash_value,
+}
+for name in sorted(filter_metrics):
+    deep_fiter_row[name] = filter_metrics.get(name, "")
+
+metadata_deep_fiter_csv_path = save_metadata(
+    csv_path_deep_fiter,
+    deep_fiter_row,
+    preferred_fieldnames=(
+        "filename_base",
+        "execution_timestamp",
+        "param_hash",
+        *sorted(filter_metrics),
+    ),
+)
+print(f"Metadata (deep_fiter) CSV updated at: {metadata_deep_fiter_csv_path}")
+
 # -------------------------------------------------------------------------------
 # Execution metadata ------------------------------------------------------------
 # -------------------------------------------------------------------------------
@@ -13946,6 +14097,12 @@ trigger_type_variables = extract_trigger_type_metadata(
 trigger_type_variables["count_rate_denominator_seconds"] = rate_histogram_variables.get(
     "count_rate_denominator_seconds",
     0,
+)
+add_trigger_type_total_offender_threshold_metadata(
+    trigger_type_variables,
+    working_df,
+    stage_tt_columns=("list_tt", "fit_tt"),
+    denominator_seconds=trigger_type_variables["count_rate_denominator_seconds"],
 )
 metadata_trigger_type_csv_path = save_metadata(
     csv_path_trigger_type,

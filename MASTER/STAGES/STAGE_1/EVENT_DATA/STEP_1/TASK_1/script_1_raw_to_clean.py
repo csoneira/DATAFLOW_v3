@@ -129,6 +129,7 @@ from MASTER.common.step1_activation import (
 )
 from MASTER.common.step1_shared import (
     add_normalized_count_metadata,
+    add_trigger_type_total_offender_threshold_metadata,
     apply_step1_master_overrides,
     apply_step1_task_parameter_overrides,
     build_events_per_second_metadata,
@@ -662,6 +663,10 @@ csv_path_trigger_type = os.path.join(
     f"task_{task_number}_metadata_trigger_type.csv",
 )
 csv_path_filter = os.path.join(metadata_directory, f"task_{task_number}_metadata_filter.csv")
+csv_path_deep_fiter = os.path.join(
+    metadata_directory,
+    f"task_{task_number}_metadata_deep_fiter.csv",
+)
 csv_path_noise_control = os.path.join(
     metadata_directory,
     f"task_{task_number}_metadata_noise_control.csv",
@@ -1059,22 +1064,22 @@ anc_std = config.get("anc_std", 0.075)
 n_planes_timtrack = config.get("n_planes_timtrack", 4)
 
 # Plotting options
-T_clip_min_debug = config["T_clip_min_debug"]
-T_clip_max_debug = config["T_clip_max_debug"]
-Q_clip_min_debug = config["Q_clip_min_debug"]
-Q_clip_max_debug = config["Q_clip_max_debug"]
+T_clip_min_debug = config.get("T_clip_min_debug", -500)
+T_clip_max_debug = config.get("T_clip_max_debug", 500)
+Q_clip_min_debug = config.get("Q_clip_min_debug", -500)
+Q_clip_max_debug = config.get("Q_clip_max_debug", 600)
 num_bins_debug = config["num_bins_debug"]
 
-T_clip_min_default = config["T_clip_min_default"]
-T_clip_max_default = config["T_clip_max_default"]
-Q_clip_min_default = config["Q_clip_min_default"]
-Q_clip_max_default = config["Q_clip_max_default"]
+T_clip_min_default = config.get("T_clip_min_default", -300)
+T_clip_max_default = config.get("T_clip_max_default", 100)
+Q_clip_min_default = config.get("Q_clip_min_default", 0)
+Q_clip_max_default = config.get("Q_clip_max_default", 500)
 num_bins_default = config["num_bins_default"]
 
-T_clip_min_ST = config["T_clip_min_ST"]
-T_clip_max_ST = config["T_clip_max_ST"]
-Q_clip_min_ST = config["Q_clip_min_ST"]
-Q_clip_max_ST = config["Q_clip_max_ST"]
+T_clip_min_ST = config.get("T_clip_min_ST", -300)
+T_clip_max_ST = config.get("T_clip_max_ST", 100)
+Q_clip_min_ST = config.get("Q_clip_min_ST", 0)
+Q_clip_max_ST = config.get("Q_clip_max_ST", 500)
 
 log_scale = config["log_scale"]
 track_removed_rows = _coerce_config_bool(config.get("track_removed_rows", False), default=False)
@@ -2156,8 +2161,12 @@ def apply_task1_plane_combination_filter(
         "valid_pair_observations": 0,
         "failed_pair_any": 0,
         "failed_pair_q_sum": 0,
+        "failed_pair_q_sum_low": 0,
+        "failed_pair_q_sum_high": 0,
         "failed_pair_q_dif": 0,
         "failed_pair_t_sum": 0,
+        "failed_pair_t_sum_low": 0,
+        "failed_pair_t_sum_high": 0,
         "failed_pair_t_dif": 0,
         "rows_affected": 0,
         "values_zeroed": 0,
@@ -2171,6 +2180,22 @@ def apply_task1_plane_combination_filter(
             for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
         },
         "failed_pair_any_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "failed_pair_q_sum_low_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "failed_pair_q_sum_high_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "failed_pair_t_sum_low_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "failed_pair_t_sum_high_by_relation": {
             relation_type: 0
             for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
         },
@@ -2214,11 +2239,7 @@ def apply_task1_plane_combination_filter(
         t_b = pd.to_numeric(df_input[cols_b["T"]], errors="coerce").fillna(0).to_numpy(dtype=float)
 
         if relation_type == "self":
-            valid_mask = (
-                np.isfinite(q_a)
-                & np.isfinite(t_a)
-                & ((q_a != 0) | (t_a != 0))
-            )
+            valid_mask = np.isfinite(q_a) & np.isfinite(t_a)
             pair_q_sum = q_a.copy()
             pair_q_dif = np.zeros_like(q_a, dtype=float)
             pair_t_sum = t_a.copy()
@@ -2245,24 +2266,38 @@ def apply_task1_plane_combination_filter(
         summary["valid_pair_observations"] += valid_count
         summary["valid_pair_observations_by_relation"][relation_type] += valid_count
 
-        fail_q_sum = valid_mask & (
-            (pair_q_sum < float(q_sum_left))
-            | (pair_q_sum > float(q_sum_right))
-        )
-        fail_q_dif = valid_mask & (np.abs(pair_q_dif) > abs(float(q_dif_threshold)))
-        fail_t_sum = valid_mask & (
-            (pair_t_sum < float(t_sum_left))
-            | (pair_t_sum > float(t_sum_right))
-        )
-        fail_t_dif = valid_mask & (np.abs(pair_t_dif) > abs(float(t_dif_threshold)))
+        q_metric_valid_mask = valid_mask & np.isfinite(pair_q_sum) & (pair_q_sum != 0)
+        t_metric_valid_mask = valid_mask & np.isfinite(pair_t_sum) & (pair_t_sum != 0)
+        q_dif_valid_mask = valid_mask & np.isfinite(pair_q_dif)
+        t_dif_valid_mask = valid_mask & np.isfinite(pair_t_dif)
+        if relation_type != "self":
+            q_dif_valid_mask &= (pair_q_sum != 0)
+            t_dif_valid_mask &= (pair_t_sum != 0)
+
+        fail_q_sum_low = q_metric_valid_mask & (pair_q_sum < float(q_sum_left))
+        fail_q_sum_high = q_metric_valid_mask & (pair_q_sum > float(q_sum_right))
+        fail_q_sum = fail_q_sum_low | fail_q_sum_high
+        fail_q_dif = q_dif_valid_mask & (np.abs(pair_q_dif) > abs(float(q_dif_threshold)))
+        fail_t_sum_low = t_metric_valid_mask & (pair_t_sum < float(t_sum_left))
+        fail_t_sum_high = t_metric_valid_mask & (pair_t_sum > float(t_sum_right))
+        fail_t_sum = fail_t_sum_low | fail_t_sum_high
+        fail_t_dif = t_dif_valid_mask & (np.abs(pair_t_dif) > abs(float(t_dif_threshold)))
         fail_any = fail_q_sum | fail_q_dif | fail_t_sum | fail_t_dif
 
         summary["failed_pair_q_sum"] += int(np.count_nonzero(fail_q_sum))
+        summary["failed_pair_q_sum_low"] += int(np.count_nonzero(fail_q_sum_low))
+        summary["failed_pair_q_sum_high"] += int(np.count_nonzero(fail_q_sum_high))
         summary["failed_pair_q_dif"] += int(np.count_nonzero(fail_q_dif))
         summary["failed_pair_t_sum"] += int(np.count_nonzero(fail_t_sum))
+        summary["failed_pair_t_sum_low"] += int(np.count_nonzero(fail_t_sum_low))
+        summary["failed_pair_t_sum_high"] += int(np.count_nonzero(fail_t_sum_high))
         summary["failed_pair_t_dif"] += int(np.count_nonzero(fail_t_dif))
         summary["failed_pair_any"] += int(np.count_nonzero(fail_any))
         summary["failed_pair_any_by_relation"][relation_type] += int(np.count_nonzero(fail_any))
+        summary["failed_pair_q_sum_low_by_relation"][relation_type] += int(np.count_nonzero(fail_q_sum_low))
+        summary["failed_pair_q_sum_high_by_relation"][relation_type] += int(np.count_nonzero(fail_q_sum_high))
+        summary["failed_pair_t_sum_low_by_relation"][relation_type] += int(np.count_nonzero(fail_t_sum_low))
+        summary["failed_pair_t_sum_high_by_relation"][relation_type] += int(np.count_nonzero(fail_t_sum_high))
 
         if np.any(fail_any):
             q_sum_width = max(abs(float(q_sum_right) - float(q_sum_left)), 1e-9)
@@ -2582,7 +2617,8 @@ def collect_task1_channel_combination_histogram_payload(
             valid_mask = (
                 np.isfinite(q_a)
                 & np.isfinite(t_a)
-                & ((q_a != 0) | (t_a != 0))
+                & (q_a != 0)
+                & (t_a != 0)
             )
             q_sum = q_a
             q_dif = np.zeros_like(q_a, dtype=float)
@@ -6336,6 +6372,30 @@ for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES:
         len(working_df) if len(working_df) else 0,
         label=f"rows with {relation_type} relation failures",
     )
+    record_activity_metric(
+        f"plane_combination_filter_{relation_type}_q_sum_low_failed_pct",
+        plane_combination_summary["failed_pair_q_sum_low_by_relation"].get(relation_type, 0),
+        valid_relation_observations if valid_relation_observations else 0,
+        label=f"{relation_type} q_sum low-bound failures",
+    )
+    record_activity_metric(
+        f"plane_combination_filter_{relation_type}_q_sum_high_failed_pct",
+        plane_combination_summary["failed_pair_q_sum_high_by_relation"].get(relation_type, 0),
+        valid_relation_observations if valid_relation_observations else 0,
+        label=f"{relation_type} q_sum high-bound failures",
+    )
+    record_activity_metric(
+        f"plane_combination_filter_{relation_type}_t_sum_low_failed_pct",
+        plane_combination_summary["failed_pair_t_sum_low_by_relation"].get(relation_type, 0),
+        valid_relation_observations if valid_relation_observations else 0,
+        label=f"{relation_type} t_sum low-bound failures",
+    )
+    record_activity_metric(
+        f"plane_combination_filter_{relation_type}_t_sum_high_failed_pct",
+        plane_combination_summary["failed_pair_t_sum_high_by_relation"].get(relation_type, 0),
+        valid_relation_observations if valid_relation_observations else 0,
+        label=f"{relation_type} t_sum high-bound failures",
+    )
 record_activity_metric(
     "plane_combination_filter_any_failed_pct",
     plane_combination_summary["failed_pair_any"],
@@ -6349,6 +6409,18 @@ record_activity_metric(
     label="Q_sum failed channel plane combinations",
 )
 record_activity_metric(
+    "plane_combination_filter_q_sum_low_failed_pct",
+    plane_combination_summary["failed_pair_q_sum_low"],
+    plane_combination_summary["valid_pair_observations"],
+    label="Q_sum low-bound failed channel plane combinations",
+)
+record_activity_metric(
+    "plane_combination_filter_q_sum_high_failed_pct",
+    plane_combination_summary["failed_pair_q_sum_high"],
+    plane_combination_summary["valid_pair_observations"],
+    label="Q_sum high-bound failed channel plane combinations",
+)
+record_activity_metric(
     "plane_combination_filter_q_dif_failed_pct",
     plane_combination_summary["failed_pair_q_dif"],
     plane_combination_summary["valid_pair_observations"],
@@ -6359,6 +6431,18 @@ record_activity_metric(
     plane_combination_summary["failed_pair_t_sum"],
     plane_combination_summary["valid_pair_observations"],
     label="T_sum failed channel plane combinations",
+)
+record_activity_metric(
+    "plane_combination_filter_t_sum_low_failed_pct",
+    plane_combination_summary["failed_pair_t_sum_low"],
+    plane_combination_summary["valid_pair_observations"],
+    label="T_sum low-bound failed channel plane combinations",
+)
+record_activity_metric(
+    "plane_combination_filter_t_sum_high_failed_pct",
+    plane_combination_summary["failed_pair_t_sum_high"],
+    plane_combination_summary["valid_pair_observations"],
+    label="T_sum high-bound failed channel plane combinations",
 )
 record_activity_metric(
     "plane_combination_filter_t_dif_failed_pct",
@@ -6396,9 +6480,33 @@ for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES:
     global_variables[f"plane_combination_filter_{relation_type}_failed_observations"] = int(
         plane_combination_summary["failed_pair_any_by_relation"].get(relation_type, 0)
     )
+    global_variables[f"plane_combination_filter_{relation_type}_q_sum_low_failed_observations"] = int(
+        plane_combination_summary["failed_pair_q_sum_low_by_relation"].get(relation_type, 0)
+    )
+    global_variables[f"plane_combination_filter_{relation_type}_q_sum_high_failed_observations"] = int(
+        plane_combination_summary["failed_pair_q_sum_high_by_relation"].get(relation_type, 0)
+    )
+    global_variables[f"plane_combination_filter_{relation_type}_t_sum_low_failed_observations"] = int(
+        plane_combination_summary["failed_pair_t_sum_low_by_relation"].get(relation_type, 0)
+    )
+    global_variables[f"plane_combination_filter_{relation_type}_t_sum_high_failed_observations"] = int(
+        plane_combination_summary["failed_pair_t_sum_high_by_relation"].get(relation_type, 0)
+    )
     global_variables[f"plane_combination_filter_rows_with_{relation_type}_relation_failures"] = int(
         plane_combination_summary["rows_with_relation_failures"].get(relation_type, 0)
     )
+global_variables["plane_combination_filter_q_sum_low_failed_observations"] = int(
+    plane_combination_summary["failed_pair_q_sum_low"]
+)
+global_variables["plane_combination_filter_q_sum_high_failed_observations"] = int(
+    plane_combination_summary["failed_pair_q_sum_high"]
+)
+global_variables["plane_combination_filter_t_sum_low_failed_observations"] = int(
+    plane_combination_summary["failed_pair_t_sum_low"]
+)
+global_variables["plane_combination_filter_t_sum_high_failed_observations"] = int(
+    plane_combination_summary["failed_pair_t_sum_high"]
+)
 global_variables["plane_combination_filter_selected_offender_channels"] = int(
     plane_combination_summary["selected_offender_channels"]
 )
@@ -6654,6 +6762,26 @@ metadata_filter_csv_path = save_metadata(
 )
 print(f"Metadata (filter) CSV updated at: {metadata_filter_csv_path}")
 
+deep_fiter_row = {
+    "filename_base": filename_base,
+    "execution_timestamp": execution_timestamp,
+    "param_hash": param_hash_value,
+}
+for name in sorted(filter_metrics):
+    deep_fiter_row[name] = filter_metrics.get(name, "")
+
+metadata_deep_fiter_csv_path = save_metadata(
+    csv_path_deep_fiter,
+    deep_fiter_row,
+    preferred_fieldnames=(
+        "filename_base",
+        "execution_timestamp",
+        "param_hash",
+        *sorted(filter_metrics),
+    ),
+)
+print(f"Metadata (deep_fiter) CSV updated at: {metadata_deep_fiter_csv_path}")
+
 noise_control_events_per_second_meta = build_events_per_second_metadata(
     task1_problematic_channel_count_snapshot
 )
@@ -6837,6 +6965,12 @@ trigger_type_variables = extract_trigger_type_metadata(
 trigger_type_variables["count_rate_denominator_seconds"] = rate_histogram_variables.get(
     "count_rate_denominator_seconds",
     0,
+)
+add_trigger_type_total_offender_threshold_metadata(
+    trigger_type_variables,
+    working_df,
+    stage_tt_columns=("raw_tt", "clean_tt"),
+    denominator_seconds=trigger_type_variables["count_rate_denominator_seconds"],
 )
 metadata_trigger_type_csv_path = save_metadata(
     csv_path_trigger_type,

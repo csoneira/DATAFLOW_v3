@@ -33,6 +33,11 @@ MASTER_SELECTION_FILENAME = "config_selection.yaml"
 class SelectionConfig:
     stations: Optional[Tuple[int, ...]]
     date_ranges: Tuple[DateRange, ...]
+    station_date_ranges: Mapping[int, Tuple[DateRange, ...]]
+
+    @property
+    def has_date_filters(self) -> bool:
+        return bool(self.date_ranges or self.station_date_ranges)
 
 
 def load_yaml_mapping(path: str | Path) -> Mapping[str, object]:
@@ -109,10 +114,10 @@ def _normalize_station_list(value: object) -> Optional[Tuple[int, ...]]:
         tokens = [tok for tok in re.split(r"[,;\s]+", text) if tok]
         parsed = []
         for token in tokens:
-            try:
-                parsed.append(int(token))
-            except Exception:
+            station_id = parse_station_id(token)
+            if station_id is None:
                 continue
+            parsed.append(station_id)
         if not parsed:
             return None
         return tuple(sorted(set(parsed)))
@@ -121,10 +126,13 @@ def _normalize_station_list(value: object) -> Optional[Tuple[int, ...]]:
         for item in value:
             if isinstance(item, str) and item.strip().lower() in {"all", "*"}:
                 return None
-            try:
-                parsed.append(int(item))
-            except Exception:
+            if isinstance(item, (int, float)):
+                station_id = int(item)
+            else:
+                station_id = parse_station_id(item)
+            if station_id is None:
                 continue
+            parsed.append(station_id)
         if not parsed:
             return None
         return tuple(sorted(set(parsed)))
@@ -144,7 +152,34 @@ def _normalize_date_range(
     return (start_value, end_value)
 
 
-def _collect_ranges_from_node(node: object, out_ranges: list[DateRange]) -> None:
+def _extract_range_stations(item: Mapping[str, object]) -> Optional[Tuple[int, ...]]:
+    if "stations" in item:
+        return _normalize_station_list(item.get("stations"))
+    if "station" in item:
+        return _normalize_station_list(item.get("station"))
+    return None
+
+
+def _append_range(
+    range_value: Optional[DateRange],
+    range_stations: Optional[Tuple[int, ...]],
+    out_ranges: list[DateRange],
+    out_station_ranges: dict[int, list[DateRange]],
+) -> None:
+    if range_value is None:
+        return
+    if range_stations is None:
+        out_ranges.append(range_value)
+        return
+    for station_id in range_stations:
+        out_station_ranges.setdefault(int(station_id), []).append(range_value)
+
+
+def _collect_ranges_from_node(
+    node: object,
+    out_ranges: list[DateRange],
+    out_station_ranges: dict[int, list[DateRange]],
+) -> None:
     if not isinstance(node, Mapping):
         return
 
@@ -159,8 +194,12 @@ def _collect_ranges_from_node(node: object, out_ranges: list[DateRange]) -> None
                     _parse_date_value(item.get("start"), is_end=False),
                     _parse_date_value(item.get("end"), is_end=True),
                 )
-                if normalized is not None:
-                    out_ranges.append(normalized)
+                _append_range(
+                    normalized,
+                    _extract_range_stations(item),
+                    out_ranges,
+                    out_station_ranges,
+                )
 
     legacy_range = node.get("date_range")
     if isinstance(legacy_range, Mapping):
@@ -168,8 +207,12 @@ def _collect_ranges_from_node(node: object, out_ranges: list[DateRange]) -> None
             _parse_date_value(legacy_range.get("start"), is_end=False),
             _parse_date_value(legacy_range.get("end"), is_end=True),
         )
-        if normalized is not None:
-            out_ranges.append(normalized)
+        _append_range(
+            normalized,
+            _extract_range_stations(legacy_range),
+            out_ranges,
+            out_station_ranges,
+        )
 
     legacy_ranges = node.get("date_ranges")
     if isinstance(legacy_ranges, list):
@@ -180,14 +223,15 @@ def _collect_ranges_from_node(node: object, out_ranges: list[DateRange]) -> None
                 _parse_date_value(item.get("start"), is_end=False),
                 _parse_date_value(item.get("end"), is_end=True),
             )
-            if normalized is not None:
-                out_ranges.append(normalized)
+            _append_range(
+                normalized,
+                _extract_range_stations(item),
+                out_ranges,
+                out_station_ranges,
+            )
 
 
-def extract_selection(config: Mapping[str, object]) -> SelectionConfig:
-    ranges: list[DateRange] = []
-    _collect_ranges_from_node(config, ranges)
-
+def _dedupe_ranges(ranges: Sequence[DateRange]) -> Tuple[DateRange, ...]:
     deduped_ranges: list[DateRange] = []
     seen_ranges: set[DateRange] = set()
     for item in ranges:
@@ -195,6 +239,23 @@ def extract_selection(config: Mapping[str, object]) -> SelectionConfig:
             continue
         seen_ranges.add(item)
         deduped_ranges.append(item)
+    return tuple(deduped_ranges)
+
+
+def _dedupe_station_ranges(
+    station_ranges: Mapping[int, Sequence[DateRange]],
+) -> dict[int, Tuple[DateRange, ...]]:
+    return {
+        int(station_id): _dedupe_ranges(ranges)
+        for station_id, ranges in station_ranges.items()
+        if ranges
+    }
+
+
+def extract_selection(config: Mapping[str, object]) -> SelectionConfig:
+    ranges: list[DateRange] = []
+    station_ranges: dict[int, list[DateRange]] = {}
+    _collect_ranges_from_node(config, ranges, station_ranges)
 
     stations: Optional[Tuple[int, ...]] = None
     selection_node = config.get("selection")
@@ -203,27 +264,30 @@ def extract_selection(config: Mapping[str, object]) -> SelectionConfig:
     if stations is None:
         stations = _normalize_station_list(config.get("stations"))
 
-    return SelectionConfig(stations=stations, date_ranges=tuple(deduped_ranges))
+    return SelectionConfig(
+        stations=stations,
+        date_ranges=_dedupe_ranges(ranges),
+        station_date_ranges=_dedupe_station_ranges(station_ranges),
+    )
 
 
 def combine_local_selections(configs: Sequence[Mapping[str, object]]) -> SelectionConfig:
     combined_ranges: list[DateRange] = []
+    combined_station_ranges: dict[int, list[DateRange]] = {}
     stations: Optional[Tuple[int, ...]] = None
     for config in configs:
         selection = extract_selection(config)
         if selection.stations is not None:
             stations = selection.stations
         combined_ranges.extend(selection.date_ranges)
+        for station_id, ranges in selection.station_date_ranges.items():
+            combined_station_ranges.setdefault(int(station_id), []).extend(ranges)
 
-    deduped_ranges: list[DateRange] = []
-    seen_ranges: set[DateRange] = set()
-    for item in combined_ranges:
-        if item in seen_ranges:
-            continue
-        seen_ranges.add(item)
-        deduped_ranges.append(item)
-
-    return SelectionConfig(stations=stations, date_ranges=tuple(deduped_ranges))
+    return SelectionConfig(
+        stations=stations,
+        date_ranges=_dedupe_ranges(combined_ranges),
+        station_date_ranges=_dedupe_station_ranges(combined_station_ranges),
+    )
 
 
 def load_master_selection(master_config_root: str | Path | None = None) -> SelectionConfig:
@@ -245,12 +309,12 @@ def resolve_selection_from_configs(
         if master_selection.stations is not None
         else local_selection.stations
     )
-    date_ranges = (
-        master_selection.date_ranges
-        if master_selection.date_ranges
-        else local_selection.date_ranges
+    date_selection = master_selection if master_selection.has_date_filters else local_selection
+    return SelectionConfig(
+        stations=stations,
+        date_ranges=date_selection.date_ranges,
+        station_date_ranges=date_selection.station_date_ranges,
     )
-    return SelectionConfig(stations=stations, date_ranges=date_ranges)
 
 
 def load_selection_for_paths(
@@ -311,11 +375,26 @@ def date_filter_allowed_for_station(station: int | str) -> bool:
 
 def effective_date_ranges_for_station(
     station: int | str,
-    ranges: Sequence[DateRange],
+    selection_or_ranges: SelectionConfig | Sequence[DateRange],
+    station_date_ranges: Optional[Mapping[int, Sequence[DateRange]]] = None,
 ) -> Tuple[DateRange, ...]:
     if not date_filter_allowed_for_station(station):
         return ()
-    return tuple(ranges)
+
+    common_ranges: Sequence[DateRange]
+    station_specific_ranges: Mapping[int, Sequence[DateRange]]
+    if isinstance(selection_or_ranges, SelectionConfig):
+        common_ranges = selection_or_ranges.date_ranges
+        station_specific_ranges = selection_or_ranges.station_date_ranges
+    else:
+        common_ranges = selection_or_ranges
+        station_specific_ranges = station_date_ranges or {}
+
+    resolved_ranges: list[DateRange] = list(common_ranges)
+    station_id = parse_station_id(station)
+    if station_id is not None:
+        resolved_ranges.extend(station_specific_ranges.get(int(station_id), ()))
+    return _dedupe_ranges(resolved_ranges)
 
 
 def date_in_ranges(day_value: date, ranges: Sequence[DateRange]) -> bool:

@@ -129,6 +129,7 @@ from MASTER.common.step1_activation import (
 )
 from MASTER.common.step1_shared import (
     add_normalized_count_metadata,
+    add_trigger_type_total_offender_threshold_metadata,
     apply_step1_master_overrides,
     apply_step1_task_parameter_overrides,
     build_events_per_second_metadata,
@@ -1207,6 +1208,12 @@ TASK3_NOISE_CONTROL_PERCENT_METRIC_NAMES: tuple[str, ...] = tuple(
     f"plane_combination_filter_rows_with_{selected_count}_selected_offenders_pct"
     for selected_count in TASK3_SELECTED_OFFENDER_CARDINALITY_VALUES
 )
+TASK3_THREE_TO_FOUR_MISSING_TRIGGER_BY_PLANE: dict[int, int] = {
+    1: 234,
+    2: 134,
+    3: 124,
+    4: 123,
+}
 FILTER6_NONZERO_COUNTER_NAMES: tuple[str, ...] = tuple(
     f"P{i_plane}_{label}_nonzero_{tag}"
     for tag in ("before_filter6", "after_filter6")
@@ -2411,6 +2418,42 @@ def _task3_selected_offender_cardinality_rate_metric_key(selected_count: int) ->
     return f"{_task3_selected_offender_cardinality_metric_key(selected_count)}_rate_hz"
 
 
+def _task3_noise_control_efficiency_metric_key(plane: int, selected_count_threshold: int) -> str:
+    return (
+        f"plane_combination_filter_eff_p{plane}_selected_offenders_le_"
+        f"{selected_count_threshold}"
+    )
+
+
+def _task3_noise_control_efficiency_metric_names(
+    selected_count_thresholds: Iterable[int],
+) -> tuple[str, ...]:
+    return tuple(
+        _task3_noise_control_efficiency_metric_key(plane, selected_count_threshold)
+        for selected_count_threshold in selected_count_thresholds
+        for plane in sorted(TASK3_THREE_TO_FOUR_MISSING_TRIGGER_BY_PLANE)
+    )
+
+
+_task3_noise_control_efficiency_max_raw = config.get(
+    "noise_control_efficiency_max_selected_offenders",
+    5,
+)
+try:
+    task3_noise_control_efficiency_max_selected_offenders = int(
+        _task3_noise_control_efficiency_max_raw
+    )
+except (TypeError, ValueError):
+    task3_noise_control_efficiency_max_selected_offenders = 5
+task3_noise_control_efficiency_max_selected_offenders = max(
+    0,
+    task3_noise_control_efficiency_max_selected_offenders,
+)
+task3_noise_control_efficiency_selected_offender_values: tuple[int, ...] = tuple(
+    range(task3_noise_control_efficiency_max_selected_offenders + 1)
+)
+
+
 def apply_task3_plane_combination_filter(
     df_input: pd.DataFrame,
     *,
@@ -3527,6 +3570,10 @@ csv_path_trigger_type = os.path.join(
     f"task_{task_number}_metadata_trigger_type.csv",
 )
 csv_path_filter = os.path.join(metadata_directory, f"task_{task_number}_metadata_filter.csv")
+csv_path_deep_fiter = os.path.join(
+    metadata_directory,
+    f"task_{task_number}_metadata_deep_fiter.csv",
+)
 csv_path_noise_control = os.path.join(
     metadata_directory,
     f"task_{task_number}_metadata_noise_control.csv",
@@ -6874,6 +6921,51 @@ if not plane_combination_stage_input_df.empty:
     working_df.loc[:, "task3_problematic_plane_count"] = task3_problematic_plane_count
 else:
     working_df.loc[:, "task3_problematic_plane_count"] = 0
+
+task1_problematic_channel_count = pd.to_numeric(
+    working_df.get(
+        "task1_problematic_channel_count",
+        pd.Series(index=working_df.index, dtype=float),
+    ),
+    errors="coerce",
+).fillna(0).astype(int)
+task2_problematic_strip_count = pd.to_numeric(
+    working_df.get(
+        "task2_problematic_strip_count",
+        pd.Series(index=working_df.index, dtype=float),
+    ),
+    errors="coerce",
+).fillna(0).astype(int)
+task3_problematic_plane_count_series = pd.to_numeric(
+    working_df.get(
+        "task3_problematic_plane_count",
+        pd.Series(index=working_df.index, dtype=float),
+    ),
+    errors="coerce",
+).fillna(0).astype(int)
+total_problematic_offender_count = (
+    task1_problematic_channel_count
+    + task2_problematic_strip_count
+    + task3_problematic_plane_count_series
+).astype(int)
+
+working_df.loc[:, "task1_problematic_channel_count"] = task1_problematic_channel_count.to_numpy()
+working_df.loc[:, "task2_problematic_strip_count"] = task2_problematic_strip_count.to_numpy()
+working_df.loc[:, "task3_problematic_plane_count"] = task3_problematic_plane_count_series.to_numpy()
+working_df.loc[:, "total_problematic_offender_count"] = (
+    total_problematic_offender_count.to_numpy()
+)
+
+total_problematic_offender_count_counts = (
+    total_problematic_offender_count.value_counts().sort_index()
+)
+global_variables["plane_combination_filter_max_selected_offenders_in_row"] = int(
+    total_problematic_offender_count.max() if len(total_problematic_offender_count) else 0
+)
+for selected_count in TASK3_SELECTED_OFFENDER_CARDINALITY_VALUES:
+    global_variables[_task3_selected_offender_cardinality_metric_key(selected_count)] = int(
+        total_problematic_offender_count_counts.get(selected_count, 0)
+    )
 if _plot_plane_combination_filter_by_tt:
     plane_combination_any_hist_after = collect_task3_plane_combination_histogram_payload(
         working_df,
@@ -9635,6 +9727,26 @@ metadata_filter_csv_path = save_metadata(
 )
 print(f"Metadata (filter) CSV updated at: {metadata_filter_csv_path}")
 
+deep_fiter_row = {
+    "filename_base": filename_base,
+    "execution_timestamp": execution_timestamp,
+    "param_hash": param_hash_value,
+}
+for name in sorted(filter_metrics):
+    deep_fiter_row[name] = filter_metrics.get(name, "")
+
+metadata_deep_fiter_csv_path = save_metadata(
+    csv_path_deep_fiter,
+    deep_fiter_row,
+    preferred_fieldnames=(
+        "filename_base",
+        "execution_timestamp",
+        "param_hash",
+        *sorted(filter_metrics),
+    ),
+)
+print(f"Metadata (deep_fiter) CSV updated at: {metadata_deep_fiter_csv_path}")
+
 noise_control_row = {
     "filename_base": filename_base,
     "execution_timestamp": execution_timestamp,
@@ -9662,6 +9774,36 @@ for selected_count in TASK3_SELECTED_OFFENDER_CARDINALITY_VALUES:
         f"plane_combination_filter_rows_with_{selected_count}_selected_offenders_pct"
     ] = round(pct_value, 4)
 
+task3_noise_control_list_tt = pd.to_numeric(
+    working_df.get("list_tt", pd.Series(index=working_df.index, dtype=float)),
+    errors="coerce",
+).fillna(0).astype(int)
+task3_noise_control_selected_offenders = pd.to_numeric(
+    working_df.get(
+        "total_problematic_offender_count",
+        pd.Series(index=working_df.index, dtype=float),
+    ),
+    errors="coerce",
+).fillna(0).astype(int)
+
+for selected_count_threshold in task3_noise_control_efficiency_selected_offender_values:
+    threshold_mask = task3_noise_control_selected_offenders <= selected_count_threshold
+    threshold_list_tt = task3_noise_control_list_tt.loc[threshold_mask]
+    four_plane_count = int((threshold_list_tt == 1234).sum())
+    for plane, missing_trigger in TASK3_THREE_TO_FOUR_MISSING_TRIGGER_BY_PLANE.items():
+        metric_key = _task3_noise_control_efficiency_metric_key(
+            plane,
+            selected_count_threshold,
+        )
+        if four_plane_count <= 0:
+            noise_control_row[metric_key] = ""
+            continue
+        missing_plane_count = int((threshold_list_tt == missing_trigger).sum())
+        noise_control_row[metric_key] = round(
+            1.0 - (float(missing_plane_count) / float(four_plane_count)),
+            6,
+        )
+
 metadata_noise_control_csv_path = save_metadata(
     csv_path_noise_control,
     noise_control_row,
@@ -9672,6 +9814,9 @@ metadata_noise_control_csv_path = save_metadata(
         NOISE_CONTROL_RATE_DENOMINATOR_COLUMN,
         *TASK3_NOISE_CONTROL_METRIC_NAMES,
         *TASK3_NOISE_CONTROL_PERCENT_METRIC_NAMES,
+        *_task3_noise_control_efficiency_metric_names(
+            task3_noise_control_efficiency_selected_offender_values
+        ),
     ),
 )
 print(f"Metadata (noise_control) CSV updated at: {metadata_noise_control_csv_path}")
@@ -9770,6 +9915,12 @@ trigger_type_variables = extract_trigger_type_metadata(
 trigger_type_variables["count_rate_denominator_seconds"] = rate_histogram_variables.get(
     "count_rate_denominator_seconds",
     0,
+)
+add_trigger_type_total_offender_threshold_metadata(
+    trigger_type_variables,
+    working_df,
+    stage_tt_columns=("cal_tt", "list_tt"),
+    denominator_seconds=trigger_type_variables["count_rate_denominator_seconds"],
 )
 metadata_trigger_type_csv_path = save_metadata(
     csv_path_trigger_type,

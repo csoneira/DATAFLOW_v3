@@ -9,7 +9,7 @@ force_replacement: true
 article_format: false
 # create_plots options: null | debug | usual | essential | all
 # Task 1 plot alias statuses live in config_plots_task_1.yaml
-create_plots: null
+create_plots: essential
 keep_all_columns_output: false
 removed_marker: x
 removed_marker_size: 20

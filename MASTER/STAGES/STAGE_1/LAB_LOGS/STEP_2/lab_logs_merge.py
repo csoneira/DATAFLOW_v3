@@ -235,7 +235,7 @@ def load_lab_logs_date_ranges(
     )
     if station is None:
         return list(selection.date_ranges)
-    return list(effective_date_ranges_for_station(station, selection.date_ranges))
+    return list(effective_date_ranges_for_station(station, selection))
 
 
 def extract_date_from_filename(path: Path) -> Optional[date]:
@@ -533,7 +533,7 @@ def main() -> int:
     # status_timestamp = append_status_row(status_csv_path)
 
     outlier_limits = load_outlier_limits()
-    date_ranges = list(effective_date_ranges_for_station(station, selection.date_ranges))
+    date_ranges = list(effective_date_ranges_for_station(station, selection))
     if date_ranges:
         human_ranges = [
             format_date_range_for_display(start_value, end_value)

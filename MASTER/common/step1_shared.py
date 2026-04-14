@@ -26,9 +26,10 @@ from typing import Callable, Dict, Iterable, List, Mapping, Sequence, Tuple, Typ
 
 import numpy as np
 import pandas as pd
+import yaml
 
 from MASTER.common.path_config import get_master_config_root
-from MASTER.common.selection_config import MASTER_SELECTION_FILENAME, load_yaml_mapping
+from MASTER.common.selection_config import load_yaml_mapping
 
 DEFAULT_STATION_CHOICES: Tuple[str, ...] = ("0", "1", "2", "3", "4")
 DEFAULT_IMPORTANT_KEYWORDS: Tuple[str, ...] = (
@@ -39,6 +40,30 @@ DEFAULT_IMPORTANT_KEYWORDS: Tuple[str, ...] = (
     "traceback",
     "usage",
 )
+STEP1_MASTER_CONFIG_RELATIVE_PATH = Path("STAGE_1") / "EVENT_DATA" / "STEP_1" / "config_step_1.yaml"
+STEP1_TASK_OVERRIDE_KEYS: Tuple[str, ...] = (
+    "complete_reanalysis",
+    "create_plots",
+    "keep_all_columns_output",
+)
+STEP1_METADATA_OUTPUT_TYPES: Tuple[str, ...] = (
+    "activation",
+    "calibration",
+    "deep_fiter",
+    "efficiency",
+    "execution",
+    "filter",
+    "noise_control",
+    "pattern",
+    "profiling",
+    "rate_histogram",
+    "specific",
+    "status",
+    "trigger_type",
+)
+STEP1_METADATA_OUTPUT_DEFAULTS: Dict[str, bool] = {
+    metadata_type: True for metadata_type in STEP1_METADATA_OUTPUT_TYPES
+}
 
 EVENTS_PER_SECOND_MAX = 40
 EVENTS_PER_SECOND_COLUMNS = [
@@ -48,29 +73,36 @@ EVENTS_PER_SECOND_COLUMNS = [
 ]
 EVENTS_PER_SECOND_COLUMN_SET = frozenset(EVENTS_PER_SECOND_COLUMNS)
 TRACEABILITY_COLUMNS: Tuple[str, ...] = ("filename_base", "execution_timestamp", "param_hash")
+CANONICAL_TT_LABEL_SEQUENCE: Tuple[str, ...] = (
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "12",
+    "13",
+    "14",
+    "23",
+    "24",
+    "34",
+    "123",
+    "124",
+    "134",
+    "234",
+    "1234",
+)
 CANONICAL_TT_LABELS: frozenset[str] = frozenset(
-    {
-        "0",
-        "1",
-        "2",
-        "3",
-        "4",
-        "12",
-        "13",
-        "14",
-        "23",
-        "24",
-        "34",
-        "123",
-        "124",
-        "134",
-        "234",
-        "1234",
-    }
+    CANONICAL_TT_LABEL_SEQUENCE
 )
 TT_RATE_COLUMN_RE = re.compile(r"^(?P<prefix>.+_tt)_(?P<label>[^_]+)_rate_hz$")
 METADATA_MAX_FULL_SCAN_BYTES = 128 * 1024 * 1024
 VertexKeyT = TypeVar("VertexKeyT")
+UPSTREAM_OFFENDER_COUNT_COLUMNS: Tuple[str, ...] = (
+    "task1_problematic_channel_count",
+    "task2_problematic_strip_count",
+    "task3_problematic_plane_count",
+)
+DEFAULT_TRIGGER_TYPE_OFFENDER_THRESHOLDS: Tuple[int, ...] = (0, 1, 2, 3, 4, 5)
 
 
 def _metadata_value_is_empty(value: object) -> bool:
@@ -467,7 +499,10 @@ def is_trigger_type_file_column(column_name: str, tt_prefixes: Iterable[str]) ->
     if column_name == "count_rate_denominator_seconds":
         return True
     if is_trigger_type_metadata_column(column_name, tt_prefixes):
-        return column_name.endswith("_rate_hz")
+        if column_name.endswith("_rate_hz"):
+            return True
+        if "_total_offenders_le_" in column_name and column_name.endswith("_count"):
+            return True
     return False
 
 
@@ -493,6 +528,85 @@ def extract_trigger_type_metadata(
             metadata.pop(key, None)
 
     return extracted
+
+
+def _total_problematic_offender_series(df: pd.DataFrame) -> pd.Series:
+    if df.empty:
+        return pd.Series(0, index=df.index, dtype=int)
+
+    if "total_problematic_offender_count" in df.columns:
+        return (
+            pd.to_numeric(df["total_problematic_offender_count"], errors="coerce")
+            .fillna(0)
+            .clip(lower=0)
+            .astype(int)
+        )
+
+    total = pd.Series(0, index=df.index, dtype=int)
+    for column_name in UPSTREAM_OFFENDER_COUNT_COLUMNS:
+        if column_name not in df.columns:
+            continue
+        total = total.add(
+            pd.to_numeric(df[column_name], errors="coerce").fillna(0).clip(lower=0).astype(int),
+            fill_value=0,
+        )
+    return total.astype(int)
+
+
+def add_trigger_type_total_offender_threshold_metadata(
+    metadata: Dict[str, object],
+    df: pd.DataFrame,
+    stage_tt_columns: Sequence[str],
+    denominator_seconds: float | int | None,
+    thresholds: Sequence[int] = DEFAULT_TRIGGER_TYPE_OFFENDER_THRESHOLDS,
+) -> None:
+    if df is None:
+        return
+
+    stage_columns = tuple(
+        _normalize_tt_prefix(column_name)
+        for column_name in stage_tt_columns
+        if _normalize_tt_prefix(column_name) in df.columns
+    )
+    if not stage_columns:
+        return
+
+    try:
+        denominator_value = float(denominator_seconds)
+    except (TypeError, ValueError):
+        denominator_value = 0.0
+    if not np.isfinite(denominator_value) or denominator_value <= 0:
+        denominator_value = 0.0
+
+    total_problematic_offender_count = _total_problematic_offender_series(df)
+    normalized_thresholds = tuple(sorted({max(0, int(threshold)) for threshold in thresholds}))
+
+    normalized_tt_by_stage: dict[str, pd.Series] = {}
+    for stage_column in stage_columns:
+        normalized_tt_by_stage[stage_column] = pd.Series(
+            (
+                normalize_tt_label(value, default="0")
+                for value in df[stage_column].to_numpy(copy=False)
+            ),
+            index=df.index,
+            dtype="object",
+        )
+
+    for threshold in normalized_thresholds:
+        threshold_mask = total_problematic_offender_count <= threshold
+        for stage_column, tt_labels in normalized_tt_by_stage.items():
+            threshold_tt = tt_labels.loc[threshold_mask]
+            tt_counts = threshold_tt.value_counts()
+            for tt_label in CANONICAL_TT_LABEL_SEQUENCE:
+                count_value = int(tt_counts.get(tt_label, 0))
+                count_key = f"{stage_column}_total_offenders_le_{threshold}_{tt_label}_count"
+                rate_key = f"{stage_column}_total_offenders_le_{threshold}_{tt_label}_rate_hz"
+                metadata[count_key] = count_value
+                metadata[rate_key] = (
+                    round(float(count_value) / denominator_value, 6)
+                    if denominator_value > 0
+                    else ""
+                )
 
 
 def prune_redundant_count_metadata(
@@ -636,25 +750,86 @@ def apply_step1_task_parameter_overrides(
     return config_obj
 
 
-def load_step1_master_overrides(
+def load_step1_shared_overrides(
     *,
     master_config_root: str | Path | None = None,
 ) -> tuple[Path, Dict[str, object]]:
     root = Path(master_config_root).expanduser() if master_config_root is not None else get_master_config_root()
-    config_path = root / MASTER_SELECTION_FILENAME
+    config_path = root / STEP1_MASTER_CONFIG_RELATIVE_PATH
     loaded = load_yaml_mapping(config_path)
 
+    return config_path, _extract_step1_task_overrides(
+        loaded,
+        _load_step1_override_scalar_states(config_path),
+    )
+
+
+def _load_step1_override_scalar_states(config_path: Path) -> Dict[str, str]:
+    if not config_path.exists():
+        return {}
+    try:
+        with config_path.open("r", encoding="utf-8") as handle:
+            root_node = yaml.compose(handle)
+    except Exception:
+        return {}
+    if root_node is None or not isinstance(root_node, yaml.nodes.MappingNode):
+        return {}
+
+    override_mapping_node: yaml.nodes.MappingNode | None = None
+    for key_node, value_node in root_node.value:
+        if not isinstance(key_node, yaml.nodes.ScalarNode):
+            continue
+        if key_node.value in {"step_1_overrides", "step1_overrides"} and isinstance(
+            value_node, yaml.nodes.MappingNode
+        ):
+            override_mapping_node = value_node
+            break
+    if override_mapping_node is None:
+        return {}
+
+    scalar_states: Dict[str, str] = {}
+    for key_node, value_node in override_mapping_node.value:
+        if not isinstance(key_node, yaml.nodes.ScalarNode):
+            continue
+        key = key_node.value
+        if key not in STEP1_TASK_OVERRIDE_KEYS:
+            continue
+        if isinstance(value_node, yaml.nodes.ScalarNode) and value_node.tag == "tag:yaml.org,2002:null":
+            scalar_states[key] = "blank" if value_node.value == "" else "null"
+    return scalar_states
+
+
+def _step1_override_value_is_set(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str) and not value.strip():
+        return False
+    return True
+
+
+def _extract_step1_task_overrides(
+    loaded: Mapping[str, object],
+    scalar_states: Mapping[str, str] | None = None,
+) -> Dict[str, object]:
     override_node = loaded.get("step_1_overrides")
     if not isinstance(override_node, Mapping):
         override_node = loaded.get("step1_overrides")
     if not isinstance(override_node, Mapping):
-        return config_path, {}
+        return {}
 
     overrides: Dict[str, object] = {}
-    for key in ("complete_reanalysis", "create_plots"):
-        if key in override_node:
+    for key in STEP1_TASK_OVERRIDE_KEYS:
+        if key not in override_node:
+            continue
+        raw_state = None if scalar_states is None else scalar_states.get(key)
+        if raw_state == "blank":
+            continue
+        if raw_state == "null":
+            overrides[key] = None
+            continue
+        if _step1_override_value_is_set(override_node.get(key)):
             overrides[key] = override_node.get(key)
-    return config_path, overrides
+    return overrides
 
 
 def apply_step1_master_overrides(
@@ -663,7 +838,7 @@ def apply_step1_master_overrides(
     master_config_root: str | Path | None = None,
     log_fn: Callable[..., None] = builtins.print,
 ) -> dict:
-    config_path, overrides = load_step1_master_overrides(
+    config_path, overrides = load_step1_shared_overrides(
         master_config_root=master_config_root,
     )
     if not overrides:
@@ -671,8 +846,82 @@ def apply_step1_master_overrides(
 
     config_obj.update(overrides)
     joined_overrides = ", ".join(f"{key}={value}" for key, value in overrides.items())
-    log_fn(f"Warning: Loaded Step 1 master overrides from {config_path}: {joined_overrides}")
+    log_fn(f"Warning: Loaded Step 1 shared overrides from {config_path}: {joined_overrides}")
     return config_obj
+
+
+def _normalize_bool_setting(value: object, default: bool = True) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+
+    text = str(value).strip().lower()
+    if text in {"true", "1", "yes", "y", "on"}:
+        return True
+    if text in {"false", "0", "no", "n", "off"}:
+        return False
+    return default
+
+
+@lru_cache(maxsize=None)
+def load_step1_metadata_output_overrides(
+    master_config_root: str | Path | None = None,
+) -> tuple[Path, Dict[str, bool]]:
+    root = (
+        Path(master_config_root).expanduser()
+        if master_config_root is not None
+        else get_master_config_root()
+    )
+    config_path = root / STEP1_MASTER_CONFIG_RELATIVE_PATH
+    loaded = load_yaml_mapping(config_path)
+
+    output_node = loaded.get("metadata_outputs")
+    if not isinstance(output_node, Mapping):
+        output_node = loaded.get("step_1_metadata_outputs")
+    if not isinstance(output_node, Mapping):
+        output_node = {}
+
+    resolved = dict(STEP1_METADATA_OUTPUT_DEFAULTS)
+    for metadata_type in STEP1_METADATA_OUTPUT_TYPES:
+        if metadata_type in output_node:
+            resolved[metadata_type] = _normalize_bool_setting(output_node.get(metadata_type), True)
+        else:
+            legacy_key = f"write_metadata_{metadata_type}"
+            if legacy_key in loaded:
+                resolved[metadata_type] = _normalize_bool_setting(loaded.get(legacy_key), True)
+
+    return config_path, resolved
+
+
+def infer_step1_metadata_type(metadata_path: str | Path) -> str | None:
+    path = Path(metadata_path)
+    path_text = path.as_posix()
+    if "/STAGE_1/EVENT_DATA/STEP_1/" not in path_text or "/METADATA/" not in path_text:
+        return None
+    match = re.fullmatch(r"task_\d+_metadata_([a-z_]+)\.csv", path.name)
+    if not match:
+        return None
+    metadata_type = match.group(1)
+    if metadata_type not in STEP1_METADATA_OUTPUT_DEFAULTS:
+        return None
+    return metadata_type
+
+
+def should_write_step1_metadata(
+    metadata_path: str | Path,
+    *,
+    master_config_root: str | Path | None = None,
+) -> tuple[bool, str | None, Path]:
+    metadata_type = infer_step1_metadata_type(metadata_path)
+    config_path, resolved = load_step1_metadata_output_overrides(
+        master_config_root=master_config_root,
+    )
+    if metadata_type is None:
+        return True, None, config_path
+    return resolved.get(metadata_type, True), metadata_type, config_path
 
 
 def normalize_analysis_mode_value(value: object) -> str:
@@ -1243,6 +1492,16 @@ def save_metadata(
     drop_field_predicate: Callable[[str], bool] | None = None,
 ) -> Path:
     metadata_path = Path(metadata_path)
+    metadata_write_enabled, metadata_type, metadata_config_path = should_write_step1_metadata(
+        metadata_path,
+    )
+    if not metadata_write_enabled:
+        log_fn(
+            "[metadata] Skipping disabled metadata write: "
+            f"{metadata_path.name} (type={metadata_type}) from {metadata_config_path}"
+        )
+        return metadata_path
+
     effective_drop_field_predicate = _compose_drop_field_predicate(
         metadata_path,
         drop_field_predicate,

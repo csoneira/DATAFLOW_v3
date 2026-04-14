@@ -82,8 +82,41 @@ PDF_TARGETS = {
         / "METADATA"
         / "NOISE_CONTROL"
         / "PLOTS"
-        / "noise_control_efficiency_report.pdf",
-        "description": "Noise-control cumulative efficiency report",
+        / "task_1_noise_control_efficiency_report.pdf",
+        "description": "Noise-control Task 1 cumulative efficiency report (compatibility alias)",
+    },
+    "noise_control_efficiency_task1": {
+        "path": BASE_DIR
+        / "MASTER"
+        / "ANCILLARY"
+        / "PLOTTERS"
+        / "METADATA"
+        / "NOISE_CONTROL"
+        / "PLOTS"
+        / "task_1_noise_control_efficiency_report.pdf",
+        "description": "Noise-control Task 1 cumulative efficiency report",
+    },
+    "noise_control_efficiency_task2": {
+        "path": BASE_DIR
+        / "MASTER"
+        / "ANCILLARY"
+        / "PLOTTERS"
+        / "METADATA"
+        / "NOISE_CONTROL"
+        / "PLOTS"
+        / "task_2_noise_control_efficiency_report.pdf",
+        "description": "Noise-control Task 2 cumulative efficiency report",
+    },
+    "noise_control_efficiency_task3": {
+        "path": BASE_DIR
+        / "MASTER"
+        / "ANCILLARY"
+        / "PLOTTERS"
+        / "METADATA"
+        / "NOISE_CONTROL"
+        / "PLOTS"
+        / "task_3_noise_control_efficiency_report.pdf",
+        "description": "Noise-control Task 3 cumulative efficiency report",
     },
     "noise_control_plane_combination_rate_report": {
         "path": BASE_DIR
@@ -189,6 +222,35 @@ PDF_TARGETS = {
     },
 }
 
+PDF_COMMAND_ALIASES: dict[str, tuple[str, ...]] = {
+    "definitive_execution_report": ("exec_map",),
+    "filter_metadata_report": ("filter_meta",),
+    "noise_control_metadata_report": ("noise_meta",),
+    "noise_control_metadata_rate_report": ("noise_rate",),
+    "noise_control_efficiency_report": ("noise_eff",),
+    "noise_control_efficiency_task1": ("noise_eff1",),
+    "noise_control_efficiency_task2": ("noise_eff2",),
+    "noise_control_efficiency_task3": ("noise_eff3",),
+    "noise_control_plane_combination_rate_report": ("noise_plane",),
+    "trigger_rate_metadata_report": ("trig_rate",),
+    "rates_metadata_report": ("rates_meta",),
+    "execution_metadata_report": ("exec_meta",),
+    "efficiency_metadata_report": ("eff_meta",),
+    "efficiencies_three_to_four_report": ("eff_34",),
+    "simulated_data_evolution_report": ("sim_evo",),
+    "param_mesh_summary": ("mesh",),
+    "simulation_execution_time_hist": ("sim_time",),
+    "backpressure_monitor": ("backpressure",),
+}
+
+BOT_COMMAND_ALIASES: dict[str, tuple[str, ...]] = {
+    "task_pdfs": ("taskpdf",),
+    "clean_dataflow_status": ("clean_status",),
+    "clean_dataflow_force": ("clean_force",),
+    "terminal": ("term",),
+    "restart_bot": ("restart",),
+}
+
 CLEANER_SCRIPT = (
     BASE_DIR / "OPERATIONS" / "MAINTENANCE" / "CLEANERS" / "clean_dataflow.sh"
 )
@@ -199,35 +261,37 @@ HELP_TEXT = (
     "===========================================\n"
     "      mingo_analysis_bot - Command Guide\n"
     "===========================================\n\n"
-    "General Commands:\n"
-    "  /start or /help - Display this guide.\n\n"
-    "SIMULATION PDF Reports:\n"
-    "  /param_mesh_summary - Param mesh summary PDF.\n"
-    "  /simulation_execution_time_hist - Simulation execution time histogram PDF.\n"
-    "  /backpressure_monitor - Send latest STEP_0 backpressure monitor PDF.\n\n"
-    "ANALYSIS PDF Reports:\n"
-    "  /definitive_execution_report - Definitive execution map PDF.\n"
-    "  /filter_metadata_report - Filter metadata PDF.\n"
-    "  /noise_control_metadata_report - Noise-control offender percent PDF.\n"
-    "  /noise_control_metadata_rate_report - Noise-control offender rate PDF.\n"
-    "  /noise_control_efficiency_report - Noise-control cumulative efficiency PDF.\n"
-    "  /noise_control_plane_combination_rate_report - Noise-control plane-combination rate PDF.\n"
-    "  /trigger_rate_metadata_report - Trigger-rate metadata PDF.\n"
-    "  /rates_metadata_report - Rates metadata PDF.\n"
-    "  /execution_metadata_report - Execution metadata PDF.\n"
-    "  /efficiency_metadata_report - Efficiency metadata PDF.\n"
-    "  /efficiencies_three_to_four_report - Three-to-four efficiency metadata PDF.\n"
-    "  /simulated_data_evolution_report - Simulated data evolution report PDF.\n\n"
-    "TASK PDFs:\n"
-    "  /task_pdfs - Ask for station and task, then send the latest PDF from that task PDF directory.\n\n"
-    "Maintenance Tools:\n"
-    "  /clean_dataflow_status - Run clean_dataflow.sh --compact to show disk usage.\n"
-    "  /clean_dataflow_force - Run clean_dataflow.sh --force --compact (temps, plots, completed; never metadata).\n\n"
-    "Terminal:\n"
-    "  /terminal <password> - Enable terminal mode for this chat.\n"
-    "  /exit - Disable terminal mode.\n\n"
-    "Operation Tools:\n"
-    "  /restart_bot - Restart this Telegram bot.\n"
+    "Quick Start:\n"
+    "  /start or /help - Show this guide.\n"
+    "  /taskpdf - Interactive latest task PDF (station + task).\n"
+    "  /term <password> - Enable terminal mode.\n"
+    "  /exit - Disable terminal mode.\n"
+    "  /restart - Restart this bot.\n\n"
+    "Simulation PDFs (short commands):\n"
+    "  /mesh - Param mesh summary PDF.\n"
+    "  /sim_time - Simulation execution time histogram PDF.\n"
+    "  /backpressure - Latest STEP_0 backpressure monitor PDF.\n\n"
+    "Noise-Control PDFs (short commands):\n"
+    "  /noise_meta - Offender percent PDF.\n"
+    "  /noise_rate - Offender rate PDF.\n"
+    "  /noise_eff1 - Task 1 cumulative efficiency PDF.\n"
+    "  /noise_eff2 - Task 2 cumulative efficiency PDF.\n"
+    "  /noise_eff3 - Task 3 cumulative efficiency PDF.\n"
+    "  /noise_plane - Plane-combination rate PDF.\n\n"
+    "Other Analysis PDFs (short commands):\n"
+    "  /exec_map - Definitive execution map PDF.\n"
+    "  /filter_meta - Filter metadata PDF.\n"
+    "  /trig_rate - Trigger-rate metadata PDF.\n"
+    "  /rates_meta - Rates metadata PDF.\n"
+    "  /exec_meta - Execution metadata PDF.\n"
+    "  /eff_meta - Efficiency metadata PDF.\n"
+    "  /eff_34 - Three-to-four efficiency metadata PDF.\n"
+    "  /sim_evo - Simulated data evolution PDF.\n\n"
+    "Maintenance:\n"
+    "  /clean_status - Run clean_dataflow.sh --compact (disk usage check).\n"
+    "  /clean_force - Run clean_dataflow.sh --force --compact.\n\n"
+    "Compatibility:\n"
+    "  Legacy long command names remain supported.\n"
     "==========================================="
 )
 
@@ -281,8 +345,8 @@ def send_pdf(chat_id: int, pdf_path: Path, description: str) -> None:
         bot.send_message(chat_id, f"Unable to send file due to error: {exc}")
 
 
-def register_static_pdf_command(command: str, path: Path, description: str) -> None:
-    @bot.message_handler(commands=[command])
+def register_static_pdf_command(commands: tuple[str, ...], path: Path, description: str) -> None:
+    @bot.message_handler(commands=list(commands))
     def handler(message, pdf_path=path, caption=description):  # type: ignore[misc]
         if maybe_handle_terminal_message(message):
             return
@@ -354,8 +418,11 @@ def latest_pdf_in_directory(pdf_dir: Path) -> Path | None:
     return pdf_candidates[0] if pdf_candidates else None
 
 
+ALL_PDF_COMMANDS: set[str] = set()
 for command, payload in PDF_TARGETS.items():
-    register_static_pdf_command(command, payload["path"], payload["description"])
+    aliases = PDF_COMMAND_ALIASES.get(command, ())
+    register_static_pdf_command((command, *aliases), payload["path"], payload["description"])
+    ALL_PDF_COMMANDS.update((command, *aliases))
 
 
 @bot.message_handler(commands=["start", "help"])
@@ -366,7 +433,7 @@ def send_welcome(message):
     bot.send_message(message.chat.id, HELP_TEXT)
 
 
-@bot.message_handler(commands=["task_pdfs"])
+@bot.message_handler(commands=["task_pdfs", *BOT_COMMAND_ALIASES.get("task_pdfs", ())])
 def handle_task_pdfs(message):  # type: ignore[misc]
     if maybe_handle_terminal_message(message):
         return
@@ -638,21 +705,21 @@ def _handle_cleaner_command(message, force: bool) -> None:
     bot.send_message(message.chat.id, response)
 
 
-@bot.message_handler(commands=["clean_dataflow_status"])
+@bot.message_handler(commands=["clean_dataflow_status", *BOT_COMMAND_ALIASES.get("clean_dataflow_status", ())])
 def handle_clean_dataflow_status(message):  # type: ignore[misc]
     if maybe_handle_terminal_message(message):
         return
     _handle_cleaner_command(message, force=False)
 
 
-@bot.message_handler(commands=["clean_dataflow_force"])
+@bot.message_handler(commands=["clean_dataflow_force", *BOT_COMMAND_ALIASES.get("clean_dataflow_force", ())])
 def handle_clean_dataflow_force(message):  # type: ignore[misc]
     if maybe_handle_terminal_message(message):
         return
     _handle_cleaner_command(message, force=True)
 
 
-@bot.message_handler(commands=["terminal"])
+@bot.message_handler(commands=["terminal", *BOT_COMMAND_ALIASES.get("terminal", ())])
 def handle_terminal(message):  # type: ignore[misc]
     chat_id = message.chat.id
     clear_task_pdf_request(chat_id)
@@ -663,7 +730,7 @@ def handle_terminal(message):  # type: ignore[misc]
 
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip():
-        bot.send_message(chat_id, "Usage: /terminal <password>")
+        bot.send_message(chat_id, "Usage: /term <password> (or /terminal <password>)")
         return
 
     provided = parts[1].strip()
@@ -692,7 +759,7 @@ def handle_exit(message):  # type: ignore[misc]
     bot.send_message(chat_id, "Terminal mode is not active.")
 
 
-@bot.message_handler(commands=["restart_bot"])
+@bot.message_handler(commands=["restart_bot", *BOT_COMMAND_ALIASES.get("restart_bot", ())])
 def handle_restart_bot(message):  # type: ignore[misc]
     if maybe_handle_terminal_message(message):
         return
@@ -718,17 +785,22 @@ def handle_unknown_text(message):
         bot.send_message(message.chat.id, HELP_TEXT)
         return
 
-    known_commands = {f"/{cmd}" for cmd in PDF_TARGETS.keys()}
+    known_commands = {f"/{cmd}" for cmd in ALL_PDF_COMMANDS}
     known_commands.update(
         {
             "/start",
             "/help",
             "/task_pdfs",
+            "/taskpdf",
             "/clean_dataflow_status",
+            "/clean_status",
             "/clean_dataflow_force",
+            "/clean_force",
             "/terminal",
+            "/term",
             "/exit",
             "/restart_bot",
+            "/restart",
         }
     )
 

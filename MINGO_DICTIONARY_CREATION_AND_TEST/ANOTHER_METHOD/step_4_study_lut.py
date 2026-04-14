@@ -105,39 +105,94 @@ def _contour_panel(
     cmap: str,
     colorbar_label: str,
 ) -> None:
-    triangulation = mtri.Triangulation(
-        dataframe["varied_eff_a"].to_numpy(dtype=float),
-        dataframe["varied_eff_b"].to_numpy(dtype=float),
-    )
-    contour = ax.tricontourf(
-        triangulation,
-        dataframe[value_column].to_numpy(dtype=float),
-        levels=16,
-        cmap=cmap,
-    )
-    ax.tricontour(
-        triangulation,
-        dataframe[value_column].to_numpy(dtype=float),
-        levels=8,
-        colors="white",
-        linewidths=0.45,
-        alpha=0.65,
-    )
-    ax.scatter(
-        dataframe["varied_eff_a"],
-        dataframe["varied_eff_b"],
-        s=18 + 6 * np.sqrt(dataframe["support_rows"].clip(lower=1)),
-        c="black",
-        alpha=0.35,
-        linewidths=0.0,
-    )
+    clean = dataframe[["varied_eff_a", "varied_eff_b", value_column, "support_rows", "pair_plane_a", "pair_plane_b"]].copy()
+    clean = clean.replace([np.inf, -np.inf], np.nan).dropna(subset=["varied_eff_a", "varied_eff_b", value_column])
+
+    if clean.empty:
+        ax.set_title(f"{title} (no finite data)")
+        ax.text(
+            0.5,
+            0.5,
+            f"No finite values for {value_column}",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=9,
+        )
+        ax.set_xlabel("eff_a")
+        ax.set_ylabel("eff_b")
+        ax.set_xlim(0.58, 1.02)
+        ax.set_ylim(0.58, 1.02)
+        ax.grid(alpha=0.15)
+        return
+
+    x = np.asarray(clean["varied_eff_a"], dtype=float).reshape(-1)
+    y = np.asarray(clean["varied_eff_b"], dtype=float).reshape(-1)
+    z = np.asarray(clean[value_column], dtype=float).reshape(-1)
+
+    if not (len(x) == len(y) == len(z)):
+        ax.set_title(f"{title} (shape mismatch)")
+        ax.text(
+            0.5,
+            0.5,
+            f"Cannot plot {value_column}: x/y/z size mismatch",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=9,
+        )
+        ax.set_xlabel("eff_a")
+        ax.set_ylabel("eff_b")
+        ax.set_xlim(0.58, 1.02)
+        ax.set_ylim(0.58, 1.02)
+        ax.grid(alpha=0.15)
+        return
+
+    contour_obj = None
+    try:
+        if len(clean) >= 3:
+            triangulation = mtri.Triangulation(x, y)
+            contour_obj = ax.tricontourf(
+                triangulation,
+                z,
+                levels=16,
+                cmap=cmap,
+            )
+            ax.tricontour(
+                triangulation,
+                z,
+                levels=8,
+                colors="white",
+                linewidths=0.45,
+                alpha=0.65,
+            )
+        else:
+            raise ValueError("Insufficient points for triangulation")
+        ax.scatter(
+            x,
+            y,
+            s=26,
+            c="black",
+            alpha=0.35,
+            linewidths=0.0,
+        )
+    except (ValueError, RuntimeError):
+        contour_obj = ax.scatter(
+            x,
+            y,
+            c=z,
+            cmap=cmap,
+            s=34,
+            alpha=0.85,
+            linewidths=0.0,
+        )
     ax.set_title(title)
-    ax.set_xlabel(f"eff_{int(dataframe['pair_plane_a'].iloc[0])}")
-    ax.set_ylabel(f"eff_{int(dataframe['pair_plane_b'].iloc[0])}")
+    ax.set_xlabel(f"eff_{int(clean['pair_plane_a'].iloc[0])}")
+    ax.set_ylabel(f"eff_{int(clean['pair_plane_b'].iloc[0])}")
     ax.set_xlim(0.58, 1.02)
     ax.set_ylim(0.58, 1.02)
     ax.grid(alpha=0.15)
-    cbar = plt.colorbar(contour, ax=ax)
+    cbar = plt.colorbar(contour_obj, ax=ax)
     cbar.set_label(colorbar_label)
 
 

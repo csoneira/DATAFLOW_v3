@@ -1,13 +1,17 @@
 # Another Method
 
-This small project builds a scale-factor LUT from the empirical efficiencies in
-`collected_data.csv`, applies it to `synthetic_dataset.csv`, and then applies it
-to a configurable slice of real station data.
+This small project builds a scale-factor LUT from simulation parameters plus
+MINGO00 metadata (joined by `param_hash`), applies it to `synthetic_dataset.csv`,
+and then applies it to a configurable slice of real station data.
 
 ## Workflow
 
 1. `step_1_prepare_data.py`
-   - Reads the collected simulation table.
+  - Reads `step_final_simulation_params.csv`.
+  - Reads MINGO00 `metadata_trigger_type.csv` from one or more Task IDs.
+  - Joins simulation parameters and real observed rates by `param_hash`.
+  - Reads only the configured trigger-type columns (minimal `usecols`) and can
+    keep offender-related trigger-rate columns in the Step 1 output CSV.
    - Keeps the four empirical efficiencies, the z-position vector, the
      configured rate column, the simulated flux, and the number of events.
    - Filters on the configured z-position vector and minimum number of events.
@@ -60,10 +64,10 @@ to a configurable slice of real station data.
    - Uses its own metadata collector (no dependency on the STEP 4.1 collector).
    - Filters the real rows by `step5.station`, `step5.date_from`, and
      `step5.date_to`.
-   - Optional: if `step5.use_zero_offender_noise_control=true`, uses the
-     zero-offender rate and per-plane efficiencies from
+   - Uses offender-limited rate and per-plane efficiencies from
      `task_<id>_metadata_noise_control.csv` (same source used by the
-     noise-control reports).
+     noise-control reports), with the threshold controlled by
+     `step5.max_selected_offenders`.
    - Applies the LUT with the same exact-match + fallback strategy used in
      Step 3.
    - Checks whether the real-data z positions in the requested window match the
@@ -82,10 +86,8 @@ cd /home/mingo/DATAFLOW_v3/MINGO_DICTIONARY_CREATION_AND_TEST/ANOTHER_METHOD
 python3 run_all.py
 ```
 
-`run_all.py` first refreshes the upstream
-`STEPS/STEP_1_SETUP/STEP_1_1_COLLECT_DATA/OUTPUTS/FILES/collected_data.csv`
-by executing `collect_data.py`, and only then runs the local Step 1 to Step 5
-workflow.
+`run_all.py` directly runs the local Step 1 to Step 5 workflow. It does not
+call the upstream `collect_data.py` pre-refresh step.
 
 To change the z-position vector, binning, or the Step 5 real-data station/date
 window, edit `config.json`. To switch the LUT from the global rate to another
@@ -94,11 +96,27 @@ controlled with `step3.lut_match_mode` / `step5.lut_match_mode` (`exact`,
 `nearest`, or `interpolate`) together with `lut_interpolation_k` and
 `lut_interpolation_power`.
 
-For zero-offender real-data inputs in Step 5, use:
-- `step5.use_zero_offender_noise_control`
+Step 1 source selection is controlled with:
+- `step1.use_mingo00_param_hash_source` (set `false` to use legacy `collected_data_csv`)
+- `step1.simulation_params_csv`
+- `step1.mingo00_metadata_root`
+- `step1.mingo00_task_ids`
+- `step1.trigger_type_rate_column`
+- `step1.trigger_type_rate_mode` (`column` or `sum_prefix`)
+- `step1.trigger_type_rate_prefix` (used when `sum_prefix` is selected)
+- `step1.trigger_type_columns_to_keep`
+- `step1.trigger_type_offender_prefix`
+- `step1.trigger_type_offender_counts`
+
+For noise-control real-data inputs in Step 5, use:
 - `step5.zero_offender_rate_source_task_id`
 - `step5.zero_offender_efficiency_source_task_id`
 - `step5.zero_offender_scope_preference` (`auto`, `plane_combination_filter`, or `strip_combination_filter`)
+- `step5.max_selected_offenders`
+
+When `TASK_3` is used as the Step 5 noise-control source, the selected-offender
+thresholds come from `total_problematic_offender_count`, i.e. the cumulative
+Task 1 + Task 2 + Task 3 offender count, not just the Task 3 local plane count.
 
 ## Main outputs
 

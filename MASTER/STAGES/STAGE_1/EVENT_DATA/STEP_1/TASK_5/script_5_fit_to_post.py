@@ -126,6 +126,7 @@ from MASTER.common.reprocessing_utils import get_reprocessing_value
 from MASTER.common.simulated_data_utils import resolve_simulated_z_positions
 from MASTER.common.step1_shared import (
     add_normalized_count_metadata,
+    add_trigger_type_total_offender_threshold_metadata,
     apply_step1_master_overrides,
     apply_step1_task_parameter_overrides,
     build_events_per_second_metadata,
@@ -587,6 +588,10 @@ csv_path_trigger_type = os.path.join(
     f"task_{task_number}_metadata_trigger_type.csv",
 )
 csv_path_filter = os.path.join(metadata_directory, f"task_{task_number}_metadata_filter.csv")
+csv_path_deep_fiter = os.path.join(
+    metadata_directory,
+    f"task_{task_number}_metadata_deep_fiter.csv",
+)
 csv_path_status = os.path.join(metadata_directory, f"task_{task_number}_metadata_status.csv")
 csv_path_profiling = os.path.join(metadata_directory, f"task_{task_number}_metadata_profiling.csv")
 status_filename_base = ""
@@ -3618,6 +3623,26 @@ metadata_filter_csv_path = save_metadata(
 )
 print(f"Metadata (filter) CSV updated at: {metadata_filter_csv_path}")
 
+deep_fiter_row = {
+    "filename_base": filename_base,
+    "execution_timestamp": execution_timestamp,
+    "param_hash": param_hash_value,
+}
+for name in sorted(filter_metrics):
+    deep_fiter_row[name] = filter_metrics.get(name, "")
+
+metadata_deep_fiter_csv_path = save_metadata(
+    csv_path_deep_fiter,
+    deep_fiter_row,
+    preferred_fieldnames=(
+        "filename_base",
+        "execution_timestamp",
+        "param_hash",
+        *sorted(filter_metrics),
+    ),
+)
+print(f"Metadata (deep_fiter) CSV updated at: {metadata_deep_fiter_csv_path}")
+
 # -------------------------------------------------------------------------------
 # Execution metadata ------------------------------------------------------------
 # -------------------------------------------------------------------------------
@@ -3684,6 +3709,12 @@ trigger_type_variables = extract_trigger_type_metadata(
 trigger_type_variables["count_rate_denominator_seconds"] = rate_histogram_variables.get(
     "count_rate_denominator_seconds",
     0,
+)
+add_trigger_type_total_offender_threshold_metadata(
+    trigger_type_variables,
+    working_df,
+    stage_tt_columns=("fit_tt", "post_tt"),
+    denominator_seconds=trigger_type_variables["count_rate_denominator_seconds"],
 )
 metadata_trigger_type_csv_path = save_metadata(
     csv_path_trigger_type,

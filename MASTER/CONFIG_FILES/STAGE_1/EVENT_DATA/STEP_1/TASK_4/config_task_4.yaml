@@ -53,6 +53,7 @@ offender_plot_settings:
   theta_max_deg: 90.0
   focus_definitive_tt: [123, 124, 134, 234, 1234]
   task1_cumulative_thresholds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  total_cumulative_thresholds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 projection_ellipse_diagnostic:
   bin_count: 140
   min_points: 300

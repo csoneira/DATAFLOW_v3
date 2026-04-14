@@ -22,8 +22,11 @@ from common import (
     PLOTS_DIR,
     apply_lut_fallback_matches,
     cfg_path,
+    derive_trigger_rate_features,
     ensure_output_dirs,
+    format_selected_rate_name,
     get_rate_column_name,
+    get_trigger_type_selection,
     load_config,
     quantize_efficiency_series,
     read_ascii_lut,
@@ -34,8 +37,8 @@ log = logging.getLogger("another_method.step5")
 
 _DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _FILE_TS_RE = re.compile(r"(\d{11})$")
-_ZERO_OFFENDER_RATE_RE = re.compile(
-    r"^(?P<scope>plane_combination_filter|strip_combination_filter)_rows_with_0_selected_offenders_rate_hz$"
+_OFFENDER_RATE_RE = re.compile(
+    r"^(?P<scope>plane_combination_filter|strip_combination_filter)_rows_with_(?P<count>\d+)_selected_offenders_rate_hz$"
 )
 
 ROOT_DIR = Path(__file__).resolve().parent
@@ -298,36 +301,48 @@ def _resolve_same_or_int(raw: object, *, default_value: int) -> int:
     return int(raw)
 
 
-def _zero_offender_rate_column(columns: list[str], scope_preference: str) -> str | None:
-    candidates: list[tuple[int, str]] = []
+def _offender_rate_columns(columns: list[str], scope_preference: str, max_selected_offenders: int) -> list[str]:
+    candidates: list[tuple[int, int, str]] = []
     for column in columns:
-        match = _ZERO_OFFENDER_RATE_RE.fullmatch(str(column))
+        match = _OFFENDER_RATE_RE.fullmatch(str(column))
         if match is None:
             continue
         scope = match.group("scope")
+        count = int(match.group("count"))
+        if count > int(max_selected_offenders):
+            continue
         priority = 1
         if scope_preference == scope:
             priority = 0
         elif scope_preference == "auto":
             priority = 0 if scope == "plane_combination_filter" else 1
-        candidates.append((priority, str(column)))
+        candidates.append((priority, count, str(column)))
     if not candidates:
-        return None
+        return []
     candidates.sort()
-    return candidates[0][1]
+    best_priority = candidates[0][0]
+    selected = [column for priority, _count, column in candidates if priority == best_priority]
+    selected.sort()
+    return selected
 
 
-def _zero_offender_eff_column(columns: list[str], plane_idx: int, scope_preference: str) -> str | None:
+def _offender_eff_column(
+    columns: list[str],
+    plane_idx: int,
+    scope_preference: str,
+    max_selected_offenders: int,
+) -> str | None:
     patterns = []
+    offender_limit = int(max_selected_offenders)
     if scope_preference in {"plane_combination_filter", "strip_combination_filter"}:
         patterns.append(
-            rf"^{scope_preference}_eff_p{plane_idx}_selected_offenders_le_0$"
+            rf"^{scope_preference}_eff_p{plane_idx}_selected_offenders_le_{offender_limit}$"
         )
     else:
         patterns.extend(
             [
-                rf"^plane_combination_filter_eff_p{plane_idx}_selected_offenders_le_0$",
-                rf"^strip_combination_filter_eff_p{plane_idx}_selected_offenders_le_0$",
+                rf"^plane_combination_filter_eff_p{plane_idx}_selected_offenders_le_{offender_limit}$",
+                rf"^strip_combination_filter_eff_p{plane_idx}_selected_offenders_le_{offender_limit}$",
             ]
         )
     for pattern in patterns:
@@ -335,6 +350,35 @@ def _zero_offender_eff_column(columns: list[str], plane_idx: int, scope_preferen
         for column in columns:
             if regex.fullmatch(str(column)):
                 return str(column)
+    return None
+
+
+def _fill_empirical_eff_from_trigger_ratios(dataframe: pd.DataFrame) -> str | None:
+    # Standard empirical efficiency definition: eps_i = R(3-fold without plane i) / R(4-fold).
+    base_prefixes = ["clean_to_cal_tt", "raw_to_clean_tt", "cal_tt", "clean_tt", "raw_tt"]
+    source_prefixes = ["trigger_type__", ""]
+
+    for source_prefix in source_prefixes:
+        for base in base_prefixes:
+            prefix = f"{source_prefix}{base}"
+            denominator_col = f"{prefix}_1234_rate_hz"
+            numerator_cols = {
+                1: f"{prefix}_234_rate_hz",
+                2: f"{prefix}_134_rate_hz",
+                3: f"{prefix}_124_rate_hz",
+                4: f"{prefix}_123_rate_hz",
+            }
+            required = [denominator_col] + [numerator_cols[i] for i in (1, 2, 3, 4)]
+            if not all(column in dataframe.columns for column in required):
+                continue
+
+            denominator = pd.to_numeric(dataframe[denominator_col], errors="coerce")
+            valid_denominator = denominator.where(denominator > 0.0)
+            for plane_idx in range(1, 5):
+                numerator = pd.to_numeric(dataframe[numerator_cols[plane_idx]], errors="coerce")
+                dataframe[f"eff_empirical_{plane_idx}"] = numerator / valid_denominator
+            return prefix
+
     return None
 
 
@@ -628,18 +672,13 @@ def _plot_real_correction_diagnostics(
 
 def _collect_real_data_slice(
     *,
+    config: dict[str, Any],
     station_id: int,
-    task_ids: list[int],
-    rate_column_name: str,
     date_from: pd.Timestamp | None,
     date_to: pd.Timestamp | None,
     min_events: float | None,
     metadata_agg: str,
     timestamp_column: str,
-    use_zero_offender_noise_control: bool,
-    zero_offender_rate_task_id: int,
-    zero_offender_efficiency_task_id: int,
-    zero_offender_scope_preference: str,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     online_schedule_all, online_schedule_path = _load_online_schedule(station_id)
     online_schedule_window = _select_schedule_rows_for_window(
@@ -647,182 +686,93 @@ def _collect_real_data_slice(
         date_from=date_from,
         date_to=date_to,
     )
-
-    all_frames: list[pd.DataFrame] = []
-    task_stats: dict[str, dict[str, int]] = {}
-
-    for task_id in task_ids:
-        key = str(task_id)
-        task_stats[key] = {
+    trigger_selection = get_trigger_type_selection(config)
+    task_id = int(trigger_selection["task_id"])
+    task_stats: dict[str, dict[str, int]] = {
+        str(task_id): {
             "rows_after_metadata_merge": 0,
             "rows_after_date_filter": 0,
             "rows_with_online_z_mapped": 0,
         }
+    }
 
-        trigger_df = _load_task_metadata_source_csv(
-            station_id=station_id,
-            task_id=task_id,
-            source_name="trigger_type",
-            metadata_agg=metadata_agg,
-            timestamp_column=timestamp_column,
-        )
-        rate_hist_df = _load_task_metadata_source_csv(
-            station_id=station_id,
-            task_id=task_id,
-            source_name="rate_histogram",
-            metadata_agg=metadata_agg,
-            timestamp_column=timestamp_column,
-        )
-        specific_df = _load_task_metadata_source_csv(
-            station_id=station_id,
-            task_id=task_id,
-            source_name="specific",
-            metadata_agg=metadata_agg,
-            timestamp_column=timestamp_column,
-        )
+    trigger_df = _load_task_metadata_source_csv(
+        station_id=station_id,
+        task_id=task_id,
+        source_name="trigger_type",
+        metadata_agg=metadata_agg,
+        timestamp_column=timestamp_column,
+    )
+    merged, trigger_info = derive_trigger_rate_features(
+        trigger_df,
+        config,
+        allow_plain_fallback=False,
+    )
+    task_stats[str(task_id)]["rows_after_metadata_merge"] = int(len(merged))
 
-        merged = _merge_sources(
-            ("trigger_type", trigger_df),
-            [("rate_histogram", rate_hist_df), ("specific", specific_df)],
-            how="inner",
-        )
+    merged["file_timestamp_utc"] = merged["filename_base"].map(_parse_filename_base_ts)
+    if timestamp_column in merged.columns:
+        merged["execution_timestamp_utc"] = _parse_execution_timestamp(merged[timestamp_column])
+    else:
+        merged["execution_timestamp_utc"] = pd.NaT
 
-        if use_zero_offender_noise_control:
-            noise_rate_df = _load_task_metadata_source_csv(
-                station_id=station_id,
-                task_id=zero_offender_rate_task_id,
-                source_name="noise_control",
-                metadata_agg=metadata_agg,
-                timestamp_column=timestamp_column,
-            )
-            merged = _merge_sources(("base", merged), [("noise_rate", noise_rate_df)], how="left")
-            if zero_offender_efficiency_task_id != zero_offender_rate_task_id:
-                noise_eff_df = _load_task_metadata_source_csv(
-                    station_id=station_id,
-                    task_id=zero_offender_efficiency_task_id,
-                    source_name="noise_control",
-                    metadata_agg=metadata_agg,
-                    timestamp_column=timestamp_column,
-                )
-                merged = _merge_sources(("base", merged), [("noise_eff", noise_eff_df)], how="left")
-
-            candidate_rate_cols = [
-                column
-                for column in merged.columns
-                if str(column).startswith("noise_rate__") and str(column).endswith("_rate_hz")
-            ]
-            selected_rate_col = _zero_offender_rate_column(
-                [column.replace("noise_rate__", "") for column in candidate_rate_cols],
-                zero_offender_scope_preference,
-            )
-            if selected_rate_col is None:
-                raise ValueError(
-                    "Could not find zero-offender rate column in noise-control metadata."
-                )
-            merged["rate_hz"] = pd.to_numeric(merged[f"noise_rate__{selected_rate_col}"], errors="coerce")
-
-            for plane_idx in range(1, 5):
-                candidate_columns = [
-                    column
-                    for column in merged.columns
-                    if str(column).startswith("noise_eff__")
-                    or str(column).startswith("noise_rate__")
-                ]
-                stripped = [
-                    str(column).replace("noise_eff__", "").replace("noise_rate__", "")
-                    for column in candidate_columns
-                ]
-                selected_eff_col = _zero_offender_eff_column(
-                    stripped,
-                    plane_idx,
-                    zero_offender_scope_preference,
-                )
-                if selected_eff_col is None:
-                    raise ValueError(
-                        f"Could not find zero-offender efficiency column for plane {plane_idx}."
-                    )
-                prefixed = f"noise_eff__{selected_eff_col}"
-                if prefixed not in merged.columns:
-                    prefixed = f"noise_rate__{selected_eff_col}"
-                merged[f"eff_empirical_{plane_idx}"] = pd.to_numeric(merged[prefixed], errors="coerce")
-        else:
-            if rate_column_name not in merged.columns:
-                raise ValueError(
-                    f"Configured rate column '{rate_column_name}' is not present in merged station metadata."
-                )
-            merged["rate_hz"] = pd.to_numeric(merged[rate_column_name], errors="coerce")
-            for plane_idx in range(1, 5):
-                candidates = [
-                    f"eff_empirical_{plane_idx}",
-                    f"charge_topology_eff_without_streamers_plane_{plane_idx}",
-                ]
-                source_column = next((column for column in candidates if column in merged.columns), None)
-                if source_column is None:
-                    raise ValueError(
-                        f"Could not resolve empirical efficiency for plane {plane_idx} in merged metadata."
-                    )
-                merged[f"eff_empirical_{plane_idx}"] = pd.to_numeric(merged[source_column], errors="coerce")
-
-        task_stats[key]["rows_after_metadata_merge"] = int(len(merged))
-
-        merged["file_timestamp_utc"] = merged["filename_base"].map(_parse_filename_base_ts)
-        if timestamp_column in merged.columns:
-            merged["execution_timestamp_utc"] = _parse_execution_timestamp(merged[timestamp_column])
-        else:
-            merged["execution_timestamp_utc"] = pd.NaT
-
-        keep = merged["file_timestamp_utc"].notna()
-        if date_from is not None:
-            keep &= merged["file_timestamp_utc"] >= date_from
-        if date_to is not None:
-            keep &= merged["file_timestamp_utc"] <= date_to
-        merged = merged.loc[keep].copy()
-        task_stats[key]["rows_after_date_filter"] = int(len(merged))
-        if merged.empty:
-            continue
-
-        online_z = merged["file_timestamp_utc"].map(
-            lambda ts: _online_z_tuple_for_timestamp(ts, online_schedule_window)
-        )
-        task_stats[key]["rows_with_online_z_mapped"] = int(online_z.notna().sum())
-        z_rows = [
-            [np.nan, np.nan, np.nan, np.nan]
-            if value is None
-            else [float(item) for item in value]
-            for value in online_z
-        ]
-        z_split = pd.DataFrame(
-            z_rows,
-            columns=["online_z_plane_1", "online_z_plane_2", "online_z_plane_3", "online_z_plane_4"],
-            index=merged.index,
-        )
-        merged = pd.concat([merged, z_split], axis=1)
-        merged["task_id"] = int(task_id)
-        merged["station_id"] = int(station_id)
-        all_frames.append(merged)
-
-    if not all_frames:
+    keep = merged["file_timestamp_utc"].notna()
+    if date_from is not None:
+        keep &= merged["file_timestamp_utc"] >= date_from
+    if date_to is not None:
+        keep &= merged["file_timestamp_utc"] <= date_to
+    collected = merged.loc[keep].copy()
+    task_stats[str(task_id)]["rows_after_date_filter"] = int(len(collected))
+    if collected.empty:
         raise ValueError("No real rows were collected for the requested station/date window.")
 
-    collected = pd.concat(all_frames, ignore_index=True)
+    rate_values = pd.to_numeric(collected["rate_hz"], errors="coerce")
+    four_plane_values = pd.to_numeric(collected.get("four_plane_rate_hz"), errors="coerce")
+    eff_frame = collected[[f"eff_empirical_{idx}" for idx in range(1, 5)]].apply(pd.to_numeric, errors="coerce")
+    valid_trigger_mask = np.isfinite(rate_values) & (rate_values > 0.0)
+    if "four_plane_rate_hz" in collected.columns:
+        valid_trigger_mask &= np.isfinite(four_plane_values) & (four_plane_values > 0.0)
+    valid_trigger_mask &= np.isfinite(eff_frame.to_numpy()).all(axis=1)
+    collected = collected.loc[valid_trigger_mask].copy()
+    if collected.empty:
+        selected_rate_name = format_selected_rate_name(
+            stage_prefix=str(trigger_info["stage_prefix"]),
+            rate_family_column=str(trigger_info["rate_family_column"]),
+            offender_threshold=trigger_info.get("used_offender_threshold"),
+        )
+        raise ValueError(
+            "No real rows remain after deriving trigger-type features for "
+            f"{selected_rate_name}. The selected task/offender/rate combination currently yields "
+            "no positive four-plane support with finite empirical efficiencies."
+        )
+
+    online_z = collected["file_timestamp_utc"].map(
+        lambda ts: _online_z_tuple_for_timestamp(ts, online_schedule_window)
+    )
+    task_stats[str(task_id)]["rows_with_online_z_mapped"] = int(online_z.notna().sum())
+    z_rows = [
+        [np.nan, np.nan, np.nan, np.nan]
+        if value is None
+        else [float(item) for item in value]
+        for value in online_z
+    ]
+    z_split = pd.DataFrame(
+        z_rows,
+        columns=["online_z_plane_1", "online_z_plane_2", "online_z_plane_3", "online_z_plane_4"],
+        index=collected.index,
+    )
+    collected = pd.concat([collected, z_split], axis=1)
+    collected["task_id"] = int(task_id)
+    collected["station_id"] = int(station_id)
+
     rows_before_event_cut = int(len(collected))
-    event_source = None
-    if "n_events" in collected.columns:
-        event_values = pd.to_numeric(collected["n_events"], errors="coerce")
-        event_source = "n_events"
-    elif "plane_combination_filter_rows_with_0_selected_offenders" in collected.columns:
-        event_values = pd.to_numeric(collected["plane_combination_filter_rows_with_0_selected_offenders"], errors="coerce")
-        event_source = "plane_combination_filter_rows_with_0_selected_offenders"
-    elif "strip_combination_filter_rows_with_0_selected_offenders" in collected.columns:
-        event_values = pd.to_numeric(collected["strip_combination_filter_rows_with_0_selected_offenders"], errors="coerce")
-        event_source = "strip_combination_filter_rows_with_0_selected_offenders"
-    else:
-        event_values = pd.Series(np.nan, index=collected.index, dtype=float)
+    event_values = pd.to_numeric(collected.get("selected_rate_count"), errors="coerce")
+    event_source = "selected_rate_count"
 
     if event_values.notna().any():
         collected["n_events"] = event_values
     if min_events is not None and event_values.notna().any():
-        collected = collected.loc[event_values > float(min_events)].copy()
+        collected = collected.loc[event_values >= float(min_events)].copy()
     rows_after_event_cut = int(len(collected))
     if collected.empty:
         raise ValueError("No real rows remain after Step 5 event-count filtering.")
@@ -841,11 +791,10 @@ def _collect_real_data_slice(
         "rows_before_event_cut": rows_before_event_cut,
         "rows_after_event_cut": rows_after_event_cut,
         "event_count_source_for_filter": event_source,
-        "task_ids_used": task_ids,
+        "task_ids_used": [task_id],
         "task_stats": task_stats,
-        "use_zero_offender_noise_control": bool(use_zero_offender_noise_control),
-        "zero_offender_rate_source_task_id": int(zero_offender_rate_task_id),
-        "zero_offender_efficiency_source_task_id": int(zero_offender_efficiency_task_id),
+        "trigger_type_selection": trigger_info,
+        "offender_count_semantics": "cumulative_total_problematic_offender_count_from_trigger_type",
     }
     return collected, metadata
 
@@ -856,8 +805,9 @@ def _rename_real_columns(dataframe: pd.DataFrame, rate_column_name: str) -> pd.D
         "eff_empirical_2": CANONICAL_EFF_COLUMNS[1],
         "eff_empirical_3": CANONICAL_EFF_COLUMNS[2],
         "eff_empirical_4": CANONICAL_EFF_COLUMNS[3],
-        rate_column_name: "rate_hz",
     }
+    if "rate_hz" not in dataframe.columns and rate_column_name in dataframe.columns:
+        rename_map[rate_column_name] = "rate_hz"
     for idx in range(1, 5):
         online_column = f"online_z_plane_{idx}"
         specific_column = f"z_P{idx}"
@@ -887,24 +837,16 @@ def run(config_path: str | Path | None = None) -> Path:
     date_to = _parse_time_bound(step5_config.get("date_to"), end_of_day=True)
     min_events_raw = step5_config.get("min_events")
     min_events = None if min_events_raw in (None, "", "null", "None") else float(min_events_raw)
-    rate_column_name = get_rate_column_name(config)
     metadata_agg = str(step5_config.get("metadata_agg", "latest")).strip().lower()
     timestamp_column = str(step5_config.get("timestamp_column", "execution_timestamp"))
 
-    task_ids = _normalize_task_ids(step5_config.get("task_ids"), [2])
-
-    use_zero_offender_noise_control = bool(step5_config.get("use_zero_offender_noise_control", False))
-    zero_offender_rate_task_id = _resolve_same_or_int(
-        step5_config.get("zero_offender_rate_source_task_id", "same"),
-        default_value=task_ids[0],
+    trigger_selection = get_trigger_type_selection(config)
+    task_ids = [int(trigger_selection["task_id"])]
+    rate_column_name = format_selected_rate_name(
+        stage_prefix=str(trigger_selection["stage_prefix"]),
+        rate_family_column=str(trigger_selection["rate_family_column"]),
+        offender_threshold=trigger_selection["offender_threshold"],
     )
-    zero_offender_efficiency_task_id = _resolve_same_or_int(
-        step5_config.get("zero_offender_efficiency_source_task_id", "same"),
-        default_value=zero_offender_rate_task_id,
-    )
-    zero_offender_scope_preference = str(
-        step5_config.get("zero_offender_scope_preference", "auto")
-    ).strip()
 
     lut_path = cfg_path(config, "paths", "step2_lut_ascii")
     lut_meta_path = cfg_path(config, "paths", "step2_meta_json")
@@ -913,18 +855,13 @@ def run(config_path: str | Path | None = None) -> Path:
     meta_path = cfg_path(config, "paths", "step5_meta_json")
 
     real_dataframe, collection_meta = _collect_real_data_slice(
+        config=config,
         station_id=station_id,
-        task_ids=task_ids,
-        rate_column_name=rate_column_name,
         date_from=date_from,
         date_to=date_to,
         min_events=min_events,
         metadata_agg=metadata_agg,
         timestamp_column=timestamp_column,
-        use_zero_offender_noise_control=use_zero_offender_noise_control,
-        zero_offender_rate_task_id=zero_offender_rate_task_id,
-        zero_offender_efficiency_task_id=zero_offender_efficiency_task_id,
-        zero_offender_scope_preference=zero_offender_scope_preference,
     )
 
     if "rate_hz" not in real_dataframe.columns and rate_column_name not in real_dataframe.columns:
@@ -1047,16 +984,13 @@ def run(config_path: str | Path | None = None) -> Path:
         "station_id": int(station_id),
         "station_name": station_name,
         "task_ids": task_ids,
-        "use_zero_offender_noise_control": bool(use_zero_offender_noise_control),
-        "zero_offender_rate_source_task_id": int(zero_offender_rate_task_id),
-        "zero_offender_efficiency_source_task_id": int(zero_offender_efficiency_task_id),
-        "zero_offender_scope_preference": zero_offender_scope_preference,
         "date_from": str(date_from) if date_from is not None else None,
         "date_to": str(date_to) if date_to is not None else None,
         "min_events": min_events,
         "metadata_agg": metadata_agg,
         "timestamp_column": timestamp_column,
         "rate_input_column": rate_column_name,
+        "trigger_type_selection": trigger_selection,
         "lut_file": str(lut_path),
         "lut_comments": lut_comments,
         "efficiency_bin_width": efficiency_bin_width,
