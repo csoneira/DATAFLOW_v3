@@ -16,7 +16,7 @@ stratos_save: false
 create_plots: null
 keep_all_columns_output: false
 removed_marker: x
-removed_marker_size: 20
+removed_marker_size: 10
 removed_marker_alpha: 0.9
 filter_parameter_config_csv: config_filter_parameters_task_3.csv
 # list_tt_qsum_pair_plot_mode options: hexbin | scatter

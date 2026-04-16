@@ -13,7 +13,7 @@ plots:
   timing: usual
   grand_figure_q_pedestal: usual
   grand_figure_q_pedestal_zoom: usual
-  grand_figure_q_pedestal_less_zoom: usual
+  grand_figure_q_pedestal_less_zoom: essential
   grand_figure_q_fc: usual
   grand_figure_q_pedestal_st: usual
   grand_figure_q_pedestal_zoom_st: usual
@@ -21,12 +21,14 @@ plots:
   grand_figure_t_dif_cal: usual
   grand_figure_t_dif_cal_st: usual
   uncalibrated: usual
+  total_charge_per_plane_uncalibrated: essential
+  calibration_charge_gates: essential
   tsum_spread_histograms_og: usual
   tsum_spread_histograms_filtered_og: usual
   uncalibrated_filtered: usual
   calibrated_filtered_before_fb_corr: usual
   calibrated_filtered: usual
-  calibrated_filtered_removed_zeroes: usual
+  calibrated_filtered_removed_zeroes: essential
   calibrated_filtered_removed_zeroes_st: usual
   dx_vs_tsum: usual
   dx_vs_travel_time: usual
@@ -50,7 +52,7 @@ plots:
   time_front_vs_back: usual
   channel_matrix_tq: usual
   strip_pair_matrix_by_planepair: usual
-  strip_combination_filter_by_tt: essential
+  strip_combination_filter_by_tt: usual
   rejected_histograms_clean_tt: usual
   rejected_histograms_q_sum_zero: usual
   rejected_histograms_cal_tt: usual

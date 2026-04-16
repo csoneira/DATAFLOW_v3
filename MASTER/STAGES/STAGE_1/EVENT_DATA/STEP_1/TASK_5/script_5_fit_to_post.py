@@ -228,6 +228,28 @@ def _coerce_config_bool(value: object, default: bool = False) -> bool:
             return False
     return bool(value)
 
+
+def _task5_config_float(
+    config_obj: dict[str, object],
+    primary_key: str,
+    *alias_keys: str,
+    default: float,
+) -> float:
+    for key in (primary_key, *alias_keys):
+        raw_value = config_obj.get(key)
+        if raw_value is None:
+            continue
+        if isinstance(raw_value, str) and raw_value.strip().lower() in {"", "none", "null"}:
+            continue
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid numeric configuration value for '{key}': {raw_value!r}") from exc
+        if not np.isfinite(value):
+            raise ValueError(f"Non-finite numeric configuration value for '{key}': {raw_value!r}")
+        return value
+    return float(default)
+
 CLI_PARSER = build_step1_cli_parser("Run Stage 1 STEP_1 TASK_5 (FIT->CORR).", STATION_CHOICES)
 CLI_ARGS = CLI_PARSER.parse_args()
 validate_step1_input_file_args(CLI_PARSER, CLI_ARGS)
@@ -1887,8 +1909,22 @@ T_side_right_pre_cal_ST = config.get("T_side_right_pre_cal_ST", -50)
 # Post-calibration
 
 # Once calculated the RPC variables
-T_sum_RPC_left = config["T_sum_RPC_left"]
-T_sum_RPC_right = config["T_sum_RPC_right"]
+T_sum_RPC_left = _task5_config_float(
+    config,
+    "T_sum_RPC_left",
+    "plane_combination_plane_t_sum_sum_left",
+    "plane_combination_same_plane_t_sum_sum_left",
+    "plane_combination_self_t_sum_sum_left",
+    default=-25.0,
+)
+T_sum_RPC_right = _task5_config_float(
+    config,
+    "T_sum_RPC_right",
+    "plane_combination_plane_t_sum_sum_right",
+    "plane_combination_same_plane_t_sum_sum_right",
+    "plane_combination_self_t_sum_sum_right",
+    default=25.0,
+)
 
 # Alternative fitter filter
 det_pos_filter = config["det_pos_filter"]
@@ -2136,8 +2172,22 @@ T_side_right_pre_cal_ST = config.get("T_side_right_pre_cal_ST", -50)
 # Post-calibration
 
 # Once calculated the RPC variables
-T_sum_RPC_left = config["T_sum_RPC_left"]
-T_sum_RPC_right = config["T_sum_RPC_right"]
+T_sum_RPC_left = _task5_config_float(
+    config,
+    "T_sum_RPC_left",
+    "plane_combination_plane_t_sum_sum_left",
+    "plane_combination_same_plane_t_sum_sum_left",
+    "plane_combination_self_t_sum_sum_left",
+    default=-25.0,
+)
+T_sum_RPC_right = _task5_config_float(
+    config,
+    "T_sum_RPC_right",
+    "plane_combination_plane_t_sum_sum_right",
+    "plane_combination_same_plane_t_sum_sum_right",
+    "plane_combination_self_t_sum_sum_right",
+    default=25.0,
+)
 
 # Alternative fitter filter
 det_pos_filter = config["det_pos_filter"]
@@ -2481,8 +2531,22 @@ T_side_right_pre_cal_ST = config.get("T_side_right_pre_cal_ST", -50)
 # Post-calibration
 
 # Once calculated the RPC variables
-T_sum_RPC_left = config["T_sum_RPC_left"]
-T_sum_RPC_right = config["T_sum_RPC_right"]
+T_sum_RPC_left = _task5_config_float(
+    config,
+    "T_sum_RPC_left",
+    "plane_combination_plane_t_sum_sum_left",
+    "plane_combination_same_plane_t_sum_sum_left",
+    "plane_combination_self_t_sum_sum_left",
+    default=-25.0,
+)
+T_sum_RPC_right = _task5_config_float(
+    config,
+    "T_sum_RPC_right",
+    "plane_combination_plane_t_sum_sum_right",
+    "plane_combination_same_plane_t_sum_sum_right",
+    "plane_combination_self_t_sum_sum_right",
+    default=25.0,
+)
 
 # Alternative fitter filter
 det_pos_filter = config["det_pos_filter"]

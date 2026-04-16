@@ -174,6 +174,41 @@ def _plot_flux_rate_comparison(
     *,
     rate_column_name: str,
 ) -> None:
+    def _plot_linear_fit(
+        axis: plt.Axes,
+        x_values: pd.Series,
+        y_values: pd.Series,
+        *,
+        fit_color: str,
+    ) -> None:
+        fit_frame = pd.DataFrame(
+            {
+                "x": pd.to_numeric(x_values, errors="coerce"),
+                "y": pd.to_numeric(y_values, errors="coerce"),
+            }
+        ).dropna()
+        if len(fit_frame) < 2 or fit_frame["x"].nunique() < 2:
+            return
+
+        x_data = fit_frame["x"].to_numpy(dtype=float)
+        y_data = fit_frame["y"].to_numpy(dtype=float)
+        slope, intercept = np.polyfit(x_data, y_data, deg=1)
+        fit_values = slope * x_data + intercept
+        ss_tot = float(np.sum((y_data - np.mean(y_data)) ** 2))
+        ss_res = float(np.sum((y_data - fit_values) ** 2))
+        r_squared = np.nan if ss_tot <= 0.0 else 1.0 - ss_res / ss_tot
+
+        x_line = np.linspace(float(np.min(x_data)), float(np.max(x_data)), 200)
+        y_line = slope * x_line + intercept
+        r2_text = "n/a" if not np.isfinite(r_squared) else f"{r_squared:.3f}"
+        axis.plot(
+            x_line,
+            y_line,
+            color=fit_color,
+            linewidth=2.0,
+            label=f"Linear fit (R^2={r2_text})",
+        )
+
     ordered, _, _ = _resolve_time_axis(dataframe)
     sequence = np.arange(len(ordered))
 
@@ -185,11 +220,19 @@ def _plot_flux_rate_comparison(
         cmap="viridis",
         s=44,
         alpha=0.85,
+        label="Samples",
+    )
+    _plot_linear_fit(
+        axes[0],
+        ordered["sim_flux_cm2_min"],
+        ordered["rate_hz"],
+        fit_color="#B22222",
     )
     axes[0].set_title(f"Flux vs observed rate\nrate column: {rate_column_name}")
     axes[0].set_xlabel("Flux [cm^-2 min^-1]")
     axes[0].set_ylabel(f"Observed rate [Hz]\n({rate_column_name})")
     axes[0].grid(alpha=0.25)
+    axes[0].legend(loc="best")
 
     axes[1].scatter(
         ordered["sim_flux_cm2_min"],
@@ -198,16 +241,202 @@ def _plot_flux_rate_comparison(
         cmap="viridis",
         s=44,
         alpha=0.85,
+        label="Samples",
+    )
+    _plot_linear_fit(
+        axes[1],
+        ordered["sim_flux_cm2_min"],
+        ordered["corrected_rate_to_perfect_hz"],
+        fit_color="#8B1E3F",
     )
     axes[1].set_title(f"Flux vs corrected rate\nrate column: {rate_column_name}")
     axes[1].set_xlabel("Flux [cm^-2 min^-1]")
     axes[1].set_ylabel(f"Corrected rate [Hz]\n(from {rate_column_name})")
     axes[1].grid(alpha=0.25)
+    axes[1].legend(loc="best")
 
     cbar = fig.colorbar(scatter_left, ax=axes, shrink=0.95)
     cbar.set_label("Time-series order")
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
+
+
+def _load_flux_reference_curve(flux_cells_path: Path) -> pd.DataFrame:
+    if not flux_cells_path.exists():
+        raise FileNotFoundError(
+            f"Step 2 flux-cell diagnostics not found: {flux_cells_path}. "
+            "Run Step 2 before Step 3 to build the almost-perfect flux reference."
+        )
+
+    flux_cells = pd.read_csv(flux_cells_path)
+    required_columns = [
+        "flux_bin_index",
+        "flux_bin_lo",
+        "flux_bin_hi",
+        "flux_bin_center",
+        "reference_rate_median",
+    ]
+    missing = [column for column in required_columns if column not in flux_cells.columns]
+    if missing:
+        raise ValueError(
+            "Step 2 flux-cell diagnostics are missing required columns: " + ", ".join(missing)
+        )
+
+    curve = (
+        flux_cells.groupby("flux_bin_index", dropna=False)
+        .agg(
+            flux_bin_lo=("flux_bin_lo", "min"),
+            flux_bin_hi=("flux_bin_hi", "max"),
+            flux_bin_center=("flux_bin_center", "median"),
+            reference_rate_median=("reference_rate_median", "median"),
+        )
+        .reset_index()
+        .sort_values("flux_bin_index")
+        .reset_index(drop=True)
+    )
+    curve = curve.dropna(subset=["flux_bin_lo", "flux_bin_hi", "reference_rate_median"])
+    if curve.empty:
+        raise ValueError("Step 2 flux-cell diagnostics contain no usable reference-rate rows.")
+    return curve
+
+
+def _map_reference_rate_by_flux(
+    flux_values: pd.Series,
+    reference_curve: pd.DataFrame,
+) -> tuple[pd.Series, pd.Series]:
+    flux_numeric = pd.to_numeric(flux_values, errors="coerce")
+    bin_edges = [float(reference_curve["flux_bin_lo"].iloc[0])] + [
+        float(value) for value in reference_curve["flux_bin_hi"].tolist()
+    ]
+    if len(bin_edges) < 2 or any(high <= low for low, high in zip(bin_edges[:-1], bin_edges[1:])):
+        raise ValueError("Invalid Step 2 flux-bin edges while building almost-perfect reference mapping.")
+
+    labels = [int(value) for value in reference_curve["flux_bin_index"].tolist()]
+    binned = pd.cut(
+        flux_numeric,
+        bins=bin_edges,
+        labels=labels,
+        include_lowest=True,
+        right=True,
+    )
+    reference_rate_by_bin = reference_curve.set_index("flux_bin_index")["reference_rate_median"]
+    mapped = binned.map(reference_rate_by_bin)
+    mapped = pd.to_numeric(mapped, errors="coerce")
+
+    assignment_method = pd.Series("flux_bin_edges", index=flux_numeric.index, dtype="object")
+    missing_mask = flux_numeric.notna() & mapped.isna()
+    if missing_mask.any():
+        centers = reference_curve["flux_bin_center"].to_numpy(dtype=float)
+        reference_values = reference_curve["reference_rate_median"].to_numpy(dtype=float)
+        flux_missing = flux_numeric.loc[missing_mask].to_numpy(dtype=float)
+        nearest_indices = np.abs(flux_missing[:, None] - centers[None, :]).argmin(axis=1)
+        mapped.loc[missing_mask] = reference_values[nearest_indices]
+        assignment_method.loc[missing_mask] = "nearest_flux_bin_center"
+
+    assignment_method.loc[flux_numeric.isna()] = "missing_flux"
+    return mapped, assignment_method
+
+
+def _plot_corrected_vs_almost_perfect_reference(
+    dataframe: pd.DataFrame,
+    output_path: Path,
+    *,
+    rate_column_name: str,
+) -> dict[str, float | int | None]:
+    ordered, _, _ = _resolve_time_axis(dataframe)
+    compare = pd.DataFrame(
+        {
+            "reference": pd.to_numeric(ordered["reference_rate_almost_perfect_hz"], errors="coerce"),
+            "corrected": pd.to_numeric(ordered["corrected_rate_to_perfect_hz"], errors="coerce"),
+        }
+    )
+    valid_mask = compare["reference"].notna() & compare["corrected"].notna()
+    valid = compare.loc[valid_mask].copy()
+
+    fig, ax = plt.subplots(figsize=(8.2, 6.2), constrained_layout=True)
+    metrics: dict[str, float | int | None] = {
+        "rows_with_reference": int(valid_mask.sum()),
+        "rows_without_reference": int((~valid_mask).sum()),
+        "linear_fit_r_squared": None,
+        "mean_absolute_error_hz": None,
+        "rmse_hz": None,
+        "mean_bias_hz": None,
+    }
+
+    if valid.empty:
+        ax.text(
+            0.5,
+            0.5,
+            "No valid points for corrected/reference comparison",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        ax.set_axis_off()
+        fig.savefig(output_path, dpi=180)
+        plt.close(fig)
+        return metrics
+
+    sequence = np.arange(len(ordered))
+    scatter = ax.scatter(
+        valid["reference"],
+        valid["corrected"],
+        c=sequence[valid_mask.to_numpy()],
+        cmap="viridis",
+        s=46,
+        alpha=0.85,
+        label="Samples",
+    )
+
+    line_min = float(np.nanmin(np.concatenate([valid["reference"].to_numpy(), valid["corrected"].to_numpy()])))
+    line_max = float(np.nanmax(np.concatenate([valid["reference"].to_numpy(), valid["corrected"].to_numpy()])))
+    ax.plot(
+        [line_min, line_max],
+        [line_min, line_max],
+        linestyle="--",
+        linewidth=1.2,
+        color="black",
+        alpha=0.75,
+        label="1:1 line",
+    )
+
+    if len(valid) >= 2 and valid["reference"].nunique() >= 2:
+        x_data = valid["reference"].to_numpy(dtype=float)
+        y_data = valid["corrected"].to_numpy(dtype=float)
+        slope, intercept = np.polyfit(x_data, y_data, deg=1)
+        y_fit = slope * x_data + intercept
+        ss_tot = float(np.sum((y_data - np.mean(y_data)) ** 2))
+        ss_res = float(np.sum((y_data - y_fit) ** 2))
+        r_squared = np.nan if ss_tot <= 0.0 else 1.0 - ss_res / ss_tot
+        x_line = np.linspace(float(np.min(x_data)), float(np.max(x_data)), 200)
+        ax.plot(
+            x_line,
+            slope * x_line + intercept,
+            color="#8B1E3F",
+            linewidth=2.0,
+            label=("Linear fit (R^2=n/a)" if not np.isfinite(r_squared) else f"Linear fit (R^2={r_squared:.3f})"),
+        )
+        metrics["linear_fit_r_squared"] = None if not np.isfinite(r_squared) else float(r_squared)
+
+    residual = valid["corrected"] - valid["reference"]
+    metrics["mean_absolute_error_hz"] = float(residual.abs().mean())
+    metrics["rmse_hz"] = float(np.sqrt(np.mean(np.square(residual))))
+    metrics["mean_bias_hz"] = float(residual.mean())
+
+    ax.set_title(
+        "Corrected rate vs almost-perfect flux reference\n"
+        f"rate column: {rate_column_name}"
+    )
+    ax.set_xlabel("Almost-perfect reference rate [Hz] (from Step 2 flux bins)")
+    ax.set_ylabel(f"Corrected rate [Hz] (from {rate_column_name})")
+    ax.grid(alpha=0.25)
+    ax.legend(loc="best")
+
+    cbar = fig.colorbar(scatter, ax=ax, shrink=0.94)
+    cbar.set_label("Time-series order")
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+    return metrics
 
 
 def run(config_path: str | Path | None = None) -> Path:
@@ -217,6 +446,7 @@ def run(config_path: str | Path | None = None) -> Path:
 
     synthetic_input_path = cfg_path(config, "paths", "synthetic_dataset_csv")
     lut_path = cfg_path(config, "paths", "step2_lut_ascii")
+    flux_cells_path = cfg_path(config, "paths", "step2_flux_cells_csv")
     lut_meta_path = cfg_path(config, "paths", "step2_meta_json")
     output_path = cfg_path(config, "paths", "step3_output_csv")
     meta_path = cfg_path(config, "paths", "step3_meta_json")
@@ -269,6 +499,15 @@ def run(config_path: str | Path | None = None) -> Path:
     )
 
     merged["corrected_rate_to_perfect_hz"] = merged["rate_hz"] * merged["lut_scale_factor"]
+    reference_curve = _load_flux_reference_curve(flux_cells_path)
+    (
+        merged["reference_rate_almost_perfect_hz"],
+        merged["reference_rate_assignment_method"],
+    ) = _map_reference_rate_by_flux(merged["sim_flux_cm2_min"], reference_curve)
+    merged["corrected_minus_reference_hz"] = (
+        pd.to_numeric(merged["corrected_rate_to_perfect_hz"], errors="coerce")
+        - pd.to_numeric(merged["reference_rate_almost_perfect_hz"], errors="coerce")
+    )
     merged["selected_z_vector_match"] = True
     selected_z_positions = lut_meta.get("selected_z_positions")
     if selected_z_positions:
@@ -305,6 +544,9 @@ def run(config_path: str | Path | None = None) -> Path:
     output_dataframe["lut_neighbor_min_distance"] = merged["lut_neighbor_min_distance"]
     output_dataframe["lut_neighbor_max_distance"] = merged["lut_neighbor_max_distance"]
     output_dataframe["corrected_rate_to_perfect_hz"] = merged["corrected_rate_to_perfect_hz"]
+    output_dataframe["reference_rate_almost_perfect_hz"] = merged["reference_rate_almost_perfect_hz"]
+    output_dataframe["reference_rate_assignment_method"] = merged["reference_rate_assignment_method"]
+    output_dataframe["corrected_minus_reference_hz"] = merged["corrected_minus_reference_hz"]
     output_dataframe["selected_z_vector_match"] = merged["selected_z_vector_match"]
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -319,10 +561,16 @@ def run(config_path: str | Path | None = None) -> Path:
         PLOTS_DIR / "step3_flux_rate_comparison.png",
         rate_column_name=rate_column_name,
     )
+    corrected_vs_reference_metrics = _plot_corrected_vs_almost_perfect_reference(
+        merged,
+        PLOTS_DIR / "step3_corrected_vs_almost_perfect_reference.png",
+        rate_column_name=rate_column_name,
+    )
 
     metadata = {
         "source_file": str(synthetic_input_path),
         "lut_file": str(lut_path),
+        "flux_reference_file": str(flux_cells_path),
         "lut_comments": lut_comments,
         "efficiency_bin_width": efficiency_bin_width,
         "lut_match_mode_requested": match_mode,
@@ -336,6 +584,16 @@ def run(config_path: str | Path | None = None) -> Path:
         "rows_matching_selected_z_vector": int(output_dataframe["selected_z_vector_match"].sum()),
         "rate_input_column": rate_column_name,
         "trigger_type_selection": trigger_info,
+        "almost_perfect_flux_reference": {
+            "flux_bins": int(len(reference_curve)),
+            "reference_flux_bin_centers": [float(value) for value in reference_curve["flux_bin_center"].tolist()],
+            "reference_rates_hz": [float(value) for value in reference_curve["reference_rate_median"].tolist()],
+            "assignment_method_counts": {
+                str(key): int(value)
+                for key, value in merged["reference_rate_assignment_method"].value_counts(dropna=False).to_dict().items()
+            },
+            "comparison_metrics": corrected_vs_reference_metrics,
+        },
         "time_axis_column_used_for_plots": _resolve_time_axis(merged)[2],
     }
     write_json(meta_path, metadata)

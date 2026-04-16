@@ -27,7 +27,7 @@ efficiencies_identical: false
 # Example tunings:
 # - 0.8  -> allows up to 0.8 spread
 # - null -> disable spread cap; each plane is sampled in full [min,max]
-efficiencies_max_spread: 0.2
+efficiencies_max_spread: 0.25
 
 # Optional: generate multiple rows per run, sharing selected columns.
 repeat_samples: 1

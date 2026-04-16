@@ -327,6 +327,28 @@ def _task3_optional_float(raw_value: object) -> float | None:
         return None
 
 
+def _task3_config_float(
+    config_obj: dict[str, object],
+    primary_key: str,
+    *alias_keys: str,
+    default: float,
+) -> float:
+    for key in (primary_key, *alias_keys):
+        raw_value = config_obj.get(key)
+        if raw_value is None:
+            continue
+        if isinstance(raw_value, str) and raw_value.strip().lower() in {"", "none", "null"}:
+            continue
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid numeric configuration value for '{key}': {raw_value!r}") from exc
+        if not np.isfinite(value):
+            raise ValueError(f"Non-finite numeric configuration value for '{key}': {raw_value!r}")
+        return value
+    return float(default)
+
+
 def resolve_task3_plot_options(config_obj: Dict[str, object]) -> tuple[str, bool, bool, bool, bool, bool, bool]:
     plot_mode = normalize_task3_plot_mode(config_obj.get("create_plots", None))
     create_plots = plot_mode in {"usual", "all"}
@@ -797,18 +819,78 @@ T_side_right_pre_cal_ST = config.get("T_side_right_pre_cal_ST", -50)
 
 # Post-calibration
 
-# Once calculated the RPC variables
-T_sum_RPC_left = config["T_sum_RPC_left"]
-T_sum_RPC_right = config["T_sum_RPC_right"]
-T_dif_RPC_abs = abs(float(config.get("T_dif_RPC_abs", config.get("T_dif_RPC_right", 0.8))))
+# Once calculated the RPC variables. Legacy per-plane keys remain as optional
+# compatibility aliases so old configs still load, but Task 3 can now run with
+# only the plane_combination_* thresholds present.
+T_sum_RPC_left = _task3_config_float(
+    config,
+    "T_sum_RPC_left",
+    "plane_combination_plane_t_sum_sum_left",
+    "plane_combination_same_plane_t_sum_sum_left",
+    "plane_combination_self_t_sum_sum_left",
+    default=-25.0,
+)
+T_sum_RPC_right = _task3_config_float(
+    config,
+    "T_sum_RPC_right",
+    "plane_combination_plane_t_sum_sum_right",
+    "plane_combination_same_plane_t_sum_sum_right",
+    "plane_combination_self_t_sum_sum_right",
+    default=25.0,
+)
+T_dif_RPC_abs = abs(
+    _task3_config_float(
+        config,
+        "T_dif_RPC_abs",
+        "T_dif_RPC_right",
+        "plane_combination_plane_t_dif_sum_threshold",
+        "plane_combination_same_plane_t_dif_sum_threshold",
+        "plane_combination_self_t_dif_sum_threshold",
+        default=0.8,
+    )
+)
 T_dif_RPC_right = T_dif_RPC_abs
 T_dif_RPC_left = -T_dif_RPC_abs
-Q_RPC_left = config["Q_RPC_left"]
-Q_RPC_right = config["Q_RPC_right"]
-Q_dif_RPC_abs = abs(float(config.get("Q_dif_RPC_abs", config.get("Q_dif_RPC_right", 4))))
+Q_RPC_left = _task3_config_float(
+    config,
+    "Q_RPC_left",
+    "plane_combination_plane_q_sum_sum_left",
+    "plane_combination_same_plane_q_sum_sum_left",
+    "plane_combination_self_q_sum_sum_left",
+    default=0.0,
+)
+Q_RPC_right = _task3_config_float(
+    config,
+    "Q_RPC_right",
+    "plane_combination_plane_q_sum_sum_right",
+    "plane_combination_same_plane_q_sum_sum_right",
+    "plane_combination_self_q_sum_sum_right",
+    default=800.0,
+)
+Q_dif_RPC_abs = abs(
+    _task3_config_float(
+        config,
+        "Q_dif_RPC_abs",
+        "Q_dif_RPC_right",
+        "plane_combination_plane_q_dif_sum_threshold",
+        "plane_combination_same_plane_q_dif_sum_threshold",
+        "plane_combination_self_q_dif_sum_threshold",
+        default=4.0,
+    )
+)
 Q_dif_RPC_right = Q_dif_RPC_abs
 Q_dif_RPC_left = -Q_dif_RPC_abs
-Y_RPC_abs = abs(float(config.get("Y_RPC_abs", config.get("Y_RPC_right", 200))))
+Y_RPC_abs = abs(
+    _task3_config_float(
+        config,
+        "Y_RPC_abs",
+        "Y_RPC_right",
+        "plane_combination_plane_y_sum_right",
+        "plane_combination_same_plane_y_sum_right",
+        "plane_combination_self_y_sum_right",
+        default=200.0,
+    )
+)
 Y_RPC_right = Y_RPC_abs
 Y_RPC_left = -Y_RPC_abs
 plane_combination_plane_q_sum_sum_left = float(
@@ -981,6 +1063,16 @@ plane_combination_detector_y_dif_threshold = abs(
             config.get("plane_combination_any_y_dif_threshold", config.get("plane_combination_y_dif_threshold", Y_RPC_abs)),
         )
     )
+)
+print(
+    "Task 3 plane-combination bounds "
+    f"(station {station}): same_plane q_sum=[{plane_combination_plane_q_sum_sum_left}, "
+    f"{plane_combination_plane_q_sum_sum_right}], "
+    f"same_plane t_sum=[{plane_combination_plane_t_sum_sum_left}, {plane_combination_plane_t_sum_sum_right}], "
+    f"same_plane y_sum=[{plane_combination_plane_y_sum_left}, {plane_combination_plane_y_sum_right}], "
+    f"detector q_sum=[{plane_combination_detector_q_sum_sum_left}, {plane_combination_detector_q_sum_sum_right}], "
+    f"detector t_sum=[{plane_combination_detector_t_sum_sum_left}, {plane_combination_detector_t_sum_sum_right}], "
+    f"detector y_sum=[{plane_combination_detector_y_sum_left}, {plane_combination_detector_y_sum_right}]"
 )
 
 # Alternative fitter filter
@@ -1192,7 +1284,7 @@ TASK3_ACTIVE_STRIP_COLUMNS: tuple[str, ...] = tuple(f"active_strips_P{plane}" fo
 TASK3_SELECTED_OFFENDER_CARDINALITY_VALUES: tuple[int, ...] = tuple(range(0, 5))
 
 FILTER_METRIC_NAMES: tuple[str, ...] = (
-    "plane_rpc_window_rows_affected_pct",
+    "plane_combination_plane_rows_affected_pct",
     "plane_combination_filter_rows_affected_pct",
     "q_sum_all_zero_rows_removed_pct",
     "data_purity_percentage",
@@ -1229,6 +1321,10 @@ FILTER_METADATA_ALLOWED_COLUMNS = {
     "param_hash",
     *FILTER_METRIC_NAMES,
 }
+TASK3_DEEP_FILTER_LEGACY_COLUMNS: tuple[str, ...] = (
+    "plane_combination_self_rows_affected_pct",
+    "plane_combination_same_plane_rows_affected_pct",
+)
 
 filter_metrics: dict[str, float] = {}
 
@@ -1244,6 +1340,13 @@ def record_activity_metric(name: str, affected: float, total: float, label: str 
     pct = 0.0 if total == 0 else 100.0 * float(affected) / float(total)
     filter_metrics[name] = round(pct, 4)
     print(f"[filter-metrics] {name}: {label} {affected} of {total} ({pct:.2f}%)")
+
+
+def _task3_drop_legacy_deep_filter_field(column_name: str) -> bool:
+    return (
+        column_name.startswith("plane_rpc_window_")
+        or column_name in TASK3_DEEP_FILTER_LEGACY_COLUMNS
+    )
 
 
 def build_task3_full_strip_pattern_series(df: pd.DataFrame) -> pd.Series:
@@ -2400,6 +2503,53 @@ def collect_task3_plane_final_map(df: pd.DataFrame) -> dict[int, dict[str, str]]
 
 
 TASK3_PLANE_KEYS: tuple[int, ...] = (1, 2, 3, 4)
+TASK3_PLANE_COMBINATION_LIMIT_LABELS: dict[str, str] = {
+    "q_sum_sum_low": "Q_sum semisum below lower limit",
+    "q_sum_sum_high": "Q_sum semisum above upper limit",
+    "q_sum_dif_low": "Q_sum semidifference below lower limit",
+    "q_sum_dif_high": "Q_sum semidifference above upper limit",
+    "q_dif_sum_low": "Q_dif semisum below lower limit",
+    "q_dif_sum_high": "Q_dif semisum above upper limit",
+    "q_dif_dif_low": "Q_dif semidifference below lower limit",
+    "q_dif_dif_high": "Q_dif semidifference above upper limit",
+    "t_sum_sum_low": "T_sum semisum below lower limit",
+    "t_sum_sum_high": "T_sum semisum above upper limit",
+    "t_sum_dif_low": "T_sum semidifference below lower limit",
+    "t_sum_dif_high": "T_sum semidifference above upper limit",
+    "t_dif_sum_low": "T_dif semisum below lower limit",
+    "t_dif_sum_high": "T_dif semisum above upper limit",
+    "t_dif_dif_low": "T_dif semidifference below lower limit",
+    "t_dif_dif_high": "T_dif semidifference above upper limit",
+    "y_sum_low": "Y semisum below lower limit",
+    "y_sum_high": "Y semisum above upper limit",
+    "y_dif_low": "Y semidifference below lower limit",
+    "y_dif_high": "Y semidifference above upper limit",
+}
+TASK3_PLANE_COMBINATION_LIMIT_KEYS: tuple[str, ...] = tuple(
+    TASK3_PLANE_COMBINATION_LIMIT_LABELS
+)
+TASK3_PLANE_SELF_LIMIT_LABELS: dict[str, str] = {
+    "q_sum_sum_low": "Plane Q_sum below lower limit",
+    "q_sum_sum_high": "Plane Q_sum above upper limit",
+    "q_dif_sum_low": "Plane Q_dif below lower limit",
+    "q_dif_sum_high": "Plane Q_dif above upper limit",
+    "t_sum_sum_low": "Plane T_sum below lower limit",
+    "t_sum_sum_high": "Plane T_sum above upper limit",
+    "t_dif_sum_low": "Plane T_dif below lower limit",
+    "t_dif_sum_high": "Plane T_dif above upper limit",
+    "y_sum_low": "Plane Y below lower limit",
+    "y_sum_high": "Plane Y above upper limit",
+}
+TASK3_PLANE_SELF_LIMIT_KEYS: tuple[str, ...] = tuple(
+    TASK3_PLANE_SELF_LIMIT_LABELS
+)
+TASK3_PLANE_SELF_OBSERVABLE_LIMIT_KEYS: dict[str, tuple[str, str]] = {
+    "q_sum_sum": ("q_sum_sum_low", "q_sum_sum_high"),
+    "q_dif_sum": ("q_dif_sum_low", "q_dif_sum_high"),
+    "t_sum_sum": ("t_sum_sum_low", "t_sum_sum_high"),
+    "t_dif_sum": ("t_dif_sum_low", "t_dif_sum_high"),
+    "y_sum": ("y_sum_low", "y_sum_high"),
+}
 
 
 def _task3_plane_order_key(plane_key: int) -> tuple[int]:
@@ -2457,32 +2607,46 @@ task3_noise_control_efficiency_selected_offender_values: tuple[int, ...] = tuple
 def apply_task3_plane_combination_filter(
     df_input: pd.DataFrame,
     *,
-    q_sum_sum_left: float,
-    q_sum_sum_right: float,
-    q_sum_dif_threshold: float,
-    q_dif_sum_threshold: float,
-    q_dif_dif_threshold: float,
-    t_sum_sum_left: float,
-    t_sum_sum_right: float,
-    t_sum_dif_threshold: float,
-    t_dif_sum_threshold: float,
-    t_dif_dif_threshold: float,
-    y_sum_left: float,
-    y_sum_right: float,
-    y_dif_threshold: float,
-) -> dict[str, int]:
+    plane_q_sum_sum_left: float,
+    plane_q_sum_sum_right: float,
+    plane_q_dif_sum_threshold: float,
+    plane_t_sum_sum_left: float,
+    plane_t_sum_sum_right: float,
+    plane_t_dif_sum_threshold: float,
+    plane_y_sum_left: float,
+    plane_y_sum_right: float,
+    detector_q_sum_sum_left: float,
+    detector_q_sum_sum_right: float,
+    detector_q_sum_dif_threshold: float,
+    detector_q_dif_sum_threshold: float,
+    detector_q_dif_dif_threshold: float,
+    detector_t_sum_sum_left: float,
+    detector_t_sum_sum_right: float,
+    detector_t_sum_dif_threshold: float,
+    detector_t_dif_sum_threshold: float,
+    detector_t_dif_dif_threshold: float,
+    detector_y_sum_left: float,
+    detector_y_sum_right: float,
+    detector_y_dif_threshold: float,
+) -> dict[str, object]:
     """
-    Apply a final Task 3 plane-combination consistency filter.
+    Apply the final Task 3 plane-consistency filter in one offender pass.
 
-    Distinct plane pairs are evaluated only when both planes carry non-zero
-    `Q_sum/Q_dif/T_sum/T_dif/Y`. Failed plane pairs are flagged first. Then,
-    per event, the exact minimum-cardinality set of offending planes is zeroed
-    so the full set of flagged plane pairs is covered.
+    Same-plane bounds (`plane_combination_plane_*`) create forced offender
+    planes. Distinct-plane detector bounds (`plane_combination_detector_*`)
+    create failed edges. Per event, forced planes are kept and the exact
+    minimum-cardinality additional offender set is selected to cover the
+    remaining failed detector edges. Plane blocks are zeroed only once, after
+    the combined selection is resolved.
     """
     plane_map = collect_task3_plane_final_map(df_input)
-    if len(plane_map) < 2:
+    detector_limit_keys = TASK3_PLANE_COMBINATION_LIMIT_KEYS
+    plane_limit_keys = TASK3_PLANE_SELF_LIMIT_KEYS
+    plane_observable_keys = tuple(TASK3_PLANE_SELF_OBSERVABLE_LIMIT_KEYS)
+    n_rows = len(df_input)
+    if not plane_map:
         return {
-            "input_rows": len(df_input),
+            "input_rows": n_rows,
             "tracked_plane_count": len(plane_map),
             "valid_pair_observations": 0,
             "failed_pair_any": 0,
@@ -2496,9 +2660,22 @@ def apply_task3_plane_combination_filter(
             "failed_pair_t_dif_dif": 0,
             "failed_pair_y_sum": 0,
             "failed_pair_y_dif": 0,
+            **{f"failed_pair_{limit_key}": 0 for limit_key in detector_limit_keys},
+            "plane_candidate_observations": {
+                observable_key: 0 for observable_key in plane_observable_keys
+            },
+            "plane_failed_limits": {
+                limit_key: 0 for limit_key in plane_limit_keys
+            },
+            "plane_rows_failed_limits": {
+                limit_key: 0 for limit_key in plane_limit_keys
+            },
+            "plane_rows_affected": 0,
+            "detector_rows_affected": 0,
             "rows_affected": 0,
             "values_zeroed": 0,
             "flagged_rows": 0,
+            **{f"rows_failed_{limit_key}": 0 for limit_key in detector_limit_keys},
             "selected_offender_planes": 0,
             "rows_with_multiple_offenders": 0,
             "max_failed_pairs_in_row": 0,
@@ -2514,11 +2691,11 @@ def apply_task3_plane_combination_filter(
         }
 
     plane_fail_masks = {
-        plane_key: np.zeros(len(df_input), dtype=bool)
+        plane_key: np.zeros(n_rows, dtype=bool)
         for plane_key in TASK3_PLANE_KEYS
     }
     summary = {
-        "input_rows": len(df_input),
+        "input_rows": n_rows,
         "tracked_plane_count": len(plane_map),
         "valid_pair_observations": 0,
         "failed_pair_any": 0,
@@ -2532,9 +2709,22 @@ def apply_task3_plane_combination_filter(
         "failed_pair_t_dif_dif": 0,
         "failed_pair_y_sum": 0,
         "failed_pair_y_dif": 0,
+        **{f"failed_pair_{limit_key}": 0 for limit_key in detector_limit_keys},
+        "plane_candidate_observations": {
+            observable_key: 0 for observable_key in plane_observable_keys
+        },
+        "plane_failed_limits": {
+            limit_key: 0 for limit_key in plane_limit_keys
+        },
+        "plane_rows_failed_limits": {
+            limit_key: 0 for limit_key in plane_limit_keys
+        },
+        "plane_rows_affected": 0,
+        "detector_rows_affected": 0,
         "rows_affected": 0,
         "values_zeroed": 0,
         "flagged_rows": 0,
+        **{f"rows_failed_{limit_key}": 0 for limit_key in detector_limit_keys},
         "selected_offender_planes": 0,
         "rows_with_multiple_offenders": 0,
         "max_failed_pairs_in_row": 0,
@@ -2545,11 +2735,86 @@ def apply_task3_plane_combination_filter(
         },
     }
     row_failed_edges: dict[int, list[tuple[int, int, float]]] = {}
+    row_forced_planes: dict[int, set[int]] = {}
     offender_hit_counts = {
         plane_key: 0
         for plane_key in TASK3_PLANE_KEYS
     }
-    selected_offender_count_by_row = np.zeros(len(df_input), dtype=int)
+    row_limit_fail_masks = {
+        limit_key: np.zeros(n_rows, dtype=bool)
+        for limit_key in detector_limit_keys
+    }
+    row_plane_limit_fail_masks = {
+        limit_key: np.zeros(n_rows, dtype=bool)
+        for limit_key in plane_limit_keys
+    }
+    row_detector_failure_any = np.zeros(n_rows, dtype=bool)
+    row_plane_failure_any = np.zeros(n_rows, dtype=bool)
+    selected_offender_count_by_row = np.zeros(n_rows, dtype=int)
+
+    plane_q_dif_sum_abs = abs(float(plane_q_dif_sum_threshold))
+    plane_t_dif_sum_abs = abs(float(plane_t_dif_sum_threshold))
+
+    detector_q_sum_dif_abs = abs(float(detector_q_sum_dif_threshold))
+    detector_q_dif_sum_abs = abs(float(detector_q_dif_sum_threshold))
+    detector_q_dif_dif_abs = abs(float(detector_q_dif_dif_threshold))
+    detector_t_sum_dif_abs = abs(float(detector_t_sum_dif_threshold))
+    detector_t_dif_sum_abs = abs(float(detector_t_dif_sum_threshold))
+    detector_t_dif_dif_abs = abs(float(detector_t_dif_dif_threshold))
+    detector_y_dif_abs = abs(float(detector_y_dif_threshold))
+
+    for plane_key in sorted(plane_map):
+        cols = plane_map[plane_key]
+        q_sum = pd.to_numeric(df_input[cols["Q_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        q_dif = pd.to_numeric(df_input[cols["Q_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_sum = pd.to_numeric(df_input[cols["T_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_dif = pd.to_numeric(df_input[cols["T_dif"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        y = pd.to_numeric(df_input[cols["Y"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+
+        valid_q_sum = np.isfinite(q_sum) & (q_sum != 0)
+        valid_q_dif = np.isfinite(q_dif) & (q_dif != 0)
+        valid_t_sum = np.isfinite(t_sum) & (t_sum != 0)
+        valid_t_dif = np.isfinite(t_dif) & (t_dif != 0)
+        valid_y = np.isfinite(y) & (y != 0)
+
+        fail_q_sum_sum_low = valid_q_sum & (q_sum < float(plane_q_sum_sum_left))
+        fail_q_sum_sum_high = valid_q_sum & (q_sum > float(plane_q_sum_sum_right))
+        fail_q_dif_sum_low = valid_q_dif & (q_dif < -plane_q_dif_sum_abs)
+        fail_q_dif_sum_high = valid_q_dif & (q_dif > plane_q_dif_sum_abs)
+        fail_t_sum_sum_low = valid_t_sum & (t_sum < float(plane_t_sum_sum_left))
+        fail_t_sum_sum_high = valid_t_sum & (t_sum > float(plane_t_sum_sum_right))
+        fail_t_dif_sum_low = valid_t_dif & (t_dif < -plane_t_dif_sum_abs)
+        fail_t_dif_sum_high = valid_t_dif & (t_dif > plane_t_dif_sum_abs)
+        fail_y_sum_low = valid_y & (y < float(plane_y_sum_left))
+        fail_y_sum_high = valid_y & (y > float(plane_y_sum_right))
+
+        summary["plane_candidate_observations"]["q_sum_sum"] += int(np.count_nonzero(valid_q_sum))
+        summary["plane_candidate_observations"]["q_dif_sum"] += int(np.count_nonzero(valid_q_dif))
+        summary["plane_candidate_observations"]["t_sum_sum"] += int(np.count_nonzero(valid_t_sum))
+        summary["plane_candidate_observations"]["t_dif_sum"] += int(np.count_nonzero(valid_t_dif))
+        summary["plane_candidate_observations"]["y_sum"] += int(np.count_nonzero(valid_y))
+
+        plane_fail_masks_by_limit = {
+            "q_sum_sum_low": fail_q_sum_sum_low,
+            "q_sum_sum_high": fail_q_sum_sum_high,
+            "q_dif_sum_low": fail_q_dif_sum_low,
+            "q_dif_sum_high": fail_q_dif_sum_high,
+            "t_sum_sum_low": fail_t_sum_sum_low,
+            "t_sum_sum_high": fail_t_sum_sum_high,
+            "t_dif_sum_low": fail_t_dif_sum_low,
+            "t_dif_sum_high": fail_t_dif_sum_high,
+            "y_sum_low": fail_y_sum_low,
+            "y_sum_high": fail_y_sum_high,
+        }
+        fail_any = np.zeros(n_rows, dtype=bool)
+        for limit_key, limit_fail_mask in plane_fail_masks_by_limit.items():
+            summary["plane_failed_limits"][limit_key] += int(np.count_nonzero(limit_fail_mask))
+            row_plane_limit_fail_masks[limit_key] |= limit_fail_mask
+            fail_any |= limit_fail_mask
+        row_plane_failure_any |= fail_any
+
+        for row_pos in np.flatnonzero(fail_any):
+            row_forced_planes.setdefault(int(row_pos), set()).add(plane_key)
 
     for plane_a, plane_b in combinations(sorted(plane_map), 2):
         cols_a = plane_map[plane_a]
@@ -2602,25 +2867,59 @@ def apply_task3_plane_combination_filter(
         pair_y_sum = 0.5 * (y_a + y_b)
         pair_y_dif = 0.5 * (y_a - y_b)
 
-        fail_q_sum_sum = valid_mask & (
-            (pair_q_sum_sum < float(q_sum_sum_left))
-            | (pair_q_sum_sum > float(q_sum_sum_right))
-        )
-        fail_q_sum_dif = valid_mask & (np.abs(pair_q_sum_dif) > abs(float(q_sum_dif_threshold)))
-        fail_q_dif_sum = valid_mask & (np.abs(pair_q_dif_sum) > abs(float(q_dif_sum_threshold)))
-        fail_q_dif_dif = valid_mask & (np.abs(pair_q_dif_dif) > abs(float(q_dif_dif_threshold)))
-        fail_t_sum_sum = valid_mask & (
-            (pair_t_sum_sum < float(t_sum_sum_left))
-            | (pair_t_sum_sum > float(t_sum_sum_right))
-        )
-        fail_t_sum_dif = valid_mask & (np.abs(pair_t_sum_dif) > abs(float(t_sum_dif_threshold)))
-        fail_t_dif_sum = valid_mask & (np.abs(pair_t_dif_sum) > abs(float(t_dif_sum_threshold)))
-        fail_t_dif_dif = valid_mask & (np.abs(pair_t_dif_dif) > abs(float(t_dif_dif_threshold)))
-        fail_y_sum = valid_mask & (
-            (pair_y_sum < float(y_sum_left))
-            | (pair_y_sum > float(y_sum_right))
-        )
-        fail_y_dif = valid_mask & (np.abs(pair_y_dif) > abs(float(y_dif_threshold)))
+        fail_q_sum_sum_low = valid_mask & (pair_q_sum_sum < float(detector_q_sum_sum_left))
+        fail_q_sum_sum_high = valid_mask & (pair_q_sum_sum > float(detector_q_sum_sum_right))
+        fail_q_sum_sum = fail_q_sum_sum_low | fail_q_sum_sum_high
+        fail_q_sum_dif_low = valid_mask & (pair_q_sum_dif < -detector_q_sum_dif_abs)
+        fail_q_sum_dif_high = valid_mask & (pair_q_sum_dif > detector_q_sum_dif_abs)
+        fail_q_sum_dif = fail_q_sum_dif_low | fail_q_sum_dif_high
+        fail_q_dif_sum_low = valid_mask & (pair_q_dif_sum < -detector_q_dif_sum_abs)
+        fail_q_dif_sum_high = valid_mask & (pair_q_dif_sum > detector_q_dif_sum_abs)
+        fail_q_dif_sum = fail_q_dif_sum_low | fail_q_dif_sum_high
+        fail_q_dif_dif_low = valid_mask & (pair_q_dif_dif < -detector_q_dif_dif_abs)
+        fail_q_dif_dif_high = valid_mask & (pair_q_dif_dif > detector_q_dif_dif_abs)
+        fail_q_dif_dif = fail_q_dif_dif_low | fail_q_dif_dif_high
+        fail_t_sum_sum_low = valid_mask & (pair_t_sum_sum < float(detector_t_sum_sum_left))
+        fail_t_sum_sum_high = valid_mask & (pair_t_sum_sum > float(detector_t_sum_sum_right))
+        fail_t_sum_sum = fail_t_sum_sum_low | fail_t_sum_sum_high
+        fail_t_sum_dif_low = valid_mask & (pair_t_sum_dif < -detector_t_sum_dif_abs)
+        fail_t_sum_dif_high = valid_mask & (pair_t_sum_dif > detector_t_sum_dif_abs)
+        fail_t_sum_dif = fail_t_sum_dif_low | fail_t_sum_dif_high
+        fail_t_dif_sum_low = valid_mask & (pair_t_dif_sum < -detector_t_dif_sum_abs)
+        fail_t_dif_sum_high = valid_mask & (pair_t_dif_sum > detector_t_dif_sum_abs)
+        fail_t_dif_sum = fail_t_dif_sum_low | fail_t_dif_sum_high
+        fail_t_dif_dif_low = valid_mask & (pair_t_dif_dif < -detector_t_dif_dif_abs)
+        fail_t_dif_dif_high = valid_mask & (pair_t_dif_dif > detector_t_dif_dif_abs)
+        fail_t_dif_dif = fail_t_dif_dif_low | fail_t_dif_dif_high
+        fail_y_sum_low = valid_mask & (pair_y_sum < float(detector_y_sum_left))
+        fail_y_sum_high = valid_mask & (pair_y_sum > float(detector_y_sum_right))
+        fail_y_sum = fail_y_sum_low | fail_y_sum_high
+        fail_y_dif_low = valid_mask & (pair_y_dif < -detector_y_dif_abs)
+        fail_y_dif_high = valid_mask & (pair_y_dif > detector_y_dif_abs)
+        fail_y_dif = fail_y_dif_low | fail_y_dif_high
+
+        fail_masks_by_limit = {
+            "q_sum_sum_low": fail_q_sum_sum_low,
+            "q_sum_sum_high": fail_q_sum_sum_high,
+            "q_sum_dif_low": fail_q_sum_dif_low,
+            "q_sum_dif_high": fail_q_sum_dif_high,
+            "q_dif_sum_low": fail_q_dif_sum_low,
+            "q_dif_sum_high": fail_q_dif_sum_high,
+            "q_dif_dif_low": fail_q_dif_dif_low,
+            "q_dif_dif_high": fail_q_dif_dif_high,
+            "t_sum_sum_low": fail_t_sum_sum_low,
+            "t_sum_sum_high": fail_t_sum_sum_high,
+            "t_sum_dif_low": fail_t_sum_dif_low,
+            "t_sum_dif_high": fail_t_sum_dif_high,
+            "t_dif_sum_low": fail_t_dif_sum_low,
+            "t_dif_sum_high": fail_t_dif_sum_high,
+            "t_dif_dif_low": fail_t_dif_dif_low,
+            "t_dif_dif_high": fail_t_dif_dif_high,
+            "y_sum_low": fail_y_sum_low,
+            "y_sum_high": fail_y_sum_high,
+            "y_dif_low": fail_y_dif_low,
+            "y_dif_high": fail_y_dif_high,
+        }
         fail_any = (
             fail_q_sum_sum
             | fail_q_sum_dif
@@ -2644,67 +2943,71 @@ def apply_task3_plane_combination_filter(
         summary["failed_pair_t_dif_dif"] += int(np.count_nonzero(fail_t_dif_dif))
         summary["failed_pair_y_sum"] += int(np.count_nonzero(fail_y_sum))
         summary["failed_pair_y_dif"] += int(np.count_nonzero(fail_y_dif))
+        for limit_key, limit_fail_mask in fail_masks_by_limit.items():
+            summary[f"failed_pair_{limit_key}"] += int(np.count_nonzero(limit_fail_mask))
+            row_limit_fail_masks[limit_key] |= limit_fail_mask
         summary["failed_pair_any"] += int(np.count_nonzero(fail_any))
+        row_detector_failure_any |= fail_any
 
         if np.any(fail_any):
-            q_sum_sum_width = max(abs(float(q_sum_sum_right) - float(q_sum_sum_left)), 1e-9)
-            q_sum_dif_scale = max(abs(float(q_sum_dif_threshold)), 1e-9)
-            q_dif_sum_scale = max(abs(float(q_dif_sum_threshold)), 1e-9)
-            q_dif_dif_scale = max(abs(float(q_dif_dif_threshold)), 1e-9)
-            t_sum_sum_width = max(abs(float(t_sum_sum_right) - float(t_sum_sum_left)), 1e-9)
-            t_sum_dif_scale = max(abs(float(t_sum_dif_threshold)), 1e-9)
-            t_dif_sum_scale = max(abs(float(t_dif_sum_threshold)), 1e-9)
-            t_dif_dif_scale = max(abs(float(t_dif_dif_threshold)), 1e-9)
-            y_sum_width = max(abs(float(y_sum_right) - float(y_sum_left)), 1e-9)
-            y_dif_scale = max(abs(float(y_dif_threshold)), 1e-9)
+            q_sum_sum_width = max(abs(float(detector_q_sum_sum_right) - float(detector_q_sum_sum_left)), 1e-9)
+            q_sum_dif_scale = max(abs(float(detector_q_sum_dif_threshold)), 1e-9)
+            q_dif_sum_scale = max(abs(float(detector_q_dif_sum_threshold)), 1e-9)
+            q_dif_dif_scale = max(abs(float(detector_q_dif_dif_threshold)), 1e-9)
+            t_sum_sum_width = max(abs(float(detector_t_sum_sum_right) - float(detector_t_sum_sum_left)), 1e-9)
+            t_sum_dif_scale = max(abs(float(detector_t_sum_dif_threshold)), 1e-9)
+            t_dif_sum_scale = max(abs(float(detector_t_dif_sum_threshold)), 1e-9)
+            t_dif_dif_scale = max(abs(float(detector_t_dif_dif_threshold)), 1e-9)
+            y_sum_width = max(abs(float(detector_y_sum_right) - float(detector_y_sum_left)), 1e-9)
+            y_dif_scale = max(abs(float(detector_y_dif_threshold)), 1e-9)
 
             q_sum_sum_excess = np.maximum.reduce(
                 [
                     np.zeros_like(pair_q_sum_sum, dtype=float),
-                    float(q_sum_sum_left) - pair_q_sum_sum,
-                    pair_q_sum_sum - float(q_sum_sum_right),
+                    float(detector_q_sum_sum_left) - pair_q_sum_sum,
+                    pair_q_sum_sum - float(detector_q_sum_sum_right),
                 ]
             ) / q_sum_sum_width
             q_sum_dif_excess = (
-                np.maximum(np.abs(pair_q_sum_dif) - abs(float(q_sum_dif_threshold)), 0.0)
+                np.maximum(np.abs(pair_q_sum_dif) - abs(float(detector_q_sum_dif_threshold)), 0.0)
                 / q_sum_dif_scale
             )
             q_dif_sum_excess = (
-                np.maximum(np.abs(pair_q_dif_sum) - abs(float(q_dif_sum_threshold)), 0.0)
+                np.maximum(np.abs(pair_q_dif_sum) - abs(float(detector_q_dif_sum_threshold)), 0.0)
                 / q_dif_sum_scale
             )
             q_dif_dif_excess = (
-                np.maximum(np.abs(pair_q_dif_dif) - abs(float(q_dif_dif_threshold)), 0.0)
+                np.maximum(np.abs(pair_q_dif_dif) - abs(float(detector_q_dif_dif_threshold)), 0.0)
                 / q_dif_dif_scale
             )
             t_sum_sum_excess = np.maximum.reduce(
                 [
                     np.zeros_like(pair_t_sum_sum, dtype=float),
-                    float(t_sum_sum_left) - pair_t_sum_sum,
-                    pair_t_sum_sum - float(t_sum_sum_right),
+                    float(detector_t_sum_sum_left) - pair_t_sum_sum,
+                    pair_t_sum_sum - float(detector_t_sum_sum_right),
                 ]
             ) / t_sum_sum_width
             t_sum_dif_excess = (
-                np.maximum(np.abs(pair_t_sum_dif) - abs(float(t_sum_dif_threshold)), 0.0)
+                np.maximum(np.abs(pair_t_sum_dif) - abs(float(detector_t_sum_dif_threshold)), 0.0)
                 / t_sum_dif_scale
             )
             t_dif_sum_excess = (
-                np.maximum(np.abs(pair_t_dif_sum) - abs(float(t_dif_sum_threshold)), 0.0)
+                np.maximum(np.abs(pair_t_dif_sum) - abs(float(detector_t_dif_sum_threshold)), 0.0)
                 / t_dif_sum_scale
             )
             t_dif_dif_excess = (
-                np.maximum(np.abs(pair_t_dif_dif) - abs(float(t_dif_dif_threshold)), 0.0)
+                np.maximum(np.abs(pair_t_dif_dif) - abs(float(detector_t_dif_dif_threshold)), 0.0)
                 / t_dif_dif_scale
             )
             y_sum_excess = np.maximum.reduce(
                 [
                     np.zeros_like(pair_y_sum, dtype=float),
-                    float(y_sum_left) - pair_y_sum,
-                    pair_y_sum - float(y_sum_right),
+                    float(detector_y_sum_left) - pair_y_sum,
+                    pair_y_sum - float(detector_y_sum_right),
                 ]
             ) / y_sum_width
             y_dif_excess = (
-                np.maximum(np.abs(pair_y_dif) - abs(float(y_dif_threshold)), 0.0)
+                np.maximum(np.abs(pair_y_dif) - abs(float(detector_y_dif_threshold)), 0.0)
                 / y_dif_scale
             )
             pair_severity = (
@@ -2726,17 +3029,31 @@ def apply_task3_plane_combination_filter(
                     (plane_a, plane_b, float(pair_severity[row_pos]))
                 )
 
-    any_row_affected = np.zeros(len(df_input), dtype=bool)
-    summary["flagged_rows"] = len(row_failed_edges)
-    for row_pos, edge_list in row_failed_edges.items():
-        selected_planes = select_exact_minimum_vertex_cover(
-            edge_list,
+    flagged_row_positions = sorted(set(row_failed_edges) | set(row_forced_planes))
+    any_row_affected = np.zeros(n_rows, dtype=bool)
+    summary["flagged_rows"] = len(flagged_row_positions)
+    summary["plane_rows_affected"] = int(np.count_nonzero(row_plane_failure_any))
+    summary["detector_rows_affected"] = int(np.count_nonzero(row_detector_failure_any))
+
+    for row_pos in flagged_row_positions:
+        forced_planes = sorted(
+            row_forced_planes.get(row_pos, set()),
+            key=_task3_plane_order_key,
+        )
+        edge_list = row_failed_edges.get(row_pos, [])
+        uncovered_edges = [
+            (plane_a, plane_b, severity)
+            for plane_a, plane_b, severity in edge_list
+            if plane_a not in forced_planes and plane_b not in forced_planes
+        ]
+        selected_planes = forced_planes + select_exact_minimum_vertex_cover(
+            uncovered_edges,
             _task3_plane_order_key,
         )
 
         summary["max_failed_pairs_in_row"] = max(
             summary["max_failed_pairs_in_row"],
-            len(edge_list),
+            len(edge_list) + len(forced_planes),
         )
         summary["max_selected_offenders_in_row"] = max(
             summary["max_selected_offenders_in_row"],
@@ -2757,6 +3074,10 @@ def apply_task3_plane_combination_filter(
         int(summary["input_rows"]) - int(summary["flagged_rows"]),
         0,
     )
+    for limit_key, row_fail_mask in row_limit_fail_masks.items():
+        summary[f"rows_failed_{limit_key}"] = int(np.count_nonzero(row_fail_mask))
+    for limit_key, row_fail_mask in row_plane_limit_fail_masks.items():
+        summary["plane_rows_failed_limits"][limit_key] = int(np.count_nonzero(row_fail_mask))
 
     for plane_key in plane_map:
         fail_mask = plane_fail_masks[plane_key]
@@ -2786,6 +3107,8 @@ def apply_task3_plane_combination_filter(
         print(
             "[plane-combination-offenders] "
             f"flagged_rows={summary['flagged_rows']} "
+            f"plane_rows={summary['plane_rows_affected']} "
+            f"detector_rows={summary['detector_rows_affected']} "
             f"selected_offenders={summary['selected_offender_planes']} "
             f"multi_offender_rows={summary['rows_with_multiple_offenders']} "
             f"max_failed_pairs_in_row={summary['max_failed_pairs_in_row']} "
@@ -3006,24 +3329,15 @@ def subtract_task3_plane_combination_payload(
     return removed_payload.loc[removed_payload["_merge"] == "left_only"].drop(columns="_merge")
 
 
-def _task3_hist_range(
-    before_values: np.ndarray,
-    after_values: np.ndarray,
+def _task3_full_data_range(
+    values: np.ndarray,
     limits: tuple[float | None, float | None],
 ) -> tuple[float, float]:
-    finite_values = np.concatenate(
-        [
-            before_values[np.isfinite(before_values)],
-            after_values[np.isfinite(after_values)],
-        ]
-    )
+    finite_values = values[np.isfinite(values)]
     lower_limit, upper_limit = limits
     if finite_values.size:
-        low = float(np.nanpercentile(finite_values, 1))
-        high = float(np.nanpercentile(finite_values, 99))
-        if not np.isfinite(low) or not np.isfinite(high):
-            low = float(np.nanmin(finite_values))
-            high = float(np.nanmax(finite_values))
+        low = float(np.nanmin(finite_values))
+        high = float(np.nanmax(finite_values))
     else:
         low, high = -1.0, 1.0
     if lower_limit is not None:
@@ -3034,7 +3348,56 @@ def _task3_hist_range(
         center = float(low if np.isfinite(low) else 0.0)
         low, high = center - 1.0, center + 1.0
     span = high - low
-    padding = 0.08 * span if span > 0 else 1.0
+    padding = 0.05 * span if span > 0 else max(1.0, 0.05 * max(abs(low), abs(high), 1.0))
+    return low - padding, high + padding
+
+
+def _task3_hist_range(
+    before_values: np.ndarray,
+    after_values: np.ndarray,
+    limits: tuple[float | None, float | None],
+    *,
+    boundary_expansion_factor: float = 1.5,
+) -> tuple[float, float]:
+    finite_values = np.concatenate(
+        [
+            before_values[np.isfinite(before_values)],
+            after_values[np.isfinite(after_values)],
+        ]
+    )
+    lower_limit, upper_limit = limits
+    lower_limit = float(lower_limit) if lower_limit is not None and np.isfinite(lower_limit) else None
+    upper_limit = float(upper_limit) if upper_limit is not None and np.isfinite(upper_limit) else None
+
+    if finite_values.size:
+        data_low = float(np.nanmin(finite_values))
+        data_high = float(np.nanmax(finite_values))
+    else:
+        data_low, data_high = np.nan, np.nan
+
+    if lower_limit is not None and upper_limit is not None and upper_limit > lower_limit:
+        center = 0.5 * (lower_limit + upper_limit)
+        half_span = 0.5 * (upper_limit - lower_limit)
+        cap_low = center - boundary_expansion_factor * half_span
+        cap_high = center + boundary_expansion_factor * half_span
+    else:
+        return _task3_full_data_range(finite_values, limits)
+
+    low = lower_limit
+    high = upper_limit
+    if np.isfinite(data_low):
+        low = min(low, data_low)
+    if np.isfinite(data_high):
+        high = max(high, data_high)
+
+    low = max(low, cap_low)
+    high = min(high, cap_high)
+
+    if not np.isfinite(low) or not np.isfinite(high) or low >= high:
+        low, high = cap_low, cap_high
+
+    span = high - low
+    padding = 0.04 * span if span > 0 else max(0.5, 0.04 * max(abs(low), abs(high), 1.0))
     return low - padding, high + padding
 
 
@@ -3666,18 +4029,78 @@ T_side_right_pre_cal_ST = config.get("T_side_right_pre_cal_ST", -50)
 
 # Post-calibration
 
-# Once calculated the RPC variables
-T_sum_RPC_left = config["T_sum_RPC_left"]
-T_sum_RPC_right = config["T_sum_RPC_right"]
-T_dif_RPC_abs = abs(float(config.get("T_dif_RPC_abs", config.get("T_dif_RPC_right", 0.8))))
+# Once calculated the RPC variables. Legacy per-plane keys remain as optional
+# compatibility aliases so old configs still load, but Task 3 can now run with
+# only the plane_combination_* thresholds present.
+T_sum_RPC_left = _task3_config_float(
+    config,
+    "T_sum_RPC_left",
+    "plane_combination_plane_t_sum_sum_left",
+    "plane_combination_same_plane_t_sum_sum_left",
+    "plane_combination_self_t_sum_sum_left",
+    default=-25.0,
+)
+T_sum_RPC_right = _task3_config_float(
+    config,
+    "T_sum_RPC_right",
+    "plane_combination_plane_t_sum_sum_right",
+    "plane_combination_same_plane_t_sum_sum_right",
+    "plane_combination_self_t_sum_sum_right",
+    default=25.0,
+)
+T_dif_RPC_abs = abs(
+    _task3_config_float(
+        config,
+        "T_dif_RPC_abs",
+        "T_dif_RPC_right",
+        "plane_combination_plane_t_dif_sum_threshold",
+        "plane_combination_same_plane_t_dif_sum_threshold",
+        "plane_combination_self_t_dif_sum_threshold",
+        default=0.8,
+    )
+)
 T_dif_RPC_right = T_dif_RPC_abs
 T_dif_RPC_left = -T_dif_RPC_abs
-Q_RPC_left = config["Q_RPC_left"]
-Q_RPC_right = config["Q_RPC_right"]
-Q_dif_RPC_abs = abs(float(config.get("Q_dif_RPC_abs", config.get("Q_dif_RPC_right", 4))))
+Q_RPC_left = _task3_config_float(
+    config,
+    "Q_RPC_left",
+    "plane_combination_plane_q_sum_sum_left",
+    "plane_combination_same_plane_q_sum_sum_left",
+    "plane_combination_self_q_sum_sum_left",
+    default=0.0,
+)
+Q_RPC_right = _task3_config_float(
+    config,
+    "Q_RPC_right",
+    "plane_combination_plane_q_sum_sum_right",
+    "plane_combination_same_plane_q_sum_sum_right",
+    "plane_combination_self_q_sum_sum_right",
+    default=800.0,
+)
+Q_dif_RPC_abs = abs(
+    _task3_config_float(
+        config,
+        "Q_dif_RPC_abs",
+        "Q_dif_RPC_right",
+        "plane_combination_plane_q_dif_sum_threshold",
+        "plane_combination_same_plane_q_dif_sum_threshold",
+        "plane_combination_self_q_dif_sum_threshold",
+        default=4.0,
+    )
+)
 Q_dif_RPC_right = Q_dif_RPC_abs
 Q_dif_RPC_left = -Q_dif_RPC_abs
-Y_RPC_abs = abs(float(config.get("Y_RPC_abs", config.get("Y_RPC_right", 200))))
+Y_RPC_abs = abs(
+    _task3_config_float(
+        config,
+        "Y_RPC_abs",
+        "Y_RPC_right",
+        "plane_combination_plane_y_sum_right",
+        "plane_combination_same_plane_y_sum_right",
+        "plane_combination_self_y_sum_right",
+        default=200.0,
+    )
+)
 Y_RPC_right = Y_RPC_abs
 Y_RPC_left = -Y_RPC_abs
 
@@ -3916,18 +4339,78 @@ T_side_right_pre_cal_ST = config.get("T_side_right_pre_cal_ST", -50)
 
 # Post-calibration
 
-# Once calculated the RPC variables
-T_sum_RPC_left = config["T_sum_RPC_left"]
-T_sum_RPC_right = config["T_sum_RPC_right"]
-T_dif_RPC_abs = abs(float(config.get("T_dif_RPC_abs", config.get("T_dif_RPC_right", 0.8))))
+# Once calculated the RPC variables. Legacy per-plane keys remain as optional
+# compatibility aliases so old configs still load, but Task 3 can now run with
+# only the plane_combination_* thresholds present.
+T_sum_RPC_left = _task3_config_float(
+    config,
+    "T_sum_RPC_left",
+    "plane_combination_plane_t_sum_sum_left",
+    "plane_combination_same_plane_t_sum_sum_left",
+    "plane_combination_self_t_sum_sum_left",
+    default=-25.0,
+)
+T_sum_RPC_right = _task3_config_float(
+    config,
+    "T_sum_RPC_right",
+    "plane_combination_plane_t_sum_sum_right",
+    "plane_combination_same_plane_t_sum_sum_right",
+    "plane_combination_self_t_sum_sum_right",
+    default=25.0,
+)
+T_dif_RPC_abs = abs(
+    _task3_config_float(
+        config,
+        "T_dif_RPC_abs",
+        "T_dif_RPC_right",
+        "plane_combination_plane_t_dif_sum_threshold",
+        "plane_combination_same_plane_t_dif_sum_threshold",
+        "plane_combination_self_t_dif_sum_threshold",
+        default=0.8,
+    )
+)
 T_dif_RPC_right = T_dif_RPC_abs
 T_dif_RPC_left = -T_dif_RPC_abs
-Q_RPC_left = config["Q_RPC_left"]
-Q_RPC_right = config["Q_RPC_right"]
-Q_dif_RPC_abs = abs(float(config.get("Q_dif_RPC_abs", config.get("Q_dif_RPC_right", 4))))
+Q_RPC_left = _task3_config_float(
+    config,
+    "Q_RPC_left",
+    "plane_combination_plane_q_sum_sum_left",
+    "plane_combination_same_plane_q_sum_sum_left",
+    "plane_combination_self_q_sum_sum_left",
+    default=0.0,
+)
+Q_RPC_right = _task3_config_float(
+    config,
+    "Q_RPC_right",
+    "plane_combination_plane_q_sum_sum_right",
+    "plane_combination_same_plane_q_sum_sum_right",
+    "plane_combination_self_q_sum_sum_right",
+    default=800.0,
+)
+Q_dif_RPC_abs = abs(
+    _task3_config_float(
+        config,
+        "Q_dif_RPC_abs",
+        "Q_dif_RPC_right",
+        "plane_combination_plane_q_dif_sum_threshold",
+        "plane_combination_same_plane_q_dif_sum_threshold",
+        "plane_combination_self_q_dif_sum_threshold",
+        default=4.0,
+    )
+)
 Q_dif_RPC_right = Q_dif_RPC_abs
 Q_dif_RPC_left = -Q_dif_RPC_abs
-Y_RPC_abs = abs(float(config.get("Y_RPC_abs", config.get("Y_RPC_right", 200))))
+Y_RPC_abs = abs(
+    _task3_config_float(
+        config,
+        "Y_RPC_abs",
+        "Y_RPC_right",
+        "plane_combination_plane_y_sum_right",
+        "plane_combination_same_plane_y_sum_right",
+        "plane_combination_self_y_sum_right",
+        default=200.0,
+    )
+)
 Y_RPC_right = Y_RPC_abs
 Y_RPC_left = -Y_RPC_abs
 
@@ -6496,8 +6979,9 @@ working_df[cols] = vals_normalized
 for i_plane in range(1, 5):
     plane_raw_values[i_plane]["T_sum"] = vals_normalized[:, i_plane - 1].copy()
 
-# Legacy metadata key retained for compatibility: it now tracks the new
-# sequential per-plane filtering cascade instead of the old all-at-once Filter 6.
+# Legacy metadata key retained for compatibility: it now tracks the unified
+# Task 3 plane-combination filter, with same-plane bounds coming from the
+# `plane_combination_plane_*` configuration family.
 def record_filter6_counts(df: pd.DataFrame, tag: str) -> None:
     for i_plane in range(1, 5):
         columns = {
@@ -6522,9 +7006,6 @@ for i_plane in range(1, 5):
         f"P{i_plane}_Q_dif_final",
     ])
 filter6_cols = [col for col in filter6_cols if col in working_df.columns]
-filter6_before_zero_mask = None
-if filter6_cols:
-    filter6_before_zero_mask = (working_df[filter6_cols] == 0).any(axis=1)
 
 if filter6_cols and task3_any_plot_enabled(
     "filter6_tsum_debug",
@@ -6535,13 +7016,16 @@ if filter6_cols and task3_any_plot_enabled(
 ):
     t_sum_cols = [col for col in filter6_cols if "T_sum_final" in col]
     if t_sum_cols and task3_plot_enabled("filter6_tsum_debug"):
-        debug_thresholds = {col: [T_sum_RPC_left, T_sum_RPC_right] for col in t_sum_cols}
+        debug_thresholds = {
+            col: [plane_combination_plane_t_sum_sum_left, plane_combination_plane_t_sum_sum_right]
+            for col in t_sum_cols
+        }
         debug_fig_idx = plot_debug_histograms(
             working_df,
             t_sum_cols,
             debug_thresholds,
             title=(
-                f"Task 3 pre-plane T_sum filter: T_sum_RPC_left/right "
+                f"Task 3 same-plane T_sum bounds: plane_combination_plane_t_sum_sum_left/right "
                 f"[tunable] (station {station})"
             ),
             out_dir=debug_plot_directory,
@@ -6550,13 +7034,19 @@ if filter6_cols and task3_any_plot_enabled(
 
     t_dif_cols = [col for col in filter6_cols if "T_dif_final" in col]
     if t_dif_cols and task3_plot_enabled("filter6_tdif_debug"):
-        debug_thresholds = {col: [T_dif_RPC_left, T_dif_RPC_right] for col in t_dif_cols}
+        debug_thresholds = {
+            col: [
+                -plane_combination_plane_t_dif_sum_threshold,
+                plane_combination_plane_t_dif_sum_threshold,
+            ]
+            for col in t_dif_cols
+        }
         debug_fig_idx = plot_debug_histograms(
             working_df,
             t_dif_cols,
             debug_thresholds,
             title=(
-                f"Task 3 pre-plane T_dif filter: T_dif_RPC_left/right "
+                f"Task 3 same-plane T_dif bounds: plane_combination_plane_t_dif_sum_threshold "
                 f"[tunable] (station {station})"
             ),
             out_dir=debug_plot_directory,
@@ -6565,13 +7055,16 @@ if filter6_cols and task3_any_plot_enabled(
 
     q_sum_cols = [col for col in filter6_cols if "Q_sum_final" in col]
     if q_sum_cols and task3_plot_enabled("filter6_qsum_debug"):
-        debug_thresholds = {col: [Q_RPC_left, Q_RPC_right] for col in q_sum_cols}
+        debug_thresholds = {
+            col: [plane_combination_plane_q_sum_sum_left, plane_combination_plane_q_sum_sum_right]
+            for col in q_sum_cols
+        }
         debug_fig_idx = plot_debug_histograms(
             working_df,
             q_sum_cols,
             debug_thresholds,
             title=(
-                f"Task 3 pre-plane Q_sum filter: Q_RPC_left/right "
+                f"Task 3 same-plane Q_sum bounds: plane_combination_plane_q_sum_sum_left/right "
                 f"[tunable] (station {station})"
             ),
             out_dir=debug_plot_directory,
@@ -6580,13 +7073,19 @@ if filter6_cols and task3_any_plot_enabled(
 
     q_dif_cols = [col for col in filter6_cols if "Q_dif_final" in col]
     if q_dif_cols and task3_plot_enabled("filter6_qdif_debug"):
-        debug_thresholds = {col: [Q_dif_RPC_left, Q_dif_RPC_right] for col in q_dif_cols}
+        debug_thresholds = {
+            col: [
+                -plane_combination_plane_q_dif_sum_threshold,
+                plane_combination_plane_q_dif_sum_threshold,
+            ]
+            for col in q_dif_cols
+        }
         debug_fig_idx = plot_debug_histograms(
             working_df,
             q_dif_cols,
             debug_thresholds,
             title=(
-                f"Task 3 pre-plane Q_dif filter: Q_dif_RPC_left/right "
+                f"Task 3 same-plane Q_dif bounds: plane_combination_plane_q_dif_sum_threshold "
                 f"[tunable] (station {station})"
             ),
             out_dir=debug_plot_directory,
@@ -6595,22 +7094,23 @@ if filter6_cols and task3_any_plot_enabled(
 
     y_cols = [col for col in filter6_cols if "Y_final" in col]
     if y_cols and task3_plot_enabled("filter6_y_debug"):
-        debug_thresholds = {col: [Y_RPC_left, Y_RPC_right] for col in y_cols}
+        debug_thresholds = {
+            col: [plane_combination_plane_y_sum_left, plane_combination_plane_y_sum_right]
+            for col in y_cols
+        }
         debug_fig_idx = plot_debug_histograms(
             working_df,
             y_cols,
             debug_thresholds,
-            title=f"Task 3 pre-plane Y filter: Y_RPC_left/right [tunable] (station {station})",
+            title=(
+                "Task 3 same-plane Y bounds: plane_combination_plane_y_sum_left/right "
+                f"[tunable] (station {station})"
+            ),
             out_dir=debug_plot_directory,
             fig_idx=debug_fig_idx,
         )
 
 record_filter6_counts(working_df, "before_filter6")
-plane_combination_stage_input_df = (
-    working_df.loc[:, filter6_cols].copy()
-    if filter6_cols
-    else pd.DataFrame(index=working_df.index)
-)
 
 _plot_plane_combination_filter_by_tt = task3_plot_enabled("plane_combination_filter_by_tt")
 if _plot_plane_combination_filter_by_tt:
@@ -6632,168 +7132,156 @@ else:
 
 _prof["s_tsum_ref_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
-print("-------------- Sequential per-plane plane filtering ------------------")
+print("-------------- Unified plane-combination offender filter -------------")
 
-plane_dead_masks: dict[int, np.ndarray] = {
-    i_plane: np.zeros(len(working_df), dtype=bool)
-    for i_plane in range(1, 5)
-}
-
-def _task3_plane_block_columns(i_plane: int) -> list[str]:
-    return [
-        col for col in (
-            f"P{i_plane}_T_sum_final",
-            f"P{i_plane}_T_dif_final",
-            f"P{i_plane}_Q_dif_final",
-            f"P{i_plane}_Q_sum_final",
-            f"P{i_plane}_Y_final",
-        )
-        if col in working_df.columns
-    ]
-
-
-def _task3_zero_plane_block(i_plane: int) -> None:
-    dead_mask = plane_dead_masks[i_plane]
-    if not np.any(dead_mask):
-        return
-    plane_cols = _task3_plane_block_columns(i_plane)
-    if plane_cols:
-        working_df.loc[dead_mask, plane_cols] = 0
-
-
-def _task3_apply_plane_stage(
-    *,
-    raw_key: str | None,
-    column_suffix: str,
-    left: float,
-    right: float,
-) -> None:
-    total_events = len(working_df)
-    for i_plane in range(1, 5):
-        col = f"P{i_plane}_{column_suffix}"
-        if raw_key is not None:
-            values = np.asarray(plane_raw_values[i_plane][raw_key], dtype=float).copy()
-        else:
-            values = pd.to_numeric(working_df[col], errors="coerce").fillna(0).to_numpy(dtype=float)
-
-        values[plane_dead_masks[i_plane]] = 0
-        out_of_range = (values != 0) & ((values < left) | (values > right))
-        values[out_of_range] = 0
-        working_df.loc[:, col] = values
-
-        plane_dead_masks[i_plane] |= (values == 0)
-        affected = int(np.count_nonzero(plane_dead_masks[i_plane]))
-        print(
-            f"Plane {i_plane}, {column_suffix}: {affected} out of {total_events} "
-            f"events affected ({(affected / total_events) * 100:.2f}%)"
-        )
-        _task3_zero_plane_block(i_plane)
-
-
-_task3_apply_plane_stage(
-    raw_key="T_sum",
-    column_suffix="T_sum_final",
-    left=T_sum_RPC_left,
-    right=T_sum_RPC_right,
-)
-_task3_apply_plane_stage(
-    raw_key="T_dif",
-    column_suffix="T_dif_final",
-    left=T_dif_RPC_left,
-    right=T_dif_RPC_right,
-)
-_task3_apply_plane_stage(
-    raw_key="Q_dif",
-    column_suffix="Q_dif_final",
-    left=Q_dif_RPC_left,
-    right=Q_dif_RPC_right,
-)
-_task3_apply_plane_stage(
-    raw_key="Q_sum",
-    column_suffix="Q_sum_final",
-    left=Q_RPC_left,
-    right=Q_RPC_right,
-)
-_task3_apply_plane_stage(
-    raw_key=None,
-    column_suffix="Y_final",
-    left=Y_RPC_left,
-    right=Y_RPC_right,
+plane_combination_summary = apply_task3_plane_combination_filter(
+    working_df,
+    plane_q_sum_sum_left=plane_combination_plane_q_sum_sum_left,
+    plane_q_sum_sum_right=plane_combination_plane_q_sum_sum_right,
+    plane_q_dif_sum_threshold=plane_combination_plane_q_dif_sum_threshold,
+    plane_t_sum_sum_left=plane_combination_plane_t_sum_sum_left,
+    plane_t_sum_sum_right=plane_combination_plane_t_sum_sum_right,
+    plane_t_dif_sum_threshold=plane_combination_plane_t_dif_sum_threshold,
+    plane_y_sum_left=plane_combination_plane_y_sum_left,
+    plane_y_sum_right=plane_combination_plane_y_sum_right,
+    detector_q_sum_sum_left=plane_combination_detector_q_sum_sum_left,
+    detector_q_sum_sum_right=plane_combination_detector_q_sum_sum_right,
+    detector_q_sum_dif_threshold=plane_combination_detector_q_sum_dif_threshold,
+    detector_q_dif_sum_threshold=plane_combination_detector_q_dif_sum_threshold,
+    detector_q_dif_dif_threshold=plane_combination_detector_q_dif_dif_threshold,
+    detector_t_sum_sum_left=plane_combination_detector_t_sum_sum_left,
+    detector_t_sum_sum_right=plane_combination_detector_t_sum_sum_right,
+    detector_t_sum_dif_threshold=plane_combination_detector_t_sum_dif_threshold,
+    detector_t_dif_sum_threshold=plane_combination_detector_t_dif_sum_threshold,
+    detector_t_dif_dif_threshold=plane_combination_detector_t_dif_dif_threshold,
+    detector_y_sum_left=plane_combination_detector_y_sum_left,
+    detector_y_sum_right=plane_combination_detector_y_sum_right,
+    detector_y_dif_threshold=plane_combination_detector_y_dif_threshold,
 )
 
-if filter6_cols and filter6_before_zero_mask is not None:
-    filter6_after_zero_mask = (working_df[filter6_cols] == 0).any(axis=1)
-    newly_zeroed = int((filter6_after_zero_mask & ~filter6_before_zero_mask).sum())
-    record_filter_metric(
-        "plane_rpc_window_rows_affected_pct",
-        newly_zeroed,
-        len(working_df) if len(working_df) else 0,
+plane_metric_specs = (
+    (
+        "q_sum_sum",
+        "plane_combination_plane_q_sum_sum",
+        "Q_sum",
+        plane_combination_plane_q_sum_sum_left,
+        plane_combination_plane_q_sum_sum_right,
+    ),
+    (
+        "q_dif_sum",
+        "plane_combination_plane_q_dif_sum",
+        "Q_dif",
+        -abs(plane_combination_plane_q_dif_sum_threshold),
+        abs(plane_combination_plane_q_dif_sum_threshold),
+    ),
+    (
+        "t_sum_sum",
+        "plane_combination_plane_t_sum_sum",
+        "T_sum",
+        plane_combination_plane_t_sum_sum_left,
+        plane_combination_plane_t_sum_sum_right,
+    ),
+    (
+        "t_dif_sum",
+        "plane_combination_plane_t_dif_sum",
+        "T_dif",
+        -abs(plane_combination_plane_t_dif_sum_threshold),
+        abs(plane_combination_plane_t_dif_sum_threshold),
+    ),
+    (
+        "y_sum",
+        "plane_combination_plane_y_sum",
+        "Y",
+        plane_combination_plane_y_sum_left,
+        plane_combination_plane_y_sum_right,
+    ),
+)
+
+record_filter_metric(
+    "plane_combination_plane_rows_affected_pct",
+    plane_combination_summary["plane_rows_affected"],
+    len(working_df) if len(working_df) else 0,
+)
+for observable_key, metric_prefix, metric_label, left_limit, right_limit in plane_metric_specs:
+    low_key, high_key = TASK3_PLANE_SELF_OBSERVABLE_LIMIT_KEYS[observable_key]
+    candidate_count = int(
+        plane_combination_summary["plane_candidate_observations"].get(observable_key, 0)
     )
-    record_filter_metric(
-        "plane_combination_plane_rows_affected_pct",
-        newly_zeroed,
-        len(working_df) if len(working_df) else 0,
+    low_failed = int(plane_combination_summary["plane_failed_limits"].get(low_key, 0))
+    high_failed = int(plane_combination_summary["plane_failed_limits"].get(high_key, 0))
+    rows_failed_low = int(
+        plane_combination_summary["plane_rows_failed_limits"].get(low_key, 0)
     )
-    record_filter_metric(
-        "plane_combination_self_rows_affected_pct",
-        newly_zeroed,
-        len(working_df) if len(working_df) else 0,
+    rows_failed_high = int(
+        plane_combination_summary["plane_rows_failed_limits"].get(high_key, 0)
     )
-    record_filter_metric(
-        "plane_combination_same_plane_rows_affected_pct",
-        newly_zeroed,
+    filter_metrics[f"{metric_prefix}_low_limit"] = round(float(left_limit), 6)
+    filter_metrics[f"{metric_prefix}_high_limit"] = round(float(right_limit), 6)
+    record_activity_metric(
+        f"{metric_prefix}_low_failed_pct",
+        low_failed,
+        candidate_count,
+        label=f"{metric_label} values below lower limit",
+    )
+    record_activity_metric(
+        f"{metric_prefix}_high_failed_pct",
+        high_failed,
+        candidate_count,
+        label=f"{metric_label} values above upper limit",
+    )
+    record_activity_metric(
+        f"{metric_prefix}_failed_pct",
+        low_failed + high_failed,
+        candidate_count,
+        label=f"{metric_label} values outside limits",
+    )
+    record_activity_metric(
+        f"{metric_prefix}_low_rows_failed_pct",
+        rows_failed_low,
         len(working_df) if len(working_df) else 0,
+        label=f"rows with {metric_label} lower-limit failures",
+    )
+    record_activity_metric(
+        f"{metric_prefix}_high_rows_failed_pct",
+        rows_failed_high,
+        len(working_df) if len(working_df) else 0,
+        label=f"rows with {metric_label} upper-limit failures",
+    )
+    record_activity_metric(
+        f"{metric_prefix}_rows_failed_pct",
+        rows_failed_low + rows_failed_high,
+        len(working_df) if len(working_df) else 0,
+        label=f"rows with {metric_label} boundary failures",
     )
 
 record_filter6_counts(working_df, "after_filter6")
 _prof["s_filter6_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
 
-print("----------------------------------------------------------------------")
-print("----------- Final inter-plane detector consistency filter ------------")
-print("----------------------------------------------------------------------")
-
-# Final Task 3 any-filter: evaluate distinct plane pairs only when both plane
-# blocks are fully populated, then zero both planes when any derived
-# inter-plane observable falls outside the configured limits.
 if _plot_plane_combination_filter_by_tt:
     plane_combination_self_hist_after = collect_task3_plane_combination_histogram_payload(
         working_df,
         plane_combination_tt_original,
         relation_type="plane",
     )
-    plane_combination_tt_before = _task3_filter_tt_series(working_df).copy()
-    plane_combination_any_hist_before = collect_task3_plane_combination_histogram_payload(
+    plane_combination_any_hist_after = collect_task3_plane_combination_histogram_payload(
         working_df,
-        plane_combination_tt_before,
+        plane_combination_tt_original,
         relation_type="detector",
     )
 else:
     plane_combination_self_hist_after = pd.DataFrame()
-    plane_combination_tt_before = pd.Series(dtype=str)
-    plane_combination_any_hist_before = pd.DataFrame()
+    plane_combination_any_hist_after = pd.DataFrame()
 
-plane_combination_summary = apply_task3_plane_combination_filter(
-    working_df,
-    q_sum_sum_left=plane_combination_detector_q_sum_sum_left,
-    q_sum_sum_right=plane_combination_detector_q_sum_sum_right,
-    q_sum_dif_threshold=plane_combination_detector_q_sum_dif_threshold,
-    q_dif_sum_threshold=plane_combination_detector_q_dif_sum_threshold,
-    q_dif_dif_threshold=plane_combination_detector_q_dif_dif_threshold,
-    t_sum_sum_left=plane_combination_detector_t_sum_sum_left,
-    t_sum_sum_right=plane_combination_detector_t_sum_sum_right,
-    t_sum_dif_threshold=plane_combination_detector_t_sum_dif_threshold,
-    t_dif_sum_threshold=plane_combination_detector_t_dif_sum_threshold,
-    t_dif_dif_threshold=plane_combination_detector_t_dif_dif_threshold,
-    y_sum_left=plane_combination_detector_y_sum_left,
-    y_sum_right=plane_combination_detector_y_sum_right,
-    y_dif_threshold=plane_combination_detector_y_dif_threshold,
-)
+print("----------------------------------------------------------------------")
+print("----------- Unified detector and same-plane consistency --------------")
+print("----------------------------------------------------------------------")
+
 record_activity_metric(
     "plane_combination_filter_rows_affected_pct",
-    plane_combination_summary["rows_affected"],
+    plane_combination_summary["detector_rows_affected"],
     len(working_df) if len(working_df) else 0,
-    label="rows with plane-combination failures",
+    label="rows with detector plane-combination failures",
 )
 record_activity_metric(
     "plane_combination_filter_values_zeroed_pct",
@@ -6875,10 +7363,25 @@ record_activity_metric(
     plane_combination_summary["valid_pair_observations"],
     label="Y semidifference failed plane combinations",
 )
+for limit_key, limit_label in TASK3_PLANE_COMBINATION_LIMIT_LABELS.items():
+    record_activity_metric(
+        f"plane_combination_filter_{limit_key}_failed_pct",
+        plane_combination_summary.get(f"failed_pair_{limit_key}", 0),
+        plane_combination_summary["valid_pair_observations"],
+        label=f"{limit_label} failed plane combinations",
+    )
+    record_activity_metric(
+        f"plane_combination_filter_{limit_key}_rows_failed_pct",
+        plane_combination_summary.get(f"rows_failed_{limit_key}", 0),
+        len(working_df) if len(working_df) else 0,
+        label=f"rows with {limit_label} failures",
+    )
 print(
     "[plane-combination-filter] "
     f"valid_pair_obs={plane_combination_summary['valid_pair_observations']} "
     f"failed_any={plane_combination_summary['failed_pair_any']} "
+    f"plane_rows={plane_combination_summary['plane_rows_affected']} "
+    f"detector_rows={plane_combination_summary['detector_rows_affected']} "
     f"rows_affected={plane_combination_summary['rows_affected']} "
     f"flagged_rows={plane_combination_summary['flagged_rows']} "
     f"selected_offenders={plane_combination_summary['selected_offender_planes']}"
@@ -6908,19 +7411,13 @@ for selected_count in TASK3_SELECTED_OFFENDER_CARDINALITY_VALUES:
     global_variables[_task3_selected_offender_cardinality_metric_key(selected_count)] = selected_rows
 for plane_key, offender_count in plane_combination_summary["selected_offender_counts"].items():
     global_variables[_task3_plane_offender_metric_key(plane_key)] = int(offender_count)
-if not plane_combination_stage_input_df.empty:
-    task3_problematic_plane_count = np.zeros(len(working_df), dtype=int)
-    stage_plane_map = collect_task3_plane_final_map(working_df)
-    for plane_key, cols in stage_plane_map.items():
-        component_cols = list(cols.values())
-        before_values = plane_combination_stage_input_df.loc[:, component_cols].to_numpy(copy=False)
-        after_values = working_df.loc[:, component_cols].to_numpy(copy=False)
-        before_active = np.all(np.isfinite(before_values) & (before_values != 0), axis=1)
-        after_zeroed = np.any(~np.isfinite(after_values) | (after_values == 0), axis=1)
-        task3_problematic_plane_count += (before_active & after_zeroed).astype(int)
-    working_df.loc[:, "task3_problematic_plane_count"] = task3_problematic_plane_count
-else:
-    working_df.loc[:, "task3_problematic_plane_count"] = 0
+working_df.loc[:, "task3_problematic_plane_count"] = (
+    plane_combination_summary["selected_offender_count_by_row"]
+    .reindex(working_df.index)
+    .fillna(0)
+    .astype(int)
+    .to_numpy()
+)
 
 task1_problematic_channel_count = pd.to_numeric(
     working_df.get(
@@ -6967,11 +7464,6 @@ for selected_count in TASK3_SELECTED_OFFENDER_CARDINALITY_VALUES:
         total_problematic_offender_count_counts.get(selected_count, 0)
     )
 if _plot_plane_combination_filter_by_tt:
-    plane_combination_any_hist_after = collect_task3_plane_combination_histogram_payload(
-        working_df,
-        plane_combination_tt_before,
-        relation_type="detector",
-    )
     plane_combination_same_plane_limits = {
         "q_sum_sum": (plane_combination_plane_q_sum_sum_left, plane_combination_plane_q_sum_sum_right),
         "q_dif_sum": (-abs(plane_combination_plane_q_dif_sum_threshold), abs(plane_combination_plane_q_dif_sum_threshold)),
@@ -7007,7 +7499,7 @@ if _plot_plane_combination_filter_by_tt:
     )
     fig_idx = plot_task3_plane_combination_filter_by_tt(
         plane_combination_any_hist_original,
-        plane_combination_any_hist_before,
+        plane_combination_any_hist_original,
         plane_combination_any_hist_after,
         basename_no_ext,
         fig_idx,
@@ -7136,7 +7628,7 @@ else:
 # Pattern for P1_Q_sum_*, P2_Q_sum_*, P3_Q_sum_*, P4_Q_sum_*
 Q_SUM_PATTERN = re.compile(r'^P[1-4]_Q_sum_.*$')
 
-# If Q*_F_* and Q*_B_* are zero for all cases, remove the row
+# Keep q_sum/all-zero checks as diagnostics only: do not drop rows here.
 Q_cols = collect_columns(working_df.columns, Q_SUM_PATTERN)
 if Q_cols and task3_plot_enabled("prefilter_qsum_nonzero_debug"):
     debug_thresholds = {col: [0] for col in Q_cols}
@@ -7148,38 +7640,17 @@ if Q_cols and task3_plot_enabled("prefilter_qsum_nonzero_debug"):
         out_dir=debug_plot_directory,
         fig_idx=debug_fig_idx,
     )
-qsum_total = len(working_df)
-qsum_mask = (working_df[Q_cols] != 0).any(axis=1)
-working_df = working_df.loc[qsum_mask].copy()
 record_filter_metric(
     "q_sum_all_zero_rows_removed_pct",
-    qsum_total - int(qsum_mask.sum()),
+    0,
     original_number_of_events if original_number_of_events else 0,
 )
 
-component_cols = []
-for i_plane in range(1, 5):
-    component_cols.extend(
-        [
-            f"P{i_plane}_T_sum_final",
-            f"P{i_plane}_T_dif_final",
-            f"P{i_plane}_Q_sum_final",
-            f"P{i_plane}_Q_dif_final",
-            f"P{i_plane}_Y_final",
-        ]
-    )
-component_cols = [col for col in component_cols if col in working_df.columns]
-if component_cols:
-    component_data = working_df[component_cols].fillna(0)
-    all_zero_mask = (component_data == 0).all(axis=1)
-    removed_all_zero = int(all_zero_mask.sum())
-    if removed_all_zero > 0:
-        working_df = working_df.loc[~all_zero_mask].copy()
-    record_filter_metric(
-        "all_components_zero_rows_removed_pct",
-        removed_all_zero,
-        len(working_df) + removed_all_zero if (len(working_df) + removed_all_zero) else 0,
-    )
+record_filter_metric(
+    "all_components_zero_rows_removed_pct",
+    0,
+    len(working_df) if len(working_df) else 0,
+)
 
 print(f"Original number of events in the dataframe: {original_number_of_events}")
 list_tt_columns = {
@@ -9743,6 +10214,9 @@ metadata_deep_fiter_csv_path = save_metadata(
         "execution_timestamp",
         "param_hash",
         *sorted(filter_metrics),
+    ),
+    drop_field_predicate=lambda column_name: (
+        _task3_drop_legacy_deep_filter_field(column_name)
     ),
 )
 print(f"Metadata (deep_fiter) CSV updated at: {metadata_deep_fiter_csv_path}")

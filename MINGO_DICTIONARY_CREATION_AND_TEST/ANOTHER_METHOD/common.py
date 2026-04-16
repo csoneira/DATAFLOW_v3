@@ -207,34 +207,74 @@ def derive_trigger_rate_features(
     allow_plain_fallback: bool = False,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     selection = get_trigger_type_selection(config)
-    stage_prefix = str(selection["stage_prefix"])
+    requested_stage_prefix = str(selection["stage_prefix"])
     requested_threshold = selection["offender_threshold"]
 
-    source_columns = {
-        label: trigger_rate_source_column(stage_prefix, label, requested_threshold)
-        for label in TT_RATE_LABELS
-    }
-    missing = [column for column in source_columns.values() if column not in dataframe.columns]
-
-    used_threshold = requested_threshold
-    if missing and requested_threshold is not None and allow_plain_fallback:
-        fallback_columns = {
-            label: trigger_rate_source_column(stage_prefix, label, None)
+    def _build_source_columns(stage_prefix: str, offender_threshold: int | None) -> dict[str, str]:
+        return {
+            label: trigger_rate_source_column(stage_prefix, label, offender_threshold)
             for label in TT_RATE_LABELS
         }
-        fallback_missing = [column for column in fallback_columns.values() if column not in dataframe.columns]
-        if not fallback_missing:
-            source_columns = fallback_columns
-            used_threshold = None
+
+    def _missing_source_columns(source_columns: dict[str, str]) -> list[str]:
+        return [column for column in source_columns.values() if column not in dataframe.columns]
+
+    used_stage_prefix = requested_stage_prefix
+    used_threshold = requested_threshold
+    source_columns = _build_source_columns(used_stage_prefix, used_threshold)
+    missing = _missing_source_columns(source_columns)
+
+    if missing and allow_plain_fallback:
+        fallback_stage_candidates = [
+            TASK_FINAL_STAGE_PREFIX[task_id]
+            for task_id in sorted(TASK_FINAL_STAGE_PREFIX.keys(), reverse=True)
+            if TASK_FINAL_STAGE_PREFIX[task_id] != requested_stage_prefix
+        ]
+
+        # Fallback priority: plain columns on requested stage, then alternate stages
+        # (prefer later pipeline stages first), then plain columns on alternates.
+        fallback_candidates: list[tuple[str, int | None]] = []
+        if requested_threshold is not None:
+            fallback_candidates.append((requested_stage_prefix, None))
+        fallback_candidates.extend((stage_prefix, requested_threshold) for stage_prefix in fallback_stage_candidates)
+        if requested_threshold is not None:
+            fallback_candidates.extend((stage_prefix, None) for stage_prefix in fallback_stage_candidates)
+
+        for candidate_stage_prefix, candidate_threshold in fallback_candidates:
+            candidate_columns = _build_source_columns(candidate_stage_prefix, candidate_threshold)
+            candidate_missing = _missing_source_columns(candidate_columns)
+            if candidate_missing:
+                continue
+            source_columns = candidate_columns
+            used_stage_prefix = candidate_stage_prefix
+            used_threshold = candidate_threshold
             missing = []
+            break
+
     if missing:
+        available_stage_prefixes = sorted(
+            {
+                column_name[: -len(f"_{tt_label}_rate_hz")]
+                for column_name in dataframe.columns.astype(str)
+                for tt_label in TT_RATE_LABELS
+                if column_name.endswith(f"_{tt_label}_rate_hz")
+            }
+        )
+        available_stage_hint = (
+            "none detected"
+            if not available_stage_prefixes
+            else ", ".join(available_stage_prefixes)
+        )
         raise KeyError(
             "Missing trigger-type rate columns required by trigger_type_selection: "
             + ", ".join(sorted(missing))
+            + f". Requested stage_prefix={requested_stage_prefix!r}, "
+            + f"offender_threshold={requested_threshold!r}. "
+            + f"Available stage prefixes in dataframe: {available_stage_hint}."
         )
 
     count_columns = {
-        label: trigger_count_source_column(stage_prefix, label, used_threshold)
+        label: trigger_count_source_column(used_stage_prefix, label, used_threshold)
         for label in TT_RATE_LABELS
     }
 
@@ -269,7 +309,7 @@ def derive_trigger_rate_features(
     valid_denominator = out["four_plane_rate_hz"].where(pd.to_numeric(out["four_plane_rate_hz"], errors="coerce") > 0.0)
     for plane_idx in range(1, 5):
         numerator_label = TT_THREE_TO_FOUR_MISSING_BY_PLANE[plane_idx]
-        out[f"eff_empirical_{plane_idx}"] = component_rates[numerator_label] / valid_denominator
+        out[f"eff_empirical_{plane_idx}"] = 1 - component_rates[numerator_label] / valid_denominator
 
     selected_rate_column = selection["rate_family_column"]
     selected_count_column = selected_rate_column.replace("_rate_hz", "_count")
@@ -279,7 +319,10 @@ def derive_trigger_rate_features(
 
     metadata = {
         "task_id": int(selection["task_id"]),
-        "stage_prefix": stage_prefix,
+        "stage_prefix": used_stage_prefix,
+        "requested_stage_prefix": requested_stage_prefix,
+        "used_stage_prefix": used_stage_prefix,
+        "stage_prefix_fallback_used": bool(used_stage_prefix != requested_stage_prefix),
         "requested_offender_threshold": requested_threshold,
         "used_offender_threshold": used_threshold,
         "rate_family": selection["rate_family"],

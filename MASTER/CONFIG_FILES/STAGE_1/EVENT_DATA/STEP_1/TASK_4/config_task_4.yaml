@@ -7,7 +7,7 @@ selection:
       end: 2024-10-01
 self_trigger: false
 timeseries_and_fits: false
-complete_reanalysis: true
+complete_reanalysis: false
 # create_plots options: null | debug | usual | essential | all
 # Task 4 plot alias statuses live in config_plots_task_4.yaml
 create_plots: null
@@ -42,7 +42,7 @@ efficiency_metadata:
 # - every_n=1 means compute LOO on every eligible event (current behavior).
 # - increase every_n to reduce CPU cost when LOO diagnostics are not critical.
 # - leave iter_max/cocut empty to inherit the main TimTrack convergence values.
-tt_loo_every_n: 1
+tt_loo_every_n: 5
 tt_loo_iter_max: null
 tt_loo_cocut: null
 # tt_loo_mode: single_step (one Newton-Raphson step from full-track solution)

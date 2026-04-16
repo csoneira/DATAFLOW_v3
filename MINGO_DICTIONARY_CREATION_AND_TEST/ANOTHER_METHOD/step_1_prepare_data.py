@@ -36,6 +36,8 @@ log = logging.getLogger("another_method.step1")
 
 TRIGGER_COLUMN = "trigger_combinations"
 STEP1_PLOT_PATH = PLOTS_DIR / "step1_parameter_space_overview.png"
+SIMULATED_EFF_SOURCE_COLUMNS = ["eff_p1", "eff_p2", "eff_p3", "eff_p4"]
+EMPIRICAL_EFF_SOURCE_COLUMNS = [f"eff_empirical_{idx}" for idx in range(1, 5)]
 DEFAULT_SIM_PARAMS_CSV = (
     Path(__file__).resolve().parents[2]
     / "MINGO_DIGITAL_TWIN"
@@ -59,10 +61,10 @@ def _configure_logging() -> None:
 def _display_label(column: str) -> str:
     labels = {
         "sim_flux_cm2_min": "Flux [cm^-2 min^-1]",
-        "emp_eff_1": "Plane 1 eff",
-        "emp_eff_2": "Plane 2 eff",
-        "emp_eff_3": "Plane 3 eff",
-        "emp_eff_4": "Plane 4 eff",
+        "emp_eff_1": "Plane 1 sim eff",
+        "emp_eff_2": "Plane 2 sim eff",
+        "emp_eff_3": "Plane 3 sim eff",
+        "emp_eff_4": "Plane 4 sim eff",
     }
     return labels.get(column, column.replace("_", " "))
 
@@ -198,12 +200,21 @@ def _resolve_step1_input_dataframe(config: dict) -> tuple[pd.DataFrame, dict[str
     if "param_hash" not in params_df.columns:
         raise ValueError("Simulation-params CSV must contain param_hash.")
 
-    if "efficiencies" in params_df.columns and not all(c in params_df.columns for c in ["eff_p1", "eff_p2", "eff_p3", "eff_p4"]):
+    if "efficiencies" in params_df.columns and not all(c in params_df.columns for c in SIMULATED_EFF_SOURCE_COLUMNS):
         parsed = params_df["efficiencies"].astype(str).str.strip()
         parsed = parsed.str.replace("(", "[", regex=False).str.replace(")", "]", regex=False)
         eff_vectors = parsed.map(lambda text: json.loads(text) if text.startswith("[") and text.endswith("]") else None)
-        for idx, column in enumerate(["eff_p1", "eff_p2", "eff_p3", "eff_p4"]):
+        for idx, column in enumerate(SIMULATED_EFF_SOURCE_COLUMNS):
             params_df[column] = eff_vectors.map(lambda vec, i=idx: np.nan if not isinstance(vec, list) or len(vec) != 4 else float(vec[i]))
+    missing_sim_eff_columns = [column for column in SIMULATED_EFF_SOURCE_COLUMNS if column not in params_df.columns]
+    if missing_sim_eff_columns:
+        raise ValueError(
+            "Simulation-params CSV must contain simulated efficiencies either as "
+            "eff_p1..eff_p4 columns or a parseable efficiencies vector. Missing: "
+            + ", ".join(missing_sim_eff_columns)
+        )
+    for column in SIMULATED_EFF_SOURCE_COLUMNS:
+        params_df[column] = pd.to_numeric(params_df[column], errors="coerce")
 
     metadata_root = Path(
         step1_config.get(
@@ -271,6 +282,7 @@ def _resolve_step1_input_dataframe(config: dict) -> tuple[pd.DataFrame, dict[str
     return merged, {
         "input_mode": "param_hash_merge_trigger_type",
         "simulation_params_csv": str(sim_params_path),
+        "simulation_efficiency_columns": SIMULATED_EFF_SOURCE_COLUMNS,
         "metadata_files_used": [str(trigger_path)],
         "trigger_type_metadata_root": str(metadata_root),
         "task_id": task_id,
@@ -305,7 +317,7 @@ def run(config_path: str | Path | None = None) -> Path:
         config,
         allow_plain_fallback=False,
     )
-    required_columns = [f"eff_empirical_{idx}" for idx in range(1, 5)] + z_columns + ["rate_hz", flux_column, num_events_column]
+    required_columns = EMPIRICAL_EFF_SOURCE_COLUMNS + SIMULATED_EFF_SOURCE_COLUMNS + z_columns + ["rate_hz", flux_column, num_events_column]
     missing_required = [column for column in required_columns if column not in dataframe.columns]
     if missing_required:
         raise ValueError("Step 1 resolved input is missing required columns: " + ", ".join(missing_required))
@@ -313,11 +325,13 @@ def run(config_path: str | Path | None = None) -> Path:
 
     rate_values = pd.to_numeric(dataframe["rate_hz"], errors="coerce")
     four_plane_values = pd.to_numeric(dataframe.get("four_plane_rate_hz"), errors="coerce")
-    eff_frame = dataframe[[f"eff_empirical_{idx}" for idx in range(1, 5)]].apply(pd.to_numeric, errors="coerce")
+    emp_eff_frame = dataframe[EMPIRICAL_EFF_SOURCE_COLUMNS].apply(pd.to_numeric, errors="coerce")
+    sim_eff_frame = dataframe[SIMULATED_EFF_SOURCE_COLUMNS].apply(pd.to_numeric, errors="coerce")
     valid_trigger_mask = np.isfinite(rate_values) & (rate_values > 0.0)
     if "four_plane_rate_hz" in dataframe.columns:
         valid_trigger_mask &= np.isfinite(four_plane_values) & (four_plane_values > 0.0)
-    valid_trigger_mask &= np.isfinite(eff_frame.to_numpy()).all(axis=1)
+    valid_trigger_mask &= np.isfinite(emp_eff_frame.to_numpy()).all(axis=1)
+    valid_trigger_mask &= np.isfinite(sim_eff_frame.to_numpy()).all(axis=1)
     dataframe = dataframe.loc[valid_trigger_mask].copy()
     rows_after_trigger_validity_filter = int(len(dataframe))
     if dataframe.empty:
@@ -329,7 +343,7 @@ def run(config_path: str | Path | None = None) -> Path:
         raise ValueError(
             "Step 1 found no usable rows after deriving trigger-type features for "
             f"{selected_rate_name}. The selected trigger-type columns currently yield no positive "
-            "four-plane support with finite empirical efficiencies."
+            "four-plane support with finite empirical and simulated efficiencies."
         )
 
     selected_z_vector = choose_z_vector(dataframe, z_columns, configured_z_vector)
@@ -364,10 +378,10 @@ def run(config_path: str | Path | None = None) -> Path:
         z_columns[1]: CANONICAL_Z_COLUMNS[1],
         z_columns[2]: CANONICAL_Z_COLUMNS[2],
         z_columns[3]: CANONICAL_Z_COLUMNS[3],
-        "eff_empirical_1": CANONICAL_EFF_COLUMNS[0],
-        "eff_empirical_2": CANONICAL_EFF_COLUMNS[1],
-        "eff_empirical_3": CANONICAL_EFF_COLUMNS[2],
-        "eff_empirical_4": CANONICAL_EFF_COLUMNS[3],
+        "eff_p1": CANONICAL_EFF_COLUMNS[0],
+        "eff_p2": CANONICAL_EFF_COLUMNS[1],
+        "eff_p3": CANONICAL_EFF_COLUMNS[2],
+        "eff_p4": CANONICAL_EFF_COLUMNS[3],
         flux_column: "sim_flux_cm2_min",
         num_events_column: "num_events",
     }
@@ -403,7 +417,8 @@ def run(config_path: str | Path | None = None) -> Path:
         "min_events": min_events,
         "input_columns": {
             "z_positions": z_columns,
-            "efficiencies": [f"eff_empirical_{idx}" for idx in range(1, 5)],
+            "efficiencies": SIMULATED_EFF_SOURCE_COLUMNS,
+            "empirical_efficiencies_for_trigger_validation": EMPIRICAL_EFF_SOURCE_COLUMNS,
             "rate": format_selected_rate_name(
                 stage_prefix=str(trigger_feature_info["stage_prefix"]),
                 rate_family_column=str(trigger_feature_info["rate_family_column"]),

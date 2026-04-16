@@ -166,6 +166,7 @@ TASK1_PLOT_ALIASES: tuple[str, ...] = (
     "debug_suite",
     "usual_suite",
     "essential_suite",
+    "event_total_charge_raw",
     "raw_tt_overview",
     "channel_histograms_raw",
     "tq_scatter_raw",
@@ -4463,6 +4464,39 @@ else:
 print(f"--> A {valid_lines_in_dat_file:.2f}% of the lines were valid.\n")
 
 global_variables['valid_lines_in_binary_file_percentage'] =  valid_lines_in_dat_file
+
+if task1_plot_enabled("event_total_charge_raw"):
+    raw_total_charge_columns = [
+        *(f"column_{idx}" for idx in range(15, 23)),
+        *(f"column_{idx}" for idx in range(31, 39)),
+        *(f"column_{idx}" for idx in range(47, 55)),
+        *(f"column_{idx}" for idx in range(63, 71)),
+    ]
+    raw_total_charge_columns = [col for col in raw_total_charge_columns if col in read_df.columns]
+    if raw_total_charge_columns:
+        raw_total_charge = read_df.loc[:, raw_total_charge_columns].sum(axis=1, skipna=True)
+        raw_total_charge = raw_total_charge[np.isfinite(raw_total_charge.to_numpy())]
+        if not raw_total_charge.empty:
+            raw_total_charge_plot = raw_total_charge.clip(lower=0, upper=2000)
+            plt.figure(figsize=(10, 6))
+            plt.hist(raw_total_charge_plot, bins=100, alpha=0.8, color='tab:blue')
+            plt.yscale('log')
+            plt.xlim(0, 2000)
+            plt.title(f"Raw total charge per event, {basename_no_ext}")
+            plt.xlabel("Total event charge (sum of raw Q channels)")
+            plt.ylabel("Number of events")
+            plt.tight_layout()
+
+            if save_plots:
+                final_filename = f'{fig_idx}_raw_total_event_charge.png'
+                fig_idx += 1
+                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                plot_list.append(save_fig_path)
+                save_plot_figure(save_fig_path, format='png')
+
+            if show_plots:
+                plt.show()
+            plt.close()
 
 _prof["s_data_read_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()

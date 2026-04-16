@@ -134,7 +134,13 @@ def load_parameter_overrides(
                 continue
 
             source_task = (row.get("source_task") or "").strip() if has_source_column else ""
-            if resolve_references and source_task:
+            source_task_lower = source_task.lower()
+            # Allow explicit non-reference markers in source_task (e.g. plot-only params)
+            # while preserving existing task-reference behavior.
+            is_non_reference_marker = source_task_lower in {
+                "plot_only_no_filtering",
+            }
+            if resolve_references and source_task and not is_non_reference_marker:
                 reference_requests[parameter_name] = source_task
                 continue
 

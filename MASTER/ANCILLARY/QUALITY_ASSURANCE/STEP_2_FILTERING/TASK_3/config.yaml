@@ -9,7 +9,7 @@ column_patterns:
   - 'filename_base'
   - 'execution_timestamp'
   - 'param_hash'
-  - 'plane_rpc_window_rows_affected_pct'
+  - 'plane_combination_plane_rows_affected_pct'
   - 'plane_combination_filter_rows_affected_pct'
   - 'q_sum_all_zero_rows_removed_pct'
   - 'all_components_zero_rows_removed_pct'
@@ -20,7 +20,7 @@ plots:
   plot_groups:
     - name: filtering_core
       columns:
-        - 'plane_rpc_window_rows_affected_pct'
+        - 'plane_combination_plane_rows_affected_pct'
         - 'plane_combination_filter_rows_affected_pct'
         - 'q_sum_all_zero_rows_removed_pct'
         - 'all_components_zero_rows_removed_pct'

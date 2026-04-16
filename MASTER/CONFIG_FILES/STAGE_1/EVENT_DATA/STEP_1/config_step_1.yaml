@@ -29,15 +29,15 @@ step_1_overrides:
 
 metadata_outputs:
   activation: false
-  calibration: false
+  calibration: true
   deep_filter: true
   efficiency: false
-  execution: false
+  execution: true
   filter: true
   noise_control: false
   pattern: false
   profiling: true
-  rate_histogram: false
-  specific: false
+  rate_histogram: true
+  specific: true
   status: true
   trigger_type: true
