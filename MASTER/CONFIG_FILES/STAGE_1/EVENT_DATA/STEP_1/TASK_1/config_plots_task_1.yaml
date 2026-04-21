@@ -2,7 +2,7 @@ plots:
   debug_suite: debug
   usual_suite: usual
   essential_suite: essential
-  event_total_charge_raw: essential
+  event_total_charge_raw: usual
   raw_tt_overview: debug
   channel_histograms_raw: debug
   tq_scatter_raw: usual
@@ -18,4 +18,4 @@ plots:
   tq_scatter_raw_by_tt: usual
   tq_scatter_filtered_by_tt: usual
   channel_tq_matrix_by_planepair: usual
-  channel_combination_filter_by_tt: usual
+  channel_combination_filter_by_tt: essential

@@ -214,6 +214,13 @@ def _load_latest_metadata_csv(path: Path, *, usecols: list[str] | None = None) -
     return frame.reset_index(drop=True)
 
 
+def _numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
+    """Return a numeric series aligned to the dataframe index, even when the column is absent."""
+    if column not in df.columns:
+        return pd.Series(np.nan, index=df.index, dtype=float)
+    return pd.to_numeric(df[column], errors="coerce")
+
+
 def _x_axis_config(config: dict[str, Any]) -> dict[str, Any]:
     raw = config.get("x_axis")
     if not isinstance(raw, dict):
@@ -420,8 +427,8 @@ def _build_global_x_correlation_frame(station_name: str, task4_df: pd.DataFrame)
         usecols=trigger_cols,
     )
     for plane, missing_col in EFFICIENCY_MISSING_RATE_COLUMNS.items():
-        base_rate = pd.to_numeric(trigger_df.get(EFFICIENCY_BASE_RATE_COLUMN), errors="coerce")
-        missing_rate = pd.to_numeric(trigger_df.get(missing_col), errors="coerce")
+        base_rate = _numeric_series(trigger_df, EFFICIENCY_BASE_RATE_COLUMN)
+        missing_rate = _numeric_series(trigger_df, missing_col)
         trigger_df[f"plane_efficiency_p{plane}"] = np.where(
             np.isfinite(base_rate) & np.isfinite(missing_rate) & (base_rate > 0),
             1.0 - (missing_rate / base_rate),
@@ -436,18 +443,17 @@ def _build_global_x_correlation_frame(station_name: str, task4_df: pd.DataFrame)
         _task_metadata_path(station_name, 3, "activation"),
         usecols=activation_cols,
     )
-    streamer_event_count = pd.to_numeric(
-        activation_df.get(STREAMER_EVENT_COUNT_COLUMN), errors="coerce"
-    )
+    streamer_event_count = _numeric_series(activation_df, STREAMER_EVENT_COUNT_COLUMN)
     streamer_pct_cols: list[str] = []
     for plane, given_col in STREAMER_GIVEN_COUNT_COLUMNS.items():
         streamer_col = f"streamer_percentage_p{plane}"
+        given_count = _numeric_series(activation_df, given_col)
         activation_df[streamer_col] = np.where(
             np.isfinite(streamer_event_count)
             & (streamer_event_count > 0)
-            & pd.to_numeric(activation_df.get(given_col), errors="coerce").notna(),
+            & given_count.notna(),
             100.0
-            * pd.to_numeric(activation_df.get(given_col), errors="coerce")
+            * given_count
             / streamer_event_count,
             np.nan,
         )

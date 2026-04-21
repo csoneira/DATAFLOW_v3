@@ -2,16 +2,22 @@
 
 This small project builds a scale-factor LUT from simulation parameters plus
 MINGO00 metadata (joined by `param_hash`), applies it to `synthetic_dataset.csv`,
-and then applies it to a configurable slice of real station data.
+and then applies it to a configurable slice of real station data. The metadata
+source can be either the existing `trigger_type` CSVs or the newer
+`robust_efficiency` CSVs.
 
 ## Workflow
 
 1. `step_1_prepare_data.py`
-  - Reads `step_final_simulation_params.csv`.
-  - Reads MINGO00 `metadata_trigger_type.csv` from one or more Task IDs.
-  - Joins simulation parameters and real observed rates by `param_hash`.
-  - Reads only the configured trigger-type columns (minimal `usecols`) and can
-    keep offender-related trigger-rate columns in the Step 1 output CSV.
+   - Reads `step_final_simulation_params.csv`.
+   - Reads the selected MINGO00 metadata source from `STAGE_1/EVENT_DATA/STEP_1`.
+   - Uses `task_<id>_metadata_trigger_type.csv` when
+     `trigger_type_selection.metadata_source = "trigger_type"`.
+   - Uses `TASK_4/task_4_metadata_robust_efficiency.csv` when
+     `trigger_type_selection.metadata_source = "robust_efficiency"`.
+   - Joins simulation parameters and real observed rates by `param_hash`.
+   - Reads only the required metadata columns and keeps the selected source-rate
+     columns in the Step 1 output CSV.
    - Keeps the four empirical efficiencies, the z-position vector, the
      configured rate column, the simulated flux, and the number of events.
    - Filters on the configured z-position vector and minimum number of events.
@@ -33,7 +39,10 @@ and then applies it to a configurable slice of real station data.
      vector, followed by `emp_eff_1 emp_eff_2 emp_eff_3 emp_eff_4 scale_factor`.
 
 3. `step_3_apply_lut.py`
-   - Reads the synthetic dataset.
+   - By default reads the Step 1 filtered training table so the Step 3 input is
+     coherent with the same metadata/rate selection used to build the LUT.
+   - Can still read the legacy external `synthetic_dataset.csv` when
+     `step3.input_source = "legacy_synthetic_dataset"`.
    - Applies the same efficiency binning.
    - Matches each row to the LUT, keeping exact bin hits and then using either
      nearest-neighbour or inverse-distance interpolation over the raw empirical
@@ -64,10 +73,12 @@ and then applies it to a configurable slice of real station data.
    - Uses its own metadata collector (no dependency on the STEP 4.1 collector).
    - Filters the real rows by `step5.station`, `step5.date_from`, and
      `step5.date_to`.
-   - Uses offender-limited rate and per-plane efficiencies from
-     `task_<id>_metadata_noise_control.csv` (same source used by the
-     noise-control reports), with the threshold controlled by
-     `step5.max_selected_offenders`.
+   - Uses the same metadata source configured in `trigger_type_selection`.
+   - For `trigger_type`, task / stage / offender threshold are taken from the
+     same config block.
+   - For `robust_efficiency`, the source is fixed to
+     `TASK_4/task_4_metadata_robust_efficiency.csv` and only the rate choice
+     matters: `rate_1234_hz` or `rate_total_hz`.
    - Applies the LUT with the same exact-match + fallback strategy used in
      Step 3.
    - Checks whether the real-data z positions in the requested window match the
@@ -90,33 +101,42 @@ python3 run_all.py
 call the upstream `collect_data.py` pre-refresh step.
 
 To change the z-position vector, binning, or the Step 5 real-data station/date
-window, edit `config.json`. To switch the LUT from the global rate to another
-rate definition, change `columns.rate` in that file. The fallback behavior is
-controlled with `step3.lut_match_mode` / `step5.lut_match_mode` (`exact`,
+window, edit `config.json`. The rate input is controlled through
+`trigger_type_selection`, and the fallback behavior is controlled with
+`step3.lut_match_mode` / `step5.lut_match_mode` (`exact`,
 `nearest`, or `interpolate`) together with `lut_interpolation_k` and
 `lut_interpolation_power`.
 
-Step 1 source selection is controlled with:
+Metadata source selection is controlled with:
+- `trigger_type_selection.metadata_source` (`trigger_type` or `robust_efficiency`)
+- `trigger_type_selection.rate_family`
+  - `trigger_type`: supports `total`, `four_plane`, `three_plane`, `two_plane`,
+    `three_and_four_plane`, and `two_and_three_plane`
+  - `robust_efficiency`: supports `1234` / `four_plane`, `four_plane_robust_hz`, and `total`
+- `trigger_type_selection.task_id`
+- `trigger_type_selection.stage_prefix`
+- `trigger_type_selection.offender_threshold`
+
+When `metadata_source = "robust_efficiency"`, the task, stage, and offender
+threshold are ignored. The code always reads
+`TASK_4/METADATA/task_4_metadata_robust_efficiency.csv` and only switches
+between `rate_1234_hz`, `four_plane_robust_hz`, and `rate_total_hz`.
+
+Step 1 source paths are controlled with:
 - `step1.use_mingo00_param_hash_source` (set `false` to use legacy `collected_data_csv`)
 - `step1.simulation_params_csv`
-- `step1.mingo00_metadata_root`
-- `step1.mingo00_task_ids`
-- `step1.trigger_type_rate_column`
-- `step1.trigger_type_rate_mode` (`column` or `sum_prefix`)
-- `step1.trigger_type_rate_prefix` (used when `sum_prefix` is selected)
-- `step1.trigger_type_columns_to_keep`
-- `step1.trigger_type_offender_prefix`
-- `step1.trigger_type_offender_counts`
+- `step1.metadata_root` (or the older `step1.trigger_type_metadata_root`)
 
-For noise-control real-data inputs in Step 5, use:
-- `step5.zero_offender_rate_source_task_id`
-- `step5.zero_offender_efficiency_source_task_id`
-- `step5.zero_offender_scope_preference` (`auto`, `plane_combination_filter`, or `strip_combination_filter`)
-- `step5.max_selected_offenders`
+Step 5 real-data slicing is controlled with:
+- `step5.station`
+- `step5.date_from`
+- `step5.date_to`
+- `step5.min_events`
+- `step5.metadata_agg`
+- `step5.timestamp_column`
 
-When `TASK_3` is used as the Step 5 noise-control source, the selected-offender
-thresholds come from `total_problematic_offender_count`, i.e. the cumulative
-Task 1 + Task 2 + Task 3 offender count, not just the Task 3 local plane count.
+Step 3 synthetic-input selection is controlled with:
+- `step3.input_source` (`training_dataset` or `legacy_synthetic_dataset`)
 
 ## Main outputs
 

@@ -1,0 +1,4 @@
+quality:
+  enabled: true
+  output_reference_filename: filtering_epoch_references.csv
+  output_column_evaluation_filename: filtering_column_evaluations.csv

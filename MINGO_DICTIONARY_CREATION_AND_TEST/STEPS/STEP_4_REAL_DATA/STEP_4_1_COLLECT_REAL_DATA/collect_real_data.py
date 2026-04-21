@@ -86,7 +86,6 @@ ONLINE_RUN_DICTIONARY_ROOT = (
     / "MASTER"
     / "CONFIG_FILES"
     / "STAGE_0"
-    / "NEW_FILES"
     / "ONLINE_RUN_DICTIONARY"
 )
 

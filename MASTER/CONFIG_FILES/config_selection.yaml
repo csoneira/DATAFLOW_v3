@@ -1,6 +1,6 @@
 selection:
   # Non-empty list overrides station selection in lower-level configs.
-  stations: [0, 1]
+  stations: [0, 1, 2, 3, 4]
   # Non-empty list overrides date range selection in lower-level configs.
   date_ranges:
     #- start: 2024-03-15
@@ -14,11 +14,22 @@ selection:
     - start: 2024-09-23 # mingo01 HV scan
       end: 2024-10-05
       stations: [1]
-    # Station-specific ranges can be added on top of the common ones.
-    # These only apply to the listed station(s).
-    #- start: 2026-01-03 # mingo02 HV scan
-    #  end: 2026-01-14
-    #  stations: [2]
-    #- start: 2025-02-25 # mingo04 HV scan
-    #  end: 2025-03-10
-    #  stations: [4]
+    - start: 2026-01-03 # mingo02 HV scan
+      end: 2026-01-14
+      stations: [2]
+    - start: 2025-02-25 # mingo04 HV scan
+      end: 2025-03-10
+      stations: [4]
+    # Para Hans, tres períodos de 20 días, 10 en cada lado alrededor de un centro
+    # Forbush Decrease 2024-03-24
+    - start: 2024-03-14
+      end: 2024-04-03
+      stations: [1]
+    # Quiet epoch 2024-04-13
+    - start: 2024-04-03
+      end: 2024-04-23
+      stations: [1]
+    # Forbush Decrease 2025-05-09
+    - start: 2025-04-29
+      end: 2025-05-19
+      stations: [1]

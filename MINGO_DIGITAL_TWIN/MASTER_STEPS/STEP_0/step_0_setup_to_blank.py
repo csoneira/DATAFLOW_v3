@@ -808,7 +808,6 @@ def main() -> None:
         / "MASTER"
         / "CONFIG_FILES"
         / "STAGE_0"
-        / "NEW_FILES"
         / "ONLINE_RUN_DICTIONARY"
     )
     station_root = Path(cfg.get("station_config_root", str(default_station_root))).expanduser()

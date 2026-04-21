@@ -1120,7 +1120,6 @@ station_directory = str(repo_root / "STATIONS" / f"MINGO0{station}")
 config_file_directory = str(
     config_root
     / "STAGE_0"
-    / "NEW_FILES"
     / "ONLINE_RUN_DICTIONARY"
     / f"STATION_{station}"
 )
@@ -1241,6 +1240,10 @@ csv_path_rate_histogram = os.path.join(
 csv_path_efficiency = os.path.join(
     metadata_directory,
     f"task_{task_number}_metadata_efficiency.csv",
+)
+csv_path_robust_efficiency = os.path.join(
+    metadata_directory,
+    f"task_{task_number}_metadata_robust_efficiency.csv",
 )
 csv_path_trigger_type = os.path.join(
     metadata_directory,
@@ -7111,6 +7114,9 @@ def _efficiency_center_field(axis_name):
     return "center_deg" if axis_name == "theta" else "center_mm"
 
 
+_ROBUST_EFFICIENCY_PLATEAU_TOLERANCE = 0.05
+
+
 def _make_efficiency_curve(values, fired, bins):
     vals = np.asarray(values, dtype=float)
     fire = np.asarray(fired, dtype=float)
@@ -7130,6 +7136,56 @@ def _make_efficiency_curve(values, fired, bins):
         "unc": np.asarray(unc, dtype=float),
         "den": np.asarray(den, dtype=float),
     }
+
+
+def _histogram_bin_indices(values, bins):
+    vals = np.asarray(values, dtype=float)
+    out = np.full(vals.shape, -1, dtype=np.int32)
+    if vals.size == 0 or len(bins) < 2:
+        return out
+
+    valid = np.isfinite(vals) & (vals >= float(bins[0])) & (vals <= float(bins[-1]))
+    if not np.any(valid):
+        return out
+
+    out[valid] = np.digitize(vals[valid], bins[1:-1], right=False).astype(np.int32)
+    return out
+
+
+def _select_robust_plateau_fired_event_indices(
+    axis_payload,
+    *,
+    axis_values,
+    fired,
+    bins,
+    accepted_indices,
+    tolerance,
+):
+    eff_vals = np.asarray(axis_payload.get("eff", []), dtype=float)
+    den_vals = np.asarray(axis_payload.get("den", []), dtype=float)
+    valid_bins = np.isfinite(eff_vals) & np.isfinite(den_vals) & (den_vals > 0)
+    if not np.any(valid_bins):
+        return None
+
+    if eff_vals.shape[0] != len(bins) - 1:
+        return None
+
+    median_eff = float(np.nanmedian(eff_vals[valid_bins]))
+    plateau_bins = valid_bins & (np.abs(eff_vals - median_eff) <= float(tolerance))
+
+    accepted_index = pd.Index(accepted_indices)
+    bin_indices = _histogram_bin_indices(axis_values, bins)
+    fired_arr = np.asarray(fired, dtype=float)
+    if len(accepted_index) != len(bin_indices) or len(fired_arr) != len(bin_indices):
+        return None
+
+    selected = (fired_arr > 0.5) & (bin_indices >= 0)
+    if np.any(selected):
+        in_plateau = np.zeros(selected.shape, dtype=bool)
+        in_plateau[selected] = plateau_bins[bin_indices[selected]]
+        selected &= in_plateau
+
+    return accepted_index[selected]
 
 
 def _compute_efficiency_scalar_summary(axis_payload, axis_name, cfg_eff):
@@ -7321,6 +7377,7 @@ def _compute_track_based_efficiency_payload(
                     "selected_center": np.nan,
                 },
             },
+            "robust_x_plateau_fired_indices": None,
         }
 
         pool_mask = np.isin(dtt_all, plane_pool_tt[plane])
@@ -7345,6 +7402,7 @@ def _compute_track_based_efficiency_payload(
         x_acc = x_pred[accepted_xy]
         y_acc = y_pred[accepted_xy]
         fired_acc = fired[accepted_xy]
+        accepted_index = df_plot.index[pool_mask][accepted_xy]
         theta_acc = theta_pred_deg[accepted_theta]
         fired_theta = fired[accepted_theta]
 
@@ -7368,6 +7426,14 @@ def _compute_track_based_efficiency_payload(
 
             plane_result["x"] = _make_efficiency_curve(x_acc, fired_acc, edges["x"])
             plane_result["y"] = _make_efficiency_curve(y_acc, fired_acc, edges["y"])
+            plane_result["robust_x_plateau_fired_indices"] = _select_robust_plateau_fired_event_indices(
+                plane_result["x"],
+                axis_values=x_acc,
+                fired=fired_acc,
+                bins=edges["x"],
+                accepted_indices=accepted_index,
+                tolerance=_ROBUST_EFFICIENCY_PLATEAU_TOLERANCE,
+            )
             any_plane_available = True
 
         if len(fired_theta) >= int(cfg_eff["min_accepted_events"]):
@@ -7483,6 +7549,86 @@ def _format_task4_efficiency_vector_title_line(payload) -> str:
         else:
             fragments.append(f"P{plane}=n/a")
     return "Track-based efficiency vector (3-plane -> 4-plane): " + ", ".join(fragments)
+
+
+def _build_robust_efficiency_row(
+    payload,
+    *,
+    df_events: pd.DataFrame,
+    denominator_seconds: float,
+    filename_base: str,
+    execution_timestamp: str,
+    param_hash: str,
+):
+    row = {
+        "filename_base": filename_base,
+        "execution_timestamp": execution_timestamp,
+        "param_hash": param_hash,
+    }
+
+    plane_results = payload.get("plane_results", {}) if isinstance(payload, dict) else {}
+    robust_plateau_index = None
+    robust_plateau_available = True
+    for plane in range(1, 5):
+        plane_result = plane_results.get(plane, {}) if isinstance(plane_results, dict) else {}
+        axis_payload = plane_result.get("x", {}) if isinstance(plane_result, dict) else {}
+        eff_vals = np.asarray(axis_payload.get("eff", []), dtype=float)
+        den_vals = np.asarray(axis_payload.get("den", []), dtype=float)
+        valid = np.isfinite(eff_vals) & np.isfinite(den_vals) & (den_vals > 0)
+        row[f"eff{plane}"] = float(np.nanmedian(eff_vals[valid])) if np.any(valid) else np.nan
+        row[f"eff{plane}_n_valid_bins"] = int(np.sum(valid))
+        if np.any(valid):
+            plateau_bins = valid & (
+                np.abs(eff_vals - row[f"eff{plane}"]) <= _ROBUST_EFFICIENCY_PLATEAU_TOLERANCE
+            )
+            row[f"eff{plane}_n_plateau_bins"] = int(np.sum(plateau_bins))
+        else:
+            row[f"eff{plane}_n_plateau_bins"] = 0
+
+        plateau_indices = (
+            plane_result.get("robust_x_plateau_fired_indices", None)
+            if isinstance(plane_result, dict)
+            else None
+        )
+        if plateau_indices is None:
+            robust_plateau_available = False
+            continue
+
+        plateau_index = pd.Index(plateau_indices)
+        robust_plateau_index = (
+            plateau_index
+            if robust_plateau_index is None
+            else robust_plateau_index.union(plateau_index, sort=False)
+        )
+
+    if "fit_tt" in df_events.columns:
+        tt_values = pd.to_numeric(df_events["fit_tt"], errors="coerce").to_numpy(dtype=float)
+        n_events_1234 = int(np.sum(tt_values == 1234.0))
+    else:
+        n_events_1234 = None
+
+    total_events = int(len(df_events))
+    denom = float(denominator_seconds) if np.isfinite(denominator_seconds) else 0.0
+    if n_events_1234 is not None and denom > 0.0:
+        row["rate_1234_hz"] = float(n_events_1234 / denom)
+    else:
+        row["rate_1234_hz"] = np.nan
+
+    if robust_plateau_available and robust_plateau_index is not None and "fit_tt" in df_events.columns and denom > 0.0:
+        fit_tt_series = pd.to_numeric(df_events["fit_tt"], errors="coerce")
+        fit_tt_1234_index = df_events.index[fit_tt_series == 1234.0]
+        n_events_four_plane_robust = int(
+            len(robust_plateau_index.intersection(pd.Index(fit_tt_1234_index), sort=False))
+        )
+        row["four_plane_robust_hz"] = float(n_events_four_plane_robust / denom)
+    else:
+        row["four_plane_robust_hz"] = np.nan
+
+    if denom > 0.0:
+        row["rate_total_hz"] = float(total_events / denom)
+    else:
+        row["rate_total_hz"] = np.nan
+    return row
 
 
 def _extract_projection_arrays(df_input: pd.DataFrame) -> tuple[np.ndarray | None, np.ndarray | None, str]:
@@ -14209,6 +14355,40 @@ metadata_specific_csv_path = save_metadata(
     ),
 )
 print(f"Metadata (specific) CSV updated at: {metadata_specific_csv_path}")
+
+robust_efficiency_row = _build_robust_efficiency_row(
+    efficiency_metadata_payload,
+    df_events=working_df,
+    denominator_seconds=float(global_variables.get("count_rate_denominator_seconds", 0) or 0),
+    filename_base=filename_base,
+    execution_timestamp=execution_timestamp,
+    param_hash=param_hash_value,
+)
+metadata_robust_efficiency_csv_path = save_metadata(
+    csv_path_robust_efficiency,
+    robust_efficiency_row,
+    preferred_fieldnames=(
+        "filename_base",
+        "execution_timestamp",
+        "param_hash",
+        "eff1",
+        "eff1_n_valid_bins",
+        "eff1_n_plateau_bins",
+        "eff2",
+        "eff2_n_valid_bins",
+        "eff2_n_plateau_bins",
+        "eff3",
+        "eff3_n_valid_bins",
+        "eff3_n_plateau_bins",
+        "eff4",
+        "eff4_n_valid_bins",
+        "eff4_n_plateau_bins",
+        "rate_1234_hz",
+        "four_plane_robust_hz",
+        "rate_total_hz",
+    ),
+)
+print(f"Metadata (robust_efficiency) CSV updated at: {metadata_robust_efficiency_csv_path}")
 
 # Ensure no figure handles remain open before persistence/final move.
 plt.close("all")

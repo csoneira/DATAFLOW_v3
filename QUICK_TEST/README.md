@@ -27,7 +27,7 @@ Calibration is done in `PURELY_LINEAR`. This script only extracts and applies.
    - `events_per_second_global_rate` if present
    - fallback to `raw_tt_1234_rate_hz` only where needed
 4. Detects station and active z-configuration `(P1,P2,P3,P4)` from:
-   - `MASTER/CONFIG_FILES/STAGE_0/NEW_FILES/ONLINE_RUN_DICTIONARY/STATION_X/input_file_mingoXX.csv`
+   - `MASTER/CONFIG_FILES/STAGE_0/ONLINE_RUN_DICTIONARY/STATION_X/input_file_mingoXX.csv`
 5. Extracts coefficients `(m11, m12, t1)` from the PURELY_LINEAR summary.
 6. Applies:
    - `flux_est = m11*global_rate_hz + m12*reference_efficiency + t1`

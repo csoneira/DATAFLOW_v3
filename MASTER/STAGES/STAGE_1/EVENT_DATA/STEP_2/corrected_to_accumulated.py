@@ -368,7 +368,6 @@ station_directory = str(repo_root / "STATIONS" / f"MINGO0{station}")
 config_file_directory = str(
     get_master_config_root()
     / "STAGE_0"
-    / "NEW_FILES"
     / "ONLINE_RUN_DICTIONARY"
     / f"STATION_{station}"
 )

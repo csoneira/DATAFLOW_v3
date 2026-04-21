@@ -24,7 +24,6 @@ from common import (
     cfg_path,
     derive_trigger_rate_features,
     ensure_output_dirs,
-    format_selected_rate_name,
     get_rate_column_name,
     get_trigger_type_selection,
     load_config,
@@ -49,7 +48,6 @@ ONLINE_RUN_DICTIONARY_ROOT = (
     / "MASTER"
     / "CONFIG_FILES"
     / "STAGE_0"
-    / "NEW_FILES"
     / "ONLINE_RUN_DICTIONARY"
 )
 
@@ -622,7 +620,19 @@ def _plot_real_correction_diagnostics(
     ordered, x_values, x_label = _resolve_time_axis(dataframe)
     sequence = np.arange(len(ordered))
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
+    # Euclidean distance in 4D efficiency space: 0 means perfect LUT-coordinate agreement.
+    eff_values = ordered[CANONICAL_EFF_COLUMNS].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+    lut_eff_values = ordered[[f"lut_{column}" for column in CANONICAL_EFF_COLUMNS]].apply(
+        pd.to_numeric, errors="coerce"
+    ).to_numpy(dtype=float)
+    valid_eff = np.isfinite(eff_values).all(axis=1) & np.isfinite(lut_eff_values).all(axis=1)
+    lut_eff_distance = np.full(len(ordered), np.nan, dtype=float)
+    if valid_eff.any():
+        lut_eff_distance[valid_eff] = np.linalg.norm(eff_values[valid_eff] - lut_eff_values[valid_eff], axis=1)
+    # Max distance is 2.0 because each of 4 efficiencies lives in [0,1].
+    trust_score = np.clip(1.0 - (lut_eff_distance / 2.0), 0.0, 1.0)
+
+    fig, axes = plt.subplots(1, 3, figsize=(17, 5), constrained_layout=True)
 
     scatter = axes[0].scatter(
         ordered["rate_hz"],
@@ -660,6 +670,38 @@ def _plot_real_correction_diagnostics(
     axes[1].grid(alpha=0.25)
     axes[1].legend()
 
+    axes[2].plot(
+        x_values,
+        lut_eff_distance,
+        marker="o",
+        linewidth=1.4,
+        markersize=4,
+        color="#1F6FEB",
+        label="LUT efficiency distance",
+    )
+    axes[2].set_title("LUT proximity / trust vs time")
+    axes[2].set_xlabel(x_label.replace("_", " "))
+    axes[2].set_ylabel("Distance in eff space")
+    axes[2].grid(alpha=0.25)
+
+    trust_axis = axes[2].twinx()
+    trust_axis.plot(
+        x_values,
+        trust_score,
+        marker="s",
+        linewidth=1.3,
+        markersize=3.5,
+        color="#E67E22",
+        alpha=0.8,
+        label="Trust score",
+    )
+    trust_axis.set_ylim(0.0, 1.05)
+    trust_axis.set_ylabel("Trust [0-1]")
+
+    distance_lines, distance_labels = axes[2].get_legend_handles_labels()
+    trust_lines, trust_labels = trust_axis.get_legend_handles_labels()
+    axes[2].legend(distance_lines + trust_lines, distance_labels + trust_labels, loc="upper right")
+
     if pd.api.types.is_datetime64_any_dtype(x_values):
         fig.autofmt_xdate()
 
@@ -668,6 +710,148 @@ def _plot_real_correction_diagnostics(
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
     return x_label
+
+
+def _plot_query_coverage_match_distance_by_efficiencies(
+    query_coverage: pd.DataFrame,
+    output_path: Path,
+    *,
+    rate_column_name: str,
+) -> None:
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10), constrained_layout=True)
+    query_columns = [f"query_{column}" for column in CANONICAL_EFF_COLUMNS]
+    plane_colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728"]
+
+    for idx, (column, ax) in enumerate(zip(query_columns, axes.flat)):
+        grouped = (
+            query_coverage.groupby(column, dropna=False, sort=True)
+            .agg(
+                median_nearest_distance=("nearest_distance", "median"),
+                exact_support_fraction=("exact_lut_support", "mean"),
+            )
+            .reset_index()
+        )
+
+        if grouped.empty:
+            ax.set_title(f"No data for {column}")
+            ax.axis("off")
+            continue
+
+        x = grouped[column].astype(float).to_numpy()
+        y = grouped["median_nearest_distance"].astype(float).to_numpy()
+        ax.plot(x, y, marker="o", linewidth=1.6, color=plane_colors[idx], label="Median nearest distance")
+        ax.set_title(f"Nearest LUT distance vs {column}")
+        ax.set_xlabel(column)
+        ax.set_ylabel("Median nearest distance")
+        ax.grid(alpha=0.25)
+        if y.size:
+            y_max = float(np.nanmax(y))
+            ax.set_ylim(0.0, max(0.15, y_max * 1.05))
+
+        ax2 = ax.twinx()
+        ax2.plot(
+            x,
+            grouped["exact_support_fraction"].to_numpy(dtype=float),
+            color="#444444",
+            linestyle="--",
+            linewidth=1.3,
+            alpha=0.9,
+            label="Exact support fraction",
+        )
+        ax2.set_ylabel("Exact support fraction", color="#444444")
+        ax2.set_ylim(0.0, 1.05)
+        if idx == 0:
+            combined_lines, combined_labels = ax.get_legend_handles_labels()
+            extra_lines, extra_labels = ax2.get_legend_handles_labels()
+            ax.legend(combined_lines + extra_lines, combined_labels + extra_labels, loc="upper right", fontsize=8)
+
+    fig.suptitle(
+        "Query coverage diagnostics by efficiency plane\n"
+        f"rate column: {rate_column_name}",
+        y=1.02,
+    )
+    fig.savefig(output_path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _plot_lut_vs_real_efficiency_coverage(
+    merged: pd.DataFrame,
+    lut_diagnostics: pd.DataFrame,
+    output_path: Path,
+    *,
+    rate_column_name: str,
+) -> None:
+    fig, axes = plt.subplots(3, 3, figsize=(13, 13), constrained_layout=True)
+    eff_columns = CANONICAL_EFF_COLUMNS
+    lut_data = lut_diagnostics[eff_columns].apply(pd.to_numeric, errors="coerce")
+    real_data = merged[eff_columns].apply(pd.to_numeric, errors="coerce")
+
+    pair_layout = [
+        [(0, 1), None, None],
+        [(0, 2), (1, 2), None],
+        [(0, 3), (1, 3), (2, 3)],
+    ]
+
+    for row in range(3):
+        for col in range(3):
+            ax = axes[row, col]
+            pair = pair_layout[row][col]
+            if pair is None:
+                ax.axis("off")
+                continue
+
+            x_idx, y_idx = pair
+            x_col = eff_columns[x_idx]
+            y_col = eff_columns[y_idx]
+            ax.scatter(
+                lut_data[x_col],
+                lut_data[y_col],
+                s=30,
+                alpha=0.55,
+                color="#2ca02c",
+                label="LUT rows",
+                edgecolors="none",
+            )
+            ax.scatter(
+                real_data[x_col],
+                real_data[y_col],
+                s=22,
+                alpha=0.65,
+                color="#1f77b4",
+                label="Real rows",
+                edgecolors="none",
+            )
+            x_values = np.concatenate(
+                [lut_data[x_col].to_numpy(dtype=float), real_data[x_col].to_numpy(dtype=float)]
+            )
+            y_values = np.concatenate(
+                [lut_data[y_col].to_numpy(dtype=float), real_data[y_col].to_numpy(dtype=float)]
+            )
+            finite_x = x_values[np.isfinite(x_values)]
+            finite_y = y_values[np.isfinite(y_values)]
+            if finite_x.size:
+                x_min = float(np.min(finite_x))
+                x_max = float(np.max(finite_x))
+                x_pad = max((x_max - x_min) * 0.03, 0.01)
+                ax.set_xlim(x_min - x_pad, x_max + x_pad)
+            if finite_y.size:
+                y_min = float(np.min(finite_y))
+                y_max = float(np.max(finite_y))
+                y_pad = max((y_max - y_min) * 0.03, 0.01)
+                ax.set_ylim(y_min - y_pad, y_max + y_pad)
+            ax.grid(alpha=0.2)
+            ax.set_xlabel(x_col)
+            ax.set_ylabel(y_col)
+            if row == 0 and col == 0:
+                ax.legend(fontsize=8, loc="upper left")
+
+    fig.suptitle(
+        "LUT coverage vs real-data empirical efficiencies\n"
+        f"rate column: {rate_column_name}",
+        y=1.02,
+    )
+    fig.savefig(output_path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
 
 
 def _collect_real_data_slice(
@@ -687,7 +871,8 @@ def _collect_real_data_slice(
         date_to=date_to,
     )
     trigger_selection = get_trigger_type_selection(config)
-    task_id = int(trigger_selection["task_id"])
+    task_id = int(trigger_selection.get("metadata_task_id", trigger_selection["task_id"]))
+    source_name = str(trigger_selection.get("source_name", "trigger_type"))
     task_stats: dict[str, dict[str, int]] = {
         str(task_id): {
             "rows_after_metadata_merge": 0,
@@ -699,7 +884,7 @@ def _collect_real_data_slice(
     trigger_df = _load_task_metadata_source_csv(
         station_id=station_id,
         task_id=task_id,
-        source_name="trigger_type",
+        source_name=source_name,
         metadata_agg=metadata_agg,
         timestamp_column=timestamp_column,
     )
@@ -735,14 +920,10 @@ def _collect_real_data_slice(
     valid_trigger_mask &= np.isfinite(eff_frame.to_numpy()).all(axis=1)
     collected = collected.loc[valid_trigger_mask].copy()
     if collected.empty:
-        selected_rate_name = format_selected_rate_name(
-            stage_prefix=str(trigger_info["stage_prefix"]),
-            rate_family_column=str(trigger_info["rate_family_column"]),
-            offender_threshold=trigger_info.get("used_offender_threshold"),
-        )
+        selected_rate_name = str(trigger_info.get("selected_source_rate_column", trigger_info["rate_family_column"]))
         raise ValueError(
-            "No real rows remain after deriving trigger-type features for "
-            f"{selected_rate_name}. The selected task/offender/rate combination currently yields "
+            "No real rows remain after deriving rate-source features for "
+            f"{selected_rate_name}. The selected metadata columns currently yield "
             "no positive four-plane support with finite empirical efficiencies."
         )
 
@@ -767,11 +948,11 @@ def _collect_real_data_slice(
 
     rows_before_event_cut = int(len(collected))
     event_values = pd.to_numeric(collected.get("selected_rate_count"), errors="coerce")
-    event_source = "selected_rate_count"
+    event_source = "selected_rate_count" if event_values.notna().any() else None
 
-    if event_values.notna().any():
+    if event_source is not None:
         collected["n_events"] = event_values
-    if min_events is not None and event_values.notna().any():
+    if min_events is not None and event_source is not None:
         collected = collected.loc[event_values >= float(min_events)].copy()
     rows_after_event_cut = int(len(collected))
     if collected.empty:
@@ -793,8 +974,13 @@ def _collect_real_data_slice(
         "event_count_source_for_filter": event_source,
         "task_ids_used": [task_id],
         "task_stats": task_stats,
+        "trigger_rate_selection": trigger_info,
         "trigger_type_selection": trigger_info,
-        "offender_count_semantics": "cumulative_total_problematic_offender_count_from_trigger_type",
+        "offender_count_semantics": (
+            "cumulative_total_problematic_offender_count_from_trigger_type"
+            if str(trigger_info.get("metadata_source", "trigger_type")) == "trigger_type"
+            else "not_applicable_for_robust_efficiency_metadata"
+        ),
     }
     return collected, metadata
 
@@ -841,12 +1027,8 @@ def run(config_path: str | Path | None = None) -> Path:
     timestamp_column = str(step5_config.get("timestamp_column", "execution_timestamp"))
 
     trigger_selection = get_trigger_type_selection(config)
-    task_ids = [int(trigger_selection["task_id"])]
-    rate_column_name = format_selected_rate_name(
-        stage_prefix=str(trigger_selection["stage_prefix"]),
-        rate_family_column=str(trigger_selection["rate_family_column"]),
-        offender_threshold=trigger_selection["offender_threshold"],
-    )
+    task_ids = [int(trigger_selection.get("metadata_task_id", trigger_selection["task_id"]))]
+    rate_column_name = str(trigger_selection["selected_source_rate_column"])
 
     lut_path = cfg_path(config, "paths", "step2_lut_ascii")
     lut_meta_path = cfg_path(config, "paths", "step2_meta_json")
@@ -978,6 +1160,12 @@ def run(config_path: str | Path | None = None) -> Path:
         PLOTS_DIR / "step5_real_correction_diagnostics.png",
         rate_column_name=rate_column_name,
     )
+    _plot_lut_vs_real_efficiency_coverage(
+        merged,
+        lut_dataframe,
+        PLOTS_DIR / "step5_lut_real_efficiency_coverage.png",
+        rate_column_name=rate_column_name,
+    )
 
     metadata = {
         "source_station_metadata_root": str(_task_metadata_dir(station_id, task_ids[0]).parent.parent.parent),
@@ -990,6 +1178,7 @@ def run(config_path: str | Path | None = None) -> Path:
         "metadata_agg": metadata_agg,
         "timestamp_column": timestamp_column,
         "rate_input_column": rate_column_name,
+        "trigger_rate_selection": trigger_selection,
         "trigger_type_selection": trigger_selection,
         "lut_file": str(lut_path),
         "lut_comments": lut_comments,

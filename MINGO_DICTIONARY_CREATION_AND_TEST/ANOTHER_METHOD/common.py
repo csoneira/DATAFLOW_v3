@@ -23,6 +23,13 @@ TT_FOUR_PLANE_LABEL = "1234"
 TT_RATE_LABELS = TT_TWO_PLANE_LABELS + TT_THREE_PLANE_LABELS + [TT_FOUR_PLANE_LABEL]
 TT_THREE_TO_FOUR_MISSING_BY_PLANE = {1: "234", 2: "134", 3: "124", 4: "123"}
 TASK_FINAL_STAGE_PREFIX = {1: "clean_tt", 2: "cal_tt", 3: "list_tt", 4: "fit_tt", 5: "post_tt"}
+TRIGGER_METADATA_SOURCE_ALIASES = {
+    "trigger": "trigger_type",
+    "trigger_type": "trigger_type",
+    "robust": "robust_efficiency",
+    "robust_eff": "robust_efficiency",
+    "robust_efficiency": "robust_efficiency",
+}
 TRIGGER_RATE_FAMILY_TO_COLUMN = {
     "total": "total_rate_hz",
     "four_plane": "four_plane_rate_hz",
@@ -34,17 +41,68 @@ TRIGGER_RATE_FAMILY_TO_COLUMN = {
 TRIGGER_RATE_FAMILY_ALIASES = {
     "global": "total",
     "all": "total",
+    "total_rate": "total",
+    "rate_total": "total",
+    "total_rate_hz": "total",
+    "rate_total_hz": "total",
     "1234": "four_plane",
     "4": "four_plane",
+    "four_plane_rate": "four_plane",
+    "rate_1234": "four_plane",
+    "four_plane_rate_hz": "four_plane",
+    "rate_1234_hz": "four_plane",
     "3": "three_plane",
+    "three_plane_rate": "three_plane",
+    "three_plane_rate_hz": "three_plane",
     "2": "two_plane",
+    "two_plane_rate": "two_plane",
+    "two_plane_rate_hz": "two_plane",
     "34": "three_and_four_plane",
+    "three_and_four_plane_rate": "three_and_four_plane",
+    "three_and_four_plane_rate_hz": "three_and_four_plane",
     "23": "two_and_three_plane",
+    "two_and_three_plane_rate": "two_and_three_plane",
+    "two_and_three_plane_rate_hz": "two_and_three_plane",
 }
+ROBUST_RATE_FAMILY_TO_COLUMN = {
+    "total": "total_rate_hz",
+    "four_plane": "four_plane_rate_hz",
+    "four_plane_robust_hz": "four_plane_robust_hz",
+}
+ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN = {
+    "total": "rate_total_hz",
+    "four_plane": "rate_1234_hz",
+    "four_plane_robust_hz": "four_plane_robust_hz",
+}
+ROBUST_RATE_FAMILY_ALIASES = {
+    "global": "total",
+    "all": "total",
+    "total_rate": "total",
+    "rate_total": "total",
+    "total_rate_hz": "total",
+    "rate_total_hz": "total",
+    "1234": "four_plane",
+    "4": "four_plane",
+    "four_plane_rate": "four_plane",
+    "rate_1234": "four_plane",
+    "four_plane_rate_hz": "four_plane",
+    "rate_1234_hz": "four_plane",
+    "four_plane_robust": "four_plane_robust_hz",
+    "four_plane_robust_rate": "four_plane_robust_hz",
+    "four_plane_robust_rate_hz": "four_plane_robust_hz",
+    "four_plane_robust_hz": "four_plane_robust_hz",
+}
+ROBUST_OPTIONAL_COUNT_COLUMNS = {
+    "total": ["total_count", "count_total", "rate_total_count"],
+    "four_plane": ["four_plane_count", "count_1234", "rate_1234_count"],
+    "four_plane_robust_hz": ["four_plane_robust_count", "count_four_plane_robust"],
+}
+DEFAULT_ROBUST_EFFICIENCY_TASK_ID = 4
 DERIVED_RATE_COLUMNS = [
     "two_plane_rate_hz",
     "three_plane_rate_hz",
     "four_plane_rate_hz",
+    "four_plane_robust_hz",
     "three_and_four_plane_rate_hz",
     "two_and_three_plane_rate_hz",
     "total_rate_hz",
@@ -60,6 +118,7 @@ DERIVED_COUNT_COLUMNS = [
 STEP1_OUTPUT_COLUMNS = (
     CANONICAL_Z_COLUMNS
     + CANONICAL_EFF_COLUMNS
+    + [f"eff_empirical_{idx}" for idx in range(1, 5)]
     + DERIVED_RATE_COLUMNS
     + DERIVED_COUNT_COLUMNS
     + ["selected_rate_hz", "selected_rate_count", "rate_hz", "sim_flux_cm2_min", "num_events"]
@@ -97,11 +156,7 @@ def get_rate_column_name(config: dict[str, Any]) -> str:
     trigger_config = config.get("trigger_type_selection", {})
     if isinstance(trigger_config, dict) and trigger_config:
         selection = get_trigger_type_selection(config)
-        return format_selected_rate_name(
-            stage_prefix=str(selection["stage_prefix"]),
-            rate_family_column=str(selection["rate_family_column"]),
-            offender_threshold=selection["offender_threshold"],
-        )
+        return str(selection["selected_source_rate_column"])
     columns = config.get("columns", {})
     if not isinstance(columns, dict):
         raise ValueError("Config is missing the 'columns' object.")
@@ -122,6 +177,35 @@ def get_trigger_type_selection(config: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raw = {}
 
+    metadata_source_raw = str(raw.get("metadata_source", "trigger_type")).strip().lower()
+    metadata_source = TRIGGER_METADATA_SOURCE_ALIASES.get(metadata_source_raw, metadata_source_raw)
+    if metadata_source == "robust_efficiency":
+        rate_family_raw = str(raw.get("rate_family", "1234")).strip().lower()
+        rate_family = ROBUST_RATE_FAMILY_ALIASES.get(rate_family_raw, rate_family_raw)
+        if rate_family not in ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN:
+            raise ValueError(
+                "Unsupported trigger_type_selection.rate_family for robust_efficiency metadata: "
+                f"{raw.get('rate_family')!r}. Supported values are: "
+                + ", ".join(sorted(ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN))
+            )
+        selected_source_rate_column = ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN[rate_family]
+        return {
+            "metadata_source": metadata_source,
+            "source_name": "robust_efficiency",
+            "task_id": DEFAULT_ROBUST_EFFICIENCY_TASK_ID,
+            "metadata_task_id": DEFAULT_ROBUST_EFFICIENCY_TASK_ID,
+            "stage_prefix": None,
+            "offender_threshold": None,
+            "rate_family": rate_family,
+            "rate_family_column": ROBUST_RATE_FAMILY_TO_COLUMN[rate_family],
+            "selected_source_rate_column": selected_source_rate_column,
+        }
+    if metadata_source != "trigger_type":
+        raise ValueError(
+            "Unsupported trigger_type_selection.metadata_source: "
+            f"{raw.get('metadata_source')!r}. Supported values are: trigger_type, robust_efficiency"
+        )
+
     task_id = int(raw.get("task_id", 5))
     stage_prefix_raw = raw.get("stage_prefix")
     if stage_prefix_raw in (None, "", "null", "None"):
@@ -141,21 +225,35 @@ def get_trigger_type_selection(config: dict[str, Any]) -> dict[str, Any]:
             + ", ".join(sorted(TRIGGER_RATE_FAMILY_TO_COLUMN))
         )
 
+    selected_source_rate_column = format_selected_rate_name(
+        stage_prefix=stage_prefix,
+        rate_family_column=TRIGGER_RATE_FAMILY_TO_COLUMN[rate_family],
+        offender_threshold=offender_threshold,
+    )
     return {
+        "metadata_source": metadata_source,
+        "source_name": "trigger_type",
         "task_id": task_id,
+        "metadata_task_id": task_id,
         "stage_prefix": stage_prefix,
         "offender_threshold": offender_threshold,
         "rate_family": rate_family,
         "rate_family_column": TRIGGER_RATE_FAMILY_TO_COLUMN[rate_family],
+        "selected_source_rate_column": selected_source_rate_column,
     }
 
 
 def format_selected_rate_name(
     *,
-    stage_prefix: str,
+    stage_prefix: str | None,
     rate_family_column: str,
     offender_threshold: int | None,
+    metadata_source: str = "trigger_type",
 ) -> str:
+    if str(metadata_source).strip().lower() == "robust_efficiency":
+        return str(rate_family_column)
+    if stage_prefix in (None, "", "null", "None"):
+        return str(rate_family_column)
     if offender_threshold is None:
         return f"{stage_prefix}_{rate_family_column}"
     return f"{stage_prefix}_total_offenders_le_{int(offender_threshold)}_{rate_family_column}"
@@ -200,6 +298,108 @@ def _resolved_count_series(
     return rate_series * denominator
 
 
+def _missing_columns(dataframe: pd.DataFrame, columns: list[str]) -> list[str]:
+    return [column for column in columns if column not in dataframe.columns]
+
+
+def _optional_numeric_series(dataframe: pd.DataFrame, column: str | None) -> pd.Series:
+    if not column or column not in dataframe.columns:
+        return pd.Series(np.nan, index=dataframe.index, dtype=float)
+    return pd.to_numeric(dataframe[column], errors="coerce")
+
+
+def _first_present_column(dataframe: pd.DataFrame, candidates: list[str]) -> str | None:
+    for column in candidates:
+        if column in dataframe.columns:
+            return column
+    return None
+
+
+def _derive_robust_efficiency_features(
+    dataframe: pd.DataFrame,
+    selection: dict[str, Any],
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    required_columns = [
+        f"eff{idx}" for idx in range(1, 5)
+    ] + [
+        ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["total"],
+        ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["four_plane"],
+    ]
+    selected_source_rate_column = str(selection["selected_source_rate_column"])
+    if selected_source_rate_column not in required_columns:
+        required_columns.append(selected_source_rate_column)
+    missing = _missing_columns(dataframe, required_columns)
+    if missing:
+        raise KeyError(
+            "Missing robust-efficiency columns required by trigger_type_selection: "
+            + ", ".join(sorted(missing))
+        )
+
+    total_count_source = _first_present_column(dataframe, ROBUST_OPTIONAL_COUNT_COLUMNS["total"])
+    four_plane_count_source = _first_present_column(dataframe, ROBUST_OPTIONAL_COUNT_COLUMNS["four_plane"])
+    four_plane_robust_count_source = _first_present_column(
+        dataframe,
+        ROBUST_OPTIONAL_COUNT_COLUMNS["four_plane_robust_hz"],
+    )
+
+    out = dataframe.copy()
+    out["two_plane_rate_hz"] = pd.Series(np.nan, index=out.index, dtype=float)
+    out["three_plane_rate_hz"] = pd.Series(np.nan, index=out.index, dtype=float)
+    out["four_plane_rate_hz"] = pd.to_numeric(out[ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["four_plane"]], errors="coerce")
+    out["four_plane_robust_hz"] = (
+        pd.to_numeric(out[ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["four_plane_robust_hz"]], errors="coerce")
+        if ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["four_plane_robust_hz"] in out.columns
+        else pd.Series(np.nan, index=out.index, dtype=float)
+    )
+    out["three_and_four_plane_rate_hz"] = pd.Series(np.nan, index=out.index, dtype=float)
+    out["two_and_three_plane_rate_hz"] = pd.Series(np.nan, index=out.index, dtype=float)
+    out["total_rate_hz"] = pd.to_numeric(out[ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["total"]], errors="coerce")
+
+    out["two_plane_count"] = pd.Series(np.nan, index=out.index, dtype=float)
+    out["three_plane_count"] = pd.Series(np.nan, index=out.index, dtype=float)
+    out["four_plane_count"] = _optional_numeric_series(out, four_plane_count_source)
+    out["four_plane_robust_count"] = _optional_numeric_series(out, four_plane_robust_count_source)
+    out["three_and_four_plane_count"] = pd.Series(np.nan, index=out.index, dtype=float)
+    out["two_and_three_plane_count"] = pd.Series(np.nan, index=out.index, dtype=float)
+    out["total_count"] = _optional_numeric_series(out, total_count_source)
+
+    for plane_idx in range(1, 5):
+        out[f"eff_empirical_{plane_idx}"] = pd.to_numeric(out[f"eff{plane_idx}"], errors="coerce")
+
+    selected_rate_column = str(selection["rate_family_column"])
+    selected_count_column = selected_rate_column.replace("_rate_hz", "_count")
+    out["selected_rate_hz"] = out[selected_rate_column]
+    out["selected_rate_count"] = out[selected_count_column] if selected_count_column in out.columns else np.nan
+    out["rate_hz"] = out["selected_rate_hz"]
+
+    metadata = {
+        "metadata_source": selection["metadata_source"],
+        "source_name": selection["source_name"],
+        "task_id": int(selection["task_id"]),
+        "stage_prefix": None,
+        "requested_stage_prefix": None,
+        "used_stage_prefix": None,
+        "stage_prefix_fallback_used": False,
+        "requested_offender_threshold": None,
+        "used_offender_threshold": None,
+        "rate_family": selection["rate_family"],
+        "rate_family_column": selected_rate_column,
+        "selected_source_rate_column": selection["selected_source_rate_column"],
+        "plain_column_fallback_used": False,
+        "source_rate_columns": {
+            "four_plane": ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["four_plane"],
+            "four_plane_robust_hz": ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["four_plane_robust_hz"],
+            "total": ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["total"],
+        },
+        "source_count_columns": {
+            "four_plane": four_plane_count_source,
+            "four_plane_robust_hz": four_plane_robust_count_source,
+            "total": total_count_source,
+        },
+    }
+    return out, metadata
+
+
 def derive_trigger_rate_features(
     dataframe: pd.DataFrame,
     config: dict[str, Any],
@@ -207,6 +407,9 @@ def derive_trigger_rate_features(
     allow_plain_fallback: bool = False,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     selection = get_trigger_type_selection(config)
+    if str(selection.get("metadata_source", "trigger_type")) == "robust_efficiency":
+        return _derive_robust_efficiency_features(dataframe, selection)
+
     requested_stage_prefix = str(selection["stage_prefix"])
     requested_threshold = selection["offender_threshold"]
 
@@ -295,6 +498,7 @@ def derive_trigger_rate_features(
     out["two_plane_rate_hz"] = _safe_sum_series(out.assign(**{f"__{k}": v for k, v in component_rates.items()}), [f"__{label}" for label in TT_TWO_PLANE_LABELS])
     out["three_plane_rate_hz"] = _safe_sum_series(out.assign(**{f"__{k}": v for k, v in component_rates.items()}), [f"__{label}" for label in TT_THREE_PLANE_LABELS])
     out["four_plane_rate_hz"] = component_rates[TT_FOUR_PLANE_LABEL]
+    out["four_plane_robust_hz"] = pd.Series(np.nan, index=out.index, dtype=float)
     out["three_and_four_plane_rate_hz"] = out["three_plane_rate_hz"] + out["four_plane_rate_hz"]
     out["two_and_three_plane_rate_hz"] = out["two_plane_rate_hz"] + out["three_plane_rate_hz"]
     out["total_rate_hz"] = out["two_plane_rate_hz"] + out["three_plane_rate_hz"] + out["four_plane_rate_hz"]
@@ -318,6 +522,8 @@ def derive_trigger_rate_features(
     out["rate_hz"] = out["selected_rate_hz"]
 
     metadata = {
+        "metadata_source": selection["metadata_source"],
+        "source_name": selection["source_name"],
         "task_id": int(selection["task_id"]),
         "stage_prefix": used_stage_prefix,
         "requested_stage_prefix": requested_stage_prefix,
@@ -327,6 +533,7 @@ def derive_trigger_rate_features(
         "used_offender_threshold": used_threshold,
         "rate_family": selection["rate_family"],
         "rate_family_column": selected_rate_column,
+        "selected_source_rate_column": selection["selected_source_rate_column"],
         "plain_column_fallback_used": bool(requested_threshold is not None and used_threshold is None),
         "source_rate_columns": source_columns,
         "source_count_columns": count_columns,

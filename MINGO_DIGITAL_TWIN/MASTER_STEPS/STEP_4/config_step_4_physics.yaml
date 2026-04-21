@@ -8,6 +8,3 @@ time_sigma_ns: 0.4
 # Best current matched-topology tuning from fresh MINGO00 vs MINGO01 comparison.
 lorentzian_gamma_mm: 4.73
 induced_charge_fraction: 0.6
-
-# Variable (to loop on)
-step_4_id: "001"

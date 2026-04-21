@@ -17,12 +17,18 @@ from common import (
     CANONICAL_EFF_COLUMNS,
     DEFAULT_CONFIG_PATH,
     PLOTS_DIR,
+    TASK_FINAL_STAGE_PREFIX,
+    TT_FOUR_PLANE_LABEL,
+    TT_RATE_LABELS,
+    TT_THREE_PLANE_LABELS,
+    TT_TWO_PLANE_LABELS,
     apply_lut_fallback_matches,
     cfg_path,
     derive_trigger_rate_features,
     ensure_output_dirs,
     format_selected_rate_name,
     get_rate_column_name,
+    get_trigger_type_selection,
     load_config,
     quantize_efficiency_series,
     read_ascii_lut,
@@ -36,14 +42,207 @@ def _configure_logging() -> None:
     logging.basicConfig(format="[%(levelname)s] STEP_3 - %(message)s", level=logging.INFO, force=True)
 
 
+def _resolve_step3_input_dataframe(config: dict) -> tuple[pd.DataFrame, Path, str]:
+    step3_config = config.get("step3", {})
+    if not isinstance(step3_config, dict):
+        step3_config = {}
+
+    raw_mode = str(step3_config.get("input_source", "training_dataset")).strip().lower()
+    input_mode = {
+        "training": "training_dataset",
+        "training_dataset": "training_dataset",
+        "step1": "training_dataset",
+        "step1_filtered": "training_dataset",
+        "step1_filtered_csv": "training_dataset",
+        "synthetic": "legacy_synthetic_dataset",
+        "synthetic_dataset": "legacy_synthetic_dataset",
+        "legacy": "legacy_synthetic_dataset",
+        "legacy_synthetic": "legacy_synthetic_dataset",
+        "legacy_synthetic_dataset": "legacy_synthetic_dataset",
+    }.get(raw_mode, raw_mode)
+
+    if input_mode == "training_dataset":
+        input_path = cfg_path(config, "paths", "step1_filtered_csv")
+    elif input_mode == "legacy_synthetic_dataset":
+        input_path = cfg_path(config, "paths", "synthetic_dataset_csv")
+    else:
+        raise ValueError(
+            "Unsupported step3.input_source: "
+            f"{step3_config.get('input_source')!r}. Supported values are "
+            "'training_dataset' and 'legacy_synthetic_dataset'."
+        )
+
+    return pd.read_csv(input_path, low_memory=False), input_path, input_mode
+
+
+def _derive_robust_synthetic_features(
+    dataframe: pd.DataFrame,
+    selection: dict[str, object],
+) -> tuple[pd.DataFrame, dict[str, object]]:
+    out = dataframe.copy()
+    empirical_columns = [f"eff_empirical_{idx}" for idx in range(1, 5)]
+    selected_rate_column = str(selection["rate_family_column"])
+    selected_source_rate_column = str(selection["selected_source_rate_column"])
+    source_mode: str | None = None
+    used_stage_prefix: str | None = None
+
+    direct_robust_columns = [f"eff{idx}" for idx in range(1, 5)] + ["rate_1234_hz", "rate_total_hz"]
+    if selected_source_rate_column not in direct_robust_columns:
+        direct_robust_columns.append(selected_source_rate_column)
+    if all(column in out.columns for column in direct_robust_columns):
+        source_mode = "robust_efficiency_columns"
+        source_rate_columns = {
+            "four_plane": "rate_1234_hz",
+            "four_plane_robust_hz": "four_plane_robust_hz" if "four_plane_robust_hz" in out.columns else None,
+            "total": "rate_total_hz",
+        }
+        out["four_plane_rate_hz"] = pd.to_numeric(out["rate_1234_hz"], errors="coerce")
+        out["four_plane_robust_hz"] = (
+            pd.to_numeric(out["four_plane_robust_hz"], errors="coerce")
+            if "four_plane_robust_hz" in out.columns
+            else pd.Series(np.nan, index=out.index, dtype=float)
+        )
+        out["total_rate_hz"] = pd.to_numeric(out["rate_total_hz"], errors="coerce")
+        for plane_idx in range(1, 5):
+            out[f"eff_empirical_{plane_idx}"] = pd.to_numeric(out[f"eff{plane_idx}"], errors="coerce")
+    canonical_required_columns = empirical_columns + ["four_plane_rate_hz", "total_rate_hz"]
+    if selected_rate_column not in canonical_required_columns:
+        canonical_required_columns.append(selected_rate_column)
+    if source_mode is None and all(column in out.columns for column in canonical_required_columns):
+        source_mode = "canonical_training_columns"
+        source_rate_columns = {
+            "four_plane": "four_plane_rate_hz",
+            "four_plane_robust_hz": "four_plane_robust_hz" if "four_plane_robust_hz" in out.columns else None,
+            "total": "total_rate_hz",
+        }
+    elif source_mode is None:
+        missing_empirical = [column for column in empirical_columns if column not in out.columns]
+        if missing_empirical:
+            raise KeyError(
+                "Synthetic dataset is missing empirical-efficiency columns required for robust mode: "
+                + ", ".join(missing_empirical)
+            )
+
+        stage_candidates = [
+            TASK_FINAL_STAGE_PREFIX[task_id]
+            for task_id in sorted(TASK_FINAL_STAGE_PREFIX.keys(), reverse=True)
+        ]
+        stage_sources: dict[str, str] | None = None
+        for stage_prefix in stage_candidates:
+            candidate_sources = {
+                label: f"{stage_prefix}_{label}_rate_hz"
+                for label in TT_RATE_LABELS
+            }
+            missing_candidate = [column for column in candidate_sources.values() if column not in out.columns]
+            if missing_candidate:
+                continue
+            stage_sources = candidate_sources
+            used_stage_prefix = stage_prefix
+            break
+
+        if stage_sources is None:
+            raise KeyError(
+                "Synthetic dataset cannot satisfy robust mode because it has neither robust-efficiency "
+                "columns nor a full trigger-type stage such as post_tt_*_rate_hz."
+            )
+
+        if selected_rate_column == "four_plane_robust_hz":
+            raise KeyError(
+                "Synthetic dataset cannot satisfy robust mode for four_plane_robust_hz because it has "
+                "no direct robust-efficiency rate column. Rebuild the Step 1 training dataset with "
+                "trigger_type_selection.rate_family = 'four_plane_robust_hz'."
+            )
+
+        component_rates = {
+            label: pd.to_numeric(out[column], errors="coerce")
+            for label, column in stage_sources.items()
+        }
+        out["two_plane_rate_hz"] = pd.DataFrame(
+            {label: component_rates[label] for label in TT_TWO_PLANE_LABELS}
+        ).sum(axis=1, min_count=1)
+        out["three_plane_rate_hz"] = pd.DataFrame(
+            {label: component_rates[label] for label in TT_THREE_PLANE_LABELS}
+        ).sum(axis=1, min_count=1)
+        out["four_plane_rate_hz"] = component_rates[TT_FOUR_PLANE_LABEL]
+        out["four_plane_robust_hz"] = pd.Series(np.nan, index=out.index, dtype=float)
+        out["three_and_four_plane_rate_hz"] = out["three_plane_rate_hz"] + out["four_plane_rate_hz"]
+        out["two_and_three_plane_rate_hz"] = out["two_plane_rate_hz"] + out["three_plane_rate_hz"]
+        out["total_rate_hz"] = out["two_plane_rate_hz"] + out["three_plane_rate_hz"] + out["four_plane_rate_hz"]
+        source_mode = "trigger_type_columns_fallback"
+        source_rate_columns = {
+            "four_plane": stage_sources[TT_FOUR_PLANE_LABEL],
+            "four_plane_robust_hz": None,
+            "total": "derived_total_rate_hz_from_trigger_type_columns",
+        }
+
+    for column in [
+        "two_plane_rate_hz",
+        "three_plane_rate_hz",
+        "four_plane_rate_hz",
+        "four_plane_robust_hz",
+        "three_and_four_plane_rate_hz",
+        "two_and_three_plane_rate_hz",
+        "total_rate_hz",
+    ]:
+        if column not in out.columns:
+            out[column] = pd.Series(np.nan, index=out.index, dtype=float)
+
+    for column in [
+        "two_plane_count",
+        "three_plane_count",
+        "four_plane_count",
+        "three_and_four_plane_count",
+        "two_and_three_plane_count",
+        "total_count",
+    ]:
+        if column not in out.columns:
+            out[column] = pd.Series(np.nan, index=out.index, dtype=float)
+
+    selected_count_column = selected_rate_column.replace("_rate_hz", "_count")
+    out["selected_rate_hz"] = pd.to_numeric(out[selected_rate_column], errors="coerce")
+    if selected_count_column in out.columns:
+        out["selected_rate_count"] = pd.to_numeric(out[selected_count_column], errors="coerce")
+    elif "selected_rate_count" not in out.columns:
+        out["selected_rate_count"] = pd.Series(np.nan, index=out.index, dtype=float)
+    out["rate_hz"] = out["selected_rate_hz"]
+
+    metadata = {
+        "metadata_source": selection["metadata_source"],
+        "source_name": selection["source_name"],
+        "task_id": int(selection["task_id"]),
+        "stage_prefix": used_stage_prefix,
+        "requested_stage_prefix": None,
+        "used_stage_prefix": used_stage_prefix,
+        "stage_prefix_fallback_used": bool(used_stage_prefix is not None),
+        "requested_offender_threshold": None,
+        "used_offender_threshold": None,
+        "rate_family": selection["rate_family"],
+        "rate_family_column": selected_rate_column,
+        "selected_source_rate_column": selection["selected_source_rate_column"],
+        "plain_column_fallback_used": bool(source_mode != "robust_efficiency_columns"),
+        "source_rate_columns": source_rate_columns,
+        "source_count_columns": {
+            "four_plane": None,
+            "four_plane_robust_hz": None,
+            "total": None,
+        },
+        "synthetic_source_mode": source_mode,
+    }
+    return out, metadata
+
+
 def _prepare_synthetic_dataframe(dataframe: pd.DataFrame, config: dict) -> tuple[pd.DataFrame, dict]:
     z_columns = list(config["columns"]["z_positions"])
-    work, trigger_info = derive_trigger_rate_features(
-        dataframe,
-        config,
-        allow_plain_fallback=True,
-    )
-    rename_map = {
+    selection = get_trigger_type_selection(config)
+    if str(selection.get("metadata_source", "trigger_type")) == "robust_efficiency":
+        work, trigger_info = _derive_robust_synthetic_features(dataframe, selection)
+    else:
+        work, trigger_info = derive_trigger_rate_features(
+            dataframe,
+            config,
+            allow_plain_fallback=True,
+        )
+    rename_candidates = {
         "eff_empirical_1": CANONICAL_EFF_COLUMNS[0],
         "eff_empirical_2": CANONICAL_EFF_COLUMNS[1],
         "eff_empirical_3": CANONICAL_EFF_COLUMNS[2],
@@ -53,6 +252,11 @@ def _prepare_synthetic_dataframe(dataframe: pd.DataFrame, config: dict) -> tuple
         z_columns[2]: "z_pos_3",
         z_columns[3]: "z_pos_4",
         str(config["columns"]["simulated_flux"]): "sim_flux_cm2_min",
+    }
+    rename_map = {
+        source: target
+        for source, target in rename_candidates.items()
+        if source in work.columns and source != target and target not in work.columns
     }
     return work.rename(columns=rename_map), trigger_info
 
@@ -444,19 +648,19 @@ def run(config_path: str | Path | None = None) -> Path:
     ensure_output_dirs()
     config = load_config(config_path)
 
-    synthetic_input_path = cfg_path(config, "paths", "synthetic_dataset_csv")
+    synthetic_dataframe, synthetic_input_path, input_mode = _resolve_step3_input_dataframe(config)
     lut_path = cfg_path(config, "paths", "step2_lut_ascii")
     flux_cells_path = cfg_path(config, "paths", "step2_flux_cells_csv")
     lut_meta_path = cfg_path(config, "paths", "step2_meta_json")
     output_path = cfg_path(config, "paths", "step3_output_csv")
     meta_path = cfg_path(config, "paths", "step3_meta_json")
 
-    synthetic_dataframe = pd.read_csv(synthetic_input_path)
     work, trigger_info = _prepare_synthetic_dataframe(synthetic_dataframe.copy(), config)
     rate_column_name = format_selected_rate_name(
-        stage_prefix=str(trigger_info["stage_prefix"]),
+        stage_prefix=trigger_info.get("stage_prefix"),
         rate_family_column=str(trigger_info["rate_family_column"]),
         offender_threshold=trigger_info.get("used_offender_threshold"),
+        metadata_source=str(trigger_info.get("metadata_source", "trigger_type")),
     )
     renamed_required_columns = [column for column in ["rate_hz", "sim_flux_cm2_min", *CANONICAL_EFF_COLUMNS] if column not in work.columns]
     if renamed_required_columns:
@@ -521,6 +725,7 @@ def run(config_path: str | Path | None = None) -> Path:
         "two_plane_rate_hz",
         "three_plane_rate_hz",
         "four_plane_rate_hz",
+        "four_plane_robust_hz",
         "three_and_four_plane_rate_hz",
         "two_and_three_plane_rate_hz",
         "total_rate_hz",
@@ -569,6 +774,7 @@ def run(config_path: str | Path | None = None) -> Path:
 
     metadata = {
         "source_file": str(synthetic_input_path),
+        "input_source_mode": input_mode,
         "lut_file": str(lut_path),
         "flux_reference_file": str(flux_cells_path),
         "lut_comments": lut_comments,
@@ -583,6 +789,7 @@ def run(config_path: str | Path | None = None) -> Path:
         "unmatched_rows": int(output_dataframe["lut_scale_factor"].isna().sum()),
         "rows_matching_selected_z_vector": int(output_dataframe["selected_z_vector_match"].sum()),
         "rate_input_column": rate_column_name,
+        "trigger_rate_selection": trigger_info,
         "trigger_type_selection": trigger_info,
         "almost_perfect_flux_reference": {
             "flux_bins": int(len(reference_curve)),

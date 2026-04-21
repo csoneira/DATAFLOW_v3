@@ -57,10 +57,75 @@ from STEP_SHARED.sim_utils import (
     select_param_row,
     extract_param_set,
 )
-from STEP_SHARED.sim_utils_geometry import DEFAULT_BOUNDS
+from STEP_SHARED.sim_utils_geometry import DEFAULT_BOUNDS, DetectorBounds
 
 ELEMENTARY_CHARGE_FC = 1.602176634e-4
 LORENTZIAN_MIN_GAMMA_MM = 1.0e-6
+
+
+def bounds_to_dict(bounds: DetectorBounds) -> dict[str, float]:
+    return {
+        "x_min": float(bounds.x_min),
+        "x_max": float(bounds.x_max),
+        "y_min": float(bounds.y_min),
+        "y_max": float(bounds.y_max),
+    }
+
+
+def _coerce_bounds(bounds_cfg: object) -> DetectorBounds | None:
+    if not isinstance(bounds_cfg, dict):
+        return None
+    try:
+        return DetectorBounds(
+            x_min=float(bounds_cfg.get("x_min", DEFAULT_BOUNDS.x_min)),
+            x_max=float(bounds_cfg.get("x_max", DEFAULT_BOUNDS.x_max)),
+            y_min=float(bounds_cfg.get("y_min", DEFAULT_BOUNDS.y_min)),
+            y_max=float(bounds_cfg.get("y_max", DEFAULT_BOUNDS.y_max)),
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def _bounds_from_metadata_lineage(meta: object) -> DetectorBounds | None:
+    cursor = meta
+    while isinstance(cursor, dict):
+        cfg = cursor.get("config")
+        if isinstance(cfg, dict):
+            candidate = _coerce_bounds(cfg.get("bounds_mm"))
+            if candidate is not None:
+                return candidate
+        cursor = cursor.get("upstream")
+    return None
+
+
+def resolve_active_bounds(cfg: dict, upstream_meta: dict | None) -> tuple[DetectorBounds, str]:
+    direct = _coerce_bounds(cfg.get("bounds_mm"))
+    if direct is not None:
+        return direct, "step4_config"
+
+    if isinstance(upstream_meta, dict):
+        lineage_bounds = _bounds_from_metadata_lineage(upstream_meta)
+        if lineage_bounds is not None:
+            return lineage_bounds, "upstream_lineage_config"
+
+    return DEFAULT_BOUNDS, "default_bounds"
+
+
+def _recover_metadata_from_chunk_manifest(data_path: Path, meta: dict | None) -> dict | None:
+    if isinstance(meta, dict) and meta:
+        return meta
+    parent = data_path.parent
+    if not parent.name.endswith("_chunks"):
+        return meta
+    manifest_path = parent.parent / f"{parent.name}.chunks.json"
+    if not manifest_path.exists():
+        return meta
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return meta
+    manifest_meta = payload.get("metadata")
+    return manifest_meta if isinstance(manifest_meta, dict) else meta
 
 
 def normalize_tt(series: pd.Series) -> pd.Series:
@@ -138,6 +203,7 @@ def induce_signal(
     time_sigma_ns: float,
     lorentzian_gamma_mm: float,
     induced_charge_fraction: float,
+    bounds: DetectorBounds,
     rng: np.random.Generator,
     debug_event_index: int | None,
     debug_points: dict | None,
@@ -171,8 +237,8 @@ def induce_signal(
             aval_x,
             aval_y,
             np.where(valid, gamma_mm, np.nan),
-            DEFAULT_BOUNDS.x_min,
-            DEFAULT_BOUNDS.x_max,
+            bounds.x_min,
+            bounds.x_max,
             plane_y_lower,
             plane_y_upper,
         )
@@ -202,8 +268,8 @@ def induce_signal(
                 aval_x,
                 aval_y,
                 np.where(valid, gamma_mm, np.nan),
-                DEFAULT_BOUNDS.x_min,
-                DEFAULT_BOUNDS.x_max,
+                bounds.x_min,
+                bounds.x_max,
                 lower_edges[strip_idx],
                 upper_edges[strip_idx],
             ).astype(np.float32, copy=False)
@@ -261,6 +327,7 @@ def plot_step4_summary(
     pdf: PdfPages,
     include_thrown_points: bool,
     thrown_points: dict | None,
+    bounds: DetectorBounds,
     examples_df: pd.DataFrame | None = None,
 ) -> None:
     fig, axes = plt.subplots(2, 2, figsize=(10, 8))
@@ -410,8 +477,8 @@ def plot_step4_summary(
             gap_charge = points.get("gap_charge_fc")
             induced_charge = points.get("induced_charge_fc")
             detector_fraction = points.get("detector_fraction")
-            x_axis = np.linspace(DEFAULT_BOUNDS.x_min, DEFAULT_BOUNDS.x_max, 240)
-            y_axis = np.linspace(DEFAULT_BOUNDS.y_min, DEFAULT_BOUNDS.y_max, 240)
+            x_axis = np.linspace(bounds.x_min, bounds.x_max, 240)
+            y_axis = np.linspace(bounds.y_min, bounds.y_max, 240)
             density = isotropic_lorentzian_density_grid(
                 x_axis,
                 y_axis,
@@ -448,8 +515,8 @@ def plot_step4_summary(
                 ax.set_title(f"Plane {plane_idx} isotropic 2D Lorentzian")
             ax.set_xlabel("X (mm)")
             ax.set_ylabel("Y (mm)")
-            ax.set_xlim(DEFAULT_BOUNDS.x_min, DEFAULT_BOUNDS.x_max)
-            ax.set_ylim(DEFAULT_BOUNDS.y_min, DEFAULT_BOUNDS.y_max)
+            ax.set_xlim(bounds.x_min, bounds.x_max)
+            ax.set_ylim(bounds.y_min, bounds.y_max)
             ax.text(
                 0.03,
                 0.97,
@@ -768,7 +835,14 @@ def main() -> None:
         latest_path = find_latest_data_path(output_dir)
         if latest_path is None:
             raise FileNotFoundError(f"No existing outputs found in {output_dir} for plot-only.")
-        df, _ = load_with_metadata(latest_path)
+        df, plot_meta = load_with_metadata(latest_path)
+        plot_meta = _recover_metadata_from_chunk_manifest(latest_path, plot_meta)
+        active_bounds, bounds_source = resolve_active_bounds(cfg, plot_meta)
+        print(
+            "Using active bounds "
+            f"({bounds_source}): x=[{active_bounds.x_min:.3f}, {active_bounds.x_max:.3f}] mm, "
+            f"y=[{active_bounds.y_min:.3f}, {active_bounds.y_max:.3f}] mm"
+        )
         sim_run_dir = find_sim_run_dir(latest_path)
         plot_dir = (sim_run_dir or latest_path.parent) / "PLOTS"
         ensure_dir(plot_dir)
@@ -780,6 +854,7 @@ def main() -> None:
                 pdf,
                 include_thrown_points=False,
                 thrown_points=None,
+                bounds=active_bounds,
                 examples_df=df,
             )
         print(f"Saved {plot_path}")
@@ -850,6 +925,13 @@ def main() -> None:
         print("Skipping STEP_4: all step_4_id combinations already exist.")
         return
 
+    active_bounds, bounds_source = resolve_active_bounds(cfg, upstream_meta)
+    print(
+        "Using active bounds "
+        f"({bounds_source}): x=[{active_bounds.x_min:.3f}, {active_bounds.x_max:.3f}] mm, "
+        f"y=[{active_bounds.y_min:.3f}, {active_bounds.y_max:.3f}] mm"
+    )
+
     normalized_stem = normalize_stem(input_path)
     print(f"Processing: {input_path}")
     sim_run = build_sim_run_name(step_chain + [step_4_id])
@@ -859,6 +941,7 @@ def main() -> None:
         return
     print("Inducing strip signals...")
 
+    physics_cfg["bounds_mm"] = bounds_to_dict(active_bounds)
     physics_cfg["step_4_id"] = step_4_id
     sim_run, sim_run_dir, config_hash, upstream_hash, _ = register_sim_run(
         output_dir, "STEP_4", config_path, physics_cfg, upstream_meta, sim_run
@@ -919,6 +1002,7 @@ def main() -> None:
             time_sigma_ns,
             lorentzian_gamma_mm,
             induced_charge_fraction,
+            active_bounds,
             rng,
             debug_event_index,
             debug_state["points"] if debug_event_index is not None else None,
@@ -1035,6 +1119,7 @@ def main() -> None:
                     pdf,
                     include_thrown_points=True,
                     thrown_points=debug_state["points"],
+                    bounds=active_bounds,
                     examples_df=plot_df_examples,
                 )
             print(f"Saved plots: {plot_path}")
@@ -1060,6 +1145,7 @@ def main() -> None:
             time_sigma_ns,
             lorentzian_gamma_mm,
             induced_charge_fraction,
+            active_bounds,
             rng,
             debug_event_index,
             debug_state["points"] if debug_event_index is not None else None,
@@ -1111,6 +1197,7 @@ def main() -> None:
                     pdf,
                     include_thrown_points=True,
                     thrown_points=debug_state["points"],
+                    bounds=active_bounds,
                     examples_df=plot_df_examples,
                 )
             print(f"Saved plots: {plot_path}")

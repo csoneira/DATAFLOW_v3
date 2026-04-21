@@ -1,0 +1,4 @@
+quality:
+  enabled: true
+  output_reference_filename: robust_efficiency_epoch_references.csv
+  output_column_evaluation_filename: robust_efficiency_column_evaluations.csv

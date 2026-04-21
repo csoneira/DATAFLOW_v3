@@ -61,6 +61,10 @@ def _aggregate_flux_cells(dataframe: pd.DataFrame, flux_bin_count: int) -> tuple
             flux_median=("sim_flux_cm2_min", "median"),
             flux_q25=("sim_flux_cm2_min", q25),
             flux_q75=("sim_flux_cm2_min", q75),
+            eff_empirical_1=("eff_empirical_1", "median"),
+            eff_empirical_2=("eff_empirical_2", "median"),
+            eff_empirical_3=("eff_empirical_3", "median"),
+            eff_empirical_4=("eff_empirical_4", "median"),
         )
         .reset_index()
     )
@@ -461,9 +465,23 @@ def run(config_path: str | Path | None = None) -> Path:
             scale_factor_q75=("cell_scale_factor", q75),
             n_flux_bins=("flux_bin_index", "nunique"),
             support_rows=("n_rows", "sum"),
+            eff_empirical_1=("eff_empirical_1", "median"),
+            eff_empirical_2=("eff_empirical_2", "median"),
+            eff_empirical_3=("eff_empirical_3", "median"),
+            eff_empirical_4=("eff_empirical_4", "median"),
         )
         .reset_index()
     )
+    negative_eff_mask = (
+        (lut["eff_empirical_2"].astype(float) >= 0.0)
+        & (lut["eff_empirical_3"].astype(float) >= 0.0)
+    )
+    if len(lut) != int(negative_eff_mask.sum()):
+        log.info(
+            "Filtering %d LUT rows with negative eff_empirical_2 or eff_empirical_3 values.",
+            len(lut) - int(negative_eff_mask.sum()),
+        )
+    lut = lut.loc[negative_eff_mask].copy()
     lut = lut[lut["n_flux_bins"] >= min_flux_bins_per_entry].copy()
     lut["relative_factor_iqr"] = (
         (lut["scale_factor_q75"] - lut["scale_factor_q25"]) / lut["scale_factor"].replace(0.0, np.nan)
@@ -473,7 +491,8 @@ def run(config_path: str | Path | None = None) -> Path:
     lut = lut.sort_values(CANONICAL_EFF_COLUMNS).reset_index(drop=True)
     lut.to_csv(lut_diag_path, index=False)
 
-    lut_ascii = lut[CANONICAL_EFF_COLUMNS + ["scale_factor"]].copy()
+    lut_ascii = lut[[f"eff_empirical_{idx}" for idx in range(1, 5)] + ["scale_factor"]].copy()
+    lut_ascii.columns = CANONICAL_EFF_COLUMNS + ["scale_factor"]
     exact_perfect_reference_available = bool(np.isclose(float(closest_single_row["distance_to_perfect"]), 0.0))
     closest_single_comment = (
         "closest_single_eff_bin: "

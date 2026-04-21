@@ -64,7 +64,9 @@ def load_sim_exec_records(
     step_filter: Optional[set[int]] = None,
 ) -> list[SimExecRecord]:
     """Read the headerless CSV and return records within the lookback window."""
-    current_time = now or datetime.now()
+    # CSV timestamps are recorded in UTC (trailing "Z").
+    # Keep all comparisons in naive-UTC to avoid local-time offset filtering bugs.
+    current_time = now or datetime.utcnow()
     min_time = current_time - lookback
     records: list[SimExecRecord] = []
 
@@ -254,10 +256,11 @@ class SimExecTimelineApp:
             return
 
         assert config is not None
-        now = datetime.now()
+        now_utc = datetime.utcnow()
+        now_local = datetime.now()
         self.records = load_sim_exec_records(
             self.csv_path,
-            now=now,
+            now=now_utc,
             lookback=timedelta(hours=float(config["lookback_hours"])),
             step_filter=config["steps"],
         )
@@ -270,8 +273,8 @@ class SimExecTimelineApp:
             else "-"
         )
         self.status_var.set(
-            f"Records: {len(self.records)} | Latest: {latest} | "
-            f"Last refresh: {now.strftime('%Y-%m-%d %H:%M:%S')}"
+            f"Records: {len(self.records)} | Latest (UTC): {latest} | "
+            f"Last refresh (local): {now_local.strftime('%Y-%m-%d %H:%M:%S')}"
         )
         self._schedule_next(int(config["refresh_seconds"]))
 
@@ -306,7 +309,7 @@ class SimExecTimelineApp:
             )
             return
 
-        now = datetime.now()
+        now = datetime.utcnow()
         lookback = timedelta(hours=float(config["lookback_hours"]))
         start_time = now - lookback
         end_time = now
@@ -486,7 +489,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             return 1
         records = load_sim_exec_records(
             args.csv_path.resolve(),
-            now=datetime.now(),
+            now=datetime.utcnow(),
             lookback=timedelta(hours=args.lookback_hours),
             step_filter=steps,
         )

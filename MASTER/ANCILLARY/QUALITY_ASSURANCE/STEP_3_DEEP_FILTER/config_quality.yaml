@@ -1,0 +1,4 @@
+quality:
+  enabled: true
+  output_reference_filename: deep_filter_epoch_references.csv
+  output_column_evaluation_filename: deep_filter_column_evaluations.csv

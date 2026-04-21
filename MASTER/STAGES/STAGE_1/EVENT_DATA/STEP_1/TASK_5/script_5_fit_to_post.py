@@ -177,6 +177,7 @@ TASK5_PLOT_ALIASES: tuple[str, ...] = (
     "debug_suite",
     "usual_suite",
     "essential_suite",
+    "charge_fit_tt_1234_per_plane_and_total",
     "theta_phi_definitive_tt_2d",
     "polar_theta_phi_definitive_tt_2d_detail_pre",
     "polar_theta_phi_definitive_tt_2d_detail_angle_correction",
@@ -520,7 +521,6 @@ station_directory = str(repo_root / "STATIONS" / f"MINGO0{station}")
 config_file_directory = str(
     config_root
     / "STAGE_0"
-    / "NEW_FILES"
     / "ONLINE_RUN_DICTIONARY"
     / f"STATION_{station}"
 )
@@ -2400,6 +2400,211 @@ save_filename = f"list_events_{save_filename_suffix}.txt"
 save_pdf_filename = f"mingo{str(station).zfill(2)}_task5_{save_filename_suffix}.pdf"
 
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
+
+fig_idx, plot_list = ensure_plot_state(globals())
+if (
+    (create_essential_plots or create_plots)
+    and task5_plot_enabled("charge_fit_tt_1234_per_plane_and_total")
+):
+    plane_charge_df = pd.DataFrame(index=working_df.index)
+    plane_charge_columns: list[str] = []
+    plane_charge_titles: list[str] = []
+    fallback_notes: list[str] = []
+
+    charge_candidates = [
+        col
+        for col in working_df.columns
+        if re.search(r"^(P[1-4]_Q_sum(?:_.*)?|Q_P[1-4]s[1-4])$", col)
+    ]
+    if charge_candidates:
+        print(
+            "Task 5: detected charge-related columns in input dataframe: "
+            + ", ".join(charge_candidates)
+        )
+    else:
+        possible_charge_cols = [
+            col
+            for col in working_df.columns
+            if re.search(r"Q|q", col)
+            and ("sum" in col.lower() or "charge" in col.lower() or "q_" in col.lower())
+        ]
+        print(
+            "Task 5: no exact charge-summary columns found; possible charge-like columns: "
+            + ", ".join(possible_charge_cols)
+        )
+
+    for i_plane in range(1, 5):
+        sum_col = f"P{i_plane}_Q_sum_final"
+        if sum_col in working_df.columns:
+            plane_charge_df.loc[:, sum_col] = pd.to_numeric(
+                working_df[sum_col], errors="coerce"
+            )
+            plane_charge_columns.append(sum_col)
+            plane_charge_titles.append(f"Plane {i_plane} Q_sum_final")
+            continue
+
+        alt_sum_cols = [
+            col
+            for col in working_df.columns
+            if re.fullmatch(fr"P{i_plane}_Q_sum(?:_.*)?", col)
+        ]
+        if alt_sum_cols:
+            alt_sum_cols = [c for c in alt_sum_cols if c != sum_col]
+            best_alt = [c for c in alt_sum_cols if c.endswith("_final")] or alt_sum_cols
+            alt_col = best_alt[0]
+            plane_charge_df.loc[:, alt_col] = pd.to_numeric(
+                working_df[alt_col], errors="coerce"
+            )
+            plane_charge_columns.append(alt_col)
+            plane_charge_titles.append(f"Plane {i_plane} {alt_col}")
+            fallback_notes.append(f"{sum_col} from {alt_col}")
+            continue
+
+        strip_cols = [
+            f"Q_P{i_plane}s{i_strip}"
+            for i_strip in range(1, 5)
+            if f"Q_P{i_plane}s{i_strip}" in working_df.columns
+        ]
+        if not strip_cols:
+            continue
+
+        fallback_col = f"P{i_plane}_Q_sum_from_strips"
+        strip_values = working_df[strip_cols].apply(pd.to_numeric, errors="coerce")
+        # Keep all-NaN rows as NaN so missing charge data is not misrepresented as 0.
+        plane_charge_df.loc[:, fallback_col] = strip_values.sum(axis=1, min_count=1)
+        plane_charge_columns.append(fallback_col)
+        plane_charge_titles.append(f"Plane {i_plane} Q sum from strips")
+        fallback_notes.append(f"P{i_plane}={' + '.join(strip_cols)}")
+
+    if plane_charge_columns:
+        if fallback_notes:
+            print(
+                "Warning: Task 5 charge summary is using fallback charge columns: "
+                + ", ".join(fallback_notes)
+            )
+
+        plane_charge_df["detector_total_charge"] = plane_charge_df[plane_charge_columns].sum(
+            axis=1,
+            min_count=1,
+        )
+
+        fit_tt_values = pd.to_numeric(working_df["fit_tt"], errors="coerce")
+        df_charge_1234 = plane_charge_df.loc[
+            fit_tt_values == 1234,
+            plane_charge_columns + ["detector_total_charge"],
+        ].copy()
+        print(
+            f"Task 5: preparing charge summary for fit_tt=1234 with {len(df_charge_1234)} matching rows"
+        )
+
+        if not df_charge_1234.empty:
+            for column_name in plane_charge_columns + ["detector_total_charge"]:
+                df_charge_1234.loc[:, column_name] = pd.to_numeric(
+                    df_charge_1234[column_name], errors="coerce"
+                )
+            df_charge_1234 = df_charge_1234.replace([np.inf, -np.inf], np.nan)
+            df_charge_1234["event_total_charge"] = df_charge_1234[
+                plane_charge_columns
+            ].sum(axis=1, min_count=1)
+        else:
+            df_charge_1234 = pd.DataFrame(
+                columns=plane_charge_columns + ["detector_total_charge", "event_total_charge"]
+            )
+
+        fig, axes = plt.subplots(
+            5,
+            2,
+            figsize=(14, 18),
+            constrained_layout=True,
+            sharex="col",
+        )
+        plot_columns = plane_charge_columns + ["event_total_charge"]
+        plot_titles = plane_charge_titles + ["Total event charge"]
+
+        for row_idx, (column_name, panel_title) in enumerate(zip(plot_columns, plot_titles)):
+            zoom_axis = axes[row_idx, 0]
+            full_axis = axes[row_idx, 1]
+            for axis, zoomed, title_suffix in [
+                (zoom_axis, True, " (0-40 zoom)"),
+                (full_axis, False, ""),
+            ]:
+                if df_charge_1234.empty:
+                    axis.text(
+                        0.5,
+                        0.5,
+                        "No fit_tt=1234 data available",
+                        ha="center",
+                        va="center",
+                    )
+                    axis.set_title(panel_title + title_suffix)
+                    axis.grid(alpha=0.25, which="both")
+                    axis.set_yscale("log")
+                    if zoomed:
+                        axis.set_xlim(0, 40)
+                    continue
+
+                values = pd.to_numeric(df_charge_1234[column_name], errors="coerce")
+                values = values[np.isfinite(values)]
+                if values.empty:
+                    axis.text(0.5, 0.5, "No finite values", ha="center", va="center")
+                    axis.set_title(panel_title + title_suffix)
+                    axis.grid(alpha=0.25, which="both")
+                    axis.set_yscale("log")
+                    if zoomed:
+                        axis.set_xlim(0, 40)
+                    continue
+
+                if zoomed:
+                    zoom_values = values[(values >= 0) & (values <= 40)]
+                    axis.hist(
+                        zoom_values,
+                        bins=np.linspace(0, 40, 121),
+                        color="tab:orange",
+                        alpha=0.75,
+                    )
+                else:
+                    axis.hist(values, bins=120, color="tab:orange", alpha=0.75)
+                axis.axvline(float(np.median(values)), color="black", ls="--", lw=1.0, alpha=0.8)
+                axis.set_title(panel_title + title_suffix)
+                axis.set_ylabel("Events")
+                axis.set_yscale("log")
+                axis.grid(alpha=0.25, which="both")
+                if zoomed:
+                    axis.set_xlim(0, 40)
+                if row_idx == len(plot_columns) - 1:
+                    axis.set_xlabel("Charge")
+
+        for row_idx in range(len(plot_columns), axes.shape[0]):
+            axes[row_idx, 0].axis("off")
+            axes[row_idx, 1].axis("off")
+
+        fig.suptitle(
+            "Task 5 charge summary for fit_tt = 1234\n"
+            "Per-plane charge and total event charge\n"
+            f"Events: {len(df_charge_1234)} | Columns: {', '.join(plot_columns)}",
+            fontsize=12,
+        )
+
+        if save_plots:
+            final_filename = f"{fig_idx}_charge_fit_tt_1234_per_plane_and_total.png"
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            save_plot_figure(
+                save_fig_path,
+                fig=fig,
+                format="png",
+                dpi=150,
+                alias="charge_fit_tt_1234_per_plane_and_total",
+            )
+        if show_plots:
+            plt.show()
+        plt.close(fig)
+    else:
+        print(
+            "Warning: Task 5 charge summary plot skipped because no per-plane charge "
+            "columns were found (neither P#_Q_sum_final nor Q_P#s# columns)."
+        )
 
 reprocessing_parameters = pd.DataFrame()
 

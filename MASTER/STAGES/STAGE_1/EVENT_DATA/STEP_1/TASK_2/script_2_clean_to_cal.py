@@ -654,7 +654,6 @@ station_directory = str(repo_root / "STATIONS" / f"MINGO0{station}")
 config_file_directory = str(
     config_root
     / "STAGE_0"
-    / "NEW_FILES"
     / "ONLINE_RUN_DICTIONARY"
     / f"STATION_{station}"
 )
@@ -5936,6 +5935,65 @@ def _compute_derivative_pedestal_metrics(
     )
     return metrics
 
+
+def _compute_histogram_pedestal_offset(Q_values: np.ndarray) -> float:
+    """Fallback pedestal estimator used when the derivative method is not finite."""
+
+    if Q_values.size == 0:
+        return float("nan")
+
+    rel_th = calibrate_strip_Q_pedestal_rel_th
+    abs_th = calibrate_strip_Q_pedestal_abs_th
+
+    offsets: list[float] = []
+    bin_vector = np.linspace(50, 1500, 200)
+    bin_vector = np.unique(bin_vector.astype(int))
+
+    for number_of_bins in bin_vector:
+        counts, bin_edges = np.histogram(Q_values, bins=int(number_of_bins))
+        if counts.size == 0 or not np.any(counts > 0):
+            continue
+
+        max_counts = np.max(counts)
+        counts_wo_peak = counts[counts < max_counts]
+        if counts_wo_peak.size == 0:
+            continue
+
+        plateau_counts_max = np.max(counts_wo_peak)
+        th = max(rel_th * plateau_counts_max, abs_th)
+        non_empty_bins = counts_wo_peak >= th
+        if not np.any(non_empty_bins):
+            continue
+
+        max_length = 0
+        current_length = 0
+        start_index = 0
+        temp_start = 0
+
+        for i, is_non_empty in enumerate(non_empty_bins):
+            if is_non_empty:
+                if current_length == 0:
+                    temp_start = i
+                current_length += 1
+                if current_length > max_length:
+                    max_length = current_length
+                    start_index = temp_start
+            else:
+                current_length = 0
+
+        if max_length == 0 or start_index >= len(bin_edges) - 1:
+            continue
+        offsets.append(float(bin_edges[start_index]))
+
+    if offsets:
+        return float(np.median(np.asarray(offsets, dtype=float)))
+
+    finite_values = Q_values[np.isfinite(Q_values)]
+    if finite_values.size == 0:
+        return float("nan")
+    return float(np.quantile(finite_values, 0.01))
+
+
 def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
     
     global index_of_cal_plot
@@ -5948,20 +6006,83 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
     abs_th = calibrate_strip_Q_pedestal_abs_th
     q_quantile = calibrate_strip_Q_pedestal_q_quantile # percentile
 
-    # First take the values that are not zero
-    pre_cond = (Q_ch != 0) & (T_ch != 0) & (Q_other != 0)
-    Q_ch = Q_ch[pre_cond]
-    Q_other = Q_other[pre_cond]
+    q_values = np.asarray(Q_ch, dtype=float)
+    t_values = np.asarray(T_ch, dtype=float)
+    q_other_values = np.asarray(Q_other, dtype=float)
 
-    cond = (abs( Q_other - Q_ch ) < Q_dif_pre_cal_threshold)
-    Q_ch = Q_ch[cond]
+    finite_mask = np.isfinite(q_values) & np.isfinite(t_values) & np.isfinite(q_other_values)
+    pair_pre_cond = finite_mask & (q_values != 0) & (t_values != 0) & (q_other_values != 0)
+    q_pair = q_values[pair_pre_cond]
+    q_other_pair = q_other_values[pair_pre_cond]
 
-    print(f"Percentage of events affected by condition: {100 * (1 - len(Q_ch) / len(Q_other)):.2f}%")
+    selected_q = np.array([], dtype=float)
+    sample_label = "paired sample"
+
+    if q_pair.size > 0:
+        cond = np.abs(q_other_pair - q_pair) < Q_dif_pre_cal_threshold
+        selected_q = q_pair[cond]
+        affected_pct = 100 * (1 - len(selected_q) / len(q_pair))
+        if selected_q.size == 0:
+            selected_q = q_pair
+            sample_label = "paired fallback without Q_dif cut"
+            print(
+                "Warning: charge pedestal calibration lost all rows after the Q_dif pre-cal cut; "
+                "falling back to the paired sample before that cut."
+            )
+    else:
+        affected_pct = 100.0
+
+    if selected_q.size == 0:
+        side_only_mask = np.isfinite(q_values) & np.isfinite(t_values) & (q_values != 0) & (t_values != 0)
+        selected_q = q_values[side_only_mask]
+        sample_label = "same-side fallback without Q_other"
+        if selected_q.size > 0:
+            print(
+                "Warning: charge pedestal calibration found no rows with non-zero Q_other; "
+                "falling back to the same-side non-zero sample."
+            )
+
+    if selected_q.size == 0:
+        charge_only_mask = np.isfinite(q_values) & (q_values != 0)
+        selected_q = q_values[charge_only_mask]
+        sample_label = "charge-only fallback"
+        if selected_q.size > 0:
+            print(
+                "Warning: charge pedestal calibration found no rows with non-zero T_ch; "
+                "falling back to non-zero charge values only."
+            )
+
+    if selected_q.size == 0:
+        print(
+            "Warning: charge pedestal calibration has no usable data after all fallback stages; "
+            "using 0.0 pedestal fallback."
+        )
+        return 0.0
+
+    print(f"Percentage of events affected by condition: {affected_pct:.2f}%")
+    if sample_label != "paired sample":
+        print(f"Warning: charge pedestal calibration using {sample_label}.")
+
+    Q_ch = selected_q
 
     derivative_metrics = _compute_derivative_pedestal_metrics(Q_ch)
-    derivative_offset = None
+    derivative_offset = float("nan")
     if derivative_metrics is not None:
         derivative_offset = derivative_metrics.get("offset")
+    histogram_offset = _compute_histogram_pedestal_offset(Q_ch)
+
+    pedestal = derivative_offset
+    pedestal_source = "derivative of smoothed CDF"
+    if not np.isfinite(pedestal) and np.isfinite(histogram_offset):
+        pedestal = histogram_offset
+        pedestal_source = "histogram fallback"
+    if not np.isfinite(pedestal):
+        pedestal = 0.0
+        pedestal_source = "0.0 fallback"
+        print(
+            "Warning: charge pedestal calibration did not find a finite offset; "
+            "using 0.0 fallback."
+        )
     
     # -----------------------------------------------------------------------------------------
     
@@ -6052,13 +6173,13 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
                 linewidth=2,
                 label="Exp fit (derivative)",
             )
-        if derivative_offset is not None and not np.isnan(derivative_offset):
+        if np.isfinite(pedestal):
             plt.axvline(
-                x=derivative_offset,
+                x=pedestal,
                 color="purple",
                 linestyle="--",
                 linewidth=1.5,
-                label=f"Derivative Offset: {derivative_offset:.2f}",
+                label=f"Pedestal: {pedestal:.2f}",
             )
 
         plt.title("Cumulative Distribution of Q_ch before Calibration")
@@ -6085,8 +6206,8 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
     # -----------------------------------------------------------------------------------------
 
     if task2_plot_requested("new_calibration_calibrated_charge", essential=True):
-        if derivative_offset is not None and np.isfinite(derivative_offset):
-            q_ch_cal = Q_ch - derivative_offset
+        if np.isfinite(pedestal):
+            q_ch_cal = Q_ch - pedestal
             q_ch_cal = q_ch_cal[(q_ch_cal > pedestal_left) & (q_ch_cal < pedestal_right)]
             if q_ch_cal.size > 0:
                 plt.figure(figsize=(8, 6))
@@ -6107,7 +6228,7 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
                     )
                 plt.close()
     
-    pedestal = derivative_offset
+    print(f"Charge pedestal applied: {pedestal} ({pedestal_source})")
     return pedestal
 
 def calibrate_strip_Q_pedestal_old(Q_ch, T_ch, Q_other, self_trigger_mode = False):

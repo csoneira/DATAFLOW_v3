@@ -22,7 +22,7 @@ Metadata types mainly split into:
 - Execution-oriented: `_execution.csv`, `_status.csv`, `_profiling.csv`
 - Data-analysis-oriented: `_calibration.csv`, `_filter.csv`, `_trigger_type.csv`, `_specific.csv`
 
-Current QA steps in this directory focus on the analysis-oriented metadata.
+Current QA steps in this directory focus on the analysis-oriented metadata, but the shared registry is intentionally wider so new metadata families can be added without cloning whole subprojects.
 
 ## Directory Structure
 
@@ -41,6 +41,19 @@ Each `STEP_*` contains:
 - outputs in `TASK_*/STATIONS/MINGOXX/OUTPUTS/{FILES,PLOTS}`
 
 `run_all_steps.sh` executes all `STEP_*/run_tasks_*.sh` runners.
+
+The shared code now lives under `qa_core/`:
+- `task_setup.py`: config loading, station bootstrap, timestamp parsing, and date filtering
+- `time_series_qa.py`: generic engine for the simple time-series QA families
+- `registry.py`: registry and filesystem discovery for metadata families
+- `epochs.py`: normalized loader for `ONLINE_RUN_DICTIONARY` epoch tables
+- `thresholds.py`: reusable threshold rules for future pass/warn/fail logic
+
+Currently wired:
+- `STEP_2_FILTERING`: thin wrappers over the generic `time_series_qa` engine
+- `STEP_3_TRIGGER_TYPES`: thin wrappers over the generic `time_series_qa` engine
+- `STEP_1_CALIBRATIONS`: still custom, but now shares the bootstrap/helpers layer
+- `STEP_4_SPECIFIC`: still custom, because its plotting logic is materially different
 
 ## Plot-First Workflow (Before Quality Criteria)
 
@@ -84,3 +97,20 @@ This keeps the plotting layer flexible while preserving reproducibility through 
 
 Task scripts currently scaffold pass outputs (`*_pass.csv`) with configurable default values.  
 Final QA criteria are intentionally deferred until exploratory plotting is complete and reviewed.
+
+## Adding More Metadata Families
+
+The intended extension path is now:
+1. Register the metadata family in `qa_core/registry.py` if it is new.
+2. Decide whether it fits the generic `time_series_qa` engine or needs a custom runner.
+3. Add task-level `config.yaml` entries with `metadata_csv_filename`, `column_patterns`, and plot groups.
+4. If thresholds are needed, define a default rule plus per-column overrides with `qa_core/thresholds.py`.
+5. Attach files to detector epochs with `qa_core/epochs.py` before computing reference medians or tolerances.
+
+This is the first step toward epoch-aware QA:
+- load metadata
+- attach an `epoch_id` from `ONLINE_RUN_DICTIONARY`
+- build per-epoch reference centers
+- evaluate each file/column against the configured tolerance rule
+
+The threshold model is designed to support a global default plus per-column overrides rather than hard-coding one margin for all parameters.

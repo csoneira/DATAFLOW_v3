@@ -1,0 +1,4 @@
+quality:
+  enabled: true
+  output_reference_filename: rate_histogram_epoch_references.csv
+  output_column_evaluation_filename: rate_histogram_column_evaluations.csv

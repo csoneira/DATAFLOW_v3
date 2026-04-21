@@ -44,7 +44,7 @@ plots:
   streamer_multiplicity: usual
   streamer_contagion_matrix: usual
   streamer_contagion_matrix_strip: usual
-  streamer_efficiency_comparison: essential
+  streamer_efficiency_comparison: usual
   fourplane_weakest_charge: usual
   fourplane_weakest_plane_identity: usual
   efficiency_anatomy_by_charge_band: usual

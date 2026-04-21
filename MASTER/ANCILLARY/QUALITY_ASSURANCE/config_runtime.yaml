@@ -2,8 +2,8 @@
 date_range:
   # Use format: YYYY-MM-DD HH:MM:SS (local station time convention).
   # Set to null to disable each boundary.
-  start: 2024-09-27
-  end: 2024-10-01
+  start: 2024-03-14
+  end: 2026-10-05
 
 # Preferred timestamp sources for time-series plots and date filtering.
 time_columns_priority:

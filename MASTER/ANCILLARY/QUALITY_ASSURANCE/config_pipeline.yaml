@@ -1,0 +1,36 @@
+steps:
+  - order: 1
+    step_name: STEP_1_CALIBRATIONS
+    display_name: calibrations
+    enabled: true
+    runner: STEP_1_CALIBRATIONS/run_tasks_calibration.sh
+
+  - order: 2
+    step_name: STEP_2_FILTERING
+    display_name: filtering
+    enabled: true
+    runner: STEP_2_FILTERING/run_tasks_filtering.sh
+
+  - order: 3
+    step_name: STEP_3_DEEP_FILTER
+    display_name: deep_filter
+    enabled: true
+    runner: STEP_3_DEEP_FILTER/run_tasks_deep_filter.sh
+
+  - order: 4
+    step_name: STEP_4_RATE_HISTOGRAM
+    display_name: rate_histogram
+    enabled: true
+    runner: STEP_4_RATE_HISTOGRAM/run_tasks_rate_histogram.sh
+
+  - order: 5
+    step_name: STEP_5_ROBUST_EFFICIENCY
+    display_name: robust_efficiency
+    enabled: true
+    runner: STEP_5_ROBUST_EFFICIENCY/run_tasks_robust_efficiency.sh
+
+  - order: 6
+    step_name: STEP_6_TRIGGER_TYPES
+    display_name: trigger_types
+    enabled: true
+    runner: STEP_6_TRIGGER_TYPES/run_tasks_trigger_types.sh

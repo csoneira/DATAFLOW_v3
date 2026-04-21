@@ -13,7 +13,7 @@ if (( ${#task_dirs[@]} == 0 )); then
 fi
 
 for task_dir in "${task_dirs[@]}"; do
-  mapfile -t py_scripts < <(find "$task_dir" -maxdepth 1 -type f -name '*.py' | sort)
+  mapfile -t py_scripts < <(find "$task_dir" -maxdepth 1 -type f -name 'task_*.py' | sort)
   if (( ${#py_scripts[@]} == 0 )); then
     echo "[run_tasks_filtering] No Python scripts found in $(basename "$task_dir")"
     continue

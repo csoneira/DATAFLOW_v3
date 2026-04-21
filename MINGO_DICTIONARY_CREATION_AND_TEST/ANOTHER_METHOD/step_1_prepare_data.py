@@ -24,7 +24,6 @@ from common import (
     derive_trigger_rate_features,
     ensure_output_dirs,
     filter_by_z_vector,
-    format_selected_rate_name,
     get_trigger_type_selection,
     load_config,
     required_trigger_rate_columns,
@@ -218,40 +217,70 @@ def _resolve_step1_input_dataframe(config: dict) -> tuple[pd.DataFrame, dict[str
 
     metadata_root = Path(
         step1_config.get(
-            "trigger_type_metadata_root",
-            step1_config.get("mingo00_metadata_root", str(DEFAULT_MINGO00_METADATA_ROOT)),
+            "metadata_root",
+            step1_config.get(
+                "trigger_type_metadata_root",
+                step1_config.get("mingo00_metadata_root", str(DEFAULT_MINGO00_METADATA_ROOT)),
+            ),
         )
     ).expanduser()
     if not metadata_root.is_absolute():
         metadata_root = (Path(config.get("_config_dir", ".")) / metadata_root).resolve()
-    task_id = int(trigger_selection["task_id"])
-    trigger_path = metadata_root / f"TASK_{task_id}" / "METADATA" / f"task_{task_id}_metadata_trigger_type.csv"
+    metadata_source = str(trigger_selection.get("metadata_source", "trigger_type"))
+    source_name = str(trigger_selection.get("source_name", "trigger_type"))
+    task_id = int(trigger_selection.get("metadata_task_id", trigger_selection["task_id"]))
+    trigger_path = metadata_root / f"TASK_{task_id}" / "METADATA" / f"task_{task_id}_metadata_{source_name}.csv"
     if not trigger_path.exists():
-        raise FileNotFoundError(f"Missing required trigger_type metadata file: {trigger_path}")
-
-    stage_prefix = str(trigger_selection["stage_prefix"])
-    offender_threshold = trigger_selection["offender_threshold"]
-    required_rate_columns = required_trigger_rate_columns(stage_prefix, offender_threshold)
-    required_count_columns = [
-        column
-        for column in (
-            trigger_count_source_column(stage_prefix, label, offender_threshold)
-            for label in ("12", "13", "14", "23", "24", "34", "123", "124", "134", "234", "1234")
-        )
-        if column is not None
-    ]
+        raise FileNotFoundError(f"Missing required {source_name} metadata file: {trigger_path}")
 
     header = set(pd.read_csv(trigger_path, nrows=0).columns)
-    needed = ["param_hash"] + [column for column in required_rate_columns + required_count_columns if column in header]
+    stage_prefix = trigger_selection.get("stage_prefix")
+    offender_threshold = trigger_selection.get("offender_threshold")
+    if metadata_source == "robust_efficiency":
+        required_rate_columns = ["rate_1234_hz", "rate_total_hz"]
+        selected_source_rate_column = str(trigger_selection.get("selected_source_rate_column", "rate_1234_hz"))
+        if selected_source_rate_column not in required_rate_columns:
+            required_rate_columns.append(selected_source_rate_column)
+        required_count_columns = [
+            column
+            for column in (
+                "four_plane_count",
+                "count_1234",
+                "rate_1234_count",
+                "four_plane_robust_count",
+                "count_four_plane_robust",
+                "total_count",
+                "count_total",
+                "rate_total_count",
+            )
+            if column in header
+        ]
+        required_efficiency_columns = [f"eff{idx}" for idx in range(1, 5)]
+        needed = ["param_hash"] + required_efficiency_columns + required_rate_columns + required_count_columns
+        missing_required_columns = [
+            column for column in ["param_hash"] + required_efficiency_columns + required_rate_columns if column not in header
+        ]
+    else:
+        stage_prefix = str(stage_prefix)
+        required_rate_columns = required_trigger_rate_columns(stage_prefix, offender_threshold)
+        required_count_columns = [
+            column
+            for column in (
+                trigger_count_source_column(stage_prefix, label, offender_threshold)
+                for label in ("12", "13", "14", "23", "24", "34", "123", "124", "134", "234", "1234")
+            )
+            if column is not None
+        ]
+        needed = ["param_hash"] + [column for column in required_rate_columns + required_count_columns if column in header]
+        missing_required_columns = [column for column in ["param_hash"] + required_rate_columns if column not in header]
     if "count_rate_denominator_seconds" in header:
         needed.append("count_rate_denominator_seconds")
     if "execution_timestamp" in header:
         needed.append("execution_timestamp")
     needed = list(dict.fromkeys(needed))
-    missing_required_columns = [column for column in ["param_hash"] + required_rate_columns if column not in header]
     if missing_required_columns:
         raise ValueError(
-            "Selected trigger_type metadata is missing required columns: "
+            f"Selected {source_name} metadata is missing required columns: "
             + ", ".join(missing_required_columns)
         )
 
@@ -280,10 +309,12 @@ def _resolve_step1_input_dataframe(config: dict) -> tuple[pd.DataFrame, dict[str
         raise ValueError("Param-hash merge produced no rows between sim params and MINGO00 metadata.")
 
     return merged, {
-        "input_mode": "param_hash_merge_trigger_type",
+        "input_mode": f"param_hash_merge_{source_name}",
+        "metadata_source": metadata_source,
         "simulation_params_csv": str(sim_params_path),
         "simulation_efficiency_columns": SIMULATED_EFF_SOURCE_COLUMNS,
         "metadata_files_used": [str(trigger_path)],
+        "metadata_root": str(metadata_root),
         "trigger_type_metadata_root": str(metadata_root),
         "task_id": task_id,
         "stage_prefix": stage_prefix,
@@ -335,14 +366,10 @@ def run(config_path: str | Path | None = None) -> Path:
     dataframe = dataframe.loc[valid_trigger_mask].copy()
     rows_after_trigger_validity_filter = int(len(dataframe))
     if dataframe.empty:
-        selected_rate_name = format_selected_rate_name(
-            stage_prefix=str(trigger_feature_info["stage_prefix"]),
-            rate_family_column=str(trigger_feature_info["rate_family_column"]),
-            offender_threshold=trigger_feature_info.get("used_offender_threshold"),
-        )
+        selected_rate_name = str(trigger_feature_info.get("selected_source_rate_column", trigger_feature_info["rate_family_column"]))
         raise ValueError(
-            "Step 1 found no usable rows after deriving trigger-type features for "
-            f"{selected_rate_name}. The selected trigger-type columns currently yield no positive "
+            "Step 1 found no usable rows after deriving rate-source features for "
+            f"{selected_rate_name}. The selected metadata columns currently yield no positive "
             "four-plane support with finite empirical and simulated efficiencies."
         )
 
@@ -354,7 +381,7 @@ def run(config_path: str | Path | None = None) -> Path:
     if dataframe.empty:
         raise ValueError(
             "No Step 1 rows remain after z-position and minimum-event filtering for the selected "
-            "trigger-type configuration."
+            "rate-source configuration."
         )
 
     selected_trigger = None
@@ -407,6 +434,7 @@ def run(config_path: str | Path | None = None) -> Path:
         "trigger_values_in_filtered_data": trigger_values,
         "parameter_space_plot": None if plot_path is None else str(plot_path),
         "source": source_info,
+        "trigger_rate_selection": trigger_feature_info,
         "trigger_type_selection": trigger_feature_info,
         "row_counts": {
             "initial": initial_rows,
@@ -419,11 +447,7 @@ def run(config_path: str | Path | None = None) -> Path:
             "z_positions": z_columns,
             "efficiencies": SIMULATED_EFF_SOURCE_COLUMNS,
             "empirical_efficiencies_for_trigger_validation": EMPIRICAL_EFF_SOURCE_COLUMNS,
-            "rate": format_selected_rate_name(
-                stage_prefix=str(trigger_feature_info["stage_prefix"]),
-                rate_family_column=str(trigger_feature_info["rate_family_column"]),
-                offender_threshold=trigger_feature_info.get("used_offender_threshold"),
-            ),
+            "rate": str(trigger_feature_info.get("selected_source_rate_column", trigger_feature_info["rate_family_column"])),
             "simulated_flux": flux_column,
             "num_events": num_events_column,
             "passthrough_trigger_columns": trigger_passthrough,

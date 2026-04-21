@@ -2,7 +2,7 @@ input_dir: ../../INTERSTEPS/STEP_1_TO_2
 input_sim_run: random
 input_basename: null
 normalize_to_first_plane: true
-station_config_root: ../../../MASTER/CONFIG_FILES/STAGE_0/NEW_FILES/ONLINE_RUN_DICTIONARY
+station_config_root: ../../../MASTER/CONFIG_FILES/STAGE_0/ONLINE_RUN_DICTIONARY
 param_mesh_dir: ../../INTERSTEPS/STEP_0_TO_1
 param_mesh_sim_run: none
 output_format: pkl

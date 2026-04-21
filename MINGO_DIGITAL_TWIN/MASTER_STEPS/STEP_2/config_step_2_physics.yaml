@@ -3,8 +3,8 @@ bounds_mm:
   # Full strip length is 300 mm, but the effective active X length is smaller.
   # Manual measurement of the active area gave 276 mm. The current T_dif tuning
   # report suggests a slightly larger effective active span of 284.888 mm.
-  x_min: -142.44405248697532
-  x_max: 142.44405248697532
+  x_min: -132.4645
+  x_max: 132.4645
   y_min: -143.5
   y_max: 143.5
 
