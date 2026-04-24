@@ -344,7 +344,11 @@ def csv_creation_like_timestamp(path: Path) -> Optional[pd.Timestamp]:
     return pd.Timestamp(datetime.fromtimestamp(stat.st_mtime))
 
 
-def load_stage_dataframe(stage: StageSpec) -> pd.DataFrame:
+def _load_stage_dataframe_with_execution_agg(
+    stage: StageSpec,
+    *,
+    execution_agg: str,
+) -> pd.DataFrame:
     if not stage.csv_path.exists():
         return pd.DataFrame(columns=["basename", "file_timestamp", "execution_timestamp"])
 
@@ -397,15 +401,23 @@ def load_stage_dataframe(stage: StageSpec) -> pd.DataFrame:
     if data.empty:
         return pd.DataFrame(columns=["basename", "file_timestamp", "execution_timestamp"])
 
-    grouped = (
-        data.sort_values("execution_timestamp")
-        .groupby("basename", as_index=False)
-        .agg(
-            file_timestamp=("file_timestamp", "first"),
-            execution_timestamp=("execution_timestamp", "max"),
-        )
+    execution_agg_name = str(execution_agg).strip().lower()
+    if execution_agg_name not in {"min", "max"}:
+        raise ValueError(f"Unsupported execution_agg: {execution_agg}")
+
+    grouped = data.sort_values("execution_timestamp").groupby("basename", as_index=False).agg(
+        file_timestamp=("file_timestamp", "first"),
+        execution_timestamp=("execution_timestamp", execution_agg_name),
     )
     return grouped
+
+
+def load_stage_dataframe(stage: StageSpec) -> pd.DataFrame:
+    return _load_stage_dataframe_with_execution_agg(stage, execution_agg="max")
+
+
+def load_stage_first_completion_dataframe(stage: StageSpec) -> pd.DataFrame:
+    return _load_stage_dataframe_with_execution_agg(stage, execution_agg="min")
 
 
 def stage_specs_for_station(
@@ -707,6 +719,185 @@ def extend_completeness_to_timestamp(
         [completeness_df, pd.DataFrame([extension_row], columns=completeness_df.columns)],
         ignore_index=True,
     )
+
+
+def _format_eta_duration(delta: pd.Timedelta) -> str:
+    total_seconds = max(0, int(round(delta.total_seconds())))
+    if total_seconds < 60:
+        return "<1 min"
+
+    days, remainder = divmod(total_seconds, 24 * 3600)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, _ = divmod(remainder, 60)
+
+    parts: List[str] = []
+    if days:
+        parts.append(f"{days}d")
+    if hours and len(parts) < 2:
+        parts.append(f"{hours}h")
+    if minutes and len(parts) < 2:
+        parts.append(f"{minutes}m")
+    if not parts:
+        parts.append("<1 min")
+    return " ".join(parts)
+
+
+def _progress_value_at_or_before(
+    timestamps: pd.Series,
+    progress: pd.Series,
+    target_timestamp: pd.Timestamp,
+) -> float:
+    if timestamps.empty or progress.empty:
+        return 0.0
+
+    target_ts = pd.Timestamp(target_timestamp)
+    first_ts = pd.Timestamp(timestamps.iloc[0])
+    if first_ts.tzinfo is None and target_ts.tzinfo is not None:
+        target_ts = target_ts.tz_localize(None)
+    elif first_ts.tzinfo is not None and target_ts.tzinfo is None:
+        target_ts = target_ts.tz_localize(first_ts.tzinfo)
+
+    idx = int(timestamps.searchsorted(target_ts, side="right") - 1)
+    if idx < 0:
+        return float(progress.iloc[0])
+    return float(progress.iloc[idx])
+
+
+def _estimate_remaining_from_window(
+    progress_start: float,
+    progress_end: float,
+    elapsed: pd.Timedelta,
+) -> Optional[pd.Timedelta]:
+    elapsed_seconds = float(elapsed.total_seconds())
+    delta_progress = float(progress_end) - float(progress_start)
+    if elapsed_seconds <= 0 or delta_progress <= 0:
+        return None
+
+    remaining_seconds = elapsed_seconds * (100.0 - float(progress_end)) / delta_progress
+    if not np.isfinite(remaining_seconds):
+        return None
+    return pd.Timedelta(seconds=max(0.0, remaining_seconds))
+
+
+def build_eta_progress_series(stages: Sequence[StageSpec]) -> pd.DataFrame:
+    ordered_stages = sorted(stages, key=lambda stage: stage.index)
+    if not ordered_stages:
+        return pd.DataFrame(columns=["execution_timestamp", "progress_pct"])
+
+    stage0_df = load_stage_dataframe(ordered_stages[0])
+    denominator = int(stage0_df["basename"].nunique()) if not stage0_df.empty else 0
+    if denominator <= 0:
+        return pd.DataFrame(columns=["execution_timestamp", "progress_pct"])
+
+    final_stage_df = load_stage_first_completion_dataframe(ordered_stages[-1])
+    if final_stage_df.empty:
+        return pd.DataFrame(columns=["execution_timestamp", "progress_pct"])
+
+    if not stage0_df.empty:
+        allowed_basenames = set(stage0_df["basename"].astype(str))
+        final_stage_df = final_stage_df[
+            final_stage_df["basename"].astype(str).isin(allowed_basenames)
+        ].copy()
+    if final_stage_df.empty:
+        return pd.DataFrame(columns=["execution_timestamp", "progress_pct"])
+
+    timeline = (
+        pd.to_datetime(final_stage_df["execution_timestamp"], errors="coerce")
+        .dropna()
+        .sort_values()
+        .reset_index(drop=True)
+    )
+    if timeline.empty:
+        return pd.DataFrame(columns=["execution_timestamp", "progress_pct"])
+
+    counts = np.arange(1, len(timeline) + 1, dtype=float)
+    progress_pct = (counts / float(denominator)) * 100.0
+    return pd.DataFrame(
+        {
+            "execution_timestamp": timeline,
+            "progress_pct": np.clip(progress_pct, 0.0, 100.0),
+        }
+    )
+
+
+def estimate_time_left_comments(
+    completeness_df: pd.DataFrame,
+    stages: Sequence[StageSpec],
+    current_timestamp: pd.Timestamp,
+) -> Tuple[str, str]:
+    eta_progress_df = build_eta_progress_series(stages)
+    if eta_progress_df.empty:
+        return (
+            "ETA using the last 1h final-stage pace: unavailable",
+            "ETA using the full final-stage history: unavailable",
+        )
+
+    ordered_stages = sorted(stages, key=lambda stage: stage.index)
+    final_stage = ordered_stages[-1]
+    timestamps = eta_progress_df["execution_timestamp"].reset_index(drop=True)
+    progress = (
+        pd.to_numeric(eta_progress_df["progress_pct"], errors="coerce")
+        .clip(lower=0.0, upper=100.0)
+        .reset_index(drop=True)
+    )
+    current_progress = float(progress.iloc[-1])
+
+    if current_progress >= 99.5:
+        return (
+            "ETA using the last 1h final-stage pace: practically finished",
+            "ETA using the full final-stage history: practically finished",
+        )
+
+    started_mask = progress > 0.0
+    if not started_mask.any():
+        unavailable = f"unavailable until {final_stage.label} starts"
+        return (
+            f"ETA using the last 1h final-stage pace: {unavailable}",
+            f"ETA using the full final-stage history: {unavailable}",
+        )
+
+    first_progress_timestamp = pd.Timestamp(timestamps.loc[started_mask.idxmax()])
+    current_ts = pd.Timestamp(current_timestamp)
+    if first_progress_timestamp.tzinfo is None and current_ts.tzinfo is not None:
+        current_ts = current_ts.tz_localize(None)
+    elif first_progress_timestamp.tzinfo is not None and current_ts.tzinfo is None:
+        current_ts = current_ts.tz_localize(first_progress_timestamp.tzinfo)
+
+    all_data_remaining = _estimate_remaining_from_window(
+        0.0,
+        current_progress,
+        current_ts - first_progress_timestamp,
+    )
+
+    last_hour_start = current_ts - timedelta(hours=1)
+    progress_one_hour_ago = _progress_value_at_or_before(
+        timestamps,
+        progress,
+        last_hour_start,
+    )
+    last_hour_remaining = _estimate_remaining_from_window(
+        progress_one_hour_ago,
+        current_progress,
+        pd.Timedelta(hours=1),
+    )
+
+    if last_hour_remaining is None:
+        last_hour_comment = "ETA using the last 1h final-stage pace: stalled / unavailable"
+    else:
+        last_hour_comment = (
+            "ETA using the last 1h final-stage pace: "
+            f"about {_format_eta_duration(last_hour_remaining)}"
+        )
+
+    if all_data_remaining is None:
+        all_data_comment = "ETA using the full final-stage history: unavailable"
+    else:
+        all_data_comment = (
+            "ETA using the full final-stage history: "
+            f"about {_format_eta_duration(all_data_remaining)}"
+        )
+
+    return last_hour_comment, all_data_comment
 
 
 def _scatter_stage_points(
@@ -1142,9 +1333,12 @@ def plot_station_page(
     middle_log_scale_seconds: float,
     x_limits_override: Optional[Tuple[pd.Timestamp, pd.Timestamp]] = None,
 ) -> None:
-    title = f"{station} - Definitive execution map"
-
     if data.empty:
+        title = (
+            f"{station} - Definitive execution map\n"
+            "ETA using the last 1h final-stage pace: unavailable\n"
+            "ETA using the full final-stage history: unavailable"
+        )
         fig, ax = plt.subplots(figsize=(13, 5))
         fig.suptitle(title, fontsize=14)
         ax.axis("off")
@@ -1170,6 +1364,16 @@ def plot_station_page(
         now = pd.Timestamp.utcnow().tz_convert(y_min.tzinfo)
 
     completeness_for_plot = extend_completeness_to_timestamp(completeness_df, now)
+    last_hour_eta_comment, all_data_eta_comment = estimate_time_left_comments(
+        completeness_for_plot,
+        stages,
+        now,
+    )
+    title = (
+        f"{station} - Definitive execution map\n"
+        f"{last_hour_eta_comment}\n"
+        f"{all_data_eta_comment}"
+    )
 
     fig_width = 16.6
     fig_height = 9.7

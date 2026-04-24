@@ -1,0 +1,10 @@
+plot_only:
+  - '*'
+
+ignore:
+  - '*_total_offenders_*'
+  - '*noise_count*'
+  - '*_noise_*'
+  - '*_to_*'
+  - '*_count'
+  - count_rate_denominator_seconds

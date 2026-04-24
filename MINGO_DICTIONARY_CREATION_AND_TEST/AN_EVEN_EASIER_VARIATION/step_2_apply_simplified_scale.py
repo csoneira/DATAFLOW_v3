@@ -10,6 +10,7 @@ from typing import Any
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 from common import DEFAULT_CONFIG_PATH, cfg_path, ensure_output_dirs, load_config
@@ -183,6 +184,63 @@ def _plot_reference_efficiency_series(
     plt.close(fig)
 
 
+def _plot_eff_reference_vs_rates_scatter(dataframe: pd.DataFrame, output_path: Path) -> None:
+    fig, ax = plt.subplots(figsize=(10, 6))
+    eff_reference = pd.to_numeric(dataframe["eff_reference"], errors="coerce")
+    selected_rate = pd.to_numeric(dataframe["selected_rate_hz"], errors="coerce")
+    corrected_rate = pd.to_numeric(dataframe["corrected_rate_hz"], errors="coerce")
+
+    selected_color = "#1f77b4"
+    corrected_color = "#ff7f0e"
+
+    ax.scatter(
+        eff_reference,
+        selected_rate,
+        s=14,
+        alpha=0.65,
+        label="selected_rate_hz",
+        color=selected_color,
+    )
+    ax.scatter(
+        eff_reference,
+        corrected_rate,
+        s=14,
+        alpha=0.65,
+        label="corrected_rate_hz",
+        color=corrected_color,
+    )
+
+    def _add_linear_trend_line(x_values: pd.Series, y_values: pd.Series, color: str, label: str) -> None:
+        valid = x_values.notna() & y_values.notna()
+        if int(valid.sum()) < 2:
+            return
+        x = x_values.loc[valid].to_numpy(dtype=float)
+        y = y_values.loc[valid].to_numpy(dtype=float)
+        x_min = float(np.nanmin(x))
+        x_line_end = 1.01
+        x_line_start = min(x_min, x_line_end)
+        if x_line_end <= x_line_start:
+            return
+        slope, intercept = np.polyfit(x, y, 1)
+        x_line = np.linspace(x_line_start, x_line_end, 120)
+        y_line = slope * x_line + intercept
+        ax.plot(x_line, y_line, linestyle="--", linewidth=1.8, color=color, label=label)
+
+    _add_linear_trend_line(eff_reference, selected_rate, selected_color, "selected trend")
+    _add_linear_trend_line(eff_reference, corrected_rate, corrected_color, "corrected trend")
+    ax.axvline(1.0, linestyle=":", linewidth=1.5, color="black", label="eff_reference = 1")
+
+    ax.set_title("Rate vs eff_reference")
+    ax.set_xlabel("eff_reference")
+    ax.set_ylabel("Rate [Hz]")
+    ax.grid(alpha=0.25)
+    ax.legend()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+
+
 def run(config_path: str | Path | None = None) -> Path:
     _configure_logging()
     ensure_output_dirs()
@@ -205,6 +263,8 @@ def run(config_path: str | Path | None = None) -> Path:
     _plot_rate_series(scaled, plot_path)
     eff_plot_path = output_path.parent.parent / "PLOTS" / "real_data_eff2_eff3_series.png"
     _plot_reference_efficiency_series(scaled, eff_plot_path, reference_columns)
+    scatter_plot_path = output_path.parent.parent / "PLOTS" / "real_data_eff_reference_vs_rate_scatter.png"
+    _plot_eff_reference_vs_rates_scatter(scaled, scatter_plot_path)
 
     logging.info(
         "Wrote simplified scaled output with %d rows to %s",
@@ -220,6 +280,7 @@ def run(config_path: str | Path | None = None) -> Path:
         )
     logging.info("Wrote reference-efficiency time series plot to %s", eff_plot_path)
     logging.info("Wrote original vs corrected time series plot to %s", plot_path)
+    logging.info("Wrote eff_reference vs rates scatter plot to %s", scatter_plot_path)
     return output_path
 
 

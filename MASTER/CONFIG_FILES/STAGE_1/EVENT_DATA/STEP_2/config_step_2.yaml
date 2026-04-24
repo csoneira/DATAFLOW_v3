@@ -35,6 +35,22 @@ blurring_sigma_angular: 2
 blurring_xy: false
 blurring_sigma_xy: 0.05
 draw_angular_regions: true
-theta_boundaries: [5, 15, 25]
-region_layout: [1, 8, 8, 8]
+# Inclination convention: theta ~= 0 is the most vertical, so it is labelled
+# "high". Larger theta is more inclined, so the outer ring is labelled "low".
+theta_boundaries: [15, 25]
+region_layout: [1, 8, 4]
+region_ring_names: [high, mid, low]
+angular_region_max_deg: 90
+output_time_column: Time
+output_time_bin: 1min
+output_rate_suffix: rate_hz
+output_invalid_region_label: R_unknown
+output_include_group_name: false
+output_trigger_groups:
+  - name: total_three_and_four_plane
+    tt_values: [123, 124, 134, 234, 1234]
+# Leave this empty to auto-build all configured columns from
+# output_trigger_groups x angular regions.
+output_value_columns: []
+output_extra_columns: [Q_event_mean]
 time_to_min: false

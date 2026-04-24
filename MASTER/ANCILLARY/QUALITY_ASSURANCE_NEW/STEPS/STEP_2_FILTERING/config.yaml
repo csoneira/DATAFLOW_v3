@@ -1,0 +1,6 @@
+display_name: filtering
+task_ids: [1, 2, 3, 4, 5]
+metadata_suffix: filter
+metadata_type: filtering
+pass_column_template: task_{task_id}_filtering_pass
+threshold_rules_csv: filtering_column_rules.csv

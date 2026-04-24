@@ -1,0 +1,43 @@
+stations: [1]
+
+date_range:
+  start: 2024-02
+  end: 2024-07
+
+date_range_excluded_stations:
+  - MINGO00
+
+time_columns_priority:
+  - execution_timestamp
+  - datetime
+
+x_axis:
+  mode: filename_timestamp
+  filename_column: filename_base
+  column: null
+
+plots:
+  dpi: 150
+  format: png
+  figsize_per_col: 4.2
+  figsize_per_row: 2.8
+  line_width: 0.9
+  marker_size: 2.0
+  default_ncols: 4
+  default_max_columns_per_plot: 12
+
+quality_defaults:
+  center_method: mean
+  tolerance_mode: zscore
+  tolerance_value: 3.0
+  min_samples: 8
+  reference_zero_policy: keep
+
+ignore_patterns_common:
+  - filename_base
+  - execution_timestamp
+  - datetime
+  - date
+  - param_hash
+  - qa_*
+  - __*

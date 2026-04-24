@@ -47,8 +47,10 @@ are ignored and only the rate choice matters:
 Step 2 scaling is controlled with:
 
 - `step2.efficiency_reference_planes`
+- `step2.efficiency_reference_min`
 
 Example:
 
 - `[3]` uses only `eff_empirical_3`
 - `[2, 3]` uses the mean of `eff_empirical_2` and `eff_empirical_3`
+- `0.2` drops rows where the derived `eff_reference` is below `0.2`

@@ -120,7 +120,15 @@ from MASTER.common.plot_utils import (
 )
 from MASTER.common.selection_config import load_selection_for_paths, station_is_selected
 from MASTER.common.status_csv import initialize_status_row, update_status_progress
-from MASTER.common.reprocessing_utils import get_reprocessing_value
+from MASTER.common.reprocessing_utils import (
+    QA_REPROCESSING_METADATA_KEYS,
+    apply_qa_reprocessing_context,
+    canonical_processing_basename,
+    filter_filenames_by_qa_retry_basenames,
+    get_reprocessing_value,
+    load_active_qa_retry_basenames,
+    load_qa_reprocessing_context_for_file,
+)
 from MASTER.common.simulated_data_utils import resolve_simulated_z_positions
 from MASTER.common.step1_shared import (
     add_normalized_count_metadata,
@@ -1089,6 +1097,11 @@ config = apply_step1_master_overrides(
     master_config_root=config_root,
     log_fn=print,
 )
+process_only_qa_retry_files = bool(config.get("process_only_qa_retry_files", False))
+if process_only_qa_retry_files:
+    print(
+        "[QA_ONLY] Enabled by STEP_1 shared config: only files present in the active QA retry list will be processed."
+    )
 
 selection_config = load_selection_for_paths(
     [config_file_path],
@@ -1526,9 +1539,43 @@ if date_ranges:
             f"[DATE_RANGE] Ignoring {skipped_completed} out-of-range file(s) in COMPLETED_DIRECTORY."
         )
 
+active_qa_retry_basenames: set[str] = set()
+if process_only_qa_retry_files:
+    active_qa_retry_basenames = load_active_qa_retry_basenames(
+        station,
+        repo_root=repo_root,
+    )
+    unprocessed_files = filter_filenames_by_qa_retry_basenames(
+        unprocessed_files,
+        active_qa_retry_basenames,
+    )
+    processing_files = filter_filenames_by_qa_retry_basenames(
+        processing_files,
+        active_qa_retry_basenames,
+    )
+    completed_files = filter_filenames_by_qa_retry_basenames(
+        completed_files,
+        active_qa_retry_basenames,
+    )
+    print(
+        "[QA_ONLY] Active basenames="
+        f"{len(active_qa_retry_basenames)} eligible files: "
+        f"UNPROCESSED={len(unprocessed_files)} "
+        f"PROCESSING={len(processing_files)} "
+        f"COMPLETED={len(completed_files)}"
+    )
+
 if user_file_selection:
     processing_file_path = user_file_path
     file_name = os.path.basename(user_file_path)
+    if (
+        process_only_qa_retry_files
+        and canonical_processing_basename(file_name) not in active_qa_retry_basenames
+    ):
+        sys.exit(
+            "[QA_ONLY] The selected input file is not present in the active QA retry list: "
+            f"{canonical_processing_basename(file_name)}"
+        )
 else:
     if last_file_test:
         latest_unprocessed = select_latest_candidate(unprocessed_files, station)
@@ -1569,9 +1616,11 @@ else:
                     safe_move(completed_file_path, processing_file_path)
                     print(f"File moved to PROCESSING: {processing_file_path}")
                 else:
-                    sys.exit("No files to process in COMPLETED after normalization.")
+                    print("No files to process in COMPLETED after normalization.")
+                    sys.exit(0)
             else:
-                sys.exit("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
+                print("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
+                sys.exit(0)
 
     else:
         if unprocessed_files:
@@ -1609,10 +1658,12 @@ else:
                 safe_move(completed_file_path, processing_file_path)
                 print(f"File moved to PROCESSING: {processing_file_path}")
             else:
-                sys.exit("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
+                print("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
+                sys.exit(0)
 
         else:
-            sys.exit("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
+            print("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
+            sys.exit(0)
 
 # This is for all cases
 file_path = processing_file_path
@@ -2126,7 +2177,6 @@ T_clip_max_ST = T_clip_max_ST
 Q_clip_min_ST = Q_clip_min_ST
 Q_clip_max_ST = Q_clip_max_ST
 
-global_variables['analysis_mode'] = 0
 global_variables['unc_y'] = anc_sy
 global_variables['unc_tsum'] = anc_sts
 global_variables['unc_tdif'] = anc_std
@@ -2236,11 +2286,25 @@ def record_residual_sigmas(df: pd.DataFrame) -> None:
                 global_variables[key] = sigma
 
 reprocessing_values: dict[str, object] = {}
+qa_reprocessing_context = load_qa_reprocessing_context_for_file(
+    station,
+    basename_no_ext,
+    repo_root=repo_root,
+)
+apply_qa_reprocessing_context(global_variables, qa_reprocessing_context)
+if int(qa_reprocessing_context.get("qa_reprocessing_mode", 0) or 0) == 1:
+    print("Active QA reprocessing state found for this file.")
+    print(
+        "QA selectors: "
+        f"{qa_reprocessing_context.get('qa_reprocessing_selector_ids', '') or 'none'}"
+    )
 
 reprocessing_parameters = load_reprocessing_parameters_for_file(station, str(task_number), basename_no_ext)
 if not reprocessing_parameters.empty:
-    global_variables["analysis_mode"] = 1
-    print("Reprocessing parameters found for this file. Setting analysis_mode to 1.")
+    if int(global_variables.get("qa_reprocessing_mode", 0) or 0) == 1:
+        print("Reprocessing parameters found for this file. qa_reprocessing_mode=1.")
+    else:
+        print("Reprocessing parameters found for this file.")
     # Print only non-NaN entries from the reprocessing table
     non_nan = reprocessing_parameters.dropna(how="all").dropna(axis=1, how="all")
     if non_nan.empty:
@@ -7934,9 +7998,9 @@ def _append_projection_ellipse_metadata(payload: dict[str, object]) -> None:
         cfg.get("axis_quantile_max", np.nan)
     )
     global_variables["timtrack_projection_ellipse_cmap"] = str(cfg.get("cmap", ""))
-    global_variables["timtrack_projection_ellipse_contour_fractions"] = ",".join(
-        f"{float(value):.2f}" for value in tuple(cfg.get("contour_fractions", ()))
-    )
+    global_variables["timtrack_projection_ellipse_contour_fractions"] = [
+        float(value) for value in tuple(cfg.get("contour_fractions", ()))
+    ]
 
     for tt_label in tuple(cfg.get("focus_definitive_tt", ())):
         result = tt_results.get(str(tt_label), {})
@@ -14221,6 +14285,7 @@ metadata_deep_fiter_csv_path = save_metadata(
         "param_hash",
         *sorted(filter_metrics),
     ),
+    replace_existing_basename=True,
 )
 print(f"Metadata (deep_fiter) CSV updated at: {metadata_deep_fiter_csv_path}")
 
@@ -14234,15 +14299,26 @@ print(f"Execution timestamp: {execution_timestamp}")
 print(f"Data purity percentage: {data_purity_percentage:.2f}%")
 print(f"Total execution time: {total_execution_time_minutes:.2f} minutes")
 
+execution_metadata_row = {
+    "filename_base": filename_base,
+    "execution_timestamp": execution_timestamp,
+    "param_hash": param_hash_value,
+    "data_purity_percentage": round(float(data_purity_percentage), 4),
+    "total_execution_time_minutes": round(float(total_execution_time_minutes), 4),
+}
+apply_qa_reprocessing_context(execution_metadata_row, qa_reprocessing_context)
+
 metadata_execution_csv_path = save_metadata(
     csv_path,
-    {
-        "filename_base": filename_base,
-        "execution_timestamp": execution_timestamp,
-        "param_hash": param_hash_value,
-        "data_purity_percentage": round(float(data_purity_percentage), 4),
-        "total_execution_time_minutes": round(float(total_execution_time_minutes), 4),
-    },
+    execution_metadata_row,
+    preferred_fieldnames=(
+        "filename_base",
+        "execution_timestamp",
+        "param_hash",
+        "data_purity_percentage",
+        "total_execution_time_minutes",
+        *QA_REPROCESSING_METADATA_KEYS,
+    ),
 )
 print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
 
@@ -14389,6 +14465,65 @@ metadata_robust_efficiency_csv_path = save_metadata(
     ),
 )
 print(f"Metadata (robust_efficiency) CSV updated at: {metadata_robust_efficiency_csv_path}")
+
+# Ensure the fitted parquet always carries an event-level total charge for
+# downstream TASK_5 / STEP_2 aggregation.
+_task4_charge_series = None
+for _task4_charge_column in ("charge_event", "tim_charge_event"):
+    if _task4_charge_column not in working_df.columns:
+        continue
+    _candidate = pd.to_numeric(working_df[_task4_charge_column], errors="coerce")
+    if _candidate.notna().sum() > 0 and (_candidate > 0).any():
+        _task4_charge_series = _candidate.astype(float)
+        print(f"TASK_4 charge_event source: {_task4_charge_column}")
+        break
+
+if _task4_charge_series is None:
+    _task4_plane_sum_columns = [
+        column_name
+        for column_name in ("P1_Q_sum_final", "P2_Q_sum_final", "P3_Q_sum_final", "P4_Q_sum_final")
+        if column_name in working_df.columns
+    ]
+    if _task4_plane_sum_columns:
+        _candidate = (
+            working_df.loc[:, _task4_plane_sum_columns]
+            .apply(pd.to_numeric, errors="coerce")
+            .fillna(0.0)
+            .sum(axis=1)
+            .astype(float)
+        )
+        if _candidate.notna().sum() > 0 and (_candidate > 0).any():
+            _task4_charge_series = _candidate
+            print(
+                "TASK_4 charge_event source: "
+                + "+".join(_task4_plane_sum_columns)
+            )
+
+if _task4_charge_series is None:
+    _task4_strip_columns = [
+        column_name
+        for column_name in working_df.columns
+        if re.fullmatch(r"Q_P[1-4]s[1-4]", str(column_name))
+    ]
+    if _task4_strip_columns:
+        _candidate = (
+            working_df.loc[:, _task4_strip_columns]
+            .apply(pd.to_numeric, errors="coerce")
+            .fillna(0.0)
+            .sum(axis=1)
+            .astype(float)
+        )
+        if _candidate.notna().sum() > 0 and (_candidate > 0).any():
+            _task4_charge_series = _candidate
+            print(
+                "TASK_4 charge_event source: "
+                + "+".join(_task4_strip_columns)
+            )
+
+if _task4_charge_series is not None:
+    working_df["charge_event"] = _task4_charge_series.astype(float)
+else:
+    print("[WARN] TASK_4 could not persist a usable charge_event column.")
 
 # Ensure no figure handles remain open before persistence/final move.
 plt.close("all")

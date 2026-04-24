@@ -1,0 +1,60 @@
+steps:
+  - order: 1
+    step_name: STEP_1_CALIBRATIONS
+    display_name: calibrations
+    enabled: true
+
+  - order: 2
+    step_name: STEP_2_FILTERING
+    display_name: filtering
+    enabled: true
+
+  - order: 3
+    step_name: STEP_3_DEEP_FILTER
+    display_name: deep_filter
+    enabled: true
+
+  - order: 4
+    step_name: STEP_4_RATE_HISTOGRAM
+    display_name: rate_histogram
+    enabled: true
+
+  - order: 5
+    step_name: STEP_5_ROBUST_EFFICIENCY
+    display_name: robust_efficiency
+    enabled: true
+
+  - order: 6
+    step_name: STEP_6_TRIGGER_TYPES
+    display_name: trigger_types
+    enabled: true
+
+  - order: 7
+    step_name: STEP_7_SPECIFIC
+    display_name: specific
+    enabled: true
+
+  - order: 8
+    step_name: STEP_8_EFFICIENCY
+    display_name: efficiency
+    enabled: true
+
+  - order: 9
+    step_name: STEP_9_NAIVE_EFFICIENCY
+    display_name: naive_efficiency
+    enabled: true
+
+  - order: 10
+    step_name: STEP_10_EXECUTION
+    display_name: execution
+    enabled: true
+
+  - order: 11
+    step_name: STEP_11_PROFILING
+    display_name: profiling
+    enabled: true
+
+  - order: 12
+    step_name: STEP_12_STATUS
+    display_name: status
+    enabled: true

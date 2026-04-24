@@ -1,0 +1,6 @@
+display_name: rate_histogram
+task_ids: [1, 2, 3, 4, 5]
+metadata_suffix: rate_histogram
+metadata_type: rate_histogram
+pass_column_template: task_{task_id}_rate_histogram_pass
+threshold_rules_csv: rate_histogram_column_rules.csv

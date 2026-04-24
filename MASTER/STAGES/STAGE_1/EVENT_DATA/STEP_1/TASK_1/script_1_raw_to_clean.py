@@ -120,7 +120,15 @@ from MASTER.common.plot_utils import (
 )
 from MASTER.common.selection_config import load_selection_for_paths, station_is_selected
 from MASTER.common.status_csv import initialize_status_row, update_status_progress
-from MASTER.common.reprocessing_utils import get_reprocessing_value
+from MASTER.common.reprocessing_utils import (
+    QA_REPROCESSING_METADATA_KEYS,
+    apply_qa_reprocessing_context,
+    canonical_processing_basename,
+    filter_filenames_by_qa_retry_basenames,
+    get_reprocessing_value,
+    load_active_qa_retry_basenames,
+    load_qa_reprocessing_context_for_file,
+)
 from MASTER.common.simulated_data_utils import SIM_PARAMS_DEFAULT, resolve_simulated_z_positions
 from MASTER.common.step1_activation import (
     compute_conditional_matrices_by_tt,
@@ -503,6 +511,11 @@ config = apply_step1_master_overrides(
     master_config_root=config_root,
     log_fn=print,
 )
+process_only_qa_retry_files = bool(config.get("process_only_qa_retry_files", False))
+if process_only_qa_retry_files:
+    print(
+        "[QA_ONLY] Enabled by STEP_1 shared config: only files present in the active QA retry list will be processed."
+    )
 
 selection_config = load_selection_for_paths(
     [config_file_path],
@@ -1281,12 +1294,7 @@ T_clip_max_ST = T_clip_max_ST
 Q_clip_min_ST = Q_clip_min_ST
 Q_clip_max_ST = Q_clip_max_ST
 
-# the analysis mode indicates if it is a regular analysis or a repeated, careful analysis
-# 0 -> regular analysis
-# 1 -> repeated, careful analysis
-global_variables = {
-    'analysis_mode': 0,
-}
+global_variables = {}
 
 CHANNEL_CONTAGION_METADATA_FIELDS: tuple[str, ...] = (
     "mean_off_diagonal_global_raw",
@@ -1589,6 +1597,14 @@ TASK1_CHANNEL_COMBINATION_BOUND_SUFFIXES: tuple[str, ...] = (
     "t_sum_left",
     "t_sum_right",
     "t_dif_threshold",
+)
+TASK1_CHANNEL_COMBINATION_COMPONENT_LABELS: tuple[tuple[str, str], ...] = (
+    ("q_sum_low", "q_sum lower-bound"),
+    ("q_sum_high", "q_sum upper-bound"),
+    ("q_dif", "q_dif threshold"),
+    ("t_sum_low", "t_sum lower-bound"),
+    ("t_sum_high", "t_sum upper-bound"),
+    ("t_dif", "t_dif threshold"),
 )
 
 FILTER_METRIC_NAMES: tuple[str, ...] = (
@@ -2138,6 +2154,60 @@ def apply_task1_plane_combination_filter(
                 relation_type: 0
                 for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
             },
+            "failed_pair_q_sum_low_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "failed_pair_q_sum_high_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "failed_pair_q_dif_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "failed_pair_t_sum_low_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "failed_pair_t_sum_high_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "failed_pair_t_dif_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "rows_failed_q_sum_low": 0,
+            "rows_failed_q_sum_high": 0,
+            "rows_failed_q_dif": 0,
+            "rows_failed_t_sum_low": 0,
+            "rows_failed_t_sum_high": 0,
+            "rows_failed_t_dif": 0,
+            "rows_failed_q_sum_low_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "rows_failed_q_sum_high_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "rows_failed_q_dif_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "rows_failed_t_sum_low_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "rows_failed_t_sum_high_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "rows_failed_t_dif_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
             "rows_with_relation_failures": {
                 relation_type: 0
                 for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
@@ -2191,11 +2261,49 @@ def apply_task1_plane_combination_filter(
             relation_type: 0
             for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
         },
+        "failed_pair_q_dif_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
         "failed_pair_t_sum_low_by_relation": {
             relation_type: 0
             for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
         },
         "failed_pair_t_sum_high_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "failed_pair_t_dif_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "rows_failed_q_sum_low": 0,
+        "rows_failed_q_sum_high": 0,
+        "rows_failed_q_dif": 0,
+        "rows_failed_t_sum_low": 0,
+        "rows_failed_t_sum_high": 0,
+        "rows_failed_t_dif": 0,
+        "rows_failed_q_sum_low_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "rows_failed_q_sum_high_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "rows_failed_q_dif_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "rows_failed_t_sum_low_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "rows_failed_t_sum_high_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "rows_failed_t_dif_by_relation": {
             relation_type: 0
             for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
         },
@@ -2211,6 +2319,17 @@ def apply_task1_plane_combination_filter(
     row_failed_edges: dict[int, list[tuple[tuple[int, str, int], tuple[int, str, int], float]]] = {}
     row_forced_channels: dict[int, set[tuple[int, str, int]]] = {}
     row_failure_relations: dict[int, set[str]] = {}
+    relation_metric_failed_rows = {
+        relation_type: {
+            component_key: set()
+            for component_key, _ in TASK1_CHANNEL_COMBINATION_COMPONENT_LABELS
+        }
+        for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+    }
+    metric_failed_rows = {
+        component_key: set()
+        for component_key, _ in TASK1_CHANNEL_COMBINATION_COMPONENT_LABELS
+    }
     channel_fail_masks = {
         channel_key: np.zeros(n_rows, dtype=bool)
         for channel_key in channel_map
@@ -2296,8 +2415,26 @@ def apply_task1_plane_combination_filter(
         summary["failed_pair_any_by_relation"][relation_type] += int(np.count_nonzero(fail_any))
         summary["failed_pair_q_sum_low_by_relation"][relation_type] += int(np.count_nonzero(fail_q_sum_low))
         summary["failed_pair_q_sum_high_by_relation"][relation_type] += int(np.count_nonzero(fail_q_sum_high))
+        summary["failed_pair_q_dif_by_relation"][relation_type] += int(np.count_nonzero(fail_q_dif))
         summary["failed_pair_t_sum_low_by_relation"][relation_type] += int(np.count_nonzero(fail_t_sum_low))
         summary["failed_pair_t_sum_high_by_relation"][relation_type] += int(np.count_nonzero(fail_t_sum_high))
+        summary["failed_pair_t_dif_by_relation"][relation_type] += int(np.count_nonzero(fail_t_dif))
+
+        for component_key, fail_mask in (
+            ("q_sum_low", fail_q_sum_low),
+            ("q_sum_high", fail_q_sum_high),
+            ("q_dif", fail_q_dif),
+            ("t_sum_low", fail_t_sum_low),
+            ("t_sum_high", fail_t_sum_high),
+            ("t_dif", fail_t_dif),
+        ):
+            failed_rows = np.flatnonzero(fail_mask)
+            if failed_rows.size == 0:
+                continue
+            relation_metric_failed_rows[relation_type][component_key].update(
+                int(row_pos) for row_pos in failed_rows
+            )
+            metric_failed_rows[component_key].update(int(row_pos) for row_pos in failed_rows)
 
         if np.any(fail_any):
             q_sum_width = max(abs(float(q_sum_right) - float(q_sum_left)), 1e-9)
@@ -2341,6 +2478,13 @@ def apply_task1_plane_combination_filter(
             for relation_set in row_failure_relations.values()
             if relation_type in relation_set
         )
+        for component_key, _ in TASK1_CHANNEL_COMBINATION_COMPONENT_LABELS:
+            summary[f"rows_failed_{component_key}_by_relation"][relation_type] = len(
+                relation_metric_failed_rows[relation_type][component_key]
+            )
+
+    for component_key, _ in TASK1_CHANNEL_COMBINATION_COMPONENT_LABELS:
+        summary[f"rows_failed_{component_key}"] = len(metric_failed_rows[component_key])
 
     for row_pos in flagged_row_positions:
         forced_channels = sorted(
@@ -4005,6 +4149,32 @@ if date_ranges:
             f"[DATE_RANGE] Ignoring {skipped_completed} out-of-range file(s) in COMPLETED_DIRECTORY."
         )
 
+active_qa_retry_basenames: set[str] = set()
+if process_only_qa_retry_files:
+    active_qa_retry_basenames = load_active_qa_retry_basenames(
+        station,
+        repo_root=repo_root,
+    )
+    unprocessed_files = filter_filenames_by_qa_retry_basenames(
+        unprocessed_files,
+        active_qa_retry_basenames,
+    )
+    processing_files = filter_filenames_by_qa_retry_basenames(
+        processing_files,
+        active_qa_retry_basenames,
+    )
+    completed_files = filter_filenames_by_qa_retry_basenames(
+        completed_files,
+        active_qa_retry_basenames,
+    )
+    print(
+        "[QA_ONLY] Active basenames="
+        f"{len(active_qa_retry_basenames)} eligible files: "
+        f"UNPROCESSED={len(unprocessed_files)} "
+        f"PROCESSING={len(processing_files)} "
+        f"COMPLETED={len(completed_files)}"
+    )
+
 task_1_z_priority_settings = _load_task_1_z_priority_settings(config)
 simulated_z_lookup: dict[str, tuple[float, float, float, float]] = {}
 if task_1_z_priority_settings.get("enabled", False):
@@ -4019,6 +4189,14 @@ if task_1_z_priority_settings.get("enabled", False):
 if user_file_selection:
     processing_file_path = user_file_path
     file_name = os.path.basename(user_file_path)
+    if (
+        process_only_qa_retry_files
+        and canonical_processing_basename(file_name) not in active_qa_retry_basenames
+    ):
+        sys.exit(
+            "[QA_ONLY] The selected input file is not present in the active QA retry list: "
+            f"{canonical_processing_basename(file_name)}"
+        )
 else:
     if last_file_test:
         latest_unprocessed = _select_latest_candidate_with_z_priority(
@@ -4077,7 +4255,8 @@ else:
                     safe_move(completed_file_path, processing_file_path)
                     print(f"File moved to PROCESSING: {processing_file_path}")
                 else:
-                    sys.exit("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
+                    print("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
+                    sys.exit(0)
 
     else:
         if unprocessed_files:
@@ -4167,10 +4346,12 @@ else:
                     safe_move(completed_file_path, processing_file_path)
                     print(f"File moved to PROCESSING: {processing_file_path}")
             else:
-                sys.exit("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
+                print("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
+                sys.exit(0)
 
         else:
-            sys.exit("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
+            print("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
+            sys.exit(0)
 
 # This is for all cases
 file_path = processing_file_path
@@ -4189,11 +4370,25 @@ status_execution_date = initialize_status_row(
 )
 
 reprocessing_values: dict[str, object] = {}
+qa_reprocessing_context = load_qa_reprocessing_context_for_file(
+    station,
+    basename_no_ext,
+    repo_root=repo_root,
+)
+apply_qa_reprocessing_context(global_variables, qa_reprocessing_context)
+if int(qa_reprocessing_context.get("qa_reprocessing_mode", 0) or 0) == 1:
+    print("Active QA reprocessing state found for this file.")
+    print(
+        "QA selectors: "
+        f"{qa_reprocessing_context.get('qa_reprocessing_selector_ids', '') or 'none'}"
+    )
 
 reprocessing_parameters = load_reprocessing_parameters_for_file(station, str(task_number), basename_no_ext)
 if not reprocessing_parameters.empty:
-    global_variables["analysis_mode"] = 1
-    print("Reprocessing parameters found for this file. Setting analysis_mode to 1.")
+    if int(global_variables.get("qa_reprocessing_mode", 0) or 0) == 1:
+        print("Reprocessing parameters found for this file. qa_reprocessing_mode=1.")
+    else:
+        print("Reprocessing parameters found for this file.")
     # Print only non-NaN entries from the reprocessing table
     non_nan = reprocessing_parameters.dropna(how="all").dropna(axis=1, how="all")
     if non_nan.empty:
@@ -6405,30 +6600,19 @@ for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES:
         len(working_df) if len(working_df) else 0,
         label=f"rows with {relation_type} relation failures",
     )
-    record_activity_metric(
-        f"plane_combination_filter_{relation_type}_q_sum_low_failed_pct",
-        plane_combination_summary["failed_pair_q_sum_low_by_relation"].get(relation_type, 0),
-        valid_relation_observations if valid_relation_observations else 0,
-        label=f"{relation_type} q_sum low-bound failures",
-    )
-    record_activity_metric(
-        f"plane_combination_filter_{relation_type}_q_sum_high_failed_pct",
-        plane_combination_summary["failed_pair_q_sum_high_by_relation"].get(relation_type, 0),
-        valid_relation_observations if valid_relation_observations else 0,
-        label=f"{relation_type} q_sum high-bound failures",
-    )
-    record_activity_metric(
-        f"plane_combination_filter_{relation_type}_t_sum_low_failed_pct",
-        plane_combination_summary["failed_pair_t_sum_low_by_relation"].get(relation_type, 0),
-        valid_relation_observations if valid_relation_observations else 0,
-        label=f"{relation_type} t_sum low-bound failures",
-    )
-    record_activity_metric(
-        f"plane_combination_filter_{relation_type}_t_sum_high_failed_pct",
-        plane_combination_summary["failed_pair_t_sum_high_by_relation"].get(relation_type, 0),
-        valid_relation_observations if valid_relation_observations else 0,
-        label=f"{relation_type} t_sum high-bound failures",
-    )
+    for component_key, component_label in TASK1_CHANNEL_COMBINATION_COMPONENT_LABELS:
+        record_activity_metric(
+            f"plane_combination_filter_{relation_type}_{component_key}_failed_pct",
+            plane_combination_summary[f"failed_pair_{component_key}_by_relation"].get(relation_type, 0),
+            valid_relation_observations if valid_relation_observations else 0,
+            label=f"{relation_type} {component_label} failures",
+        )
+        record_activity_metric(
+            f"plane_combination_filter_{relation_type}_{component_key}_rows_failed_pct",
+            plane_combination_summary[f"rows_failed_{component_key}_by_relation"].get(relation_type, 0),
+            len(working_df) if len(working_df) else 0,
+            label=f"rows with {relation_type} {component_label} failures",
+        )
 record_activity_metric(
     "plane_combination_filter_any_failed_pct",
     plane_combination_summary["failed_pair_any"],
@@ -6483,6 +6667,13 @@ record_activity_metric(
     plane_combination_summary["valid_pair_observations"],
     label="T_dif failed channel plane combinations",
 )
+for component_key, component_label in TASK1_CHANNEL_COMBINATION_COMPONENT_LABELS:
+    record_activity_metric(
+        f"plane_combination_filter_{component_key}_rows_failed_pct",
+        plane_combination_summary[f"rows_failed_{component_key}"],
+        len(working_df) if len(working_df) else 0,
+        label=f"rows with {component_label} failures",
+    )
 record_activity_metric(
     "plane_combination_filter_flagged_rows_pct",
     plane_combination_summary["flagged_rows"],
@@ -6812,6 +7003,7 @@ metadata_deep_fiter_csv_path = save_metadata(
         "param_hash",
         *sorted(filter_metrics),
     ),
+    replace_existing_basename=True,
 )
 print(f"Metadata (deep_fiter) CSV updated at: {metadata_deep_fiter_csv_path}")
 
@@ -6918,22 +7110,26 @@ print(f"Total execution time: {total_execution_time_minutes:.2f} minutes")
 for _metric_name, _metric_value in channel_contagion_metrics.items():
     global_variables[_metric_name] = _metric_value
 
+execution_metadata_row = {
+    "filename_base": filename_base,
+    "execution_timestamp": execution_timestamp,
+    "param_hash": param_hash_value,
+    "data_purity_percentage": round(float(data_purity_percentage), 4),
+    "total_execution_time_minutes": round(float(total_execution_time_minutes), 4),
+    **channel_contagion_metrics,
+}
+apply_qa_reprocessing_context(execution_metadata_row, qa_reprocessing_context)
+
 metadata_execution_csv_path = save_metadata(
     csv_path,
-    {
-        "filename_base": filename_base,
-        "execution_timestamp": execution_timestamp,
-        "param_hash": param_hash_value,
-        "data_purity_percentage": round(float(data_purity_percentage), 4),
-        "total_execution_time_minutes": round(float(total_execution_time_minutes), 4),
-        **channel_contagion_metrics,
-    },
+    execution_metadata_row,
     preferred_fieldnames=(
         "filename_base",
         "execution_timestamp",
         "param_hash",
         "data_purity_percentage",
         "total_execution_time_minutes",
+        *QA_REPROCESSING_METADATA_KEYS,
         *CHANNEL_CONTAGION_METADATA_FIELDS,
     ),
 )

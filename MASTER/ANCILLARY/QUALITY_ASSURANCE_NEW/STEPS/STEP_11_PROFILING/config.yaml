@@ -1,0 +1,5 @@
+display_name: profiling
+task_ids: [1, 2, 3, 4, 5]
+metadata_suffix: profiling
+metadata_type: profiling
+pass_column_template: task_{task_id}_profiling_pass

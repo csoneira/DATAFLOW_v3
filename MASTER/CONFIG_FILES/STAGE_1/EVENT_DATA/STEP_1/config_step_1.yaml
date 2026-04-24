@@ -26,6 +26,7 @@ step_1_overrides:
   complete_reanalysis: false
   create_plots: null
   keep_all_columns_output: false
+  process_only_qa_retry_files: false
 
 metadata_outputs:
   activation: false

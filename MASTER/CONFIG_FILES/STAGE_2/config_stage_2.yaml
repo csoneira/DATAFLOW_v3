@@ -1,0 +1,132 @@
+comment_prefix: "#"
+
+event_data:
+  input_subdir: STAGE_1/EVENT_DATA/STEP_3/TASK_2/OUTPUT_FILES
+  file_prefix: event_data
+  time_column: Time
+  q_event_mean_candidates:
+    - Q_event_mean
+  angular_sector_sources:
+    High:
+      - [High]
+      - [high_rate_hz]
+      - [total_three_and_four_plane_high_rate_hz]
+      - [four_plane_high_rate_hz, three_plane_high_rate_hz]
+    Mid-N:
+      - [Mid-N]
+      - [mid_0_rate_hz]
+      - [total_three_and_four_plane_mid_0_rate_hz]
+      - [four_plane_mid_0_rate_hz, three_plane_mid_0_rate_hz]
+    Mid-NE:
+      - [Mid-NE]
+      - [mid_1_rate_hz]
+      - [total_three_and_four_plane_mid_1_rate_hz]
+      - [four_plane_mid_1_rate_hz, three_plane_mid_1_rate_hz]
+    Mid-E:
+      - [Mid-E]
+      - [mid_2_rate_hz]
+      - [total_three_and_four_plane_mid_2_rate_hz]
+      - [four_plane_mid_2_rate_hz, three_plane_mid_2_rate_hz]
+    Mid-SE:
+      - [Mid-SE]
+      - [mid_3_rate_hz]
+      - [total_three_and_four_plane_mid_3_rate_hz]
+      - [four_plane_mid_3_rate_hz, three_plane_mid_3_rate_hz]
+    Mid-S:
+      - [Mid-S]
+      - [mid_4_rate_hz]
+      - [total_three_and_four_plane_mid_4_rate_hz]
+      - [four_plane_mid_4_rate_hz, three_plane_mid_4_rate_hz]
+    Mid-SW:
+      - [Mid-SW]
+      - [mid_5_rate_hz]
+      - [total_three_and_four_plane_mid_5_rate_hz]
+      - [four_plane_mid_5_rate_hz, three_plane_mid_5_rate_hz]
+    Mid-W:
+      - [Mid-W]
+      - [mid_6_rate_hz]
+      - [total_three_and_four_plane_mid_6_rate_hz]
+      - [four_plane_mid_6_rate_hz, three_plane_mid_6_rate_hz]
+    Mid-NW:
+      - [Mid-NW]
+      - [mid_7_rate_hz]
+      - [total_three_and_four_plane_mid_7_rate_hz]
+      - [four_plane_mid_7_rate_hz, three_plane_mid_7_rate_hz]
+    Low-N:
+      - [Low-N]
+      - [low_0_rate_hz]
+      - [total_three_and_four_plane_low_0_rate_hz]
+      - [four_plane_low_0_rate_hz, three_plane_low_0_rate_hz]
+    Low-E:
+      - [Low-E]
+      - [low_1_rate_hz]
+      - [total_three_and_four_plane_low_1_rate_hz]
+      - [four_plane_low_1_rate_hz, three_plane_low_1_rate_hz]
+    Low-S:
+      - [Low-S]
+      - [low_2_rate_hz]
+      - [total_three_and_four_plane_low_2_rate_hz]
+      - [four_plane_low_2_rate_hz, three_plane_low_2_rate_hz]
+    Low-W:
+      - [Low-W]
+      - [low_3_rate_hz]
+      - [total_three_and_four_plane_low_3_rate_hz]
+      - [four_plane_low_3_rate_hz, three_plane_low_3_rate_hz]
+
+lab_logs:
+  input_subdir: STAGE_1/LAB_LOGS/STEP_2/OUTPUT_FILES
+  file_prefix: lab_logs
+  time_column: Time
+  alignment_method: interpolate
+  nearest_tolerance: 90s
+  column_candidates:
+    # ext is treated as the ambient lab value; int remains available as fallback.
+    temp_lab:
+      - sensors_ext_Temperature_ext
+      - sensors_int_Temperature_int
+    pressure_lab:
+      - sensors_ext_Pressure_ext
+      - sensors_int_Pressure_int
+
+copernicus:
+  input_subdir: STAGE_1/COPERNICUS/STEP_1/OUTPUT_FILES
+  file_prefix: copernicus
+  time_column: Time
+  alignment_method: interpolate
+  column_candidates:
+    temp_ground:
+      - temp_ground
+    temp_100mbar:
+      - temp_100mbar
+    height_100mbar:
+      - height_100mbar
+
+output:
+  stage_subdir: STAGE_2
+  output_subdir: OUTPUT_FILES
+  daily_file_prefix: stage_2
+  big_output_filename: joined_stage_2.csv
+  time_column: time
+  count_column: count
+  output_columns:
+    - time
+    - count
+    - temp_lab
+    - pressure_lab
+    - temp_ground
+    - temp_100mbar
+    - height_100mbar
+    - Q_event_mean
+    - High
+    - Mid-N
+    - Mid-NE
+    - Mid-E
+    - Mid-SE
+    - Mid-S
+    - Mid-SW
+    - Mid-W
+    - Mid-NW
+    - Low-N
+    - Low-E
+    - Low-S
+    - Low-W

@@ -289,27 +289,12 @@ script_name=$(basename "$0")
 script_args="$*"
 current_pid=$$
 
-# # Get all running instances of the script *with the same argument*, but exclude the current process
-# for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | grep -v "bin/bash -c" | awk '{print $1}'); do
-#     if [[ "$pid" != "$current_pid" ]]; then
-#         cmdline=$(ps -p "$pid" -o args=)
-#         # echo "$(date) - Found running process: PID $pid - $cmdline"
-#         if [[ "$cmdline" == *"$script_name $script_args"* ]]; then
-#             echo "------------------------------------------------------"
-#             echo "$(date): The script $script_name with arguments '$script_args' is already running (PID: $pid). Exiting."
-#             echo "------------------------------------------------------"
-#             exit 1
-#         fi
-#     fi
-# done
-
 # Get all running instances of the script *with the same argument*, but exclude the current process
 for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | grep -v "bin/bash -c" | awk '{print $1}'); do
     if [[ "$pid" != "$current_pid" ]]; then
         cmdline=$(ps -p "$pid" -o args=)
-        # echo "$(date) - Found running process: PID $pid - $cmdline"
-        if [[ "$cmdline" == *"$script_name"* ]]; then
-            log_warn "The script $script_name is already running (pid=$pid). Exiting."
+        if [[ "$cmdline" == *"$script_name $script_args"* ]]; then
+            log_warn "The script $script_name with arguments '$script_args' is already running (pid=$pid). Exiting."
             exit 1
         fi
     fi

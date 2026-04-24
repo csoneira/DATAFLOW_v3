@@ -1,0 +1,16 @@
+plot_only:
+  - '*'
+
+ignore:
+  - analysis_mode
+  - '*_reason'
+  - '*_mode'
+  - '*_cmap'
+  - '*_projection_source'
+  - '*_global_method'
+  - '*_source'
+  - '*channels'
+  - '*active_strips*'
+  - '*topology*'
+  - '*entries*'
+  - '*offender*'

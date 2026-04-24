@@ -1,0 +1,5 @@
+display_name: specific
+task_ids: [1, 2, 3, 4, 5]
+metadata_suffix: specific
+metadata_type: specific
+pass_column_template: task_{task_id}_specific_pass

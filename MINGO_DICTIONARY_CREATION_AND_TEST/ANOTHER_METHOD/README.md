@@ -36,7 +36,8 @@ source can be either the existing `trigger_type` CSVs or the newer
      band, summarized in bins of the mean efficiency, because exact 4D
      efficiency vectors in this dataset do not repeat across flux.
    - Writes an ASCII LUT whose first commented line stores the z-position
-     vector, followed by `emp_eff_1 emp_eff_2 emp_eff_3 emp_eff_4 scale_factor`.
+     vector, followed by the quantized efficiency-bin coordinates
+     `emp_eff_1 emp_eff_2 emp_eff_3 emp_eff_4 scale_factor`.
 
 3. `step_3_apply_lut.py`
    - By default reads the Step 1 filtered training table so the Step 3 input is

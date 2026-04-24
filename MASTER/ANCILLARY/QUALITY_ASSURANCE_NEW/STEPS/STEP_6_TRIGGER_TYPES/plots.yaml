@@ -1,0 +1,54 @@
+default:
+  default_ncols: 4
+  default_max_columns_per_plot: 12
+
+special:
+  - name: raw_vs_clean_rates
+    mode: overlay
+    tasks: [1]
+    ncols: 4
+    series:
+      - label: raw
+        columns: raw_tt_*_rate_hz
+      - label: clean
+        columns: clean_tt_*_rate_hz
+
+  - name: clean_vs_cal_rates
+    mode: overlay
+    tasks: [2]
+    ncols: 4
+    series:
+      - label: clean
+        columns: clean_tt_*_rate_hz
+      - label: cal
+        columns: cal_tt_*_rate_hz
+
+  - name: cal_vs_list_rates
+    mode: overlay
+    tasks: [3]
+    ncols: 4
+    series:
+      - label: cal
+        columns: cal_tt_*_rate_hz
+      - label: list
+        columns: list_tt_*_rate_hz
+
+  - name: list_vs_fit_rates
+    mode: overlay
+    tasks: [4]
+    ncols: 4
+    series:
+      - label: list
+        columns: list_tt_*_rate_hz
+      - label: fit
+        columns: fit_tt_*_rate_hz
+
+  - name: fit_vs_post_rates
+    mode: overlay
+    tasks: [5]
+    ncols: 4
+    series:
+      - label: fit
+        columns: fit_tt_*_rate_hz
+      - label: post
+        columns: post_tt_*_rate_hz

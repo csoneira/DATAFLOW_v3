@@ -378,13 +378,10 @@ def _plot_flux_rate_comparison(
     *,
     rate_column_name: str,
 ) -> None:
-    def _plot_linear_fit(
-        axis: plt.Axes,
+    def _build_linear_fit(
         x_values: pd.Series,
         y_values: pd.Series,
-        *,
-        fit_color: str,
-    ) -> None:
+    ) -> dict[str, float | np.ndarray] | None:
         fit_frame = pd.DataFrame(
             {
                 "x": pd.to_numeric(x_values, errors="coerce"),
@@ -392,7 +389,7 @@ def _plot_flux_rate_comparison(
             }
         ).dropna()
         if len(fit_frame) < 2 or fit_frame["x"].nunique() < 2:
-            return
+            return None
 
         x_data = fit_frame["x"].to_numpy(dtype=float)
         y_data = fit_frame["y"].to_numpy(dtype=float)
@@ -401,7 +398,30 @@ def _plot_flux_rate_comparison(
         ss_tot = float(np.sum((y_data - np.mean(y_data)) ** 2))
         ss_res = float(np.sum((y_data - fit_values) ** 2))
         r_squared = np.nan if ss_tot <= 0.0 else 1.0 - ss_res / ss_tot
+        return {
+            "x_data": x_data,
+            "y_data": y_data,
+            "slope": float(slope),
+            "intercept": float(intercept),
+            "fit_values": fit_values,
+            "r_squared": r_squared,
+        }
 
+    def _plot_linear_fit(
+        axis: plt.Axes,
+        x_values: pd.Series,
+        y_values: pd.Series,
+        *,
+        fit_color: str,
+    ) -> dict[str, float | np.ndarray] | None:
+        fit_result = _build_linear_fit(x_values, y_values)
+        if fit_result is None:
+            return None
+
+        x_data = np.asarray(fit_result["x_data"], dtype=float)
+        slope = float(fit_result["slope"])
+        intercept = float(fit_result["intercept"])
+        r_squared = float(fit_result["r_squared"])
         x_line = np.linspace(float(np.min(x_data)), float(np.max(x_data)), 200)
         y_line = slope * x_line + intercept
         r2_text = "n/a" if not np.isfinite(r_squared) else f"{r_squared:.3f}"
@@ -412,11 +432,12 @@ def _plot_flux_rate_comparison(
             linewidth=2.0,
             label=f"Linear fit (R^2={r2_text})",
         )
+        return fit_result
 
     ordered, _, _ = _resolve_time_axis(dataframe)
     sequence = np.arange(len(ordered))
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharex=True, sharey=True, constrained_layout=True)
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5), constrained_layout=True)
     scatter_left = axes[0].scatter(
         ordered["sim_flux_cm2_min"],
         ordered["rate_hz"],
@@ -447,7 +468,7 @@ def _plot_flux_rate_comparison(
         alpha=0.85,
         label="Samples",
     )
-    _plot_linear_fit(
+    corrected_fit = _plot_linear_fit(
         axes[1],
         ordered["sim_flux_cm2_min"],
         ordered["corrected_rate_to_perfect_hz"],
@@ -459,7 +480,45 @@ def _plot_flux_rate_comparison(
     axes[1].grid(alpha=0.25)
     axes[1].legend(loc="best")
 
-    cbar = fig.colorbar(scatter_left, ax=axes, shrink=0.95)
+    if corrected_fit is None:
+        axes[2].text(
+            0.5,
+            0.5,
+            "Insufficient data for fit-error histogram",
+            ha="center",
+            va="center",
+            transform=axes[2].transAxes,
+        )
+    else:
+        corrected_rate = np.asarray(corrected_fit["y_data"], dtype=float)
+        corrected_fit_values = np.asarray(corrected_fit["fit_values"], dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            relative_fit_error = (corrected_fit_values - corrected_rate) / corrected_rate
+        relative_fit_error = relative_fit_error[np.isfinite(relative_fit_error)]
+        if relative_fit_error.size == 0:
+            axes[2].text(
+                0.5,
+                0.5,
+                "No finite relative fit errors",
+                ha="center",
+                va="center",
+                transform=axes[2].transAxes,
+            )
+        else:
+            axes[2].hist(
+                relative_fit_error * 100.0,
+                bins="auto",
+                histtype="step",
+                linewidth=2.0,
+                color="#8B1E3F",
+            )
+            axes[2].axvline(0.0, color="0.35", linestyle="--", linewidth=1.0)
+    axes[2].set_title("Corrected-rate linear-fit relative error")
+    axes[2].set_xlabel("(fit - corrected) / corrected [%]")
+    axes[2].set_ylabel("Count")
+    axes[2].grid(alpha=0.25)
+
+    cbar = fig.colorbar(scatter_left, ax=axes[:2], shrink=0.95)
     cbar.set_label("Time-series order")
     fig.savefig(output_path, dpi=180)
     plt.close(fig)

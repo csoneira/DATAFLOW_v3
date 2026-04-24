@@ -1,4 +1,0 @@
-column_rule_table_csv: ../filtering_column_rules.csv
-
-plots:
-  max_columns_per_group: 12

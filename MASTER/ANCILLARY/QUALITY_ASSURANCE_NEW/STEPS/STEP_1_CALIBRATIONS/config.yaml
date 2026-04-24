@@ -1,0 +1,6 @@
+display_name: calibrations
+task_ids: [2]
+metadata_suffix: calibration
+metadata_type: calibration
+pass_column_template: task_{task_id}_calibration_pass
+threshold_rules_csv: task_2_column_rules.csv

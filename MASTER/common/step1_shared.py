@@ -15,7 +15,9 @@ Notes: Keep behavior configuration-driven and reproducible.
 from __future__ import annotations
 
 import argparse
+from ast import literal_eval
 import builtins
+from collections.abc import Mapping as MappingABC
 import csv
 import fcntl
 from functools import lru_cache
@@ -45,6 +47,7 @@ STEP1_TASK_OVERRIDE_KEYS: Tuple[str, ...] = (
     "complete_reanalysis",
     "create_plots",
     "keep_all_columns_output",
+    "process_only_qa_retry_files",
 )
 STEP1_METADATA_OUTPUT_TYPES: Tuple[str, ...] = (
     "activation",
@@ -103,10 +106,113 @@ UPSTREAM_OFFENDER_COUNT_COLUMNS: Tuple[str, ...] = (
     "task3_problematic_plane_count",
 )
 DEFAULT_TRIGGER_TYPE_OFFENDER_THRESHOLDS: Tuple[int, ...] = (0, 1, 2, 3, 4, 5)
+METADATA_COMPONENT_SUFFIX_RE = re.compile(r"^(?P<source>.+)__([0-9]+)$")
+METADATA_VECTOR_STRING_COLUMNS: frozenset[str] = frozenset(
+    {
+        "timtrack_projection_ellipse_contour_fractions",
+    }
+)
 
 
 def _metadata_value_is_empty(value: object) -> bool:
     return value is None or value == "" or (isinstance(value, float) and math.isnan(value))
+
+
+def split_metadata_component_column(column_name: str) -> tuple[str, int] | None:
+    match = METADATA_COMPONENT_SUFFIX_RE.match(str(column_name))
+    if match is None:
+        return None
+    try:
+        return match.group("source"), int(match.group(2))
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_metadata_scalar(value: object) -> object:
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (np.bool_,)):
+        return int(bool(value))
+    return value
+
+
+def _metadata_prefers_component_columns(key: str) -> bool:
+    return key in METADATA_VECTOR_STRING_COLUMNS or key.endswith("_Q_FB_coeffs")
+
+
+def _parse_metadata_string_container(key: str, value: str) -> object | None:
+    text = str(value).strip()
+    if not text:
+        return None
+
+    lowered = text.lower()
+    if lowered == "true":
+        return 1
+    if lowered == "false":
+        return 0
+
+    if key in METADATA_VECTOR_STRING_COLUMNS:
+        parts = [part.strip() for part in text.split(",") if part.strip()]
+        if parts and all(re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", part) for part in parts):
+            return [float(part) for part in parts]
+
+    if text.startswith("[") or text.startswith("("):
+        try:
+            parsed = literal_eval(text)
+        except Exception:
+            return None
+        if isinstance(parsed, (list, tuple)):
+            return parsed
+
+    if text.startswith("{"):
+        try:
+            parsed = literal_eval(text)
+        except Exception:
+            return None
+        if isinstance(parsed, dict):
+            return parsed
+
+    return None
+
+
+def _iter_normalized_metadata_items(key: str, value: object) -> Iterable[tuple[str, object]]:
+    value = _coerce_metadata_scalar(value)
+    if _metadata_value_is_empty(value):
+        if _metadata_prefers_component_columns(str(key)):
+            return
+        yield key, value
+        return
+
+    if isinstance(value, str):
+        parsed = _parse_metadata_string_container(key, value)
+        if parsed is not None:
+            yield from _iter_normalized_metadata_items(key, parsed)
+            return
+        yield key, value
+        return
+
+    if isinstance(value, np.ndarray):
+        if value.ndim == 0:
+            yield key, _coerce_metadata_scalar(value.item())
+            return
+        value = value.tolist()
+
+    if isinstance(value, (list, tuple)):
+        for idx, item in enumerate(value):
+            yield from _iter_normalized_metadata_items(f"{key}__{idx}", item)
+        return
+
+    if isinstance(value, MappingABC):
+        for subkey, subvalue in value.items():
+            subkey_text = str(subkey).strip()
+            if not subkey_text:
+                continue
+            yield from _iter_normalized_metadata_items(f"{key}__{subkey_text}", subvalue)
+        return
+
+    yield key, value
 
 
 def normalize_tt_label(value: object, default: str = "0") -> str:
@@ -1134,12 +1240,15 @@ def _normalize_metadata_row(raw: Dict[str, object]) -> Dict[str, object]:
     for key, value in raw.items():
         if key is None:
             continue
-        out_key = _normalize_metadata_tt_key(str(key)) if isinstance(key, str) else key
-        if out_key in normalized:
-            if _metadata_value_is_empty(normalized[out_key]) and not _metadata_value_is_empty(value):
-                normalized[out_key] = value
-            continue
-        normalized[out_key] = value
+        out_key = _normalize_metadata_tt_key(str(key)) if isinstance(key, str) else str(key)
+        for normalized_key, normalized_value in _iter_normalized_metadata_items(out_key, value):
+            if normalized_key in normalized:
+                if _metadata_value_is_empty(normalized[normalized_key]) and not _metadata_value_is_empty(
+                    normalized_value
+                ):
+                    normalized[normalized_key] = normalized_value
+                continue
+            normalized[normalized_key] = normalized_value
     return normalized
 
 
@@ -1196,6 +1305,8 @@ def _format_metadata_row(item: Dict[str, object], fieldnames: List[str]) -> Dict
         value = item.get(lookup_key, item.get(key, ""))
         if value is None or (isinstance(value, float) and math.isnan(value)):
             formatted[key] = ""
+        elif isinstance(value, (bool, np.bool_)):
+            formatted[key] = int(bool(value))
         elif isinstance(value, (list, dict, np.ndarray)):
             formatted[key] = str(value)
         else:
@@ -1278,6 +1389,7 @@ def _save_metadata_rewrite(
     preferred_fieldnames: Iterable[str] | None,
     log_fn: Callable[..., None],
     drop_field_predicate: Callable[[str], bool] | None = None,
+    replace_filename_base: str | None = None,
 ) -> None:
     rows: List[Dict[str, object]] = []
     fieldnames: List[str] = []
@@ -1328,6 +1440,13 @@ def _save_metadata_rewrite(
                     and drop_field_predicate(key)
                 )
             ]
+        replace_basename = str(replace_filename_base or "").strip()
+        if replace_basename:
+            existing_rows = [
+                existing
+                for existing in existing_rows
+                if str(existing.get("filename_base", "")).strip() != replace_basename
+            ]
         rows.extend(existing_rows)
 
     rows.append(row_filtered)
@@ -1347,6 +1466,17 @@ def _save_metadata_rewrite(
             if key not in seen:
                 fieldnames.append(key)
                 seen.add(key)
+    if not fieldnames:
+        fieldnames = _normalize_metadata_fieldnames(raw_fieldnames)
+        if effective_drop_field_predicate:
+            fieldnames = [
+                key
+                for key in fieldnames
+                if not (
+                    isinstance(key, str)
+                    and effective_drop_field_predicate(key)
+                )
+            ]
     fieldnames = _apply_preferred_field_order(fieldnames, preferred_fieldnames)
 
     with metadata_path.open("w", newline="") as csvfile:
@@ -1354,6 +1484,63 @@ def _save_metadata_rewrite(
         writer.writeheader()
         for item in rows:
             writer.writerow(_format_metadata_row(item, fieldnames))
+
+
+def normalize_metadata_file_schema(
+    metadata_path: str | Path,
+    *,
+    preferred_fieldnames: Iterable[str] | None = None,
+    log_fn: Callable[..., None] = builtins.print,
+    drop_field_predicate: Callable[[str], bool] | None = None,
+) -> Path:
+    metadata_path = Path(metadata_path)
+    if not metadata_path.exists() or metadata_path.stat().st_size == 0:
+        return metadata_path
+
+    effective_drop_field_predicate = _compose_drop_field_predicate(
+        metadata_path,
+        drop_field_predicate,
+    )
+    original_limit = csv.field_size_limit()
+    csv.field_size_limit(2**31 - 1)
+    try:
+        with metadata_path.open("r", newline="") as csvfile:
+            reader = csv.DictReader(csvfile)
+            raw_fieldnames = list(reader.fieldnames or [])
+            rows: list[dict[str, object]] = []
+            fieldnames: list[str] = []
+            seen_fields: set[str] = set()
+            for raw_row in reader:
+                normalized_row = _normalize_metadata_row(dict(raw_row))
+                if effective_drop_field_predicate:
+                    normalized_row = {
+                        key: value
+                        for key, value in normalized_row.items()
+                        if not (
+                            isinstance(key, str)
+                            and effective_drop_field_predicate(key)
+                        )
+                    }
+                sanitize_analysis_mode_rows([normalized_row])
+                rows.append(normalized_row)
+                for key in normalized_row.keys():
+                    if key in seen_fields:
+                        continue
+                    seen_fields.add(key)
+                    fieldnames.append(key)
+    finally:
+        csv.field_size_limit(original_limit)
+
+    fieldnames = _apply_preferred_field_order(fieldnames, preferred_fieldnames)
+    temp_path = metadata_path.with_suffix(metadata_path.suffix + ".schema_tmp")
+    with temp_path.open("w", newline="") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(_format_metadata_row(row, fieldnames))
+    temp_path.replace(metadata_path)
+    _sync_filename_base_index_from_csv(metadata_path, log_fn)
+    return metadata_path
 
 
 def _metadata_operation_dir(metadata_path: Path) -> Path:
@@ -1490,6 +1677,7 @@ def save_metadata(
     preferred_fieldnames: Iterable[str] | None = None,
     log_fn: Callable[..., None] = builtins.print,
     drop_field_predicate: Callable[[str], bool] | None = None,
+    replace_existing_basename: bool = False,
 ) -> Path:
     metadata_path = Path(metadata_path)
     metadata_write_enabled, metadata_type, metadata_config_path = should_write_step1_metadata(
@@ -1555,6 +1743,9 @@ def save_metadata(
                         preferred_fieldnames,
                         log_fn,
                         drop_field_predicate=effective_drop_field_predicate,
+                        replace_filename_base=(
+                            str(row_data.get("filename_base", "")).strip() if replace_existing_basename else None
+                        ),
                     )
                     _sync_filename_base_index_from_csv(metadata_path, log_fn)
                     return metadata_path
@@ -1596,6 +1787,9 @@ def save_metadata(
                     preferred_fieldnames,
                     log_fn,
                     drop_field_predicate=effective_drop_field_predicate,
+                    replace_filename_base=(
+                        str(row_data.get("filename_base", "")).strip() if replace_existing_basename else None
+                    ),
                 )
                 _sync_filename_base_index_from_csv(metadata_path, log_fn)
                 return metadata_path
@@ -1629,6 +1823,20 @@ def save_metadata(
                 )
             duplicate_basename = basename in index_values
             if duplicate_basename:
+                if replace_existing_basename and _metadata_allows_full_scan(metadata_file_size):
+                    log_fn(
+                        f"[metadata] filename_base={basename} already present in {metadata_path.name}; replacing existing row."
+                    )
+                    _save_metadata_rewrite(
+                        metadata_path,
+                        row_data,
+                        preferred_fieldnames,
+                        log_fn,
+                        drop_field_predicate=effective_drop_field_predicate,
+                        replace_filename_base=basename,
+                    )
+                    _sync_filename_base_index_from_csv(metadata_path, log_fn)
+                    return metadata_path
                 log_fn(
                     f"[metadata] filename_base={basename} already present in {metadata_path.name}; appending new row."
                 )

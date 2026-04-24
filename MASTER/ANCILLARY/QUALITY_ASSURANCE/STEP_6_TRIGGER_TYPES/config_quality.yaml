@@ -1,4 +1,0 @@
-quality:
-  enabled: true
-  output_reference_filename: trigger_types_epoch_references.csv
-  output_column_evaluation_filename: trigger_types_column_evaluations.csv

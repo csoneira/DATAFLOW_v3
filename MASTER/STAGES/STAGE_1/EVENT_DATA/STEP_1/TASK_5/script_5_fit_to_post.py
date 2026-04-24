@@ -122,7 +122,15 @@ from MASTER.common.plot_utils import (
 )
 from MASTER.common.selection_config import load_selection_for_paths, station_is_selected
 from MASTER.common.status_csv import initialize_status_row, update_status_progress
-from MASTER.common.reprocessing_utils import get_reprocessing_value
+from MASTER.common.reprocessing_utils import (
+    QA_REPROCESSING_METADATA_KEYS,
+    apply_qa_reprocessing_context,
+    canonical_processing_basename,
+    filter_filenames_by_qa_retry_basenames,
+    get_reprocessing_value,
+    load_active_qa_retry_basenames,
+    load_qa_reprocessing_context_for_file,
+)
 from MASTER.common.simulated_data_utils import resolve_simulated_z_positions
 from MASTER.common.step1_shared import (
     add_normalized_count_metadata,
@@ -151,6 +159,20 @@ from MASTER.common.step1_shared import (
 )
 
 task_number = 5
+TASK4_CHARGE_SUM_COLUMNS: tuple[str, ...] = (
+    "P1_Q_sum_final",
+    "P2_Q_sum_final",
+    "P3_Q_sum_final",
+    "P4_Q_sum_final",
+)
+TASK4_LISTED_FALLBACK_SUBDIRS: tuple[str, ...] = (
+    "PROCESSING_DIRECTORY",
+    "COMPLETED_DIRECTORY",
+    "UNPROCESSED_DIRECTORY",
+    "OUT_OF_DATE_DIRECTORY",
+)
+TASK5_STRIP_Q_COLUMN_RE = re.compile(r"^Q_P[1-4]s[1-4]$")
+TASK5_PLANE_Q_SUM_COLUMN_RE = re.compile(r"^P[1-4]_Q_sum_final$")
 
 try:
     import pyarrow as pa
@@ -166,6 +188,140 @@ def _preferred_parquet_compression() -> str:
         except Exception:
             pass
     return "zstd"
+
+
+def _charge_series_is_usable(series: pd.Series) -> bool:
+    numeric = pd.to_numeric(series, errors="coerce")
+    if numeric.notna().sum() == 0:
+        return False
+    return bool((numeric > 0).any())
+
+
+def _derive_charge_event_from_dataframe(
+    dataframe: pd.DataFrame,
+) -> tuple[pd.Series | None, str | None]:
+    for column_name in ("charge_event", "tim_charge_event"):
+        if column_name not in dataframe.columns:
+            continue
+        series = pd.to_numeric(dataframe[column_name], errors="coerce")
+        if _charge_series_is_usable(series):
+            return series.astype(float), column_name
+
+    plane_sum_columns = [
+        column_name
+        for column_name in dataframe.columns
+        if TASK5_PLANE_Q_SUM_COLUMN_RE.fullmatch(str(column_name))
+    ]
+    if plane_sum_columns:
+        plane_sum_series = (
+            dataframe.loc[:, plane_sum_columns]
+            .apply(pd.to_numeric, errors="coerce")
+            .fillna(0.0)
+            .sum(axis=1)
+            .astype(float)
+        )
+        if _charge_series_is_usable(plane_sum_series):
+            return plane_sum_series, "+".join(plane_sum_columns)
+
+    strip_q_columns = [
+        column_name
+        for column_name in dataframe.columns
+        if TASK5_STRIP_Q_COLUMN_RE.fullmatch(str(column_name))
+    ]
+    if strip_q_columns:
+        strip_q_series = (
+            dataframe.loc[:, strip_q_columns]
+            .apply(pd.to_numeric, errors="coerce")
+            .fillna(0.0)
+            .sum(axis=1)
+            .astype(float)
+        )
+        if _charge_series_is_usable(strip_q_series):
+            return strip_q_series, "+".join(strip_q_columns)
+
+    return None, None
+
+
+def _load_charge_event_from_task4_listed(
+    station_root: str | Path,
+    basename_no_ext: str,
+    event_ids: pd.Series,
+) -> tuple[pd.Series | None, str | None]:
+    if event_ids.empty:
+        return None, None
+
+    task4_input_root = (
+        Path(station_root)
+        / "STAGE_1"
+        / "EVENT_DATA"
+        / "STEP_1"
+        / "TASK_4"
+        / "INPUT_FILES"
+    )
+
+    for subdir_name in TASK4_LISTED_FALLBACK_SUBDIRS:
+        candidate_path = task4_input_root / subdir_name / f"listed_{basename_no_ext}.parquet"
+        if not candidate_path.exists():
+            continue
+        try:
+            task4_df = pd.read_parquet(
+                candidate_path,
+                columns=["event_id", *TASK4_CHARGE_SUM_COLUMNS],
+            )
+        except Exception as exc:
+            print(f"Warning: could not load Task 4 charge fallback {candidate_path}: {exc}")
+            continue
+        if "event_id" not in task4_df.columns:
+            continue
+
+        present_charge_columns = [
+            column_name
+            for column_name in TASK4_CHARGE_SUM_COLUMNS
+            if column_name in task4_df.columns
+        ]
+        if not present_charge_columns:
+            continue
+
+        charge_lookup = task4_df.loc[:, ["event_id", *present_charge_columns]].copy()
+        charge_lookup["charge_event"] = (
+            charge_lookup.loc[:, present_charge_columns]
+            .apply(pd.to_numeric, errors="coerce")
+            .fillna(0.0)
+            .sum(axis=1)
+            .astype(float)
+        )
+        charge_lookup = charge_lookup.loc[:, ["event_id", "charge_event"]]
+        charge_lookup = charge_lookup.drop_duplicates(subset=["event_id"], keep="last")
+
+        aligned = pd.DataFrame({"event_id": event_ids}).merge(
+            charge_lookup,
+            on="event_id",
+            how="left",
+        )["charge_event"]
+        if _charge_series_is_usable(aligned):
+            return aligned.astype(float), str(candidate_path)
+
+    return None, None
+
+
+def resolve_charge_event_series(
+    dataframe: pd.DataFrame,
+    *,
+    station_root: str | Path,
+    basename_no_ext: str,
+) -> tuple[pd.Series | None, str | None]:
+    series, source = _derive_charge_event_from_dataframe(dataframe)
+    if series is not None:
+        return series, source
+
+    if "event_id" in dataframe.columns:
+        return _load_charge_event_from_task4_listed(
+            station_root,
+            basename_no_ext,
+            pd.to_numeric(dataframe["event_id"], errors="coerce"),
+        )
+
+    return None, None
 
 # I want to chrono the execution time of the script
 start_execution_time_counting = datetime.now()
@@ -447,6 +603,11 @@ config = apply_step1_master_overrides(
     master_config_root=config_root,
     log_fn=print,
 )
+process_only_qa_retry_files = bool(config.get("process_only_qa_retry_files", False))
+if process_only_qa_retry_files:
+    print(
+        "[QA_ONLY] Enabled by STEP_1 shared config: only files present in the active QA retry list will be processed."
+    )
 
 selection_config = load_selection_for_paths(
     [config_file_path],
@@ -883,6 +1044,31 @@ if date_ranges:
         print(
             f"[DATE_RANGE] Ignoring {skipped_completed} out-of-range file(s) in COMPLETED_DIRECTORY."
         )
+active_qa_retry_basenames: set[str] = set()
+if process_only_qa_retry_files:
+    active_qa_retry_basenames = load_active_qa_retry_basenames(
+        station,
+        repo_root=repo_root,
+    )
+    unprocessed_files = filter_filenames_by_qa_retry_basenames(
+        unprocessed_files,
+        active_qa_retry_basenames,
+    )
+    processing_files = filter_filenames_by_qa_retry_basenames(
+        processing_files,
+        active_qa_retry_basenames,
+    )
+    completed_files = filter_filenames_by_qa_retry_basenames(
+        completed_files,
+        active_qa_retry_basenames,
+    )
+    print(
+        "[QA_ONLY] Active basenames="
+        f"{len(active_qa_retry_basenames)} eligible files: "
+        f"UNPROCESSED={len(unprocessed_files)} "
+        f"PROCESSING={len(processing_files)} "
+        f"COMPLETED={len(completed_files)}"
+    )
 last_file_test = bool(config.get("last_file_test", False))
 keep_all_columns_output = _coerce_config_bool(
     config.get("keep_all_columns_output", False),
@@ -892,6 +1078,14 @@ keep_all_columns_output = _coerce_config_bool(
 if user_file_selection:
     processing_file_path = user_file_path
     file_name = os.path.basename(user_file_path)
+    if (
+        process_only_qa_retry_files
+        and canonical_processing_basename(file_name) not in active_qa_retry_basenames
+    ):
+        sys.exit(
+            "[QA_ONLY] The selected input file is not present in the active QA retry list: "
+            f"{canonical_processing_basename(file_name)}"
+        )
 else:
     if last_file_test:
         latest_unprocessed = select_latest_candidate(unprocessed_files, station)
@@ -932,9 +1126,11 @@ else:
                     safe_move(completed_file_path, processing_file_path)
                     print(f"File moved to PROCESSING: {processing_file_path}")
                 else:
-                    sys.exit("No files to process in COMPLETED after normalization.")
+                    print("No files to process in COMPLETED after normalization.")
+                    sys.exit(0)
             else:
-                sys.exit("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
+                print("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
+                sys.exit(0)
 
     else:
         if unprocessed_files:
@@ -972,10 +1168,12 @@ else:
                 safe_move(completed_file_path, processing_file_path)
                 print(f"File moved to PROCESSING: {processing_file_path}")
             else:
-                sys.exit("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
+                print("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
+                sys.exit(0)
 
         else:
-            sys.exit("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
+            print("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
+            sys.exit(0)
 
 # This is for all cases
 file_path = processing_file_path
@@ -1052,6 +1250,16 @@ working_df = working_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"
 if "event_id" not in working_df.columns:
     print("Warning: 'event_id' missing in Task 5 input; reconstructing from current row order.")
     working_df.insert(0, "event_id", np.arange(len(working_df), dtype=np.int64))
+charge_event_series, charge_event_source = resolve_charge_event_series(
+    working_df,
+    station_root=station_directory,
+    basename_no_ext=basename_no_ext,
+)
+if charge_event_series is not None:
+    working_df["charge_event"] = charge_event_series
+    print(f"Recovered charge_event for TASK_5 using: {charge_event_source}")
+else:
+    print("[WARN] charge_event could not be reconstructed in TASK_5.")
 print(f"Listed dataframe reloaded from: {file_path}")
 # Ensure param_hash is persisted for downstream tasks.
 if "param_hash" not in working_df.columns:
@@ -1142,9 +1350,7 @@ fit_tt_columns = {
 # Prefer the corr_tt already provided by upstream steps.
 CORR_TT_COLUMN = "corr_tt"
 POST_TT_COLUMN = "post_tt"
-global_variables = {
-    'analysis_mode': 0,
-}
+global_variables = {}
 
 TT_COUNT_VALUES: tuple[int, ...] = (
     0, 1, 2, 3, 4, 12, 13, 14, 23, 24, 34, 123, 124, 134, 234, 1234
@@ -2885,11 +3091,25 @@ Q_clip_min_ST = Q_clip_min_ST
 Q_clip_max_ST = Q_clip_max_ST
 
 reprocessing_values: dict[str, object] = {}
+qa_reprocessing_context = load_qa_reprocessing_context_for_file(
+    station,
+    basename_no_ext,
+    repo_root=repo_root,
+)
+apply_qa_reprocessing_context(global_variables, qa_reprocessing_context)
+if int(qa_reprocessing_context.get("qa_reprocessing_mode", 0) or 0) == 1:
+    print("Active QA reprocessing state found for this file.")
+    print(
+        "QA selectors: "
+        f"{qa_reprocessing_context.get('qa_reprocessing_selector_ids', '') or 'none'}"
+    )
 
 reprocessing_parameters = load_reprocessing_parameters_for_file(station, str(task_number), basename_no_ext)
 if not reprocessing_parameters.empty:
-    global_variables["analysis_mode"] = 1
-    print("Reprocessing parameters found for this file. Setting analysis_mode to 1.")
+    if int(global_variables.get("qa_reprocessing_mode", 0) or 0) == 1:
+        print("Reprocessing parameters found for this file. qa_reprocessing_mode=1.")
+    else:
+        print("Reprocessing parameters found for this file.")
     # Print only non-NaN entries from the reprocessing table
     non_nan = reprocessing_parameters.dropna(how="all").dropna(axis=1, how="all")
     if non_nan.empty:
@@ -3909,6 +4129,7 @@ metadata_deep_fiter_csv_path = save_metadata(
         "param_hash",
         *sorted(filter_metrics),
     ),
+    replace_existing_basename=True,
 )
 print(f"Metadata (deep_fiter) CSV updated at: {metadata_deep_fiter_csv_path}")
 
@@ -3922,15 +4143,26 @@ print(f"Execution timestamp: {execution_timestamp}")
 print(f"Data purity percentage: {data_purity_percentage:.2f}%")
 print(f"Total execution time: {total_execution_time_minutes:.2f} minutes")
 
+execution_metadata_row = {
+    "filename_base": filename_base,
+    "execution_timestamp": execution_timestamp,
+    "param_hash": param_hash_value,
+    "data_purity_percentage": round(float(data_purity_percentage), 4),
+    "total_execution_time_minutes": round(float(total_execution_time_minutes), 4),
+}
+apply_qa_reprocessing_context(execution_metadata_row, qa_reprocessing_context)
+
 metadata_execution_csv_path = save_metadata(
     csv_path,
-    {
-        "filename_base": filename_base,
-        "execution_timestamp": execution_timestamp,
-        "param_hash": param_hash_value,
-        "data_purity_percentage": round(float(data_purity_percentage), 4),
-        "total_execution_time_minutes": round(float(total_execution_time_minutes), 4),
-    },
+    execution_metadata_row,
+    preferred_fieldnames=(
+        "filename_base",
+        "execution_timestamp",
+        "param_hash",
+        "data_purity_percentage",
+        "total_execution_time_minutes",
+        *QA_REPROCESSING_METADATA_KEYS,
+    ),
 )
 print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
 

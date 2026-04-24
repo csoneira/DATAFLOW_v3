@@ -49,6 +49,11 @@ if str(REPO_ROOT) not in sys.path:
 from MASTER.common.config_loader import update_config_with_parameters
 from MASTER.common.execution_logger import set_station, start_timer
 from MASTER.common.file_selection import select_latest_candidate
+from MASTER.common.event_output_schema import (
+    canonicalize_output_dataframe,
+    classify_angular_regions,
+    resolve_output_schema,
+)
 from MASTER.common.path_config import (
     get_master_config_root,
     get_repo_root,
@@ -175,6 +180,214 @@ def normalise_basename(name: str) -> str:
             base = base[len(prefix):]
             break
     return base
+
+
+TASK4_CHARGE_SUM_COLUMNS = (
+    "P1_Q_sum_final",
+    "P2_Q_sum_final",
+    "P3_Q_sum_final",
+    "P4_Q_sum_final",
+)
+TASK4_LISTED_FALLBACK_SUBDIRS = (
+    "PROCESSING_DIRECTORY",
+    "COMPLETED_DIRECTORY",
+    "UNPROCESSED_DIRECTORY",
+    "OUT_OF_DATE_DIRECTORY",
+)
+STEP2_STRIP_Q_COLUMN_RE = re.compile(r"^Q_P[1-4]s[1-4]$")
+STEP2_PLANE_Q_SUM_COLUMN_RE = re.compile(r"^P[1-4]_Q_sum_final$")
+INTERNAL_BIN_LIVE_SECONDS_COLUMN = "__bin_live_seconds"
+INTERNAL_COUNT_COLUMN_PREFIX = "__count__"
+
+
+def _charge_series_is_usable(series: pd.Series) -> bool:
+    numeric = pd.to_numeric(series, errors="coerce")
+    if numeric.notna().sum() == 0:
+        return False
+    return bool((numeric > 0).any())
+
+
+def _derive_charge_event_from_dataframe(
+    dataframe: pd.DataFrame,
+) -> tuple[pd.Series | None, str | None]:
+    for column_name in ("charge_event", "tim_charge_event"):
+        if column_name not in dataframe.columns:
+            continue
+        series = pd.to_numeric(dataframe[column_name], errors="coerce")
+        if _charge_series_is_usable(series):
+            return series.astype(float), column_name
+
+    plane_sum_columns = [
+        column_name
+        for column_name in dataframe.columns
+        if STEP2_PLANE_Q_SUM_COLUMN_RE.fullmatch(str(column_name))
+    ]
+    if plane_sum_columns:
+        plane_sum_series = (
+            dataframe.loc[:, plane_sum_columns]
+            .apply(pd.to_numeric, errors="coerce")
+            .fillna(0.0)
+            .sum(axis=1)
+            .astype(float)
+        )
+        if _charge_series_is_usable(plane_sum_series):
+            return plane_sum_series, "+".join(plane_sum_columns)
+
+    strip_q_columns = [
+        column_name
+        for column_name in dataframe.columns
+        if STEP2_STRIP_Q_COLUMN_RE.fullmatch(str(column_name))
+    ]
+    if strip_q_columns:
+        strip_q_series = (
+            dataframe.loc[:, strip_q_columns]
+            .apply(pd.to_numeric, errors="coerce")
+            .fillna(0.0)
+            .sum(axis=1)
+            .astype(float)
+        )
+        if _charge_series_is_usable(strip_q_series):
+            return strip_q_series, "+".join(strip_q_columns)
+
+    return None, None
+
+
+def _load_charge_event_from_task4_listed(
+    station_root: str | Path,
+    basename_no_ext: str,
+    event_ids: pd.Series,
+) -> tuple[pd.Series | None, str | None]:
+    if event_ids.empty:
+        return None, None
+
+    task4_input_root = (
+        Path(station_root)
+        / "STAGE_1"
+        / "EVENT_DATA"
+        / "STEP_1"
+        / "TASK_4"
+        / "INPUT_FILES"
+    )
+
+    for subdir_name in TASK4_LISTED_FALLBACK_SUBDIRS:
+        candidate_path = task4_input_root / subdir_name / f"listed_{basename_no_ext}.parquet"
+        if not candidate_path.exists():
+            continue
+        try:
+            task4_df = pd.read_parquet(
+                candidate_path,
+                columns=["event_id", *TASK4_CHARGE_SUM_COLUMNS],
+            )
+        except Exception as exc:
+            print(f"Warning: could not load Task 4 charge fallback {candidate_path}: {exc}")
+            continue
+        if "event_id" not in task4_df.columns:
+            continue
+
+        present_charge_columns = [
+            column_name
+            for column_name in TASK4_CHARGE_SUM_COLUMNS
+            if column_name in task4_df.columns
+        ]
+        if not present_charge_columns:
+            continue
+
+        charge_lookup = task4_df.loc[:, ["event_id", *present_charge_columns]].copy()
+        charge_lookup["charge_event"] = (
+            charge_lookup.loc[:, present_charge_columns]
+            .apply(pd.to_numeric, errors="coerce")
+            .fillna(0.0)
+            .sum(axis=1)
+            .astype(float)
+        )
+        charge_lookup = charge_lookup.loc[:, ["event_id", "charge_event"]]
+        charge_lookup = charge_lookup.drop_duplicates(subset=["event_id"], keep="last")
+
+        aligned = pd.DataFrame({"event_id": event_ids}).merge(
+            charge_lookup,
+            on="event_id",
+            how="left",
+        )["charge_event"]
+        if _charge_series_is_usable(aligned):
+            return aligned.astype(float), str(candidate_path)
+
+    return None, None
+
+
+def resolve_charge_event_series(
+    dataframe: pd.DataFrame,
+    *,
+    station_root: str | Path,
+    basename_no_ext: str,
+) -> tuple[pd.Series | None, str | None]:
+    series, source = _derive_charge_event_from_dataframe(dataframe)
+    if series is not None:
+        return series, source
+
+    if "event_id" in dataframe.columns:
+        return _load_charge_event_from_task4_listed(
+            station_root,
+            basename_no_ext,
+            pd.to_numeric(dataframe["event_id"], errors="coerce"),
+        )
+
+    return None, None
+
+
+def internal_count_column(output_column: str) -> str:
+    return f"{INTERNAL_COUNT_COLUMN_PREFIX}{str(output_column).strip()}"
+
+
+def build_live_seconds_frame(
+    intervals: List[tuple[pd.Timestamp, pd.Timestamp]],
+    *,
+    time_column: str,
+    time_bin_delta: pd.Timedelta,
+) -> pd.DataFrame:
+    live_seconds_by_bin: Dict[pd.Timestamp, float] = defaultdict(float)
+
+    for start_time, end_time in intervals:
+        if pd.isna(start_time) or pd.isna(end_time):
+            continue
+        start_ts = pd.Timestamp(start_time)
+        end_ts = pd.Timestamp(end_time)
+        if end_ts < start_ts:
+            start_ts, end_ts = end_ts, start_ts
+
+        bin_start = start_ts.floor(time_bin_delta)
+        last_bin_start = end_ts.floor(time_bin_delta)
+
+        while bin_start <= last_bin_start:
+            bin_end = bin_start + time_bin_delta
+            overlap_seconds = (
+                min(end_ts, bin_end) - max(start_ts, bin_start)
+            ).total_seconds()
+            if overlap_seconds > 0:
+                live_seconds_by_bin[bin_start] += float(overlap_seconds)
+            elif start_ts == end_ts and bin_start == last_bin_start:
+                live_seconds_by_bin[bin_start] += 1.0
+            bin_start = bin_end
+
+    if not live_seconds_by_bin:
+        return pd.DataFrame(columns=[time_column, INTERNAL_BIN_LIVE_SECONDS_COLUMN])
+
+    live_seconds = (
+        pd.DataFrame(
+            {
+                time_column: list(live_seconds_by_bin.keys()),
+                INTERNAL_BIN_LIVE_SECONDS_COLUMN: list(live_seconds_by_bin.values()),
+            }
+        )
+        .sort_values(time_column)
+        .reset_index(drop=True)
+    )
+    live_seconds[INTERNAL_BIN_LIVE_SECONDS_COLUMN] = (
+        pd.to_numeric(live_seconds[INTERNAL_BIN_LIVE_SECONDS_COLUMN], errors="coerce")
+        .fillna(0.0)
+        .clip(lower=1.0)
+        .astype(float)
+    )
+    return live_seconds
 
 # Image Processing
 from PIL import Image
@@ -449,71 +662,29 @@ if files:  # Check if the directory contains any files
     for file in files:
         os.remove(os.path.join(figure_directory, file))
 
-
-
-
-
-def _coerce_numeric_sequence(raw_value, caster):
-    """Return a list of numbers parsed from *raw_value*."""
-    if isinstance(raw_value, (list, tuple, np.ndarray)):
-        result: List[float] = []
-        for item in raw_value:
-            result.extend(_coerce_numeric_sequence(item, caster))
-        return result
-    if isinstance(raw_value, str):
-        cleaned = raw_value.strip()
-        if not cleaned:
-            return []
-        try:
-            parsed = literal_eval(cleaned)
-        except (ValueError, SyntaxError):
-            cleaned = cleaned.replace("[", " ").replace("]", " ")
-            tokens = [tok for tok in re.split(r"[;,\\s]+", cleaned) if tok]
-            result = []
-            for tok in tokens:
-                try:
-                    result.append(caster(tok))
-                except (ValueError, TypeError):
-                    continue
-            return result
-        else:
-            return _coerce_numeric_sequence(parsed, caster)
-    if np.isscalar(raw_value):
-        try:
-            return [caster(raw_value)]
-        except (ValueError, TypeError):
-            return []
-    return []
-
-
-theta_boundaries_raw = config.get("theta_boundaries", [])
-region_layout_raw = config.get("region_layout", [])
-
-theta_boundaries = _coerce_numeric_sequence(theta_boundaries_raw, float)
-theta_values = []
-for b in theta_boundaries:
-    if isinstance(b, (int, float)) and np.isfinite(b):
-        b_float = float(b)
-        if 0 <= b_float <= 90 and b_float not in theta_values:
-            theta_values.append(b_float)
-theta_boundaries = theta_values
-
-region_layout = _coerce_numeric_sequence(region_layout_raw, int)
-region_layout = [max(1, int(abs(n))) for n in region_layout if isinstance(n, (int, float))]
-
-expected_regions = len(theta_boundaries) + 1
-if not region_layout:
-    region_layout = [1] * expected_regions
-elif len(region_layout) < expected_regions:
-    region_layout = region_layout + [region_layout[-1]] * (expected_regions - len(region_layout))
-elif len(region_layout) > expected_regions:
-    region_layout = region_layout[:expected_regions]
-
-if not theta_boundaries:
-    theta_boundaries = []
-
+output_schema = resolve_output_schema(config)
+theta_boundaries = output_schema["theta_boundaries"]
+region_layout = output_schema["region_layout"]
+region_ring_names = output_schema["region_ring_names"]
+output_time_column = output_schema["time_column"]
+output_time_bin_delta = output_schema["time_bin_delta"]
+output_value_columns = output_schema["value_columns"]
+output_region_labels = set(output_schema["region_labels"])
+output_tt_to_group = output_schema["tt_to_output_group"]
+output_column_by_group_region = output_schema["column_by_group_region"]
+output_rate_suffix = output_schema["rate_suffix"]
+output_invalid_region_label = output_schema["invalid_region_label"]
+output_theta_max_deg = output_schema["theta_max_deg"]
+output_extra_columns = output_schema["extra_columns"]
+Q_EVENT_SUM_COLUMN = "Q_event_sum"
+Q_EVENT_COUNT_COLUMN = "Q_event_count"
+Q_EVENT_MEAN_COLUMN = "Q_event_mean"
 
 print(f"Theta boundaries (degrees): {theta_boundaries}")
+print(
+    "Configured STEP_2 output columns: "
+    f"{len(output_value_columns)} value column(s) across {len(output_region_labels)} angular region(s)."
+)
 
 
 # --------------------------------------------------------------------------------------------
@@ -775,6 +946,17 @@ initial_event_count = len(df)
 final_event_count = initial_event_count
 print(f"Listed dataframe reloaded from: {file_path}")
 
+charge_event_series, charge_event_source = resolve_charge_event_series(
+    df,
+    station_root=station_directory,
+    basename_no_ext=normalise_basename(reference_filename),
+)
+if charge_event_series is not None:
+    df["charge_event"] = charge_event_series
+    print(f"Recovered charge_event for STEP_2 input using: {charge_event_source}")
+else:
+    print("[WARN] charge_event could not be reconstructed before STEP_2 accumulation.")
+
 
 df['Time'] = pd.to_datetime(df['Time'], errors='coerce') # Added errors='coerce' to handle NaT values
 print(f"Number of events in the file: {initial_event_count}")
@@ -782,6 +964,9 @@ print(f"Number of events in the file: {initial_event_count}")
 min_time_original = df['Time'].min()
 max_time_original = df['Time'].max()
 valid_times = df['Time'].dropna()
+source_time_intervals: List[tuple[pd.Timestamp, pd.Timestamp]] = []
+if not valid_times.empty:
+    source_time_intervals.append((valid_times.min(), valid_times.max()))
 
 # ------------------------------------------------------------------------------------------
 
@@ -887,6 +1072,8 @@ if multiple_files:
                     print(f"Merging file: {fname}")
                 used_files_names.append(fname)
                 merged_df = pd.concat([merged_df, temp_df], ignore_index=True)
+                if pd.notna(min_t) and pd.notna(max_t):
+                    source_time_intervals.append((pd.Timestamp(min_t), pd.Timestamp(max_t)))
                 # Update time range for rolling inclusion
                 min_time_original = min(min_time_original, min_t)
                 max_time_original = max(max_time_original, max_t)
@@ -4940,7 +5127,29 @@ if draw_angular_regions:
     plt.close()
 
 
-# df['region'] = df.apply(lambda row: classify_region_flexible(row, theta_boundaries, region_layout), axis=1)
+if {"theta", "phi"}.issubset(df.columns):
+    df["region"] = classify_angular_regions(
+        df["theta"],
+        df["phi"],
+        theta_boundaries=theta_boundaries,
+        region_layout=region_layout,
+        region_ring_names=region_ring_names,
+        theta_max_deg=output_theta_max_deg,
+        invalid_label=output_invalid_region_label,
+    )
+else:
+    print(
+        "[WARN] Missing theta/phi columns in STEP_2 input; angular region assignment "
+        f"fell back to {output_invalid_region_label!r}."
+    )
+    df["region"] = output_invalid_region_label
+
+unclassified_region_count = int((df["region"] == output_invalid_region_label).sum())
+if unclassified_region_count:
+    print(
+        "Rows without a configured angular-region assignment: "
+        f"{unclassified_region_count} -> {output_invalid_region_label}"
+    )
 
 print(f"Region distribution: {df['region'].value_counts().to_dict()}")
 
@@ -5123,12 +5332,7 @@ for bin_width in time_bins:
     df = df_original.copy()
     df['Time'] = df['Time'].dt.floor(bin_width)
 
-    # Group and count
-    binned = df.groupby(['Time', 'definitive_tt', 'region']).size().reset_index(name='counts')
-    pivoted = binned.pivot_table(index='Time', columns=['definitive_tt', 'region'], values='counts', fill_value=0)
-    pivoted.columns = [f"{tt}_{region}" for tt, region in pivoted.columns]
-    pivoted['events'] = pivoted.sum(axis=1)
-    pivoted = pivoted.reset_index()
+    pivoted = df.groupby('Time').size().rename('events').reset_index()
 
     # Remove borders
     n = 1
@@ -5277,48 +5481,176 @@ df = df_original.copy()
 # --- 1. Floor to seconds for outlier detection ---
 df['Time'] = df['Time'].dt.floor('1s')
 
-# --- 2. Count events per second per (tt, region) ---
-binned = df.groupby(['Time', 'definitive_tt', 'region']).size().reset_index(name='counts')
-pivoted = binned.pivot_table(index='Time', columns=['definitive_tt', 'region'], values='counts', fill_value=0)
-pivoted.columns = [f"{tt}_{region}" for tt, region in pivoted.columns]
-pivoted['events'] = pivoted.sum(axis=1)
-pivoted = pivoted.reset_index()
+# --- 2. Count events per second ---
+pivoted = df.groupby('Time').size().rename('events').reset_index()
 
 # --- 3. Empirical quantile outlier detection ---
 lower_q = 0.005  # 0.5%
 upper_q = 0.995  # 99.5%
 
-lower = pivoted['events'].quantile(lower_q)
-upper = pivoted['events'].quantile(upper_q)
+if pivoted.empty:
+    lower = 0.0
+    upper = 0.0
+    outlier_mask = pd.Series(dtype=bool)
+    n_outliers = 0
+    outliers_percentage = 0.0
+    outlier_times = set()
+else:
+    lower = pivoted['events'].quantile(lower_q)
+    upper = pivoted['events'].quantile(upper_q)
+    outlier_mask = (pivoted['events'] < lower) | (pivoted['events'] > upper)
+    n_outliers = int(outlier_mask.sum())
+    outliers_percentage = 100.0 * n_outliers / len(pivoted)
+    outlier_times = set(pivoted.loc[outlier_mask, 'Time'])
 
-outlier_mask = (pivoted['events'] < lower) | (pivoted['events'] > upper)
-n_outliers = outlier_mask.sum()
-
-outliers_percentage = 100 * n_outliers / len(pivoted)
 print(f"Outliers detected: {n_outliers} ({outliers_percentage:.2f}%) using empirical quantiles in [{lower:.2f}, {upper:.2f}].")
 global_variables['outliers_removed_percentage'] = outliers_percentage
 
 # --- 4. Remove rows from df corresponding to outlier seconds ---
-outlier_times = set(pivoted.loc[outlier_mask, 'Time'])
 df = df[~df['Time'].isin(outlier_times)]
 
-# --- 5. Floor to 1-minute for accumulation ---
-df['Time'] = df['Time'].dt.floor('1min')
+# --- 5. Floor to output accumulation bin ---
+df[output_time_column] = df[output_time_column].dt.floor(output_time_bin_delta)
 
-# --- 6. Accumulate event counts per minute ---
-binned = df.groupby(['Time', 'definitive_tt', 'region']).size().reset_index(name='counts')
-pivoted = binned.pivot_table(index='Time', columns=['definitive_tt', 'region'], values='counts', fill_value=0)
-pivoted.columns = [f"{tt}_{region}" for tt, region in pivoted.columns]
-pivoted['events'] = pivoted.sum(axis=1)
-pivoted = pivoted.reset_index()
+# --- 6. Accumulate configured trigger families by angular region and convert to Hz ---
+output_df = df.copy()
+output_df["_output_group"] = (
+    pd.to_numeric(output_df["definitive_tt"], errors="coerce")
+    .astype("Int64")
+    .map(output_tt_to_group)
+)
+rows_before_output_filter = len(output_df)
+output_df = output_df[
+    output_df["_output_group"].notna() & output_df["region"].isin(output_region_labels)
+].copy()
+rows_excluded_from_output = rows_before_output_filter - len(output_df)
+if rows_excluded_from_output:
+    print(
+        "Rows excluded from STEP_2 saved rate table: "
+        f"{rows_excluded_from_output}"
+    )
+
+if output_df.empty:
+    pivoted = pd.DataFrame(
+        columns=[
+            output_time_column,
+            *output_value_columns,
+            *output_extra_columns,
+            Q_EVENT_SUM_COLUMN,
+            Q_EVENT_COUNT_COLUMN,
+            INTERNAL_BIN_LIVE_SECONDS_COLUMN,
+            *[internal_count_column(column_name) for column_name in output_value_columns],
+        ]
+    )
+else:
+    binned = (
+        output_df.groupby([output_time_column, "_output_group", "region"])
+        .size()
+        .reset_index(name="counts")
+    )
+    pivoted = binned.pivot_table(
+        index=output_time_column,
+        columns=["_output_group", "region"],
+        values="counts",
+        fill_value=0,
+    )
+    pivoted.columns = [
+        output_column_by_group_region[(str(group_name), str(region_name))]
+        for group_name, region_name in pivoted.columns
+    ]
+    pivoted = pivoted.reset_index()
+    live_seconds_frame = build_live_seconds_frame(
+        source_time_intervals,
+        time_column=output_time_column,
+        time_bin_delta=output_time_bin_delta,
+    )
+    if INTERNAL_BIN_LIVE_SECONDS_COLUMN not in live_seconds_frame.columns:
+        live_seconds_frame[INTERNAL_BIN_LIVE_SECONDS_COLUMN] = np.nan
+    pivoted = pivoted.merge(live_seconds_frame, on=output_time_column, how="left")
+    default_bin_seconds = float(output_time_bin_delta.total_seconds()) or 60.0
+    pivoted[INTERNAL_BIN_LIVE_SECONDS_COLUMN] = (
+        pd.to_numeric(pivoted[INTERNAL_BIN_LIVE_SECONDS_COLUMN], errors="coerce")
+        .fillna(default_bin_seconds)
+        .clip(lower=1.0)
+        .astype(float)
+    )
+
+    for output_column in output_value_columns:
+        count_column = internal_count_column(output_column)
+        if output_column in pivoted.columns:
+            counts = pd.to_numeric(pivoted[output_column], errors="coerce").fillna(0.0)
+        else:
+            counts = pd.Series(0.0, index=pivoted.index, dtype=float)
+        pivoted[count_column] = counts.astype(float)
+        pivoted[output_column] = np.where(
+            pivoted[INTERNAL_BIN_LIVE_SECONDS_COLUMN] > 0,
+            pivoted[count_column] / pivoted[INTERNAL_BIN_LIVE_SECONDS_COLUMN],
+            np.nan,
+        )
+    auxiliary_columns = [
+        output_time_column,
+        INTERNAL_BIN_LIVE_SECONDS_COLUMN,
+        *[internal_count_column(column_name) for column_name in output_value_columns],
+    ]
+    auxiliary_frame = pivoted[auxiliary_columns].copy()
+    pivoted = canonicalize_output_dataframe(
+        pivoted,
+        time_column=output_time_column,
+        value_columns=output_value_columns,
+    )
+    pivoted = pivoted.merge(auxiliary_frame, on=output_time_column, how="left")
+
+    if "charge_event" in output_df.columns:
+        charge_stats = output_df.assign(
+            _charge_event=pd.to_numeric(output_df["charge_event"], errors="coerce")
+        )
+        charge_stats = (
+            charge_stats.groupby(output_time_column)["_charge_event"]
+            .agg(["sum", "count"])
+            .reset_index()
+            .rename(
+                columns={
+                    "sum": Q_EVENT_SUM_COLUMN,
+                    "count": Q_EVENT_COUNT_COLUMN,
+                }
+            )
+        )
+        charge_stats[Q_EVENT_MEAN_COLUMN] = np.where(
+            charge_stats[Q_EVENT_COUNT_COLUMN] > 0,
+            charge_stats[Q_EVENT_SUM_COLUMN] / charge_stats[Q_EVENT_COUNT_COLUMN],
+            np.nan,
+        )
+        pivoted = pivoted.merge(charge_stats, on=output_time_column, how="left")
+    else:
+        print("[WARN] charge_event not available; Q_event_mean will be empty in STEP_2 output.")
+
+for extra_column in output_extra_columns:
+    if extra_column not in pivoted.columns:
+        pivoted[extra_column] = np.nan
+if Q_EVENT_SUM_COLUMN not in pivoted.columns:
+    pivoted[Q_EVENT_SUM_COLUMN] = np.nan
+if Q_EVENT_COUNT_COLUMN not in pivoted.columns:
+    pivoted[Q_EVENT_COUNT_COLUMN] = np.nan
+
+pivoted = pivoted[
+    [
+        output_time_column,
+        *output_value_columns,
+        *output_extra_columns,
+        Q_EVENT_SUM_COLUMN,
+        Q_EVENT_COUNT_COLUMN,
+        INTERNAL_BIN_LIVE_SECONDS_COLUMN,
+        *[internal_count_column(column_name) for column_name in output_value_columns],
+    ]
+]
 
 final_event_count = len(df)
 
 # --- 7. Save to disk ---
-pivoted['Time'] = pivoted['Time'].astype('datetime64[ns]')
-for col in pivoted.columns:
-    if col != 'Time':
-        pivoted[col] = pivoted[col].astype('int32', errors='ignore')
+pivoted[output_time_column] = pd.to_datetime(
+    pivoted[output_time_column],
+    errors='coerce',
+).astype('datetime64[ns]')
 
 stripped_sources = [normalise_basename(name) for name in used_files_names]
 sources_comment = "# source_basenames=" + ";".join(stripped_sources)
@@ -5335,7 +5667,9 @@ print(f"Accumulated CSV saved as {save_filename}. Path is {save_path}")
 
 # Move the original file in file_path to completed_directory
 print("Moving file to COMPLETED directory...")
-if os.path.exists(file_path):
+if user_file_selection:
+    print("User-selected input: skipping completion move.")
+elif os.path.exists(file_path):
     shutil.move(file_path, completed_file_path)
     now = time.time()
     os.utime(completed_file_path, (now, now))

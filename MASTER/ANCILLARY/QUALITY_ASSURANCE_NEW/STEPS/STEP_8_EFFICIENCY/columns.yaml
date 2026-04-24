@@ -1,0 +1,6 @@
+plot_only:
+  - '*'
+
+ignore:
+  - efficiency_metadata_reason
+  - efficiency_vector_*_bin_*

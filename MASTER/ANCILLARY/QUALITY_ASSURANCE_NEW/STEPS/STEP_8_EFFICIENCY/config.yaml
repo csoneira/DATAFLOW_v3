@@ -1,0 +1,5 @@
+display_name: efficiency
+task_ids: [4]
+metadata_suffix: efficiency
+metadata_type: efficiency
+pass_column_template: task_{task_id}_efficiency_pass

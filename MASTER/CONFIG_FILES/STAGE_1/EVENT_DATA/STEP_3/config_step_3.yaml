@@ -1,0 +1,5 @@
+inherit_step_2_output_schema: true
+output_time_column: Time
+# Leave this empty to reuse the STEP_2 schema. Set an explicit list here only if
+# you want STEP_3/TASK_2 daily files to reorder or subset the saved value columns.
+output_value_columns: []

@@ -1,0 +1,6 @@
+display_name: robust_efficiency
+task_ids: [4]
+metadata_suffix: robust_efficiency
+metadata_type: robust_efficiency
+pass_column_template: task_{task_id}_robust_efficiency_pass
+threshold_rules_csv: robust_efficiency_column_rules.csv

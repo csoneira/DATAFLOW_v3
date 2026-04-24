@@ -117,6 +117,7 @@ MASTER_DIR="$SCRIPT_DIR"
 while [[ "${MASTER_DIR}" != "/" && "$(basename "${MASTER_DIR}")" != "MASTER" ]]; do
     MASTER_DIR="$(dirname "${MASTER_DIR}")"
 done
+REPO_ROOT="$(dirname "${MASTER_DIR}")"
 
 config_file_shared="${MASTER_DIR}/CONFIG_FILES/STAGE_0/REPROCESSING/config_reprocessing.yaml"
 config_file_step="${MASTER_DIR}/CONFIG_FILES/STAGE_0/REPROCESSING/STEP_2/config_step_2.yaml"
@@ -357,9 +358,15 @@ fi
 STATIONS_BASE="$HOME/DATAFLOW_v3/STATIONS"
 station_directory="${STATIONS_BASE}/MINGO${station_code}"
 reprocessing_directory="${station_directory}/STAGE_0/REPROCESSING/STEP_2"
+step0_directory="${station_directory}/STAGE_0/REPROCESSING/STEP_0"
+step0_output_directory="${step0_directory}/OUTPUT_FILES"
+step0_metadata_directory="${step0_directory}/METADATA"
 step_1_output_directory="${station_directory}/STAGE_0/REPROCESSING/STEP_1/OUTPUT_FILES"
 step_1_output_compressed="${step_1_output_directory}/COMPRESSED_HLDS"
 step_1_output_uncompressed="${step_1_output_directory}/UNCOMPRESSED_HLDS"
+qa_retry_manifest_csv="${step0_output_directory}/qa_retry_manifest_${station}"
+qa_retry_manifest_csv="${qa_retry_manifest_csv}.csv"
+qa_retry_state_csv="${step0_metadata_directory}/qa_retry_state_${station}.csv"
 input_directory="${reprocessing_directory}/INPUT_FILES"
 unprocessed_uncompressed="${input_directory}/UNPROCESSED"
 completed_uncompressed="${input_directory}/COMPLETED"
@@ -380,6 +387,7 @@ mkdir -p \
 dat_unpacked_csv="${metadata_directory}/dat_files_unpacked.csv"
 dat_unpacked_header="dat_name,execution_timestamp,execution_duration_s,actually_unpacked"
 declare -A dat_unpacked_basenames=()
+declare -A qa_retry_basenames=()
 
 # csv_path="$HOME/DATAFLOW_v3/STATIONS/MINGO0${station}/database_status_${station}.csv"
 csv_header="basename,start_date,hld_remote_add_date,hld_local_add_date,dat_add_date,list_ev_name,list_ev_add_date,acc_name,acc_add_date,merge_add_date"
@@ -434,6 +442,38 @@ load_dat_unpacked_basenames() {
         [[ -z "$base" ]] && base="$dat_name"
         dat_unpacked_basenames["$base"]=1
     done < "$dat_unpacked_csv"
+}
+
+load_qa_retry_manifest_basenames() {
+    qa_retry_basenames=()
+    if [[ ! -s "$qa_retry_manifest_csv" ]]; then
+        return
+    fi
+    while IFS=',' read -r retry_base _rest; do
+        retry_base=${retry_base//$'\r'/}
+        [[ -z "$retry_base" || "$retry_base" == "basename" ]] && continue
+        qa_retry_basenames["$retry_base"]=1
+    done < "$qa_retry_manifest_csv"
+}
+
+mark_qa_retry_admitted_state() {
+    local base="$1"
+    local admitted_at="$2"
+    [[ -n "$base" ]] || return 0
+    [[ -n ${qa_retry_basenames["$base"]+_} ]] || return 0
+
+    local summary
+    if summary=$(
+        PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+        python3 -m MASTER.common.reprocessing_qa_retry mark-admitted \
+            --state-csv "$qa_retry_state_csv" \
+            --basename "$base" \
+            --admitted-at "$admitted_at"
+    ); then
+        log_info "QA retry admission recorded for ${base}: ${summary}"
+    else
+        log_warn "failed to update QA retry admission state for ${base}"
+    fi
 }
 
 # ensure_csv() {
@@ -734,11 +774,13 @@ process_single_hld() {
     csv_timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
 
     load_dat_unpacked_basenames
+    load_qa_retry_manifest_basenames
     if $unpack_anyway; then
         echo "Loaded ${#dat_unpacked_basenames[@]} previously unpacked basenames (unpack_anyway=true, so they will be reprocessed if present)."
     else
         echo "Loaded ${#dat_unpacked_basenames[@]} previously unpacked basenames as exclusions."
     fi
+    echo "Loaded ${#qa_retry_basenames[@]} active QA retry basenames from STEP_0 manifest."
 
     echo "Creating necessary directories..."
     mkdir -p \
@@ -813,7 +855,9 @@ process_single_hld() {
             candidate_base=$(strip_suffix "$(basename "$candidate")")
             [[ -z "$candidate_base" ]] && candidate_base="$(basename "$candidate")"
             if [[ -n ${dat_unpacked_basenames["$candidate_base"]+_} ]]; then
-                if $unpack_anyway; then
+                if [[ -n ${qa_retry_basenames["$candidate_base"]+_} ]]; then
+                    echo "  -> Re-processing $(basename "$candidate") (active QA retry manifest entry)."
+                elif $unpack_anyway; then
                     echo "  -> Re-processing $(basename "$candidate") (record exists in dat_files_unpacked.csv; unpack_anyway=true)."
                 else
                     echo "  -> Skipping $(basename "$candidate") (already recorded in dat_files_unpacked.csv)."
@@ -870,7 +914,8 @@ process_single_hld() {
     echo "Selected HLD file: $(basename "$selected_file") [source: $source_stage]"
 
     local selected_base
-    selected_base=$(basename "${selected_file%.hld}")
+    selected_base=$(strip_suffix "$(basename "$selected_file")")
+    [[ -z "$selected_base" ]] && selected_base="$(basename "$selected_file")"
     # append_row_if_missing "$selected_base" "" "$csv_timestamp" ""
 
     # awk -F',' -v OFS=',' -v key="$selected_base" -v ts="$csv_timestamp" '
@@ -896,6 +941,8 @@ process_single_hld() {
         log_warn "failed to move $filename into PROCESSING"
         return 1
     fi
+
+    mark_qa_retry_admitted_state "$selected_base" "$csv_timestamp"
 
     {
         flock -w 300 200 || { echo "Another unpacking is in progress; try again shortly." >&2; return 1; }

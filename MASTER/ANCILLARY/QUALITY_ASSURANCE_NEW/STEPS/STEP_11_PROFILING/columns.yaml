@@ -1,0 +1,5 @@
+plot_only:
+  - '*'
+
+ignore:
+  - tt_loo_mode

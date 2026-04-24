@@ -108,6 +108,13 @@ if ! $refresh_metadata && ! $plot_hist && ! $update_range_only; then
   usage
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MASTER_DIR="$SCRIPT_DIR"
+while [[ "${MASTER_DIR}" != "/" && "$(basename "${MASTER_DIR}")" != "MASTER" ]]; do
+  MASTER_DIR="$(dirname "${MASTER_DIR}")"
+done
+REPO_ROOT="$(dirname "${MASTER_DIR}")"
+
 config_file_shared="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_0/REPROCESSING/config_reprocessing.yaml"
 config_file_step="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_0/REPROCESSING/STEP_0/config_step_0.yaml"
 
@@ -299,9 +306,11 @@ date_range_filter_enabled=false
 
 raw_csv="${input_directory}/remote_database_${station}.csv"
 clean_csv="${output_directory}/clean_remote_database_${station}.csv"
+qa_retry_manifest_csv="${output_directory}/qa_retry_manifest_${station}.csv"
 metadata_tracking_csv="${metadata_directory}/metadata_refresh_history.csv"
 metadata_tracking_header="executed_at,remote_file_count,clean_file_count"
 filter_state_file="${metadata_directory}/metadata_filter_state_${station}.txt"
+qa_retry_state_csv="${metadata_directory}/qa_retry_state_${station}.csv"
 filter_state_version="1"
 csv_header="basename,filesize_bytes,minutes_to_next"
 
@@ -753,6 +762,25 @@ PY
     rm -f "$tmp_filtered_plot"
     return 1
   fi
+}
+
+build_qa_retry_manifest() {
+  local summary now_ts
+  now_ts="$(date '+%Y-%m-%d %H:%M:%S')"
+  if ! summary=$(
+    PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 -m MASTER.common.reprocessing_qa_retry build-manifest \
+      --config-path "$config_file_shared" \
+      --config-path "$config_file_step" \
+      --station "$station" \
+      --clean-csv "$clean_csv" \
+      --output-csv "$qa_retry_manifest_csv" \
+      --state-csv "$qa_retry_state_csv" \
+      --now-timestamp "$now_ts"
+  ); then
+    return 1
+  fi
+  log_info "QA retry manifest refreshed: ${summary}"
 }
 
 filter_existing_raw_csv() {
@@ -1786,5 +1814,10 @@ if $plot_hist; then
     log_info "Filtered plot CSV missing; skipping filtered plots."
   fi
 fi
+
+build_qa_retry_manifest || {
+  log_warn "Unable to rebuild QA retry manifest for station ${station}."
+  exit 1
+}
 
 log_info "STEP_0 metadata preparation finished."

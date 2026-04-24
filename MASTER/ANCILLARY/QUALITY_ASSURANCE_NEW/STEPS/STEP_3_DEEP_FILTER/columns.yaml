@@ -1,0 +1,23 @@
+plot_only:
+  - '*_rows_failed_pct'
+  - '*_rows_with_*_failures_pct'
+  - '*_rows_with_*_relation_failures_pct'
+  - '*_rows_removed_pct'
+  - '*_rows_affected_pct'
+  - '*_flagged_rows_pct'
+  - '*_values_zeroed_pct'
+  - '*_selected_offender*_pct'
+  - '*_multi_offender_rows_pct'
+  - '*_max_failed_pairs_in_row'
+  - '*_mean_failed_pairs_per_flagged_row'
+  - '*_max_selected_offenders_in_row'
+  - '*_mean_selected_offenders_per_flagged_row'
+  - '*_limit'
+  - '*_percentage'
+  - '*'
+
+ignore:
+  - '*_failed_pct'
+  - 'strip_combination_filter_rows_with_self_failures_pct'
+  - 'strip_combination_filter_rows_with_same_strip_failures_pct'
+  - 'strip_combination_filter_rows_with_same_plane_failures_pct'

@@ -1,0 +1,6 @@
+display_name: trigger_types
+task_ids: [1, 2, 3, 4, 5]
+metadata_suffix: trigger_type
+metadata_type: trigger_type
+pass_column_template: task_{task_id}_trigger_type_pass
+threshold_rules_csv: trigger_types_column_rules.csv

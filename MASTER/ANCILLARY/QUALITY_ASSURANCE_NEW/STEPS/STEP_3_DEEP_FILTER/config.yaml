@@ -1,0 +1,6 @@
+display_name: deep_filter
+task_ids: [1, 2, 3, 4, 5]
+metadata_suffix: deep_fiter
+metadata_type: deep_filter
+pass_column_template: task_{task_id}_deep_filter_pass
+threshold_rules_csv: deep_filter_column_rules.csv

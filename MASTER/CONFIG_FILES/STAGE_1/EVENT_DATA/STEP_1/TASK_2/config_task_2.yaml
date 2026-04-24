@@ -35,14 +35,17 @@ validate_charge_pedestal_calibration: true
 # charge_front_back primes: null=×1, file=×5,  make=×7
 # time_calibration primes:  null=×1, file=×11, make=×13
 # time_dif_calibration:     null=×1, file=×17, make=×19
-charge_side: [file]
-charge_front_back: [file]
-time_calibration: [file]
-time_dif_calibration: [file]
+charge_side: [make]
+charge_front_back: [make]
+time_calibration: [make]
+time_dif_calibration: [make]
 slewing_correction: false
 time_window_filtering: false
+charge_share_prefilter: false
+calibration_dataframe_filtering: false
 old_timing_method: true
 # Calibration behaviour flags (moved here from config_parameters_task_2.csv)
 validate_pos_cal: true
 interpolate_fast_charge_log_scale: true
-crosstalk_fitting: true
+crosstalk_fitting: false
+crosstalk_removal_and_recalibration: false

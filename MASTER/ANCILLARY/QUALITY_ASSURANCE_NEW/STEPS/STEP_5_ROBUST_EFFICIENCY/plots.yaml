@@ -1,0 +1,17 @@
+default:
+  default_ncols: 4
+  default_max_columns_per_plot: 12
+
+special:
+  - name: efficiencies
+    mode: columns
+    ncols: 3
+    columns:
+      - eff*
+
+  - name: rates
+    mode: columns
+    ncols: 4
+    columns:
+      - rate_*_hz
+      - four_plane_robust_hz

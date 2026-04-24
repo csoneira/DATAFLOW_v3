@@ -1,0 +1,44 @@
+default:
+  default_ncols: 4
+  default_max_columns_per_plot: 12
+
+special:
+  - name: crstlk
+    mode: columns
+    ncols: 4
+    columns:
+      - P[1-4]_s[1-4]_crstlk_pedestal
+      - P[1-4]_s[1-4]_crstlk_limit
+
+  - name: charge_summary
+    mode: columns
+    ncols: 4
+    columns:
+      - P[1-4]_s[1-4]_Q_sum
+
+  - name: q_sides
+    mode: overlay
+    ncols: 4
+    series:
+      - label: B
+        columns: P[1-4]_s[1-4]_Q_B
+      - label: F
+        columns: P[1-4]_s[1-4]_Q_F
+
+  - name: q_fb_coeffs
+    mode: columns
+    ncols: 4
+    columns:
+      - P[1-4]_s[1-4]_Q_FB_coeffs__*
+
+  - name: tsum_summary
+    mode: columns
+    ncols: 4
+    columns:
+      - P[1-4]_s[1-4]_T_sum
+
+  - name: tdif_summary
+    mode: columns
+    ncols: 4
+    columns:
+      - P[1-4]_s[1-4]_T_dif

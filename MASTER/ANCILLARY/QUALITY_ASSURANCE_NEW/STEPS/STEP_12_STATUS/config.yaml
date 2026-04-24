@@ -1,0 +1,5 @@
+display_name: status
+task_ids: [1, 2, 3, 4, 5]
+metadata_suffix: status
+metadata_type: status
+pass_column_template: task_{task_id}_status_pass

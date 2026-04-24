@@ -391,6 +391,14 @@ def _plot_scale_factor_vs_flux(
     plt.close(fig)
 
 
+def _build_lut_ascii_export(lut: pd.DataFrame) -> pd.DataFrame:
+    required_columns = [*CANONICAL_EFF_COLUMNS, "scale_factor"]
+    missing = [column for column in required_columns if column not in lut.columns]
+    if missing:
+        raise ValueError("LUT export is missing required columns: " + ", ".join(missing))
+    return lut[required_columns].copy()
+
+
 def run(config_path: str | Path | None = None) -> Path:
     _configure_logging()
     ensure_output_dirs()
@@ -491,8 +499,9 @@ def run(config_path: str | Path | None = None) -> Path:
     lut = lut.sort_values(CANONICAL_EFF_COLUMNS).reset_index(drop=True)
     lut.to_csv(lut_diag_path, index=False)
 
-    lut_ascii = lut[[f"eff_empirical_{idx}" for idx in range(1, 5)] + ["scale_factor"]].copy()
-    lut_ascii.columns = CANONICAL_EFF_COLUMNS + ["scale_factor"]
+    # Export the quantized 4-D efficiency-bin coordinates used to define the LUT.
+    # Step 3 and Step 5 query on these bin keys before falling back to interpolation.
+    lut_ascii = _build_lut_ascii_export(lut)
     exact_perfect_reference_available = bool(np.isclose(float(closest_single_row["distance_to_perfect"]), 0.0))
     closest_single_comment = (
         "closest_single_eff_bin: "

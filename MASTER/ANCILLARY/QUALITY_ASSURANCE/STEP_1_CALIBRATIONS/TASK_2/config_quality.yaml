@@ -1,4 +1,0 @@
-quality:
-  enabled: true
-  output_reference_filename: calibration_epoch_references.csv
-  output_column_evaluation_filename: calibration_column_evaluations.csv

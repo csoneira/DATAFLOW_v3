@@ -1,0 +1,5 @@
+display_name: naive_efficiency
+task_ids: [2]
+metadata_suffix: naive_efficiency
+metadata_type: naive_efficiency
+pass_column_template: task_{task_id}_naive_efficiency_pass

@@ -1,0 +1,5 @@
+plot_only:
+  - '*'
+
+ignore:
+  - 'events_per_second_*'

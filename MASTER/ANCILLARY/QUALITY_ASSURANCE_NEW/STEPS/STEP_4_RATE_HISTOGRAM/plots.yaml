@@ -1,0 +1,18 @@
+default:
+  default_ncols: 4
+  default_max_columns_per_plot: 12
+
+special:
+  - name: rate_histogram_summary
+    mode: columns
+    ncols: 3
+    columns:
+      - events_per_second_total_seconds
+      - count_rate_denominator_seconds
+      - events_per_second_global_rate
+
+  - name: events_per_second_bins
+    mode: columns
+    ncols: 4
+    columns:
+      - events_per_second_*_rate_hz

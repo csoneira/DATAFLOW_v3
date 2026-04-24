@@ -774,6 +774,17 @@ def _plot_query_coverage_match_distance_by_efficiencies(
     plt.close(fig)
 
 
+def _select_lut_empirical_support_for_plot(lut_support: pd.DataFrame) -> pd.DataFrame:
+    lut_empirical_columns = [f"eff_empirical_{idx}" for idx in range(1, 5)]
+    if all(column in lut_support.columns for column in lut_empirical_columns):
+        return (
+            lut_support[lut_empirical_columns]
+            .rename(columns=dict(zip(lut_empirical_columns, CANONICAL_EFF_COLUMNS)))
+            .apply(pd.to_numeric, errors="coerce")
+        )
+    return lut_support[CANONICAL_EFF_COLUMNS].apply(pd.to_numeric, errors="coerce")
+
+
 def _plot_lut_vs_real_efficiency_coverage(
     merged: pd.DataFrame,
     lut_diagnostics: pd.DataFrame,
@@ -783,7 +794,7 @@ def _plot_lut_vs_real_efficiency_coverage(
 ) -> None:
     fig, axes = plt.subplots(3, 3, figsize=(13, 13), constrained_layout=True)
     eff_columns = CANONICAL_EFF_COLUMNS
-    lut_data = lut_diagnostics[eff_columns].apply(pd.to_numeric, errors="coerce")
+    lut_data = _select_lut_empirical_support_for_plot(lut_diagnostics)
     real_data = merged[eff_columns].apply(pd.to_numeric, errors="coerce")
 
     pair_layout = [
@@ -847,6 +858,85 @@ def _plot_lut_vs_real_efficiency_coverage(
 
     fig.suptitle(
         "LUT coverage vs real-data empirical efficiencies\n"
+        f"rate column: {rate_column_name}",
+        y=1.02,
+    )
+    fig.savefig(output_path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _plot_real_rate_vs_efficiencies_2x2(
+    merged: pd.DataFrame,
+    output_path: Path,
+    *,
+    rate_column_name: str,
+) -> None:
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharex=True, sharey=True, constrained_layout=True)
+    eff_columns = CANONICAL_EFF_COLUMNS
+    rate_original = pd.to_numeric(merged["rate_hz"], errors="coerce")
+    rate_corrected = pd.to_numeric(merged["corrected_rate_to_perfect_hz"], errors="coerce")
+    x_line_end = 1.01
+
+    def _add_linear_trend_line(ax: plt.Axes, x_values: pd.Series, y_values: pd.Series, color: str, label: str) -> None:
+        valid = x_values.notna() & y_values.notna()
+        if int(valid.sum()) < 2:
+            return
+        x = x_values.loc[valid].to_numpy(dtype=float)
+        y = y_values.loc[valid].to_numpy(dtype=float)
+        slope, intercept = np.polyfit(x, y, 1)
+        x_start = float(np.nanmin(x))
+        x_line = np.linspace(x_start, x_line_end, 120)
+        y_line = slope * x_line + intercept
+        ax.plot(x_line, y_line, linestyle="--", linewidth=1.6, color=color, alpha=0.8, label=label)
+
+    all_y = pd.concat([rate_original, rate_corrected], ignore_index=True)
+    finite_y = all_y[np.isfinite(all_y)]
+    if finite_y.size:
+        y_min = float(np.nanmin(finite_y))
+        y_max = float(np.nanmax(finite_y))
+    else:
+        y_min, y_max = 0.0, 1.0
+    y_pad = max((y_max - y_min) * 0.05, 0.1)
+
+    for idx, ax in enumerate(axes.flat):
+        eff_col = eff_columns[idx]
+        x_values = pd.to_numeric(merged[eff_col], errors="coerce")
+
+        ax.scatter(
+            x_values,
+            rate_original,
+            s=24,
+            alpha=0.65,
+            color="#1f77b4",
+            label="Original rate",
+            edgecolors="none",
+        )
+        ax.scatter(
+            x_values,
+            rate_corrected,
+            s=24,
+            alpha=0.65,
+            color="#ff7f0e",
+            label="Corrected rate",
+            edgecolors="none",
+        )
+
+        _add_linear_trend_line(ax, x_values, rate_original, "#1f77b4", "Original trend")
+        _add_linear_trend_line(ax, x_values, rate_corrected, "#ff7f0e", "Corrected trend")
+        ax.axvline(1.0, linestyle=":", linewidth=1.5, color="black", alpha=0.8)
+
+        ax.set_title(f"Rate vs {eff_col}")
+        ax.set_xlabel(eff_col)
+        ax.set_ylabel("Rate [Hz]")
+        ax.grid(alpha=0.25)
+        ax.set_xlim(0.0, x_line_end)
+        ax.set_ylim(y_min - y_pad, y_max + y_pad)
+
+        if idx == 0:
+            ax.legend()
+
+    fig.suptitle(
+        "Original and corrected rate vs empirical efficiencies\n"
         f"rate column: {rate_column_name}",
         y=1.02,
     )
@@ -1162,8 +1252,13 @@ def run(config_path: str | Path | None = None) -> Path:
     )
     _plot_lut_vs_real_efficiency_coverage(
         merged,
-        lut_dataframe,
+        lut_diagnostics,
         PLOTS_DIR / "step5_lut_real_efficiency_coverage.png",
+        rate_column_name=rate_column_name,
+    )
+    _plot_real_rate_vs_efficiencies_2x2(
+        merged,
+        PLOTS_DIR / "step5_real_rate_vs_efficiencies_2x2.png",
         rate_column_name=rate_column_name,
     )
 

@@ -1,0 +1,5 @@
+plot_only:
+  - '*'
+
+ignore:
+  - execution_date

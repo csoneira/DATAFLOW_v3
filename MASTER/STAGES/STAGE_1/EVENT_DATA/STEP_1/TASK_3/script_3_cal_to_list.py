@@ -118,7 +118,15 @@ from MASTER.common.plot_utils import (
 )
 from MASTER.common.selection_config import load_selection_for_paths, station_is_selected
 from MASTER.common.status_csv import initialize_status_row, update_status_progress
-from MASTER.common.reprocessing_utils import get_reprocessing_value
+from MASTER.common.reprocessing_utils import (
+    QA_REPROCESSING_METADATA_KEYS,
+    apply_qa_reprocessing_context,
+    canonical_processing_basename,
+    filter_filenames_by_qa_retry_basenames,
+    get_reprocessing_value,
+    load_active_qa_retry_basenames,
+    load_qa_reprocessing_context_for_file,
+)
 from MASTER.common.simulated_data_utils import resolve_simulated_z_positions
 from MASTER.common.step1_activation import (
     ACTIVATION_METADATA_DECIMALS,
@@ -719,6 +727,11 @@ config = apply_step1_master_overrides(
     master_config_root=config_root,
     log_fn=print,
 )
+process_only_qa_retry_files = bool(config.get("process_only_qa_retry_files", False))
+if process_only_qa_retry_files:
+    print(
+        "[QA_ONLY] Enabled by STEP_1 shared config: only files present in the active QA retry list will be processed."
+    )
 selection_config = load_selection_for_paths(
     [config_file_path],
     master_config_root=config_root,
@@ -1253,9 +1266,7 @@ Q_clip_max_ST = Q_clip_max_ST
 # the analysis mode indicates if it is a regular analysis or a repeated, careful analysis
 # 0 -> regular analysis
 # 1 -> repeated, careful analysis
-global_variables = {
-    'analysis_mode': 0,
-}
+global_variables = {}
 
 TT_COUNT_VALUES: tuple[int, ...] = (
     0, 1, 2, 3, 4, 12, 13, 14, 23, 24, 34, 123, 124, 134, 234, 1234
@@ -5004,9 +5015,43 @@ if date_ranges:
             f"[DATE_RANGE] Ignoring {skipped_completed} out-of-range file(s) in COMPLETED_DIRECTORY."
         )
 
+active_qa_retry_basenames: set[str] = set()
+if process_only_qa_retry_files:
+    active_qa_retry_basenames = load_active_qa_retry_basenames(
+        station,
+        repo_root=repo_root,
+    )
+    unprocessed_files = filter_filenames_by_qa_retry_basenames(
+        unprocessed_files,
+        active_qa_retry_basenames,
+    )
+    processing_files = filter_filenames_by_qa_retry_basenames(
+        processing_files,
+        active_qa_retry_basenames,
+    )
+    completed_files = filter_filenames_by_qa_retry_basenames(
+        completed_files,
+        active_qa_retry_basenames,
+    )
+    print(
+        "[QA_ONLY] Active basenames="
+        f"{len(active_qa_retry_basenames)} eligible files: "
+        f"UNPROCESSED={len(unprocessed_files)} "
+        f"PROCESSING={len(processing_files)} "
+        f"COMPLETED={len(completed_files)}"
+    )
+
 if user_file_selection:
     processing_file_path = user_file_path
     file_name = os.path.basename(user_file_path)
+    if (
+        process_only_qa_retry_files
+        and canonical_processing_basename(file_name) not in active_qa_retry_basenames
+    ):
+        sys.exit(
+            "[QA_ONLY] The selected input file is not present in the active QA retry list: "
+            f"{canonical_processing_basename(file_name)}"
+        )
 else:
     if last_file_test:
         latest_unprocessed = select_latest_candidate(unprocessed_files, station)
@@ -5119,6 +5164,18 @@ status_execution_date = initialize_status_row(
     filename_base=status_filename_base,
     completion_fraction=0.0,
 )
+qa_reprocessing_context = load_qa_reprocessing_context_for_file(
+    station,
+    basename_no_ext,
+    repo_root=repo_root,
+)
+apply_qa_reprocessing_context(global_variables, qa_reprocessing_context)
+if int(qa_reprocessing_context.get("qa_reprocessing_mode", 0) or 0) == 1:
+    print("Active QA reprocessing state found for this file.")
+    print(
+        "QA selectors: "
+        f"{qa_reprocessing_context.get('qa_reprocessing_selector_ids', '') or 'none'}"
+    )
 
 simulated_z_positions, simulated_param_hash = resolve_simulated_z_positions(
     basename_no_ext,
@@ -5138,8 +5195,10 @@ reprocessing_values: dict[str, object] = {}
 
 reprocessing_parameters = load_reprocessing_parameters_for_file(station, str(task_number), basename_no_ext)
 if not reprocessing_parameters.empty:
-    global_variables["analysis_mode"] = 1
-    print("Reprocessing parameters found for this file. Setting analysis_mode to 1.")
+    if int(global_variables.get("qa_reprocessing_mode", 0) or 0) == 1:
+        print("Reprocessing parameters found for this file. qa_reprocessing_mode=1.")
+    else:
+        print("Reprocessing parameters found for this file.")
     # Print only non-NaN entries from the reprocessing table
     non_nan = reprocessing_parameters.dropna(how="all").dropna(axis=1, how="all")
     if non_nan.empty:
@@ -10217,6 +10276,7 @@ metadata_deep_fiter_csv_path = save_metadata(
     drop_field_predicate=lambda column_name: (
         _task3_drop_legacy_deep_filter_field(column_name)
     ),
+    replace_existing_basename=True,
 )
 print(f"Metadata (deep_fiter) CSV updated at: {metadata_deep_fiter_csv_path}")
 
@@ -10304,15 +10364,26 @@ print(f"Execution timestamp: {execution_timestamp}")
 print(f"Data purity percentage: {data_purity_percentage:.2f}%")
 print(f"Total execution time: {total_execution_time_minutes:.2f} minutes")
 
+execution_metadata_row = {
+    "filename_base": filename_base,
+    "execution_timestamp": execution_timestamp,
+    "param_hash": param_hash_value,
+    "data_purity_percentage": round(float(data_purity_percentage), 4),
+    "total_execution_time_minutes": round(float(total_execution_time_minutes), 4),
+}
+apply_qa_reprocessing_context(execution_metadata_row, qa_reprocessing_context)
+
 metadata_execution_csv_path = save_metadata(
     csv_path,
-    {
-        "filename_base": filename_base,
-        "execution_timestamp": execution_timestamp,
-        "param_hash": param_hash_value,
-        "data_purity_percentage": round(float(data_purity_percentage), 4),
-        "total_execution_time_minutes": round(float(total_execution_time_minutes), 4),
-    },
+    execution_metadata_row,
+    preferred_fieldnames=(
+        "filename_base",
+        "execution_timestamp",
+        "param_hash",
+        "data_purity_percentage",
+        "total_execution_time_minutes",
+        *QA_REPROCESSING_METADATA_KEYS,
+    ),
 )
 print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
 

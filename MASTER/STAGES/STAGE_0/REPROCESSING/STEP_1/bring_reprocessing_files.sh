@@ -197,6 +197,7 @@ mkdir -p "$input_directory" "$compressed_directory" "$uncompressed_directory" "$
 step0_directory="${station_directory}/STAGE_0/REPROCESSING/STEP_0"
 step0_metadata_directory="${step0_directory}/METADATA"
 step0_output_directory="${step0_directory}/OUTPUT_FILES"
+qa_retry_manifest_csv="${step0_output_directory}/qa_retry_manifest_${station}.csv"
 
 brought_csv="${metadata_directory}/hld_files_brought.csv"
 brought_csv_header="hld_name,bring_timesamp"
@@ -442,6 +443,22 @@ ensure_brought_csv() {
   fi
 }
 
+declare -A qa_retry_basenames=()
+load_qa_retry_manifest_basenames() {
+  qa_retry_basenames=()
+  if [[ ! -s "$qa_retry_manifest_csv" ]]; then
+    return
+  fi
+  {
+    read -r _header || true
+    while IFS=',' read -r retry_base _rest; do
+      retry_base=${retry_base//$'\r'/}
+      [[ -z "$retry_base" || "$retry_base" == "basename" ]] && continue
+      qa_retry_basenames["$retry_base"]=1
+    done
+  } < "$qa_retry_manifest_csv"
+}
+
 declare -A brought_hld_records=()
 load_brought_hld_records() {
   if [[ ! -s "$brought_csv" ]]; then
@@ -626,6 +643,9 @@ if (( ${#metadata_basenames[@]} == 0 )); then
 fi
 log_info "Loaded ${#metadata_basenames[@]} basenames from metadata CSV."
 
+load_qa_retry_manifest_basenames
+log_info "Active QA retry basenames from STEP_0 manifest: ${#qa_retry_basenames[@]}"
+
 if ! $perform_download; then
   if $plot_hist; then
     log_info "No download requested; plot-only run complete."
@@ -693,7 +713,7 @@ if $random_mode; then
   mapfile -t random_candidates < <(
     for base in "${metadata_basenames[@]}"; do
       [[ -n ${brought_basenames["$base"]+_} ]] && continue
-      if ! $skip_processed_exclusion && [[ -n ${processed_basenames["$base"]+_} ]]; then
+      if ! $skip_processed_exclusion && [[ -z ${qa_retry_basenames["$base"]+_} ]] && [[ -n ${processed_basenames["$base"]+_} ]]; then
         continue
       fi
       printf '%s\n' "$base"
@@ -712,7 +732,7 @@ elif $newest_mode; then
   mapfile -t newest_candidates < <(
     for base in "${metadata_basenames[@]}"; do
       [[ -n ${brought_basenames["$base"]+_} ]] && continue
-      if ! $skip_processed_exclusion && [[ -n ${processed_basenames["$base"]+_} ]]; then
+      if ! $skip_processed_exclusion && [[ -z ${qa_retry_basenames["$base"]+_} ]] && [[ -n ${processed_basenames["$base"]+_} ]]; then
         continue
       fi
       printf '%s\n' "$base"
@@ -763,7 +783,7 @@ else
 
   for base in "${metadata_basenames[@]}"; do
     [[ -n ${brought_basenames["$base"]+_} ]] && continue
-    if ! $skip_processed_exclusion && [[ -n ${processed_basenames["$base"]+_} ]]; then
+    if ! $skip_processed_exclusion && [[ -z ${qa_retry_basenames["$base"]+_} ]] && [[ -n ${processed_basenames["$base"]+_} ]]; then
       continue
     fi
     [[ "$base" < "$start_bound" ]] && continue

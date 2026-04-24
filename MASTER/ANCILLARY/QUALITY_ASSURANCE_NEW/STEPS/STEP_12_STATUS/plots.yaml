@@ -1,0 +1,3 @@
+default:
+  default_ncols: 2
+  default_max_columns_per_plot: 8

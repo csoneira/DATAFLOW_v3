@@ -4,6 +4,17 @@ selection:
     - start: 2024-09-27
       end: 2024-10-01
 
+qa_retry:
+  enabled: true
+  source_csv: /home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/QUALITY_ASSURANCE_NEW/TOTAL_SUMMARY/OUTPUTS/FILES/qa_all_stations_reprocessing_quality.csv
+  selectors:
+    - id: all_quality_failures
+      target_stations: [1, 2, 3, 4]
+      qa_stations: [1, 2, 3, 4]
+      quality_statuses: [fail]
+      failed_columns_any:
+        - '*'
+
 reprocessing_run_matrix:
   enabled: true
   mode: whitelist
