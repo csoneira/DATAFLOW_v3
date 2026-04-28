@@ -7296,7 +7296,19 @@ if apply_charge_side:
     print("-------------------- Charge pedestal calibration -------------------------")
     print("--------------------------------------------------------------------------")
 
-    charge_test = calibration_work_df.copy()
+    charge_test_columns = [
+        f"{key}_{side}_{strip}"
+        for key in ("Q1", "Q2", "Q3", "Q4")
+        for side in ("F", "B")
+        for strip in range(1, 5)
+        if f"{key}_{side}_{strip}" in calibration_work_df.columns
+    ]
+    need_charge_test = bool(validate_charge_pedestal_calibration or calibrate_charge_ns_to_fc)
+    charge_test = (
+        calibration_work_df.loc[:, charge_test_columns].copy()
+        if need_charge_test and charge_test_columns
+        else None
+    )
 
     if calculate_charge_side:
         # New pedestal calibration for charges ------------------------------------------------
@@ -7363,15 +7375,16 @@ if apply_charge_side:
     print("\nBack Charge Pedestal:")
     print(QB_pedestal,"\n")
 
-    for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
-        for j in range(4):
-            mask = calibration_work_df[f'{key}_F_{j+1}'] != 0
-            charge_test.loc[mask, f'{key}_F_{j+1}'] -= QF_pedestal[i][j]
+    if charge_test is not None:
+        for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
+            for j in range(4):
+                mask = calibration_work_df[f'{key}_F_{j+1}'] != 0
+                charge_test.loc[mask, f'{key}_F_{j+1}'] -= QF_pedestal[i][j]
 
-    for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
-        for j in range(4):
-            mask = calibration_work_df[f'{key}_B_{j+1}'] != 0
-            charge_test.loc[mask, f'{key}_B_{j+1}'] -= QB_pedestal[i][j]
+        for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
+            for j in range(4):
+                mask = calibration_work_df[f'{key}_B_{j+1}'] != 0
+                charge_test.loc[mask, f'{key}_B_{j+1}'] -= QB_pedestal[i][j]
 
     
     if validate_charge_pedestal_calibration:
@@ -7596,7 +7609,18 @@ if apply_charge_side:
         print("---------------- SELF TRIGGER Charge pedestal calibration-----------------")
         print("--------------------------------------------------------------------------")
 
-        charge_test = calibration_work_st_df.copy()
+        charge_test_st_columns = [
+            f"{key}_{side}_{strip}"
+            for key in ("Q1", "Q2", "Q3", "Q4")
+            for side in ("F", "B")
+            for strip in range(1, 5)
+            if f"{key}_{side}_{strip}" in calibration_work_st_df.columns
+        ]
+        charge_test = (
+            calibration_work_st_df.loc[:, charge_test_st_columns].copy()
+            if validate_charge_pedestal_calibration and charge_test_st_columns
+            else None
+        )
 
         # New pedestal calibration for charges ------------------------------------------------
         QF_pedestal_ST = []
@@ -7634,15 +7658,16 @@ if apply_charge_side:
         print("\nSELF TRIGGER Back Charge Pedestal:")
         print(QB_pedestal_ST,"\n")
 
-        for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
-            for j in range(4):
-                mask = calibration_work_st_df[f'{key}_F_{j+1}'] != 0
-                charge_test.loc[mask, f'{key}_F_{j+1}'] -= QF_pedestal_ST[i][j]
+        if charge_test is not None:
+            for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
+                for j in range(4):
+                    mask = calibration_work_st_df[f'{key}_F_{j+1}'] != 0
+                    charge_test.loc[mask, f'{key}_F_{j+1}'] -= QF_pedestal_ST[i][j]
 
-        for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
-            for j in range(4):
-                mask = calibration_work_st_df[f'{key}_B_{j+1}'] != 0
-                charge_test.loc[mask, f'{key}_B_{j+1}'] -= QB_pedestal_ST[i][j]
+            for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
+                for j in range(4):
+                    mask = calibration_work_st_df[f'{key}_B_{j+1}'] != 0
+                    charge_test.loc[mask, f'{key}_B_{j+1}'] -= QB_pedestal_ST[i][j]
 
         # Plot histograms of all the pedestal substractions
         if validate_charge_pedestal_calibration:
@@ -7778,7 +7803,6 @@ if apply_charge_side:
                 plt.close(fig_Q)
     if "charge_test" in locals():
         del charge_test
-        gc.collect()
 else:
     print("Skipping charge side calibration (mode=null).")
 
@@ -7791,12 +7815,22 @@ if apply_T_dif_calibration:
     print("------------------- Position offset calibration ----------------------")
     print("----------------------------------------------------------------------")
 
-    pos_test = calibration_work_df.copy()
-    for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-        for j in range(4):
-            pos_test[f'{key}_dif_{j+1}'] = ( pos_test[f'{key}_B_{j+1}'] - pos_test[f'{key}_F_{j+1}'] ) / 2
-
-    pos_test_copy = pos_test.copy()
+    timing_test_columns = [
+        f"{key}_{side}_{strip}"
+        for key in ("T1", "T2", "T3", "T4")
+        for side in ("F", "B")
+        for strip in range(1, 5)
+        if f"{key}_{side}_{strip}" in calibration_work_df.columns
+    ]
+    pos_test = (
+        calibration_work_df.loc[:, timing_test_columns].copy()
+        if validate_pos_cal and timing_test_columns
+        else None
+    )
+    if pos_test is not None:
+        for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
+            for j in range(4):
+                pos_test[f'{key}_dif_{j+1}'] = ( pos_test[f'{key}_B_{j+1}'] - pos_test[f'{key}_F_{j+1}'] ) / 2
 
     if calculate_T_dif_calibration:
         raw_one_strip_masks = _task2_plane_one_strip_masks_from_raw(calibration_work_df)
@@ -7837,7 +7871,7 @@ if apply_T_dif_calibration:
 
         for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
             for j in range(4):
-                mask = pos_test_copy[f'{key}_dif_{j+1}'] != 0
+                mask = pos_test[f'{key}_dif_{j+1}'] != 0
                 pos_test.loc[mask, f'{key}_dif_{j+1}'] -= Tdiff_cal[i][j]
 
         
@@ -7886,12 +7920,22 @@ if apply_T_dif_calibration:
         print("------------------- Position offset calibration ----------------------")
         print("----------------------------------------------------------------------")
 
-        pos_test = calibration_work_st_df.copy()
-        for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-            for j in range(4):
-                pos_test[f'{key}_dif_{j+1}'] = ( pos_test[f'{key}_B_{j+1}'] - pos_test[f'{key}_F_{j+1}'] ) / 2
-
-        pos_test_copy = pos_test.copy()
+        pos_test_st_columns = [
+            f"{key}_{side}_{strip}"
+            for key in ("T1", "T2", "T3", "T4")
+            for side in ("F", "B")
+            for strip in range(1, 5)
+            if f"{key}_{side}_{strip}" in calibration_work_st_df.columns
+        ]
+        pos_test = (
+            calibration_work_st_df.loc[:, pos_test_st_columns].copy()
+            if pos_test_st_columns
+            else None
+        )
+        if pos_test is not None:
+            for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
+                for j in range(4):
+                    pos_test[f'{key}_dif_{j+1}'] = ( pos_test[f'{key}_B_{j+1}'] - pos_test[f'{key}_F_{j+1}'] ) / 2
         Tdiff_cal_ST = []
         for key in ['1', '2', '3', '4']:
             T_F_cols = [f'T{key}_F_{i+1}' for i in range(4)]
@@ -7917,7 +7961,7 @@ if apply_T_dif_calibration:
 
             for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
                 for j in range(4):
-                    mask = pos_test_copy[f'{key}_dif_{j+1}'] != 0
+                    mask = pos_test[f'{key}_dif_{j+1}'] != 0
                     pos_test.loc[mask, f'{key}_dif_{j+1}'] -= Tdiff_cal_ST[i][j]
 
             
@@ -7962,9 +8006,6 @@ if apply_T_dif_calibration:
                 plt.close(fig_Q)
     if "pos_test" in locals():
         del pos_test
-    if "pos_test_copy" in locals():
-        del pos_test_copy
-    gc.collect()
 else:
     print("Skipping T_dif calibration (mode=null).")
 
