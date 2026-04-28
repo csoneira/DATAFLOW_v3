@@ -14116,13 +14116,7 @@ if create_pdf:
     existing_pngs = collect_saved_plot_paths(plot_list, base_directories["figure_directory"])
 
     if _direct_pdf_pages is not None:
-        for png in existing_pngs:
-            img = Image.open(png)
-            fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
-            ax.imshow(img)
-            ax.axis('off')
-            pdf_save_rasterized_page(_direct_pdf_pages, fig, bbox_inches='tight')
-            plt.close(fig)
+        # Direct PDF mode already wrote each page incrementally via save_plot_figure.
         close_direct_pdf_writer()
     elif existing_pngs:
         temp_pdf_path = _build_temp_pdf_path(save_pdf_path)
@@ -14590,12 +14584,6 @@ metadata_execution_csv_path = save_metadata(
 )
 print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
 
-_prof["filename_base"] = filename_base
-_prof["execution_timestamp"] = execution_timestamp
-_prof["param_hash"] = param_hash_value
-_prof["total_s"] = round(time.perf_counter() - _prof_t0, 2)
-save_metadata(csv_path_profiling, _prof)
-
 # -------------------------------------------------------------------------------
 # Specific metadata ------------------------------------------------------------
 # -------------------------------------------------------------------------------
@@ -14816,5 +14804,10 @@ if status_execution_date is not None:
         param_hash=str(global_variables.get("param_hash", "")),
     )
 _prof["s_save_finish_s"] = round(time.perf_counter() - _t_sec, 2)
+_prof["filename_base"] = filename_base
+_prof["execution_timestamp"] = execution_timestamp
+_prof["param_hash"] = param_hash_value
+_prof["total_s"] = round(time.perf_counter() - _prof_t0, 2)
+save_metadata(csv_path_profiling, _prof)
 
 # %%

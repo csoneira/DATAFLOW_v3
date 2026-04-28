@@ -20,7 +20,7 @@ plots:
   filter6_qsum_debug: debug
   filter6_qdif_debug: debug
   filter6_y_debug: debug
-  filtered_rpc_variables_hexbin: usual
+  filtered_rpc_variables_hexbin: essential
   prefilter_qsum_nonzero_debug: debug
   prefilter_list_tt_debug: debug
   list_tt_qsum_pairgrid: usual

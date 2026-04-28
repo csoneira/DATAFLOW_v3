@@ -12446,12 +12446,6 @@ metadata_execution_csv_path = save_metadata(
 )
 print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
 
-_prof["filename_base"] = filename_base
-_prof["execution_timestamp"] = execution_timestamp
-_prof["param_hash"] = param_hash_value
-_prof["total_s"] = round(time.perf_counter() - _prof_t0, 2)
-save_metadata(csv_path_profiling, _prof)
-
 activation_metadata["filename_base"] = filename_base
 activation_metadata["execution_timestamp"] = execution_timestamp
 activation_metadata["param_hash"] = param_hash_value
@@ -12619,3 +12613,9 @@ if status_execution_date is not None:
         completion_fraction=1.0,
         param_hash=str(global_variables.get("param_hash", "")),
     )
+
+_prof["filename_base"] = filename_base
+_prof["execution_timestamp"] = execution_timestamp
+_prof["param_hash"] = param_hash_value
+_prof["total_s"] = round(time.perf_counter() - _prof_t0, 2)
+save_metadata(csv_path_profiling, _prof)

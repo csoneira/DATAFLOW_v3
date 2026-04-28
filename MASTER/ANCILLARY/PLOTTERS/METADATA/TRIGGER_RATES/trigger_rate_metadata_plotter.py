@@ -668,6 +668,159 @@ def plot_station_page(
     plt.close(fig)
 
 
+def plot_station_pair_scatter_page(
+    station: str,
+    task_data: Dict[int, pd.DataFrame],
+    tasks: Sequence[int],
+    trigger_values: Sequence[str],
+    pdf: PdfPages,
+    marker_size: float,
+    allowed_count: int,
+) -> None:
+    n_values = len(trigger_values)
+    if n_values == 0:
+        return
+
+    fig_size = max(14.0, 1.55 * n_values)
+    fig, axes = plt.subplots(
+        n_values,
+        n_values,
+        figsize=(fig_size, fig_size),
+        constrained_layout=True,
+    )
+    if n_values == 1:
+        axes = np.array([[axes]])
+
+    cmap = plt.get_cmap("tab10")
+    legend_handles: List[Line2D] = []
+    for idx, task_id in enumerate(tasks):
+        color = cmap(idx % cmap.N)
+        legend_handles.append(
+            Line2D(
+                [0],
+                [0],
+                color=color,
+                marker="o",
+                linestyle="",
+                markersize=max(3.5, np.sqrt(max(marker_size, 1.0))),
+                label=f"Task {task_id}",
+            )
+        )
+
+    fig.suptitle(
+        f"{station} - Trigger-rate pair scatters by task (clean_remote/imported basenames: {allowed_count})",
+        fontsize=13,
+    )
+
+    prefix_by_task = {task_id: TASK_FINAL_PREFIX[task_id] for task_id in tasks}
+
+    for row_idx, y_trigger in enumerate(trigger_values):
+        for col_idx, x_trigger in enumerate(trigger_values):
+            ax = axes[row_idx, col_idx]
+
+            if col_idx > row_idx:
+                ax.set_axis_off()
+                continue
+
+            if row_idx == col_idx:
+                ax.set_axis_off()
+                ax.text(
+                    0.5,
+                    0.5,
+                    y_trigger,
+                    transform=ax.transAxes,
+                    ha="center",
+                    va="center",
+                    fontsize=9,
+                    fontweight="bold",
+                    color="dimgray",
+                )
+                continue
+
+            panel_has_points = False
+            x_values_all: List[float] = []
+            y_values_all: List[float] = []
+
+            for idx, task_id in enumerate(tasks):
+                df = task_data.get(task_id, pd.DataFrame())
+                if df.empty:
+                    continue
+
+                prefix = prefix_by_task[task_id]
+                x_col = f"{prefix}_{x_trigger}_rate_hz"
+                y_col = f"{prefix}_{y_trigger}_rate_hz"
+                if x_col not in df.columns or y_col not in df.columns:
+                    continue
+
+                panel_df = df[[x_col, y_col]].copy()
+                panel_df[x_col] = pd.to_numeric(panel_df[x_col], errors="coerce")
+                panel_df[y_col] = pd.to_numeric(panel_df[y_col], errors="coerce")
+                panel_df = panel_df.dropna(subset=[x_col, y_col])
+                if panel_df.empty:
+                    continue
+
+                color = cmap(idx % cmap.N)
+                ax.scatter(
+                    panel_df[x_col],
+                    panel_df[y_col],
+                    color=color,
+                    s=max(marker_size, 4.0),
+                    alpha=0.65,
+                    linewidths=0,
+                )
+                x_values = panel_df[x_col].to_numpy(dtype=float)
+                y_values = panel_df[y_col].to_numpy(dtype=float)
+                x_values_all.extend(x_values.tolist())
+                y_values_all.extend(y_values.tolist())
+                panel_has_points = True
+
+            if panel_has_points:
+                finite_x = np.asarray(x_values_all, dtype=float)
+                finite_y = np.asarray(y_values_all, dtype=float)
+                finite_x = finite_x[np.isfinite(finite_x)]
+                finite_y = finite_y[np.isfinite(finite_y)]
+                if finite_x.size > 0 and finite_y.size > 0:
+                    x_max = max(0.1, float(np.nanmax(finite_x)) * 1.06)
+                    y_max = max(0.1, float(np.nanmax(finite_y)) * 1.06)
+                    ax.set_xlim(0.0, x_max)
+                    ax.set_ylim(0.0, y_max)
+            else:
+                ax.text(
+                    0.5,
+                    0.5,
+                    "No points",
+                    transform=ax.transAxes,
+                    ha="center",
+                    va="center",
+                    fontsize=7,
+                    color="dimgray",
+                )
+
+            if row_idx == n_values - 1:
+                ax.set_xlabel(x_trigger, fontsize=8)
+            else:
+                ax.set_xticklabels([])
+
+            if col_idx == 0:
+                ax.set_ylabel(y_trigger, fontsize=8)
+            else:
+                ax.set_yticklabels([])
+
+            ax.grid(True, alpha=0.18, linestyle="--", linewidth=0.4)
+            ax.tick_params(labelsize=7)
+
+    fig.legend(
+        handles=legend_handles,
+        loc="upper right",
+        ncols=min(len(tasks), 5),
+        fontsize=8,
+        frameon=True,
+    )
+
+    pdf_save_rasterized_page(pdf, fig, dpi=150)
+    plt.close(fig)
+
+
 def default_output_path() -> Path:
     PLOTS_DIR.mkdir(parents=True, exist_ok=True)
     return PLOTS_DIR / DEFAULT_OUTPUT_FILENAME
@@ -773,6 +926,15 @@ def main() -> None:
                 line_width=line_width,
                 marker_size=marker_size,
                 y_min_hz=y_min_hz,
+                allowed_count=allowed_count,
+            )
+            plot_station_pair_scatter_page(
+                station=station,
+                task_data=task_payload,
+                tasks=tasks,
+                trigger_values=trigger_values,
+                pdf=pdf,
+                marker_size=marker_size,
                 allowed_count=allowed_count,
             )
 

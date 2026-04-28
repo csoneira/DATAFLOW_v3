@@ -398,13 +398,7 @@ def finalize_saved_plots_to_pdf() -> None:
     existing_pngs = collect_saved_plot_paths(plot_list, base_directories["figure_directory"])
 
     if _direct_pdf_pages is not None:
-        for png in existing_pngs:
-            img = Image.open(png)
-            fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
-            ax.imshow(img)
-            ax.axis('off')
-            pdf_save_rasterized_page(_direct_pdf_pages, fig, bbox_inches='tight')
-            plt.close(fig)
+        # Direct PDF mode already wrote each page incrementally via save_plot_figure.
         close_direct_pdf_writer()
     elif existing_pngs:
         temp_pdf_path = _build_temp_pdf_path(save_pdf_path)
@@ -4453,7 +4447,7 @@ print("----------------------------------------------------------------------")
 
 read_df = read_df.loc[read_df["datetime"].between(left_limit_time, right_limit_time)].copy()
 gc.collect()
-if not isinstance(read_df.set_index('datetime').index, pd.DatetimeIndex):
+if not pd.api.types.is_datetime64_any_dtype(read_df["datetime"]):
     raise ValueError("The index is not a DatetimeIndex. Check 'datetime' column formatting.")
 
 # Print the count frequency of the values in column_6
@@ -6684,7 +6678,10 @@ if task1_plot_enabled("channel_contagion_by_tt"):
 # -----------------------------------------------------------------------------
 # Create and save the PDF (deferred until all plots are generated) ------------
 # -----------------------------------------------------------------------------
+_finalize_stage_t0 = _t_sec
 finalize_saved_plots_to_pdf()
+_prof["s_pdf_finalize_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 
 # Final number of events
 final_number_of_events = len(working_df)
@@ -6698,18 +6695,25 @@ print(f"Final number of events in the dataframe: {final_number_of_events}")
 # global_variables called TX_F_Y_entries or TX_B_Y_entries
 
 # Count for main dataframe (non-self-trigger)
-for key, idx_range in column_indices.items():
-    for i in range(1, len(idx_range) + 1):
-        colname = f"{key}_{i}"
-        count = (working_df[colname] != 0).sum()
-        global_var_name = f"{key}_{i}_entries_final"
-        global_variables[global_var_name] = count
+final_entry_columns = [
+    f"{key}_{i}"
+    for key, idx_range in column_indices.items()
+    for i in range(1, len(idx_range) + 1)
+    if f"{key}_{i}" in working_df.columns
+]
+final_entry_counts = (
+    working_df.loc[:, final_entry_columns].ne(0).sum(axis=0).astype(int).to_dict()
+    if final_entry_columns
+    else {}
+)
+for colname, count in final_entry_counts.items():
+    global_variables[f"{colname}_entries_final"] = int(count)
+_prof["s_final_counts_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 
 # Data purity
 data_purity = final_number_of_events / original_number_of_events * 100
 
-# End of the execution time
-_prof["s_finalize_s"] = round(time.perf_counter() - _t_sec, 2)
 end_time_execution = datetime.now()
 execution_time = end_time_execution - start_execution_time_counting
 # In minutes
@@ -6906,12 +6910,6 @@ metadata_execution_csv_path = save_metadata(
 )
 print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
 
-_prof["filename_base"] = filename_base
-_prof["execution_timestamp"] = execution_timestamp
-_prof["param_hash"] = param_hash_value
-_prof["total_s"] = round(time.perf_counter() - _prof_t0, 2)
-save_metadata(csv_path_profiling, _prof)
-
 activation_metadata["filename_base"] = filename_base
 activation_metadata["execution_timestamp"] = execution_timestamp
 activation_metadata["param_hash"] = param_hash_value
@@ -7012,6 +7010,8 @@ metadata_specific_csv_path = save_metadata(
     ),
 )
 print(f"Metadata (specific) CSV updated at: {metadata_specific_csv_path}")
+_prof["s_metadata_write_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 
 print(
     f"Writing cleaned parquet: rows={len(working_df)} cols={len(working_df.columns)} -> {OUT_PATH}"
@@ -7092,6 +7092,8 @@ plt.close("all")
 # Save to HDF5 file
 working_df.to_parquet(OUT_PATH, engine="pyarrow", compression="zstd", index=False)
 print(f"Cleaned dataframe saved to: {OUT_PATH}")
+_prof["s_output_write_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 
 # Move the original datafile to COMPLETED -------------------------------------
 print("Moving file to COMPLETED directory...")
@@ -7112,3 +7114,11 @@ if status_execution_date is not None:
         completion_fraction=1.0,
         param_hash=str(global_variables.get("param_hash", "")),
     )
+
+_prof["s_file_move_s"] = round(time.perf_counter() - _t_sec, 2)
+_prof["s_finalize_s"] = round(time.perf_counter() - _finalize_stage_t0, 2)
+_prof["filename_base"] = filename_base
+_prof["execution_timestamp"] = execution_timestamp
+_prof["param_hash"] = param_hash_value
+_prof["total_s"] = round(time.perf_counter() - _prof_t0, 2)
+save_metadata(csv_path_profiling, _prof)
