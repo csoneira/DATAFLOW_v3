@@ -28,10 +28,11 @@ plots:
   track_consistency_loo_residuals: usual
   strip_hit_occupancy: usual
   track_based_efficiency: essential
+  total_event_charge_histogram: essential
   track_based_efficiency_tt_stability: usual
   track_based_efficiency_vs_theta: usual
-  timtrack_projection_ellipse_contours: essential
-  timtrack_projection_scaled_angle_comparison: essential
+  timtrack_projection_ellipse_contours: usual
+  timtrack_projection_scaled_angle_comparison: usual
   chi2_offender_populations: usual
   offender_angle_populations: usual
   offender_kinematics_populations: usual

@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -18,52 +19,41 @@ ROOT_DIR = Path(__file__).resolve().parents[4]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
-from MASTER.ANCILLARY.SIMULATION_TUNING.common import (
-    date_range_mask,
-    load_tuning_config,
-    resolve_selection,
-)
+from MASTER.ANCILLARY.SIMULATION_TUNING.common import date_range_mask, load_tuning_config, resolve_selection
 from MASTER.common.file_selection import extract_run_datetime_from_name
-from MASTER.common.tot_charge_calibration import (
-    TotChargeCalibration,
-    default_tot_charge_calibration_path,
-)
+from MASTER.common.tot_charge_calibration import TotChargeCalibration, default_tot_charge_calibration_path
 
 
-PLANE_QSUM_FINAL = {
-    plane: f"P{plane}_Q_sum_final"
-    for plane in range(1, 5)
-}
-PLANE_ACTIVE_STRIPS = {
-    plane: f"active_strips_P{plane}"
-    for plane in range(1, 5)
-}
-PLANE_NO_TRIGGER = {
-    1: "234",
-    2: "134",
-    3: "124",
-    4: "123",
-}
+PLANE_QSUM_FINAL = {plane: f"P{plane}_Q_sum_final" for plane in range(1, 5)}
+PLANE_ACTIVE_STRIPS = {plane: f"active_strips_P{plane}" for plane in range(1, 5)}
+PLANE_NO_TRIGGER = {1: "234", 2: "134", 3: "124", 4: "123"}
+STREAMER_PERCENT_COLUMNS = {plane: f"streamer_P{plane}" for plane in range(1, 5)}
+Z_POSITION_COLUMNS = {plane: f"z_P{plane}" for plane in range(1, 5)}
 GROUP_COLORS = {
     "SIM": "#d95f02",
     "REAL": "#1b9e77",
     "SCALED": "#7570b3",
 }
+UNIT_LABELS = {"ns": "ns", "fc": "fC"}
 DEFAULT_SEED = 20260331
 SAMPLE_CACHE: dict[tuple[str, int, str, int, float], np.ndarray] = {}
-UNIT_LABELS = {
-    "ns": "ns",
-    "fc": "fC",
-}
+STREAMER_CACHE: dict[tuple[str, float], dict[int, float]] = {}
+Z_CONFIG_CACHE: dict[str, dict[int, float]] = {}
 
 
 @dataclass(frozen=True)
 class ChargeStudyConfig:
+    simulation_station: str
+    real_station: str
+    simulation_basename: str | None
+    real_basename: str | None
     multiplicity_mode: str
-    efficiency_match_max_abs_difference: float
-    efficiency_match_fallback_max_abs_difference: float
-    max_pairs_per_plane: int
-    min_pairs_per_plane: int
+    streamer_threshold_qsum: float
+    streamer_threshold_source: str
+    real_streamer_min_percent: float
+    real_streamer_selector: str
+    max_per_plane_efficiency_abs_difference: float
+    max_mean_efficiency_abs_difference: float
     sample_entries_per_file: int
     min_positive_charge_ns: float
     hist_bin_count: int
@@ -89,29 +79,174 @@ def output_dir() -> Path:
     return Path(__file__).resolve().parent / "OUTPUTS"
 
 
-def load_charge_study_config(config: dict) -> ChargeStudyConfig:
+def clear_previous_outputs(out: Path) -> None:
+    filenames = [
+        "charge_spectrum_real_file_screening.csv",
+        "charge_spectrum_pair_candidates.csv",
+        "charge_spectrum_nearest_pair_candidates.csv",
+        "charge_spectrum_selected_pair.csv",
+        "selected_pair_charge_spectrum_summary_ns.csv",
+        "selected_pair_charge_spectrum_summary_fc.csv",
+        "selected_pair_charge_spectrum_report.txt",
+        "selected_pair_plane_by_plane_overlay.png",
+        "selected_pair_plane_by_plane_overlay_ns.png",
+        "selected_pair_plane_by_plane_overlay_fc.png",
+        "selected_pair_charge_overlay_linear_ns.png",
+        "selected_pair_charge_overlay_linear_ns.pdf",
+        "selected_pair_charge_overlay_linear_fc.png",
+        "selected_pair_charge_overlay_linear_fc.pdf",
+        "selected_pair_charge_overlay_log_ns.png",
+        "selected_pair_charge_overlay_log_ns.pdf",
+        "selected_pair_charge_overlay_log_fc.png",
+        "selected_pair_charge_overlay_log_fc.pdf",
+    ]
+    for filename in filenames:
+        path = out / filename
+        if path.exists():
+            path.unlink()
+
+
+def _normalize_station_label(raw: object) -> str:
+    if isinstance(raw, int):
+        return f"MINGO{int(raw):02d}"
+    text = str(raw).strip().upper()
+    if not text:
+        raise ValueError("Empty station token in charge_spectrum config.")
+    if text.isdigit():
+        return f"MINGO{int(text):02d}"
+    if text.startswith("MINGO") and text[5:].isdigit():
+        return f"MINGO{int(text[5:]):02d}"
+    raise ValueError(f"Unsupported station token in charge_spectrum config: {raw!r}")
+
+
+def _normalize_basename(raw: object | None) -> str | None:
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    if text.startswith("listed_"):
+        text = text[len("listed_") :]
+    if text.endswith(".parquet"):
+        text = text[: -len(".parquet")]
+    return text or None
+
+
+def _normalize_streamer_selector(raw: object) -> str:
+    text = str(raw).strip().lower()
+    aliases = {
+        "max": "max_plane",
+        "any_plane": "max_plane",
+        "mean": "mean_plane",
+        "avg": "mean_plane",
+        "all_planes": "min_plane",
+        "min": "min_plane",
+    }
+    normalized = aliases.get(text, text)
+    if normalized not in {"max_plane", "mean_plane", "min_plane"}:
+        raise ValueError(
+            "charge_spectrum.real_streamer_selector must be one of "
+            "'max_plane', 'mean_plane', or 'min_plane'."
+        )
+    return normalized
+
+
+def _scalar_to_float(value: object) -> float:
+    try:
+        return float(pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0])
+    except Exception:
+        return float("nan")
+
+
+def _safe_timestamp(value: object) -> pd.Timestamp:
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return pd.NaT
+    try:
+        return pd.Timestamp(value)
+    except Exception:
+        return pd.NaT
+
+
+def task3_config_path() -> Path:
+    return (
+        ROOT_DIR
+        / "MASTER"
+        / "CONFIG_FILES"
+        / "STAGE_1"
+        / "EVENT_DATA"
+        / "STEP_1"
+        / "TASK_3"
+        / "config_task_3.yaml"
+    )
+
+
+def load_default_streamer_threshold_qsum() -> tuple[float, str]:
+    path = task3_config_path()
+    with path.open("r", encoding="utf-8") as handle:
+        config = yaml.safe_load(handle) or {}
+    threshold = _scalar_to_float(config.get("streamer_charge_sum_threshold"))
+    if not np.isfinite(threshold):
+        raise ValueError(
+            "Task 3 streamer_charge_sum_threshold is not set, and "
+            "charge_spectrum.streamer_threshold_qsum was not provided."
+        )
+    return threshold, f"{path}:streamer_charge_sum_threshold"
+
+
+def load_charge_study_config(config: dict, selection) -> ChargeStudyConfig:
     study_cfg = config.get("charge_spectrum", {})
     multiplicity_mode = str(study_cfg.get("multiplicity_mode", "single_strip_only")).strip().lower()
     if multiplicity_mode not in {"single_strip_only", "all_active"}:
         raise ValueError(
             "charge_spectrum.multiplicity_mode must be 'single_strip_only' or 'all_active'."
         )
+
+    threshold_raw = study_cfg.get("streamer_threshold_qsum")
+    if threshold_raw is None:
+        streamer_threshold_qsum, streamer_threshold_source = load_default_streamer_threshold_qsum()
+    else:
+        streamer_threshold_qsum = float(threshold_raw)
+        streamer_threshold_source = "charge_spectrum.streamer_threshold_qsum"
+    if not np.isfinite(streamer_threshold_qsum) or streamer_threshold_qsum <= 0:
+        raise ValueError("charge_spectrum.streamer_threshold_qsum must be a positive number.")
+
+    simulation_station = _normalize_station_label(
+        study_cfg.get("simulation_station", selection.simulation_stations[0])
+    )
+    real_station = _normalize_station_label(study_cfg.get("real_station", selection.real_stations[0]))
+
+    alpha_min = float(study_cfg.get("alpha_min", 0.20))
+    alpha_max = float(study_cfg.get("alpha_max", 2.00))
+    alpha_grid_points = int(study_cfg.get("alpha_grid_points", 161))
+    if alpha_min <= 0 or alpha_max <= alpha_min:
+        raise ValueError("charge_spectrum alpha range must satisfy 0 < alpha_min < alpha_max.")
+    if alpha_grid_points < 3:
+        raise ValueError("charge_spectrum.alpha_grid_points must be at least 3.")
+
     return ChargeStudyConfig(
+        simulation_station=simulation_station,
+        real_station=real_station,
+        simulation_basename=_normalize_basename(study_cfg.get("simulation_basename")),
+        real_basename=_normalize_basename(study_cfg.get("real_basename")),
         multiplicity_mode=multiplicity_mode,
-        efficiency_match_max_abs_difference=float(
-            study_cfg.get("efficiency_match_max_abs_difference", 0.05)
+        streamer_threshold_qsum=streamer_threshold_qsum,
+        streamer_threshold_source=streamer_threshold_source,
+        real_streamer_min_percent=float(study_cfg.get("real_streamer_min_percent", 5.0)),
+        real_streamer_selector=_normalize_streamer_selector(
+            study_cfg.get("real_streamer_selector", "max_plane")
         ),
-        efficiency_match_fallback_max_abs_difference=float(
-            study_cfg.get("efficiency_match_fallback_max_abs_difference", 0.15)
+        max_per_plane_efficiency_abs_difference=float(
+            study_cfg.get("max_per_plane_efficiency_abs_difference", 0.05)
         ),
-        max_pairs_per_plane=int(study_cfg.get("max_pairs_per_plane", 80)),
-        min_pairs_per_plane=int(study_cfg.get("min_pairs_per_plane", 6)),
+        max_mean_efficiency_abs_difference=float(
+            study_cfg.get("max_mean_efficiency_abs_difference", 0.03)
+        ),
         sample_entries_per_file=int(study_cfg.get("sample_entries_per_file", 1500)),
         min_positive_charge_ns=float(study_cfg.get("min_positive_charge_ns", 0.05)),
         hist_bin_count=int(study_cfg.get("hist_bin_count", 90)),
-        alpha_min=float(study_cfg.get("alpha_min", 0.40)),
-        alpha_max=float(study_cfg.get("alpha_max", 2.00)),
-        alpha_grid_points=int(study_cfg.get("alpha_grid_points", 161)),
+        alpha_min=alpha_min,
+        alpha_max=alpha_max,
+        alpha_grid_points=alpha_grid_points,
     )
 
 
@@ -133,10 +268,7 @@ def load_current_charge_model() -> CurrentChargeModel:
         avalanche_gap_mm=float(step3_cfg.get("avalanche_gap_mm", np.nan)),
         avalanche_electron_sigma=float(step3_cfg.get("avalanche_electron_sigma", np.nan)),
         lorentzian_gamma_mm=float(
-            step4_cfg.get(
-                "lorentzian_gamma_mm",
-                0.5 * float(step4_cfg.get("avalanche_width_mm", np.nan)),
-            )
+            step4_cfg.get("lorentzian_gamma_mm", 0.5 * float(step4_cfg.get("avalanche_width_mm", np.nan)))
         ),
         induced_charge_fraction=float(step4_cfg.get("induced_charge_fraction", 1.0)),
         qdiff_width=float(step5_cfg.get("qdiff_width", np.nan)),
@@ -162,6 +294,20 @@ def station_trigger_metadata_path(station_label: str) -> Path:
     )
 
 
+def station_specific_metadata_path(station_label: str) -> Path:
+    return (
+        ROOT_DIR
+        / "STATIONS"
+        / station_label
+        / "STAGE_1"
+        / "EVENT_DATA"
+        / "STEP_1"
+        / "TASK_3"
+        / "METADATA"
+        / "task_3_metadata_specific.csv"
+    )
+
+
 def station_listed_input_dirs(station_label: str) -> list[Path]:
     base = (
         ROOT_DIR
@@ -180,25 +326,17 @@ def station_listed_input_dirs(station_label: str) -> list[Path]:
     ]
 
 
-def collect_listed_file_entries(station_labels: list[str]) -> list[tuple[str, Path]]:
-    files_by_key: dict[tuple[str, str], Path] = {}
-    for station_label in station_labels:
-        for input_dir in station_listed_input_dirs(station_label):
-            if not input_dir.exists():
-                continue
-            for parquet_path in sorted(input_dir.glob("listed_*.parquet")):
-                files_by_key[(station_label, parquet_path.name)] = parquet_path
-    return [
-        (station_label, files_by_key[(station_label, name)])
-        for station_label, name in sorted(files_by_key)
-    ]
+def collect_listed_file_entries(station_label: str) -> dict[str, Path]:
+    files_by_key: dict[str, Path] = {}
+    for input_dir in station_listed_input_dirs(station_label):
+        if not input_dir.exists():
+            continue
+        for parquet_path in sorted(input_dir.glob("listed_*.parquet")):
+            files_by_key[_basename_from_listed_path(parquet_path)] = parquet_path
+    return files_by_key
 
 
-def resolve_listed_file_path(
-    station_label: str,
-    basename: str,
-    preferred_path: str | Path,
-) -> Path:
+def resolve_listed_file_path(station_label: str, basename: str, preferred_path: str | Path) -> Path:
     preferred = Path(preferred_path)
     if preferred.exists():
         return preferred
@@ -217,6 +355,19 @@ def _basename_from_listed_path(path: Path) -> str:
     return path.stem
 
 
+def _dedupe_latest_by_filename(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty or "filename_base" not in frame.columns:
+        return frame.iloc[0:0].copy()
+    copy = frame.copy()
+    copy["execution_ts"] = pd.to_datetime(
+        copy.get("execution_timestamp"),
+        format="%Y-%m-%d_%H.%M.%S",
+        errors="coerce",
+    )
+    copy.sort_values(["filename_base", "execution_ts"], inplace=True)
+    return copy.drop_duplicates(subset=["filename_base"], keep="last")
+
+
 def _preferred_rate(frame: pd.DataFrame, tt_label: str) -> pd.Series:
     list_col = f"list_tt_{tt_label}_rate_hz"
     cal_col = f"cal_tt_{tt_label}_rate_hz"
@@ -231,259 +382,339 @@ def _preferred_rate(frame: pd.DataFrame, tt_label: str) -> pd.Series:
     return list_values.where(list_values > 0, cal_values)
 
 
-def _global_legend(fig: plt.Figure, axes: np.ndarray) -> None:
-    handles: list[object] = []
-    labels: list[str] = []
-    seen: set[str] = set()
-    for ax in axes.flat:
-        ax_handles, ax_labels = ax.get_legend_handles_labels()
-        for handle, label in zip(ax_handles, ax_labels):
-            if not label or label in seen:
-                continue
-            handles.append(handle)
-            labels.append(label)
-            seen.add(label)
-    if handles:
-        fig.legend(handles, labels, loc="upper center", ncol=min(3, len(labels)), fontsize=9)
-
-
-def load_latest_trigger_metadata(
-    station_labels: list[str],
+def load_station_metadata(
+    station_label: str,
     date_ranges: list[tuple[pd.Timestamp, pd.Timestamp]] | None,
 ) -> pd.DataFrame:
-    path_lookup = {
-        (station_label, _basename_from_listed_path(path)): path
-        for station_label, path in collect_listed_file_entries(station_labels)
-    }
-
-    frames: list[pd.DataFrame] = []
-    for station_label in station_labels:
-        metadata_path = station_trigger_metadata_path(station_label)
-        if not metadata_path.exists():
-            continue
-        frame = pd.read_csv(metadata_path)
-        if frame.empty or "filename_base" not in frame.columns:
-            continue
-        frame = frame.copy()
-        frame["station_label"] = station_label
-        frame["execution_ts"] = pd.to_datetime(
-            frame.get("execution_timestamp"),
-            format="%Y-%m-%d_%H.%M.%S",
-            errors="coerce",
-        )
-        frame.sort_values(["filename_base", "execution_ts"], inplace=True)
-        frame = frame.drop_duplicates(subset=["filename_base"], keep="last")
-        frame["datetime"] = frame["filename_base"].map(extract_run_datetime_from_name)
-        if date_ranges:
-            mask = date_range_mask(frame["datetime"], date_ranges)
-            frame = frame.loc[mask].copy()
-        frame["parquet_path"] = [
-            path_lookup.get((station_label, basename))
-            for basename in frame["filename_base"].astype(str)
-        ]
-        frame = frame[frame["parquet_path"].notna()].copy()
-        if frame.empty:
-            continue
-        base_rate = _preferred_rate(frame, "1234")
-        frame["empirical_rate_1234"] = base_rate
-        for plane, tt_label in PLANE_NO_TRIGGER.items():
-            missing_rate = _preferred_rate(frame, tt_label)
-            efficiency = 1.0 - (missing_rate / base_rate)
-            frame[f"empirical_eff_plane_{plane}"] = efficiency.where(
-                np.isfinite(efficiency) & np.isfinite(base_rate) & (base_rate > 0)
-            )
-        frames.append(frame)
-
-    if not frames:
+    path_lookup = collect_listed_file_entries(station_label)
+    trigger_path = station_trigger_metadata_path(station_label)
+    if not trigger_path.exists():
         return pd.DataFrame()
-    combined = pd.concat(frames, ignore_index=True)
-    return combined
+
+    trigger = pd.read_csv(trigger_path)
+    trigger = _dedupe_latest_by_filename(trigger)
+    if trigger.empty:
+        return trigger
+
+    trigger = trigger.copy()
+    trigger["station_label"] = station_label
+    trigger["datetime"] = trigger["filename_base"].map(extract_run_datetime_from_name)
+    if date_ranges:
+        trigger = trigger.loc[date_range_mask(trigger["datetime"], date_ranges)].copy()
+    if trigger.empty:
+        return trigger
+    trigger["parquet_path"] = trigger["filename_base"].map(path_lookup.get)
+    trigger = trigger[trigger["parquet_path"].notna()].copy()
+    if trigger.empty:
+        return trigger
+
+    base_rate = _preferred_rate(trigger, "1234")
+    trigger["empirical_rate_1234"] = base_rate
+    for plane, tt_label in PLANE_NO_TRIGGER.items():
+        missing_rate = _preferred_rate(trigger, tt_label)
+        efficiency = 1.0 - (missing_rate / base_rate)
+        trigger[f"empirical_eff_plane_{plane}"] = efficiency.where(
+            np.isfinite(efficiency) & np.isfinite(base_rate) & (base_rate > 0)
+        )
+
+    specific_path = station_specific_metadata_path(station_label)
+    if not specific_path.exists():
+        return trigger
+
+    specific = pd.read_csv(specific_path)
+    specific = _dedupe_latest_by_filename(specific)
+    if specific.empty:
+        return trigger
+
+    keep_columns = ["filename_base", "charge_topology_streamer_threshold_qsum"]
+    keep_columns.extend(column for column in STREAMER_PERCENT_COLUMNS.values() if column in specific.columns)
+    keep_columns.extend(column for column in Z_POSITION_COLUMNS.values() if column in specific.columns)
+    specific = specific[[column for column in keep_columns if column in specific.columns]].copy()
+    return trigger.merge(specific, on="filename_base", how="left")
 
 
-def select_plane_matches(
+def filter_metadata_by_basename(frame: pd.DataFrame, basename: str | None, *, label: str) -> pd.DataFrame:
+    if basename is None:
+        return frame.copy()
+    filtered = frame[frame["filename_base"].astype(str) == basename].copy()
+    if filtered.empty:
+        raise SystemExit(f"Configured {label}_basename={basename!r} was not found in the selected metadata.")
+    return filtered
+
+
+def _streamer_selector_value(percentages: dict[int, float], selector: str) -> float:
+    values = np.array([percentages[plane] for plane in range(1, 5)], dtype=float)
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return np.nan
+    if selector == "max_plane":
+        return float(np.max(finite))
+    if selector == "mean_plane":
+        return float(np.mean(finite))
+    if selector == "min_plane":
+        return float(np.min(finite))
+    raise ValueError(f"Unsupported streamer selector: {selector}")
+
+
+def compute_streamer_percentages_from_parquet(parquet_path: str | Path, threshold_qsum: float) -> dict[int, float]:
+    cache_key = (str(parquet_path), float(threshold_qsum))
+    cached = STREAMER_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    frame = pd.read_parquet(Path(parquet_path), columns=list(PLANE_QSUM_FINAL.values()))
+    total_events = len(frame.index)
+    result: dict[int, float] = {}
+    for plane, column in PLANE_QSUM_FINAL.items():
+        values = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
+        if total_events <= 0:
+            result[plane] = np.nan
+        else:
+            streamer_count = int(np.count_nonzero(np.isfinite(values) & (values > threshold_qsum)))
+            result[plane] = float(100.0 * streamer_count / total_events)
+    STREAMER_CACHE[cache_key] = result
+    return result
+
+
+def resolve_streamer_percentages(row: pd.Series, study_cfg: ChargeStudyConfig) -> tuple[dict[int, float], str]:
+    metadata_threshold = _scalar_to_float(row.get("charge_topology_streamer_threshold_qsum"))
+    metadata_values = {
+        plane: _scalar_to_float(row.get(STREAMER_PERCENT_COLUMNS[plane]))
+        for plane in range(1, 5)
+    }
+    if (
+        np.isfinite(metadata_threshold)
+        and np.isclose(metadata_threshold, study_cfg.streamer_threshold_qsum, rtol=0.0, atol=1e-9)
+        and all(np.isfinite(metadata_values[plane]) for plane in range(1, 5))
+    ):
+        return metadata_values, "metadata_specific"
+
+    parquet_path = row.get("parquet_path")
+    if parquet_path is None or (isinstance(parquet_path, float) and np.isnan(parquet_path)):
+        raise SystemExit(f"Missing listed parquet path for {row.get('filename_base', '<unknown>')}.")
+    return compute_streamer_percentages_from_parquet(parquet_path, study_cfg.streamer_threshold_qsum), "parquet"
+
+
+def _format_z_config(z_positions: dict[int, float]) -> str:
+    return "/".join(f"{z_positions[plane]:g}" for plane in range(1, 5))
+
+
+def resolve_z_positions(row: pd.Series) -> dict[int, float]:
+    metadata_values = {
+        plane: _scalar_to_float(row.get(Z_POSITION_COLUMNS[plane]))
+        for plane in range(1, 5)
+    }
+    if all(np.isfinite(metadata_values[plane]) for plane in range(1, 5)):
+        return metadata_values
+
+    parquet_path = row.get("parquet_path")
+    if parquet_path is None or (isinstance(parquet_path, float) and np.isnan(parquet_path)):
+        return metadata_values
+    cache_key = str(parquet_path)
+    cached = Z_CONFIG_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    frame = pd.read_parquet(Path(parquet_path), columns=list(Z_POSITION_COLUMNS.values()))
+    if frame.empty:
+        return metadata_values
+    result = {
+        plane: _scalar_to_float(frame.iloc[0][Z_POSITION_COLUMNS[plane]])
+        for plane in range(1, 5)
+    }
+    Z_CONFIG_CACHE[cache_key] = result
+    return result
+
+
+def build_real_file_screening(real_metadata: pd.DataFrame, study_cfg: ChargeStudyConfig) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for _, row in real_metadata.iterrows():
+        streamer_percentages, streamer_source = resolve_streamer_percentages(row, study_cfg)
+        z_positions = resolve_z_positions(row)
+        selector_value = _streamer_selector_value(streamer_percentages, study_cfg.real_streamer_selector)
+        streamer_values = np.array(list(streamer_percentages.values()), dtype=float)
+        finite_streamers = streamer_values[np.isfinite(streamer_values)]
+        record: dict[str, object] = {
+            "station_label": row["station_label"],
+            "filename_base": row["filename_base"],
+            "datetime": row.get("datetime"),
+            "parquet_path": row.get("parquet_path"),
+            "streamer_percent_source": streamer_source,
+            "streamer_selector_mode": study_cfg.real_streamer_selector,
+            "streamer_selector_percent": selector_value,
+            "streamer_mean_percent": float(np.mean(finite_streamers)) if finite_streamers.size else np.nan,
+            "z_config_label": _format_z_config(z_positions)
+            if all(np.isfinite(z_positions[plane]) for plane in range(1, 5))
+            else "",
+            "streamer_target_shortfall": float(
+                max(0.0, study_cfg.real_streamer_min_percent - selector_value)
+            )
+            if np.isfinite(selector_value)
+            else np.nan,
+            "meets_streamer_target": bool(
+                np.isfinite(selector_value) and selector_value >= study_cfg.real_streamer_min_percent
+            ),
+        }
+        for plane in range(1, 5):
+            record[f"streamer_P{plane}"] = streamer_percentages[plane]
+            record[f"empirical_eff_plane_{plane}"] = _scalar_to_float(row.get(f"empirical_eff_plane_{plane}"))
+            record[Z_POSITION_COLUMNS[plane]] = z_positions[plane]
+        rows.append(record)
+    screening = pd.DataFrame(rows)
+    if screening.empty:
+        return pd.DataFrame(
+            columns=[
+                "station_label",
+                "filename_base",
+                "datetime",
+                "parquet_path",
+                "streamer_percent_source",
+                "streamer_selector_mode",
+                "streamer_selector_percent",
+                "streamer_mean_percent",
+                "z_config_label",
+                "streamer_target_shortfall",
+                "meets_streamer_target",
+            ]
+            + [f"streamer_P{plane}" for plane in range(1, 5)]
+            + [f"empirical_eff_plane_{plane}" for plane in range(1, 5)]
+            + [Z_POSITION_COLUMNS[plane] for plane in range(1, 5)]
+        )
+    screening.sort_values(
+        ["streamer_target_shortfall", "streamer_selector_percent", "streamer_mean_percent", "datetime"],
+        ascending=[True, False, False, False],
+        inplace=True,
+    )
+    screening.reset_index(drop=True, inplace=True)
+    screening.insert(0, "screening_rank", np.arange(1, len(screening) + 1))
+    return screening
+
+
+def build_pair_candidates(
     sim_metadata: pd.DataFrame,
-    real_metadata: pd.DataFrame,
+    real_screening: pd.DataFrame,
     study_cfg: ChargeStudyConfig,
 ) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
-
-    for plane in range(1, 5):
-        eff_col = f"empirical_eff_plane_{plane}"
-        sim_plane = sim_metadata[
-            sim_metadata[eff_col].notna()
-            & (sim_metadata[eff_col] > 0)
-            & (sim_metadata[eff_col] < 1)
-        ].copy()
-        real_plane = real_metadata[
-            real_metadata[eff_col].notna()
-            & (real_metadata[eff_col] > 0)
-            & (real_metadata[eff_col] < 1)
-        ].copy()
-        if sim_plane.empty or real_plane.empty:
+    sim_pool = sim_metadata.copy()
+    for _, real_row in real_screening.iterrows():
+        real_efficiencies = {
+            plane: _scalar_to_float(real_row.get(f"empirical_eff_plane_{plane}"))
+            for plane in range(1, 5)
+        }
+        real_z_positions = {
+            plane: _scalar_to_float(real_row.get(Z_POSITION_COLUMNS[plane]))
+            for plane in range(1, 5)
+        }
+        if not all(np.isfinite(real_efficiencies[plane]) for plane in range(1, 5)):
             continue
-        max_unique_pairs = min(len(sim_plane), len(real_plane))
-        if study_cfg.max_pairs_per_plane > 0:
-            max_unique_pairs = min(max_unique_pairs, study_cfg.max_pairs_per_plane)
-        target_pairs = max_unique_pairs
-        if study_cfg.min_pairs_per_plane > 0:
-            target_pairs = min(target_pairs, study_cfg.min_pairs_per_plane)
-        if target_pairs <= 0:
+        if not all(np.isfinite(real_z_positions[plane]) for plane in range(1, 5)):
             continue
 
-        sim_values = sim_plane[eff_col].to_numpy(dtype=float)
-        real_values = real_plane[eff_col].to_numpy(dtype=float)
-        deltas = np.abs(sim_values[:, None] - real_values[None, :])
-        sim_indices, real_indices = np.where(
-            deltas <= study_cfg.efficiency_match_max_abs_difference
-        )
-        if sim_indices.size == 0:
-            continue
-
-        candidate_rows: list[dict[str, object]] = []
-        for sim_idx, real_idx in zip(sim_indices.tolist(), real_indices.tolist()):
-            sim_row = sim_plane.iloc[sim_idx]
-            real_row = real_plane.iloc[real_idx]
-            candidate_rows.append(
-                {
-                    "plane": plane,
-                    "sim_pool_size": int(len(sim_plane)),
-                    "real_pool_size": int(len(real_plane)),
-                    "target_pairs": int(target_pairs),
-                    "sim_station": sim_row["station_label"],
-                    "sim_basename": sim_row["filename_base"],
-                    "sim_empirical_efficiency": float(sim_row[eff_col]),
-                    "sim_path": str(sim_row["parquet_path"]),
-                    "real_station": real_row["station_label"],
-                    "real_basename": real_row["filename_base"],
-                    "real_empirical_efficiency": float(real_row[eff_col]),
-                    "real_path": str(real_row["parquet_path"]),
-                    "abs_empirical_efficiency_delta": float(deltas[sim_idx, real_idx]),
-                    "match_mode": "within_threshold",
-                }
-            )
-
-        candidate_df = pd.DataFrame(candidate_rows)
-        fallback_rows: list[dict[str, object]] = []
-        if candidate_df.empty or len(candidate_df) < target_pairs:
-            fallback_limit = max(
-                study_cfg.efficiency_match_max_abs_difference,
-                study_cfg.efficiency_match_fallback_max_abs_difference,
-            )
-            fallback_sim_indices, fallback_real_indices = np.where(deltas <= fallback_limit)
-            for sim_idx, real_idx in zip(fallback_sim_indices.tolist(), fallback_real_indices.tolist()):
-                sim_row = sim_plane.iloc[sim_idx]
-                real_row = real_plane.iloc[real_idx]
-                delta_value = float(deltas[sim_idx, real_idx])
-                if delta_value <= study_cfg.efficiency_match_max_abs_difference:
-                    continue
-                fallback_rows.append(
-                    {
-                        "plane": plane,
-                        "sim_pool_size": int(len(sim_plane)),
-                        "real_pool_size": int(len(real_plane)),
-                        "target_pairs": int(target_pairs),
-                        "sim_station": sim_row["station_label"],
-                        "sim_basename": sim_row["filename_base"],
-                        "sim_empirical_efficiency": float(sim_row[eff_col]),
-                        "sim_path": str(sim_row["parquet_path"]),
-                        "real_station": real_row["station_label"],
-                        "real_basename": real_row["filename_base"],
-                        "real_empirical_efficiency": float(real_row[eff_col]),
-                        "real_path": str(real_row["parquet_path"]),
-                        "abs_empirical_efficiency_delta": delta_value,
-                        "match_mode": "fallback_nearest",
-                    }
-                )
-        if fallback_rows:
-            candidate_df = pd.concat([candidate_df, pd.DataFrame(fallback_rows)], ignore_index=True)
-        if candidate_df.empty:
-            continue
-        candidate_df = candidate_df.sort_values(
-            [
-                "abs_empirical_efficiency_delta",
-                "match_mode",
-                "sim_empirical_efficiency",
-                "real_empirical_efficiency",
-                "sim_basename",
-                "real_basename",
-            ]
-        )
-        used_sim: set[tuple[str, str]] = set()
-        used_real: set[tuple[str, str]] = set()
-        taken = 0
-        for row in candidate_df.itertuples(index=False):
-            sim_key = (row.sim_station, row.sim_basename)
-            real_key = (row.real_station, row.real_basename)
-            if sim_key in used_sim or real_key in used_real:
+        for _, sim_row in sim_pool.iterrows():
+            sim_efficiencies = {
+                plane: _scalar_to_float(sim_row.get(f"empirical_eff_plane_{plane}"))
+                for plane in range(1, 5)
+            }
+            sim_z_positions = resolve_z_positions(sim_row)
+            if not all(np.isfinite(sim_efficiencies[plane]) for plane in range(1, 5)):
                 continue
-            used_sim.add(sim_key)
-            used_real.add(real_key)
-            rows.append(row._asdict())
-            taken += 1
-            if study_cfg.max_pairs_per_plane > 0 and taken >= study_cfg.max_pairs_per_plane:
-                break
-        if taken < target_pairs:
-            remaining_rows: list[dict[str, object]] = []
-            all_sim_indices, all_real_indices = np.where(np.isfinite(deltas))
-            for sim_idx, real_idx in zip(all_sim_indices.tolist(), all_real_indices.tolist()):
-                sim_row = sim_plane.iloc[sim_idx]
-                real_row = real_plane.iloc[real_idx]
-                sim_key = (sim_row["station_label"], sim_row["filename_base"])
-                real_key = (real_row["station_label"], real_row["filename_base"])
-                if sim_key in used_sim or real_key in used_real:
-                    continue
-                remaining_rows.append(
-                    {
-                        "plane": plane,
-                        "sim_pool_size": int(len(sim_plane)),
-                        "real_pool_size": int(len(real_plane)),
-                        "target_pairs": int(target_pairs),
-                        "sim_station": sim_row["station_label"],
-                        "sim_basename": sim_row["filename_base"],
-                        "sim_empirical_efficiency": float(sim_row[eff_col]),
-                        "sim_path": str(sim_row["parquet_path"]),
-                        "real_station": real_row["station_label"],
-                        "real_basename": real_row["filename_base"],
-                        "real_empirical_efficiency": float(real_row[eff_col]),
-                        "real_path": str(real_row["parquet_path"]),
-                        "abs_empirical_efficiency_delta": float(deltas[sim_idx, real_idx]),
-                        "match_mode": "forced_nearest",
-                    }
-                )
-            if remaining_rows:
-                remaining_df = pd.DataFrame(remaining_rows).sort_values(
-                    [
-                        "abs_empirical_efficiency_delta",
-                        "sim_empirical_efficiency",
-                        "real_empirical_efficiency",
-                        "sim_basename",
-                        "real_basename",
-                    ]
-                )
-                for row in remaining_df.itertuples(index=False):
-                    sim_key = (row.sim_station, row.sim_basename)
-                    real_key = (row.real_station, row.real_basename)
-                    if sim_key in used_sim or real_key in used_real:
-                        continue
-                    used_sim.add(sim_key)
-                    used_real.add(real_key)
-                    rows.append(row._asdict())
-                    taken += 1
-                    if taken >= target_pairs:
-                        break
-                    if study_cfg.max_pairs_per_plane > 0 and taken >= study_cfg.max_pairs_per_plane:
-                        break
+            if not all(np.isfinite(sim_z_positions[plane]) for plane in range(1, 5)):
+                continue
+            if any(
+                not np.isclose(sim_z_positions[plane], real_z_positions[plane], rtol=0.0, atol=1e-9)
+                for plane in range(1, 5)
+            ):
+                continue
 
-    return pd.DataFrame(rows)
+            deltas = {
+                plane: abs(sim_efficiencies[plane] - real_efficiencies[plane])
+                for plane in range(1, 5)
+            }
+            max_delta = max(deltas.values())
+            mean_delta = float(np.mean(list(deltas.values())))
+
+            record: dict[str, object] = {
+                "sim_station": sim_row["station_label"],
+                "sim_basename": sim_row["filename_base"],
+                "sim_datetime": sim_row.get("datetime"),
+                "sim_path": sim_row.get("parquet_path"),
+                "real_station": real_row["station_label"],
+                "real_basename": real_row["filename_base"],
+                "real_datetime": real_row.get("datetime"),
+                "real_path": real_row.get("parquet_path"),
+                "real_streamer_selector_mode": study_cfg.real_streamer_selector,
+                "real_streamer_selector_percent": _scalar_to_float(real_row.get("streamer_selector_percent")),
+                "real_streamer_mean_percent": _scalar_to_float(real_row.get("streamer_mean_percent")),
+                "z_config_label": _format_z_config(real_z_positions),
+                "real_streamer_target_shortfall": _scalar_to_float(real_row.get("streamer_target_shortfall")),
+                "real_meets_streamer_target": bool(real_row.get("meets_streamer_target", False)),
+                "within_efficiency_advisory_limits": bool(
+                    max_delta <= study_cfg.max_per_plane_efficiency_abs_difference
+                    and mean_delta <= study_cfg.max_mean_efficiency_abs_difference
+                ),
+                "max_efficiency_abs_delta": max_delta,
+                "mean_efficiency_abs_delta": mean_delta,
+            }
+            for plane in range(1, 5):
+                record[f"z_P{plane}"] = real_z_positions[plane]
+                record[f"sim_eff_plane_{plane}"] = sim_efficiencies[plane]
+                record[f"real_eff_plane_{plane}"] = real_efficiencies[plane]
+                record[f"eff_delta_plane_{plane}"] = deltas[plane]
+                record[f"real_streamer_P{plane}"] = _scalar_to_float(real_row.get(f"streamer_P{plane}"))
+            rows.append(record)
+
+    candidate_df = pd.DataFrame(rows)
+    if candidate_df.empty:
+        return pd.DataFrame(
+            columns=[
+                "sim_station",
+                "sim_basename",
+                "sim_datetime",
+                "sim_path",
+                "real_station",
+                "real_basename",
+                "real_datetime",
+                "real_path",
+                "real_streamer_selector_mode",
+                "real_streamer_selector_percent",
+                "real_streamer_mean_percent",
+                "z_config_label",
+                "real_streamer_target_shortfall",
+                "real_meets_streamer_target",
+                "within_efficiency_advisory_limits",
+                "max_efficiency_abs_delta",
+                "mean_efficiency_abs_delta",
+            ]
+            + [f"z_P{plane}" for plane in range(1, 5)]
+            + [f"sim_eff_plane_{plane}" for plane in range(1, 5)]
+            + [f"real_eff_plane_{plane}" for plane in range(1, 5)]
+            + [f"eff_delta_plane_{plane}" for plane in range(1, 5)]
+            + [f"real_streamer_P{plane}" for plane in range(1, 5)]
+        )
+    candidate_df.sort_values(
+        [
+            "real_streamer_target_shortfall",
+            "within_efficiency_advisory_limits",
+            "mean_efficiency_abs_delta",
+            "max_efficiency_abs_delta",
+            "real_streamer_selector_percent",
+            "real_streamer_mean_percent",
+            "real_datetime",
+            "sim_datetime",
+            "real_basename",
+            "sim_basename",
+        ],
+        ascending=[True, False, True, True, False, False, False, False, True, True],
+        inplace=True,
+    )
+    candidate_df.reset_index(drop=True, inplace=True)
+    candidate_df.insert(0, "pair_rank", np.arange(1, len(candidate_df) + 1))
+    return candidate_df
 
 
-def _deterministic_sample_indices(
-    total: int,
-    wanted: int,
-    token: str,
-) -> np.ndarray:
-    if total <= wanted:
-        return np.arange(total)
+def _deterministic_sample_indices(total: int, wanted: int, token: str) -> np.ndarray:
+    if wanted <= 0 or total <= wanted:
+        return np.arange(total, dtype=int)
     digest = hashlib.sha256(f"{DEFAULT_SEED}|{token}".encode("utf-8")).hexdigest()
     seed = int(digest[:16], 16) % (2**32)
     rng = np.random.default_rng(seed)
@@ -495,11 +726,7 @@ def _strip_multiplicity(series: pd.Series) -> np.ndarray:
     return np.array([str(value).count("1") for value in text], dtype=int)
 
 
-def sample_plane_charge_ns(
-    parquet_path: str | Path,
-    plane: int,
-    study_cfg: ChargeStudyConfig,
-) -> np.ndarray:
+def sample_plane_charge_ns(parquet_path: str | Path, plane: int, study_cfg: ChargeStudyConfig) -> np.ndarray:
     cache_key = (
         str(parquet_path),
         plane,
@@ -538,34 +765,6 @@ def sample_plane_charge_ns(
     return sampled
 
 
-def pooled_plane_samples(
-    matches_df: pd.DataFrame,
-    plane: int,
-    study_cfg: ChargeStudyConfig,
-    unit_key: str,
-    calibration: TotChargeCalibration,
-) -> tuple[np.ndarray, np.ndarray]:
-    plane_df = matches_df[matches_df["plane"] == plane].copy()
-    sim_chunks: list[np.ndarray] = []
-    real_chunks: list[np.ndarray] = []
-    for row in plane_df.itertuples(index=False):
-        sim_path = resolve_listed_file_path(row.sim_station, row.sim_basename, row.sim_path)
-        real_path = resolve_listed_file_path(row.real_station, row.real_basename, row.real_path)
-        sim_values = sample_plane_charge_ns(sim_path, plane, study_cfg)
-        real_values = sample_plane_charge_ns(real_path, plane, study_cfg)
-        if unit_key == "fc":
-            sim_values = calibration.width_ns_to_charge_fc(sim_values)
-            real_values = calibration.width_ns_to_charge_fc(real_values)
-        if sim_values.size:
-            sim_chunks.append(sim_values)
-        if real_values.size:
-            real_chunks.append(real_values)
-
-    sim_pooled = np.concatenate(sim_chunks) if sim_chunks else np.array([], dtype=float)
-    real_pooled = np.concatenate(real_chunks) if real_chunks else np.array([], dtype=float)
-    return sim_pooled, real_pooled
-
-
 def _positive_log10(values: np.ndarray) -> np.ndarray:
     positive = values[np.isfinite(values) & (values > 0)]
     return np.log10(positive)
@@ -600,15 +799,19 @@ def alpha_scan(
     if log_sim.size == 0 or log_real.size == 0:
         return np.nan, np.nan, np.nan, np.array([], dtype=float)
 
-    alphas = np.linspace(
-        study_cfg.alpha_min,
-        study_cfg.alpha_max,
-        study_cfg.alpha_grid_points,
+    alphas = np.linspace(study_cfg.alpha_min, study_cfg.alpha_max, study_cfg.alpha_grid_points)
+    left = float(
+        min(
+            log_real.min(),
+            log_sim.min() + np.log10(study_cfg.alpha_min),
+        )
     )
-    log_shift_min = np.log10(study_cfg.alpha_min)
-    log_shift_max = np.log10(study_cfg.alpha_max)
-    left = float(min(log_real.min(), log_sim.min() + log_shift_min))
-    right = float(max(log_real.max(), log_sim.max() + log_shift_max))
+    right = float(
+        max(
+            log_real.max(),
+            log_sim.max() + np.log10(study_cfg.alpha_max),
+        )
+    )
     if not np.isfinite(left) or not np.isfinite(right) or right <= left:
         right = left + 1.0
     edges = np.linspace(left, right, study_cfg.hist_bin_count + 1)
@@ -633,81 +836,103 @@ def alpha_scan(
     return best_alpha, mse_original, best_mse, edges
 
 
-def summarize_charge_spectrum(
-    matches_df: pd.DataFrame,
+def _unit_values(
+    parquet_path: Path,
+    plane: int,
     study_cfg: ChargeStudyConfig,
     unit_key: str,
     calibration: TotChargeCalibration,
+) -> np.ndarray:
+    values_ns = sample_plane_charge_ns(parquet_path, plane, study_cfg)
+    if unit_key == "fc":
+        return np.asarray(calibration.width_ns_to_charge_fc(values_ns), dtype=float)
+    return values_ns
+
+
+def summarize_selected_pair(
+    selected_pair: pd.Series,
+    study_cfg: ChargeStudyConfig,
+    calibration: TotChargeCalibration,
+    unit_key: str,
+    sim_streamers: dict[int, float],
+    real_streamers: dict[int, float],
 ) -> tuple[pd.DataFrame, dict[int, dict[str, np.ndarray | float]]]:
-    rows: list[dict[str, float | int]] = []
+    sim_path = resolve_listed_file_path(
+        str(selected_pair["sim_station"]),
+        str(selected_pair["sim_basename"]),
+        str(selected_pair["sim_path"]),
+    )
+    real_path = resolve_listed_file_path(
+        str(selected_pair["real_station"]),
+        str(selected_pair["real_basename"]),
+        str(selected_pair["real_path"]),
+    )
+
+    rows: list[dict[str, object]] = []
     plot_payload: dict[int, dict[str, np.ndarray | float]] = {}
-
     for plane in range(1, 5):
-        plane_matches = matches_df[matches_df["plane"] == plane].copy()
-        sim_values, real_values = pooled_plane_samples(
-            matches_df,
-            plane,
-            study_cfg,
-            unit_key,
-            calibration,
-        )
-        best_alpha, mse_original, mse_scaled, hist_edges = alpha_scan(
-            sim_values,
-            real_values,
-            study_cfg,
-        )
-        sim_sigma = robust_log_sigma(sim_values)
-        real_sigma = robust_log_sigma(real_values)
-        ks_original = ks_distance(sim_values, real_values)
-        ks_scaled = ks_distance(sim_values * best_alpha, real_values) if np.isfinite(best_alpha) else np.nan
-
+        sim_values = _unit_values(sim_path, plane, study_cfg, unit_key, calibration)
+        real_values = _unit_values(real_path, plane, study_cfg, unit_key, calibration)
+        alpha, mse_original, mse_scaled, hist_edges = alpha_scan(sim_values, real_values, study_cfg)
         rows.append(
             {
                 "plane": plane,
-                "available_sim_files": int(plane_matches["sim_pool_size"].iloc[0]) if not plane_matches.empty and "sim_pool_size" in plane_matches.columns else 0,
-                "available_real_files": int(plane_matches["real_pool_size"].iloc[0]) if not plane_matches.empty and "real_pool_size" in plane_matches.columns else 0,
-                "target_pairs": int(plane_matches["target_pairs"].iloc[0]) if not plane_matches.empty and "target_pairs" in plane_matches.columns else 0,
-                "matched_pairs": int(len(plane_matches)),
+                "charge_unit": unit_key,
                 "sim_samples": int(sim_values.size),
                 "real_samples": int(real_values.size),
-                "median_sim_empirical_efficiency": float(plane_matches["sim_empirical_efficiency"].median()) if not plane_matches.empty else np.nan,
-                "median_real_empirical_efficiency": float(plane_matches["real_empirical_efficiency"].median()) if not plane_matches.empty else np.nan,
-                "median_abs_empirical_efficiency_delta": float(plane_matches["abs_empirical_efficiency_delta"].median()) if not plane_matches.empty else np.nan,
-                "strict_pairs": int((plane_matches["match_mode"] == "within_threshold").sum()) if "match_mode" in plane_matches.columns else 0,
-                "fallback_pairs": int((plane_matches["match_mode"] == "fallback_nearest").sum()) if "match_mode" in plane_matches.columns else 0,
-                "forced_pairs": int((plane_matches["match_mode"] == "forced_nearest").sum()) if "match_mode" in plane_matches.columns else 0,
-                "recommended_charge_scale_alpha": best_alpha,
+                "sim_efficiency": _scalar_to_float(selected_pair.get(f"sim_eff_plane_{plane}")),
+                "real_efficiency": _scalar_to_float(selected_pair.get(f"real_eff_plane_{plane}")),
+                "efficiency_abs_delta": _scalar_to_float(selected_pair.get(f"eff_delta_plane_{plane}")),
+                "sim_streamer_percent": float(sim_streamers[plane]),
+                "real_streamer_percent": float(real_streamers[plane]),
+                "recommended_charge_scale_alpha": alpha,
                 "hist_mse_original": mse_original,
                 "hist_mse_scaled": mse_scaled,
-                "ks_original": ks_original,
-                "ks_scaled": ks_scaled,
-                "sim_log10_charge_sigma": sim_sigma,
-                "real_log10_charge_sigma": real_sigma,
-                "real_over_sim_log10_charge_sigma_ratio": (
-                    float(real_sigma / sim_sigma)
-                    if np.isfinite(real_sigma) and np.isfinite(sim_sigma) and sim_sigma > 0
-                    else np.nan
-                ),
-                "match_coverage_fraction": (
-                    float(len(plane_matches) / max(1, int(plane_matches["target_pairs"].iloc[0])))
-                    if not plane_matches.empty
-                    else np.nan
-                ),
-                "charge_unit": unit_key,
+                "ks_original": ks_distance(sim_values, real_values),
+                "ks_scaled": ks_distance(sim_values * alpha, real_values) if np.isfinite(alpha) else np.nan,
+                "sim_log10_charge_sigma": robust_log_sigma(sim_values),
+                "real_log10_charge_sigma": robust_log_sigma(real_values),
             }
         )
-
         plot_payload[plane] = {
             "sim_values": sim_values,
             "real_values": real_values,
-            "alpha": best_alpha,
+            "alpha": alpha,
             "hist_edges": hist_edges,
         }
 
-    return pd.DataFrame(rows), plot_payload
+    summary_df = pd.DataFrame(rows)
+    summary_df["real_over_sim_log10_charge_sigma_ratio"] = summary_df.apply(
+        lambda row: (
+            float(row["real_log10_charge_sigma"] / row["sim_log10_charge_sigma"])
+            if np.isfinite(row["real_log10_charge_sigma"])
+            and np.isfinite(row["sim_log10_charge_sigma"])
+            and row["sim_log10_charge_sigma"] > 0
+            else np.nan
+        ),
+        axis=1,
+    )
+    return summary_df, plot_payload
 
 
-def plot_linear_charge_overlay(
+def _global_legend(fig: plt.Figure, axes: np.ndarray) -> None:
+    handles: list[object] = []
+    labels: list[str] = []
+    seen: set[str] = set()
+    for ax in axes.flat:
+        ax_handles, ax_labels = ax.get_legend_handles_labels()
+        for handle, label in zip(ax_handles, ax_labels):
+            if not label or label in seen:
+                continue
+            handles.append(handle)
+            labels.append(label)
+            seen.add(label)
+    if handles:
+        fig.legend(handles, labels, loc="upper center", ncol=min(3, len(labels)), fontsize=9)
+
+
+def plot_linear_overlay(
+    selected_pair: pd.Series,
     summary_df: pd.DataFrame,
     plot_payload: dict[int, dict[str, np.ndarray | float]],
     unit_key: str,
@@ -717,52 +942,79 @@ def plot_linear_charge_overlay(
     fig, axes = plt.subplots(2, 2, figsize=(13, 10), sharey=True)
     for plane in range(1, 5):
         ax = axes.flat[plane - 1]
+        row = summary_df[summary_df["plane"] == plane].iloc[0]
         payload = plot_payload.get(plane, {})
         sim_values = np.asarray(payload.get("sim_values", np.array([], dtype=float)))
         real_values = np.asarray(payload.get("real_values", np.array([], dtype=float)))
         alpha = float(payload.get("alpha", np.nan))
         scaled_values = sim_values * alpha if np.isfinite(alpha) else np.array([], dtype=float)
         pooled = np.concatenate(
-            [
-                arr
-                for arr in (sim_values, real_values, scaled_values)
-                if np.asarray(arr).size
-            ]
+            [arr for arr in (sim_values, real_values, scaled_values) if np.asarray(arr).size]
         ) if (sim_values.size or real_values.size or scaled_values.size) else np.array([], dtype=float)
-        if pooled.size:
-            upper = float(np.quantile(pooled[np.isfinite(pooled) & (pooled > 0)], 0.995))
+        positive = pooled[np.isfinite(pooled) & (pooled > 0)]
+        if positive.size:
+            upper = float(np.quantile(positive, 0.995))
             if not np.isfinite(upper) or upper <= 0:
-                upper = float(np.nanmax(pooled))
-            if np.isfinite(upper) and upper > 0:
-                edges = np.linspace(0.0, upper, 80)
+                upper = float(np.nanmax(positive))
+            edges = np.linspace(0.0, upper, 80) if upper > 0 else np.array([])
+            if edges.size:
                 if sim_values.size:
-                    ax.hist(sim_values, bins=edges, density=True, histtype="step", linewidth=1.6, color=GROUP_COLORS["SIM"], label="MINGO00")
+                    ax.hist(
+                        sim_values,
+                        bins=edges,
+                        density=True,
+                        histtype="step",
+                        linewidth=1.6,
+                        color=GROUP_COLORS["SIM"],
+                        label=f"{selected_pair['sim_station']}",
+                    )
                 if real_values.size:
-                    ax.hist(real_values, bins=edges, density=True, histtype="step", linewidth=1.6, color=GROUP_COLORS["REAL"], label="MINGO01")
+                    ax.hist(
+                        real_values,
+                        bins=edges,
+                        density=True,
+                        histtype="step",
+                        linewidth=1.6,
+                        color=GROUP_COLORS["REAL"],
+                        label=f"{selected_pair['real_station']}",
+                    )
                 if scaled_values.size:
-                    ax.hist(scaled_values, bins=edges, density=True, histtype="step", linewidth=1.4, linestyle="--", color=GROUP_COLORS["SCALED"], label=f"scaled sim x{alpha:.3f}")
-        row = summary_df[summary_df["plane"] == plane].iloc[0]
+                    ax.hist(
+                        scaled_values,
+                        bins=edges,
+                        density=True,
+                        histtype="step",
+                        linewidth=1.4,
+                        linestyle="--",
+                        color=GROUP_COLORS["SCALED"],
+                        label=f"scaled sim x{alpha:.3f}",
+                    )
         ax.set_title(
             f"Plane {plane} | alpha={row['recommended_charge_scale_alpha']:.3f}\n"
-            f"emp. eff delta={row['median_abs_empirical_efficiency_delta']:.3f}",
+            f"eff real/sim={row['real_efficiency']:.3f}/{row['sim_efficiency']:.3f} | streamer real/sim="
+            f"{row['real_streamer_percent']:.2f}%/{row['sim_streamer_percent']:.2f}%",
             fontsize=10,
         )
-        ax.grid(alpha=0.2)
         ax.set_xlabel(f"Plane charge [{unit_label}]")
         if plane in (1, 3):
             ax.set_ylabel("Density")
+        ax.grid(alpha=0.2)
     _global_legend(fig, axes)
     fig.suptitle(
-        f"Linear Task 3 plane-charge overlay in {unit_label} matched by metadata empirical efficiency",
+        f"Selected charge-spectrum pair: {selected_pair['sim_basename']} vs {selected_pair['real_basename']} "
+        f"| z={selected_pair['z_config_label']} ({unit_label})",
         fontsize=14,
     )
     fig.tight_layout(rect=(0, 0, 1, 0.94))
-    fig.savefig(out / f"charge_spectrum_linear_overlay_{unit_key}.png", dpi=180)
-    fig.savefig(out / f"charge_spectrum_linear_overlay_{unit_key}.pdf")
+    output_path = out / f"selected_pair_plane_by_plane_overlay_{unit_key}.png"
+    fig.savefig(output_path, dpi=180)
+    if unit_key == "ns":
+        fig.savefig(out / "selected_pair_plane_by_plane_overlay.png", dpi=180)
     plt.close(fig)
 
 
-def plot_log_charge_overlay(
+def plot_log_overlay(
+    selected_pair: pd.Series,
     summary_df: pd.DataFrame,
     plot_payload: dict[int, dict[str, np.ndarray | float]],
     unit_key: str,
@@ -772,6 +1024,7 @@ def plot_log_charge_overlay(
     fig, axes = plt.subplots(2, 2, figsize=(13, 10), sharey=True)
     for plane in range(1, 5):
         ax = axes.flat[plane - 1]
+        row = summary_df[summary_df["plane"] == plane].iloc[0]
         payload = plot_payload.get(plane, {})
         sim_values = np.asarray(payload.get("sim_values", np.array([], dtype=float)))
         real_values = np.asarray(payload.get("real_values", np.array([], dtype=float)))
@@ -785,7 +1038,7 @@ def plot_log_charge_overlay(
                 histtype="step",
                 linewidth=1.6,
                 color=GROUP_COLORS["SIM"],
-                label="MINGO00",
+                label=f"{selected_pair['sim_station']}",
             )
         if real_values.size and edges.size:
             ax.hist(
@@ -795,7 +1048,7 @@ def plot_log_charge_overlay(
                 histtype="step",
                 linewidth=1.6,
                 color=GROUP_COLORS["REAL"],
-                label="MINGO01",
+                label=f"{selected_pair['real_station']}",
             )
         if sim_values.size and edges.size and np.isfinite(alpha):
             ax.hist(
@@ -808,386 +1061,230 @@ def plot_log_charge_overlay(
                 color=GROUP_COLORS["SCALED"],
                 label=f"scaled sim x{alpha:.3f}",
             )
-        row = summary_df[summary_df["plane"] == plane].iloc[0]
         ax.set_title(
-            f"Plane {plane} | alpha={row['recommended_charge_scale_alpha']:.3f}\n"
-            f"shape ratio={row['real_over_sim_log10_charge_sigma_ratio']:.3f}",
+            f"Plane {plane} | KS {row['ks_original']:.3f} -> {row['ks_scaled']:.3f}\n"
+            f"width ratio={row['real_over_sim_log10_charge_sigma_ratio']:.3f}",
             fontsize=10,
         )
-        ax.grid(alpha=0.2)
         ax.set_xlabel(f"log10(plane charge [{unit_label}])")
         if plane in (1, 3):
             ax.set_ylabel("Density")
+        ax.grid(alpha=0.2)
     _global_legend(fig, axes)
     fig.suptitle(
-        f"Log-charge overlay in {unit_label} matched by metadata empirical efficiency",
+        f"Selected charge-spectrum pair: log overlay for {selected_pair['sim_basename']} vs {selected_pair['real_basename']} ({unit_label})",
         fontsize=14,
     )
     fig.tight_layout(rect=(0, 0, 1, 0.94))
-    fig.savefig(out / f"charge_spectrum_log_overlay_{unit_key}.png", dpi=180)
-    fig.savefig(out / f"charge_spectrum_log_overlay_{unit_key}.pdf")
+    fig.savefig(out / f"selected_pair_charge_overlay_log_{unit_key}.png", dpi=180)
     plt.close(fig)
 
 
-def _cdf_xy(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    clean = np.sort(values[np.isfinite(values) & (values > 0)])
-    if clean.size == 0:
-        return np.array([], dtype=float), np.array([], dtype=float)
-    y = np.arange(1, clean.size + 1, dtype=float) / clean.size
-    return clean, y
-
-
-def plot_charge_cdf_overlay(
-    summary_df: pd.DataFrame,
-    plot_payload: dict[int, dict[str, np.ndarray | float]],
-    unit_key: str,
-) -> None:
-    out = output_dir()
-    unit_label = UNIT_LABELS[unit_key]
-    fig, axes = plt.subplots(2, 2, figsize=(13, 10), sharey=True)
+def build_selected_pair_export(
+    selected_pair: pd.Series,
+    sim_streamers: dict[int, float],
+    sim_streamer_source: str,
+    real_streamers: dict[int, float],
+    real_streamer_source: str,
+) -> pd.DataFrame:
+    record = selected_pair.to_dict()
+    record["sim_streamer_percent_source"] = sim_streamer_source
+    record["real_streamer_percent_source"] = real_streamer_source
     for plane in range(1, 5):
-        ax = axes.flat[plane - 1]
-        payload = plot_payload.get(plane, {})
-        sim_values = np.asarray(payload.get("sim_values", np.array([], dtype=float)))
-        real_values = np.asarray(payload.get("real_values", np.array([], dtype=float)))
-        alpha = float(payload.get("alpha", np.nan))
-        for label, values, color, linestyle in (
-            ("MINGO00", sim_values, GROUP_COLORS["SIM"], "-"),
-            ("MINGO01", real_values, GROUP_COLORS["REAL"], "-"),
-            ("scaled sim", sim_values * alpha if np.isfinite(alpha) else np.array([], dtype=float), GROUP_COLORS["SCALED"], "--"),
-        ):
-            x, y = _cdf_xy(values)
-            if x.size:
-                ax.plot(x, y, color=color, linestyle=linestyle, linewidth=1.4, label=label)
-        row = summary_df[summary_df["plane"] == plane].iloc[0]
-        ax.set_title(
-            f"Plane {plane} | KS {row['ks_original']:.3f} -> {row['ks_scaled']:.3f}",
-            fontsize=10,
-        )
-        ax.grid(alpha=0.2)
-        ax.set_xlabel(f"Plane charge [{unit_label}]")
-        if plane in (1, 3):
-            ax.set_ylabel("CDF")
-    _global_legend(fig, axes)
-    fig.suptitle(f"Charge-spectrum CDF overlay in {unit_label}", fontsize=14)
-    fig.tight_layout(rect=(0, 0, 1, 0.94))
-    fig.savefig(out / f"charge_spectrum_cdf_overlay_{unit_key}.png", dpi=180)
-    fig.savefig(out / f"charge_spectrum_cdf_overlay_{unit_key}.pdf")
-    plt.close(fig)
-
-
-def plot_centered_shape_overlay(
-    summary_df: pd.DataFrame,
-    plot_payload: dict[int, dict[str, np.ndarray | float]],
-    unit_key: str,
-) -> None:
-    out = output_dir()
-    unit_label = UNIT_LABELS[unit_key]
-    fig, axes = plt.subplots(2, 2, figsize=(13, 10), sharey=True)
-    for plane in range(1, 5):
-        ax = axes.flat[plane - 1]
-        payload = plot_payload.get(plane, {})
-        sim_values = _positive_log10(np.asarray(payload.get("sim_values", np.array([], dtype=float))))
-        real_values = _positive_log10(np.asarray(payload.get("real_values", np.array([], dtype=float))))
-        if sim_values.size:
-            sim_centered = sim_values - np.median(sim_values)
-            ax.hist(
-                sim_centered,
-                bins=70,
-                density=True,
-                histtype="step",
-                linewidth=1.5,
-                color=GROUP_COLORS["SIM"],
-                label="MINGO00 centered",
-            )
-        if real_values.size:
-            real_centered = real_values - np.median(real_values)
-            ax.hist(
-                real_centered,
-                bins=70,
-                density=True,
-                histtype="step",
-                linewidth=1.5,
-                color=GROUP_COLORS["REAL"],
-                label="MINGO01 centered",
-            )
-        row = summary_df[summary_df["plane"] == plane].iloc[0]
-        ax.set_title(
-            f"Plane {plane} | width ratio={row['real_over_sim_log10_charge_sigma_ratio']:.3f}",
-            fontsize=10,
-        )
-        ax.grid(alpha=0.2)
-        ax.set_xlabel(f"log10(charge [{unit_label}]) - median")
-        if plane in (1, 3):
-            ax.set_ylabel("Density")
-    _global_legend(fig, axes)
-    fig.suptitle(
-        f"Centered log-charge shape comparison in {unit_label} after removing the scale shift",
-        fontsize=14,
-    )
-    fig.tight_layout(rect=(0, 0, 1, 0.94))
-    fig.savefig(out / f"charge_spectrum_centered_shape_overlay_{unit_key}.png", dpi=180)
-    fig.savefig(out / f"charge_spectrum_centered_shape_overlay_{unit_key}.pdf")
-    plt.close(fig)
-
-
-def plot_efficiency_match_quality(matches_df: pd.DataFrame) -> None:
-    out = output_dir()
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10), sharex=True, sharey=True)
-    for plane in range(1, 5):
-        ax = axes.flat[plane - 1]
-        plane_df = matches_df[matches_df["plane"] == plane].copy()
-        if not plane_df.empty:
-            color_map = {
-                "within_threshold": "#4c72b0",
-                "fallback_nearest": "#dd8452",
-                "forced_nearest": "#c44e52",
-            }
-            point_colors = [color_map.get(mode, "#4c72b0") for mode in plane_df.get("match_mode", pd.Series([], dtype=str))]
-            ax.scatter(
-                plane_df["sim_empirical_efficiency"],
-                plane_df["real_empirical_efficiency"],
-                s=18,
-                alpha=0.7,
-                color=point_colors,
-            )
-            low = float(
-                min(
-                    plane_df["sim_empirical_efficiency"].min(),
-                    plane_df["real_empirical_efficiency"].min(),
-                )
-            )
-            high = float(
-                max(
-                    plane_df["sim_empirical_efficiency"].max(),
-                    plane_df["real_empirical_efficiency"].max(),
-                )
-            )
-            ax.plot([low, high], [low, high], linestyle="--", color="black", linewidth=1.0)
-        ax.set_title(f"Plane {plane}", fontsize=10)
-        ax.grid(alpha=0.2)
-        ax.set_xlabel("MINGO00 empirical efficiency")
-        if plane in (1, 3):
-            ax.set_ylabel("MINGO01 empirical efficiency")
-    fig.suptitle("Matched-file quality by metadata empirical efficiency", fontsize=14)
-    fig.tight_layout(rect=(0, 0, 1, 0.94))
-    fig.savefig(out / "charge_spectrum_efficiency_match_quality.png", dpi=180)
-    fig.savefig(out / "charge_spectrum_efficiency_match_quality.pdf")
-    plt.close(fig)
-
-
-def plot_summary_bars(summary_df: pd.DataFrame, unit_key: str) -> None:
-    out = output_dir()
-    unit_label = UNIT_LABELS[unit_key]
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
-    planes = summary_df["plane"].to_numpy(dtype=int)
-
-    axes[0].bar(planes, summary_df["recommended_charge_scale_alpha"], color="#4c72b0")
-    axes[0].axhline(1.0, linestyle="--", color="red", linewidth=1.0)
-    axes[0].set_title("Recommended charge-scale alpha")
-    axes[0].set_xlabel("Plane")
-    axes[0].set_ylabel("alpha")
-    axes[0].grid(axis="y", alpha=0.2)
-
-    axes[1].bar(planes, summary_df["real_over_sim_log10_charge_sigma_ratio"], color="#55a868")
-    axes[1].axhline(1.0, linestyle="--", color="red", linewidth=1.0)
-    axes[1].set_title("Real / sim shape-width ratio")
-    axes[1].set_xlabel("Plane")
-    axes[1].set_ylabel("ratio")
-    axes[1].grid(axis="y", alpha=0.2)
-
-    fig.suptitle(f"Charge-spectrum tuning summary in {unit_label}", fontsize=14)
-    fig.tight_layout(rect=(0, 0, 1, 0.94))
-    fig.savefig(out / f"charge_spectrum_summary_bars_{unit_key}.png", dpi=180)
-    fig.savefig(out / f"charge_spectrum_summary_bars_{unit_key}.pdf")
-    plt.close(fig)
+        record[f"sim_streamer_P{plane}"] = sim_streamers[plane]
+        record[f"real_streamer_P{plane}"] = real_streamers[plane]
+    return pd.DataFrame([record])
 
 
 def write_report(
+    config_path: str,
     selection,
     study_cfg: ChargeStudyConfig,
     current_model: CurrentChargeModel,
-    matches_df: pd.DataFrame,
+    real_screening: pd.DataFrame,
+    pair_candidates: pd.DataFrame,
+    selected_pair: pd.Series,
     summary_by_unit: dict[str, pd.DataFrame],
-) -> pd.DataFrame:
+    sim_streamers: dict[int, float],
+    sim_streamer_source: str,
+    real_streamers: dict[int, float],
+    real_streamer_source: str,
+) -> None:
     out = output_dir()
-    summary_rows = [
-        {"metric": "current_step3_townsend_alpha_per_mm", "value": current_model.townsend_alpha_per_mm},
-        {"metric": "current_step3_avalanche_gap_mm_fixed", "value": current_model.avalanche_gap_mm},
-        {"metric": "current_step3_avalanche_electron_sigma", "value": current_model.avalanche_electron_sigma},
-        {"metric": "current_step4_lorentzian_gamma_mm", "value": current_model.lorentzian_gamma_mm},
-        {"metric": "current_step4_induced_charge_fraction", "value": current_model.induced_charge_fraction},
-        {"metric": "current_step5_qdiff_width", "value": current_model.qdiff_width},
-        {"metric": "current_step8_q_to_time_factor", "value": current_model.q_to_time_factor},
-        {"metric": "current_step8_charge_threshold", "value": current_model.charge_threshold},
-        {"metric": "total_matched_pairs", "value": float(len(matches_df))},
+    best_real_count = int(real_screening["meets_streamer_target"].sum()) if not real_screening.empty else 0
+    report_lines = [
+        "Selected charge-spectrum tuning pair",
+        "===================================",
+        "",
+        f"Config path: {config_path}",
+        f"Simulation station: {study_cfg.simulation_station}",
+        f"Real-data station: {study_cfg.real_station}",
+        f"Simulation selection basename: {study_cfg.simulation_basename or '<best efficiency match>'}",
+        f"Real-data selection basename: {study_cfg.real_basename or '<highest-streamer feasible match>'}",
+        "",
+        "Selection rules:",
+        f"- streamer_threshold_qsum={study_cfg.streamer_threshold_qsum:.6g} ({study_cfg.streamer_threshold_source})",
+        f"- real_streamer_selector={study_cfg.real_streamer_selector}",
+        f"- preferred real streamer target percent={study_cfg.real_streamer_min_percent:.3f} (soft target)",
+        f"- advisory max_per_plane_efficiency_abs_difference={study_cfg.max_per_plane_efficiency_abs_difference:.4f}",
+        f"- advisory max_mean_efficiency_abs_difference={study_cfg.max_mean_efficiency_abs_difference:.4f}",
+        f"- multiplicity_mode={study_cfg.multiplicity_mode}",
+        f"- selection.simulation_date_ranges={selection.simulation_date_ranges}",
+        f"- selection.real_date_ranges={selection.real_date_ranges}",
+        "",
+        "Screening summary:",
+        f"- real files screened={len(real_screening)}",
+        f"- real files meeting the streamer target={best_real_count}",
+        f"- sim/real candidate pairs ranked={len(pair_candidates)}",
+        "",
+        "Selected files:",
+        f"- simulation: {selected_pair['sim_station']} / {selected_pair['sim_basename']} / {selected_pair['sim_datetime']}",
+        f"- real-data: {selected_pair['real_station']} / {selected_pair['real_basename']} / {selected_pair['real_datetime']}",
+        f"- selected pair rank={int(selected_pair['pair_rank'])}",
+        f"- shared z configuration={selected_pair['z_config_label']}",
+        f"- real streamer target shortfall={float(selected_pair['real_streamer_target_shortfall']):.4f}",
+        f"- within advisory efficiency limits={bool(selected_pair['within_efficiency_advisory_limits'])}",
+        f"- pair mean efficiency abs delta={float(selected_pair['mean_efficiency_abs_delta']):.4f}",
+        f"- pair max efficiency abs delta={float(selected_pair['max_efficiency_abs_delta']):.4f}",
+        "",
+        "Streamer percentages with the active threshold:",
+        f"- simulation source={sim_streamer_source}",
+        f"- real-data source={real_streamer_source}",
+        f"- simulation P1/P2/P3/P4={sim_streamers[1]:.3f}% / {sim_streamers[2]:.3f}% / {sim_streamers[3]:.3f}% / {sim_streamers[4]:.3f}%",
+        f"- real-data P1/P2/P3/P4={real_streamers[1]:.3f}% / {real_streamers[2]:.3f}% / {real_streamers[3]:.3f}% / {real_streamers[4]:.3f}%",
+        "",
+        "Current digital-twin charge model:",
+        f"- STEP 3 townsend_alpha_per_mm={current_model.townsend_alpha_per_mm:.6g}",
+        f"- STEP 3 avalanche_gap_mm={current_model.avalanche_gap_mm:.6g}",
+        f"- STEP 3 avalanche_electron_sigma={current_model.avalanche_electron_sigma:.6g}",
+        f"- STEP 4 lorentzian_gamma_mm={current_model.lorentzian_gamma_mm:.6g}",
+        f"- STEP 4 induced_charge_fraction={current_model.induced_charge_fraction:.6g}",
+        f"- STEP 5 qdiff_width={current_model.qdiff_width:.6g}",
+        f"- STEP 8 charge_conversion_model={current_model.charge_conversion_model}",
+        f"- STEP 8 q_to_time_factor={current_model.q_to_time_factor:.6g}",
+        f"- STEP 8 charge_threshold={current_model.charge_threshold:.6g}",
+        "",
     ]
-    report_sections: list[str] = []
+
     for unit_key, summary_df in summary_by_unit.items():
-        recommended_alpha = float(
-            np.nanmedian(summary_df["recommended_charge_scale_alpha"].to_numpy(dtype=float))
-        )
-        recommended_shape_ratio = float(
-            np.nanmedian(summary_df["real_over_sim_log10_charge_sigma_ratio"].to_numpy(dtype=float))
-        )
-        fallback_pairs = int(summary_df["fallback_pairs"].sum()) if "fallback_pairs" in summary_df.columns else 0
-        forced_pairs = int(summary_df["forced_pairs"].sum()) if "forced_pairs" in summary_df.columns else 0
-        summary_rows.extend(
-            [
-                {"metric": f"median_recommended_charge_scale_alpha_{unit_key}", "value": recommended_alpha},
-                {"metric": f"median_real_over_sim_log10_charge_sigma_ratio_{unit_key}", "value": recommended_shape_ratio},
-                {"metric": f"fallback_pairs_{unit_key}", "value": float(fallback_pairs)},
-                {"metric": f"forced_pairs_{unit_key}", "value": float(forced_pairs)},
-            ]
-        )
-
-        per_plane_lines = []
+        report_lines.append(f"Per-plane summary in {UNIT_LABELS[unit_key]}:")
         for row in summary_df.itertuples(index=False):
-            if int(row.matched_pairs) == 0:
-                status = "no matches in the selected data"
-            elif int(row.matched_pairs) < 3:
-                status = "weak statistics"
-            elif int(getattr(row, "forced_pairs", 0)) > 0:
-                status = "ok (includes forced nearest matches)"
-            elif int(getattr(row, "fallback_pairs", 0)) > 0:
-                status = "ok (includes nearest-neighbour fallback)"
-            else:
-                status = "ok"
-            per_plane_lines.append(
-                f"- Plane {row.plane}: alpha={row.recommended_charge_scale_alpha:.3f}, "
-                f"shape ratio={row.real_over_sim_log10_charge_sigma_ratio:.3f}, "
-                f"pairs={int(row.matched_pairs)}, "
-                f"pool={int(getattr(row, 'available_sim_files', 0))} sim / {int(getattr(row, 'available_real_files', 0))} real, "
-                f"target={int(getattr(row, 'target_pairs', 0))}, "
-                f"strict={int(getattr(row, 'strict_pairs', 0))}, "
-                f"median |emp. eff delta|={row.median_abs_empirical_efficiency_delta:.4f}, "
-                f"fallback={int(getattr(row, 'fallback_pairs', 0))}, "
-                f"forced={int(getattr(row, 'forced_pairs', 0))}, "
-                f"coverage={float(getattr(row, 'match_coverage_fraction', np.nan)):.3f}, "
-                f"status={status}"
+            report_lines.append(
+                f"- Plane {row.plane}: alpha={row.recommended_charge_scale_alpha:.4f}, "
+                f"eff real/sim={row.real_efficiency:.4f}/{row.sim_efficiency:.4f}, "
+                f"streamer real/sim={row.real_streamer_percent:.3f}%/{row.sim_streamer_percent:.3f}%, "
+                f"KS={row.ks_original:.4f}->{row.ks_scaled:.4f}, "
+                f"width ratio={row.real_over_sim_log10_charge_sigma_ratio:.4f}, "
+                f"samples sim/real={int(row.sim_samples)}/{int(row.real_samples)}"
             )
+        report_lines.append("")
 
-        report_sections.append(
-            f"""{UNIT_LABELS[unit_key]} view:
-- Median charge-scale alpha across planes: {recommended_alpha:.3f}
-- Median real/sim log-charge width ratio across planes: {recommended_shape_ratio:.3f}
-- Fallback nearest-neighbour pairs used: {fallback_pairs}
-- Forced nearest pairs used to reach minimum statistics: {forced_pairs}
-
-Plane-by-plane summary:
-{chr(10).join(per_plane_lines)}
-"""
-        )
-    summary_export = pd.DataFrame(summary_rows)
-    summary_export.to_csv(out / "recommended_charge_spectrum_summary.csv", index=False)
-
-    report = f"""Charge-spectrum tuning from Task 3 plane charge
-==================================================
-
-Simulation stations:
-- {", ".join(selection.simulation_stations)}
-
-Real-data stations:
-- {", ".join(selection.real_stations)}
-
-Selection settings:
-- multiplicity_mode={study_cfg.multiplicity_mode}
-- efficiency_match_max_abs_difference={study_cfg.efficiency_match_max_abs_difference:.3f}
-- efficiency_match_fallback_max_abs_difference={study_cfg.efficiency_match_fallback_max_abs_difference:.3f}
-- max_pairs_per_plane={study_cfg.max_pairs_per_plane}
-- min_pairs_per_plane={study_cfg.min_pairs_per_plane}
-- sample_entries_per_file={study_cfg.sample_entries_per_file}
-- min_positive_charge_ns={study_cfg.min_positive_charge_ns:.3f}
-
-Current digital-twin charge-model knobs:
-- STEP 3 townsend_alpha_per_mm={current_model.townsend_alpha_per_mm:.6g}
-- STEP 3 avalanche_gap_mm={current_model.avalanche_gap_mm:.6g} (fixed, not a tuning knob)
-- STEP 3 avalanche_electron_sigma={current_model.avalanche_electron_sigma:.6g}
-- STEP 4 lorentzian_gamma_mm={current_model.lorentzian_gamma_mm:.6g}
-- STEP 4 induced_charge_fraction={current_model.induced_charge_fraction:.6g}
-- STEP 5 qdiff_width={current_model.qdiff_width:.6g}
-- STEP 8 charge_conversion_model={current_model.charge_conversion_model}
-- STEP 8 q_to_time_factor={current_model.q_to_time_factor:.6g}
-- STEP 8 charge_threshold={current_model.charge_threshold:.6g}
-
-Recommendations from matched Task 3 plane-charge spectra:
-{chr(10).join(report_sections)}
-
-Interpretation:
-- File matching uses only metadata-derived empirical efficiencies from Task 3 trigger-rate metadata for both MINGO00 and MINGO01.
-- The matcher first takes unique pairs within the strict efficiency window, then fills with nearest-neighbour fallback pairs when needed, and only forces nearest pairs if that is required to avoid empty or near-empty planes.
-- The effective minimum number of pairs is capped by the number of unique sim/real files actually available for that plane, so the report reflects the real evidence size instead of an impossible target.
-- The primary quantity read from the listed Task 3 output is `P*_Q_sum_final`, which is treated here as the detector-side charge width in ns.
-- The ancillary `fC` view is derived afterward by applying the same forward TOT calibration used in the real pipeline.
-- With `multiplicity_mode=single_strip_only`, only Task 3 plane entries with exactly one active strip are used, based on `active_strips_P*`.
-- The `log10(charge) - median` plot is made by taking those positive plane charges, applying `log10`, then centering each group by its own median. Any left bump there is therefore a real low-charge subpopulation in that matched sample, not a fit artifact.
-- The scale alpha multiplies the simulated charge to best match real-data shape in log-charge space.
-- Alpha below 1 means the simulation charge scale is too high; above 1 means it is too low.
-- The shape ratio compares robust log-charge widths after removing the scale shift.
-- A shape ratio above 1 suggests the real avalanche-charge spectrum is broader than the simulated one,
-  which points first to STEP 3 fluctuation controls such as `avalanche_electron_sigma`.
-- The simulated total avalanche charge is currently generated as:
-  `avalanche_size_electrons = ions * exp(townsend_alpha_per_mm * avalanche_gap_mm) * lognormal(sigma=avalanche_electron_sigma)`.
-- STEP 4 now converts that avalanche size into gap charge in `fC`, then applies
-  `induced_charge_fraction` to get the total induced readout charge before strip sharing.
-- After that, STEP 4 redistributes the induced charge with an isotropic 2D Lorentzian whose width
-  parameter is `lorentzian_gamma_mm`.
-- STEP 8 then converts the induced `fC` to detector-side width using the configured
-  `charge_conversion_model`, which is now the physically relevant FEE-side charge knob.
-- The final detector-side width scale seen here is therefore mainly controlled by
-  `townsend_alpha_per_mm`, `avalanche_electron_sigma`, `induced_charge_fraction`,
-  `lorentzian_gamma_mm`, and the downstream STEP 8 conversion / threshold.
-
-This study is advisory-only: it does not modify the simulation config files.
-"""
-    (out / "charge_spectrum_report.txt").write_text(report, encoding="utf-8")
-    return summary_export
+    report_lines.extend(
+        [
+            "Notes:",
+            "- The real-data file is ranked by streamer richness, but the streamer target is soft: files below it remain eligible and simply rank lower.",
+            "- Only sim/real files with the same z-position configuration are eligible for comparison.",
+            "- Within the same z configuration, sim and real-data files are ranked by closest per-plane empirical efficiencies; the configured efficiency limits are advisory only and do not reject the pair.",
+            "- The streamer percentage uses the configured Task 3 Q_sum threshold; metadata_specific is used when it matches, otherwise the listed parquet is recomputed directly.",
+            "- The main plot is the plane-by-plane overlaid spectrum PNG for the selected pair.",
+            "- Plots are advisory only and do not modify simulation settings.",
+            "",
+        ]
+    )
+    (out / "selected_pair_charge_spectrum_report.txt").write_text("\n".join(report_lines), encoding="utf-8")
 
 
 def main() -> None:
     out = output_dir()
     out.mkdir(parents=True, exist_ok=True)
+    clear_previous_outputs(out)
 
-    config = load_tuning_config()
+    config_arg = sys.argv[1] if len(sys.argv) > 1 else None
+    config = load_tuning_config(config_arg)
     selection = resolve_selection(config)
-    study_cfg = load_charge_study_config(config)
+    study_cfg = load_charge_study_config(config, selection)
     current_model = load_current_charge_model()
     calibration = TotChargeCalibration.from_csv(default_tot_charge_calibration_path(ROOT_DIR))
 
-    sim_metadata = load_latest_trigger_metadata(
-        selection.simulation_stations,
-        selection.simulation_date_ranges,
-    )
-    real_metadata = load_latest_trigger_metadata(
-        selection.real_stations,
-        selection.real_date_ranges,
-    )
-    if sim_metadata.empty or real_metadata.empty:
-        raise SystemExit("No metadata with matching listed parquets found for the selected stations.")
+    sim_metadata = load_station_metadata(study_cfg.simulation_station, selection.simulation_date_ranges)
+    real_metadata = load_station_metadata(study_cfg.real_station, selection.real_date_ranges)
+    if sim_metadata.empty:
+        raise SystemExit(f"No simulation metadata with listed parquets found for {study_cfg.simulation_station}.")
+    if real_metadata.empty:
+        raise SystemExit(f"No real-data metadata with listed parquets found for {study_cfg.real_station}.")
 
-    matches_df = select_plane_matches(sim_metadata, real_metadata, study_cfg)
-    matches_df.to_csv(out / "matched_charge_spectrum_pairs.csv", index=False)
-    if matches_df.empty:
-        raise SystemExit("No matched files found within the configured efficiency tolerance.")
+    sim_metadata = filter_metadata_by_basename(
+        sim_metadata,
+        study_cfg.simulation_basename,
+        label="simulation",
+    )
+    real_metadata = filter_metadata_by_basename(
+        real_metadata,
+        study_cfg.real_basename,
+        label="real",
+    )
 
-    plot_efficiency_match_quality(matches_df)
+    real_screening = build_real_file_screening(real_metadata, study_cfg)
+    real_screening.to_csv(out / "charge_spectrum_real_file_screening.csv", index=False)
+    if real_screening.empty:
+        raise SystemExit("No real-data files remained after metadata filtering.")
+
+    pair_candidates = build_pair_candidates(sim_metadata, real_screening, study_cfg)
+    pair_candidates.to_csv(out / "charge_spectrum_pair_candidates.csv", index=False)
+    if pair_candidates.empty:
+        raise SystemExit(
+            "No sim/real pair with the same z-position configuration and finite per-plane efficiencies was found. "
+            "See OUTPUTS/charge_spectrum_pair_candidates.csv and "
+            "OUTPUTS/charge_spectrum_real_file_screening.csv."
+        )
+
+    selected_pair = pair_candidates.iloc[0].copy()
+    sim_metadata_row = sim_metadata[
+        sim_metadata["filename_base"].astype(str) == str(selected_pair["sim_basename"])
+    ].iloc[0]
+    real_metadata_row = real_metadata[
+        real_metadata["filename_base"].astype(str) == str(selected_pair["real_basename"])
+    ].iloc[0]
+    sim_streamers, sim_streamer_source = resolve_streamer_percentages(sim_metadata_row, study_cfg)
+    real_streamers, real_streamer_source = resolve_streamer_percentages(real_metadata_row, study_cfg)
+
+    selected_pair_export = build_selected_pair_export(
+        selected_pair,
+        sim_streamers,
+        sim_streamer_source,
+        real_streamers,
+        real_streamer_source,
+    )
+    selected_pair_export.to_csv(out / "charge_spectrum_selected_pair.csv", index=False)
+
     summary_by_unit: dict[str, pd.DataFrame] = {}
     for unit_key in ("ns", "fc"):
-        summary_df, plot_payload = summarize_charge_spectrum(
-            matches_df,
+        summary_df, plot_payload = summarize_selected_pair(
+            selected_pair,
             study_cfg,
-            unit_key,
             calibration,
+            unit_key,
+            sim_streamers,
+            real_streamers,
         )
-        summary_df.to_csv(out / f"per_plane_charge_spectrum_summary_{unit_key}.csv", index=False)
-        plot_linear_charge_overlay(summary_df, plot_payload, unit_key)
-        plot_log_charge_overlay(summary_df, plot_payload, unit_key)
-        plot_charge_cdf_overlay(summary_df, plot_payload, unit_key)
-        plot_centered_shape_overlay(summary_df, plot_payload, unit_key)
-        plot_summary_bars(summary_df, unit_key)
+        summary_df.to_csv(out / f"selected_pair_charge_spectrum_summary_{unit_key}.csv", index=False)
+        plot_linear_overlay(selected_pair, summary_df, plot_payload, unit_key)
         summary_by_unit[unit_key] = summary_df
 
-    write_report(selection, study_cfg, current_model, matches_df, summary_by_unit)
+    write_report(
+        config_path=str(config.get("_config_path", config_arg or "<default>")),
+        selection=selection,
+        study_cfg=study_cfg,
+        current_model=current_model,
+        real_screening=real_screening,
+        pair_candidates=pair_candidates,
+        selected_pair=selected_pair,
+        summary_by_unit=summary_by_unit,
+        sim_streamers=sim_streamers,
+        sim_streamer_source=sim_streamer_source,
+        real_streamers=real_streamers,
+        real_streamer_source=real_streamer_source,
+    )
 
 
 if __name__ == "__main__":

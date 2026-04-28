@@ -8,6 +8,28 @@ special:
     ncols: 3
     columns:
       - eff*
+  
+  - name: efficiencies_only
+    mode: columns
+    ncols: 4
+    sharey: true
+    columns:
+      - eff1
+      - eff1_plateau
+      - eff1_overall
+      - eff1_median_x
+      - eff2
+      - eff2_plateau
+      - eff2_overall
+      - eff2_median_x
+      - eff3
+      - eff3_plateau
+      - eff3_overall
+      - eff3_median_x
+      - eff4
+      - eff4_plateau
+      - eff4_overall
+      - eff4_median_x
 
   - name: rates
     mode: columns

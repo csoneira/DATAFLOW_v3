@@ -26,6 +26,13 @@ def _output_plots_dir(base_dir: Path) -> Path:
     return path
 
 
+def _cleanup_total_plots_dir(base_dir: Path) -> None:
+    plots_dir = _output_plots_dir(base_dir)
+    for path in plots_dir.iterdir():
+        if path.is_file():
+            path.unlink()
+
+
 def _station_root(total_root: Path, station_name: str) -> Path:
     return total_root / "STATIONS" / station_name
 
@@ -253,6 +260,7 @@ def build_total_summary(
 
         station_files_dir = _output_files_dir(_station_root(total_root, station_name))
         station_plots_dir = _output_plots_dir(_station_root(total_root, station_name)) if generate_plots else None
+        _cleanup_total_plots_dir(_station_root(total_root, station_name))
 
         if step_frames:
             step_df = pd.concat(step_frames, ignore_index=True)

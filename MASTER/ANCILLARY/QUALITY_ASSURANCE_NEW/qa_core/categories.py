@@ -93,6 +93,15 @@ def category_rules(
 
 def resolve_column_category(column_name: str, rules: list[CategoryRule]) -> str:
     matched = [rule for rule in rules if rule.matches(column_name)]
+    if column_name.endswith("_limit"):
+        shorthand_quality_matches = [
+            rule
+            for rule in rules
+            if rule.category in {CATEGORY_QUALITY_AND_PLOT, CATEGORY_QUALITY_ONLY}
+            and not _has_wildcard(rule.pattern)
+            and column_name.endswith(f"_{rule.pattern}_limit")
+        ]
+        matched.extend(shorthand_quality_matches)
     if not matched:
         return CATEGORY_PLOT_ONLY
     best = sorted(matched, key=lambda rule: rule.sort_key, reverse=True)[0]

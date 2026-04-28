@@ -40,6 +40,12 @@ class SelectionConfig:
         return bool(self.date_ranges or self.station_date_ranges)
 
 
+@dataclass(frozen=True)
+class EventMarkerConfig:
+    time: datetime
+    label: str
+
+
 def load_yaml_mapping(path: str | Path) -> Mapping[str, object]:
     file_path = Path(path).expanduser()
     if not file_path.exists():
@@ -175,6 +181,45 @@ def _append_range(
         out_station_ranges.setdefault(int(station_id), []).append(range_value)
 
 
+def _extract_event_markers_from_mapping(
+    raw_markers: object,
+    *,
+    station: int | str | None = None,
+) -> list[EventMarkerConfig]:
+    if not isinstance(raw_markers, list):
+        return []
+
+    station_id = parse_station_id(station) if station is not None else None
+    markers: list[EventMarkerConfig] = []
+    for index, item in enumerate(raw_markers, start=1):
+        if not isinstance(item, Mapping):
+            raise ValueError(
+                f"event_markers entry #{index} must be a mapping with 'date' and 'label'."
+            )
+
+        raw_date = item.get("date")
+        raw_label = item.get("label")
+        if raw_date is None or raw_label is None:
+            raise ValueError(
+                f"event_markers entry #{index} must define both 'date' and 'label'."
+            )
+
+        marker_time = _parse_date_value(raw_date, is_end=False)
+        if marker_time is None:
+            raise ValueError(
+                f"event_markers entry #{index} has an invalid date value: {raw_date!r}."
+            )
+        label = str(raw_label).strip()
+        if not label:
+            raise ValueError(f"event_markers entry #{index} has an empty label.")
+
+        marker_stations = _extract_range_stations(item)
+        if station_id is not None and marker_stations is not None and station_id not in marker_stations:
+            continue
+        markers.append(EventMarkerConfig(time=marker_time, label=label))
+    return markers
+
+
 def _collect_ranges_from_node(
     node: object,
     out_ranges: list[DateRange],
@@ -271,6 +316,40 @@ def extract_selection(config: Mapping[str, object]) -> SelectionConfig:
     )
 
 
+def extract_event_markers(
+    config: Mapping[str, object],
+    *,
+    station: int | str | None = None,
+) -> Tuple[EventMarkerConfig, ...]:
+    markers: list[EventMarkerConfig] = []
+
+    selection_node = config.get("selection")
+    if isinstance(selection_node, Mapping):
+        markers.extend(
+            _extract_event_markers_from_mapping(
+                selection_node.get("event_markers"),
+                station=station,
+            )
+        )
+
+    markers.extend(
+        _extract_event_markers_from_mapping(
+            config.get("event_markers"),
+            station=station,
+        )
+    )
+
+    deduped: list[EventMarkerConfig] = []
+    seen: set[tuple[datetime, str]] = set()
+    for marker in sorted(markers, key=lambda item: item.time):
+        key = (marker.time, marker.label)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(marker)
+    return tuple(deduped)
+
+
 def combine_local_selections(configs: Sequence[Mapping[str, object]]) -> SelectionConfig:
     combined_ranges: list[DateRange] = []
     combined_station_ranges: dict[int, list[DateRange]] = {}
@@ -294,6 +373,16 @@ def load_master_selection(master_config_root: str | Path | None = None) -> Selec
     root = Path(master_config_root).expanduser() if master_config_root is not None else get_master_config_root()
     config = load_yaml_mapping(root / MASTER_SELECTION_FILENAME)
     return extract_selection(config)
+
+
+def load_master_event_markers(
+    *,
+    station: int | str | None = None,
+    master_config_root: str | Path | None = None,
+) -> Tuple[EventMarkerConfig, ...]:
+    root = Path(master_config_root).expanduser() if master_config_root is not None else get_master_config_root()
+    config = load_yaml_mapping(root / MASTER_SELECTION_FILENAME)
+    return extract_event_markers(config, station=station)
 
 
 def resolve_selection_from_configs(

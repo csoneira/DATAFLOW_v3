@@ -30,6 +30,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from MASTER.common.config_loader import load_parameter_overrides
 from MASTER.common.path_config import get_master_config_root
 from MASTER.common.selection_config import load_yaml_mapping
 
@@ -840,17 +841,30 @@ def apply_step1_task_parameter_overrides(
     task_number: int,
     update_fn: Callable[[dict, Path | str, str], dict],
     log_fn: Callable[..., None] = builtins.print,
+    exclude_keys: Iterable[str] | None = None,
 ) -> dict:
+    excluded = {str(key) for key in (exclude_keys or ()) if str(key)}
+
+    def _apply_parameter_file(config_dict: dict, csv_path: Path) -> dict:
+        overrides = load_parameter_overrides(csv_path, station_id)
+        if excluded:
+            overrides = {
+                key: value for key, value in overrides.items() if key not in excluded
+            }
+        if overrides:
+            config_dict.update(overrides)
+        return config_dict
+
     task_path = Path(task_parameter_path)
     if task_path.exists():
-        config_obj = update_fn(config_obj, task_path, station_id)
-        log_fn(f"Warning: Loaded task parameters from {task_path}")
+        config_obj = _apply_parameter_file(config_obj, task_path)
+        log_fn(f"Info: Loaded task parameters from {task_path}")
         return config_obj
 
     fallback_path = Path(fallback_parameter_path)
     if fallback_path.exists():
         log_fn(f"Warning: Task parameters file not found; falling back to {fallback_path}")
-        config_obj = update_fn(config_obj, fallback_path, station_id)
+        config_obj = _apply_parameter_file(config_obj, fallback_path)
     else:
         log_fn(f"Warning: No parameters file found for task {task_number}")
     return config_obj
@@ -952,7 +966,7 @@ def apply_step1_master_overrides(
 
     config_obj.update(overrides)
     joined_overrides = ", ".join(f"{key}={value}" for key, value in overrides.items())
-    log_fn(f"Warning: Loaded Step 1 shared overrides from {config_path}: {joined_overrides}")
+    log_fn(f"Info: Loaded Step 1 shared overrides from {config_path}: {joined_overrides}")
     return config_obj
 
 

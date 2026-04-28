@@ -281,6 +281,13 @@ def _cleanup_task_quality_artifacts(task_output_dir: Path, station_name: str, me
             path.unlink()
 
 
+def _cleanup_task_plot_artifacts(task_output_dir: Path, station_name: str) -> None:
+    plots_dir = _output_plots_dir(task_output_dir, station_name)
+    for path in plots_dir.iterdir():
+        if path.is_file():
+            path.unlink()
+
+
 def _build_pass_dataframe(meta_df: pd.DataFrame, pass_column: str, default_pass: float) -> pd.DataFrame:
     if "filename_base" not in meta_df.columns:
         return pd.DataFrame(columns=["filename_base", pass_column])
@@ -744,8 +751,6 @@ def _generate_station_plots(
         plot_config.get("default", {}) if isinstance(plot_config.get("default"), dict) else {},
     )
     image_format = str(plot_defaults.get("format", "png")).strip().lower() or "png"
-    for stale_path in plots_dir.glob(f"{station_name}_task_{task_id}_{metadata_type}_*.{image_format}"):
-        stale_path.unlink()
 
     available_plot_columns = [col for col in df.columns if col in set(plot_columns)]
     consumed: list[str] = []
@@ -1263,6 +1268,7 @@ def run_step(
             plot_columns = manifest_plot_columns(manifest_df)
             quality_columns = manifest_quality_columns(manifest_df)
             _cleanup_task_quality_artifacts(task_output_dir, station_name, metadata_type)
+            _cleanup_task_plot_artifacts(task_output_dir, station_name)
 
             reference_df, reference_path = _write_epoch_reference_table(
                 task_output_dir=task_output_dir,

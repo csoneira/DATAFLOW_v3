@@ -1,3 +1,7 @@
+quality_and_plot:
+  - 'q_dif_sum_low'
+  - 'q_dif_sum_high'
+
 plot_only:
   - '*_rows_failed_pct'
   - '*_rows_with_*_failures_pct'
@@ -14,7 +18,6 @@ plot_only:
   - '*_mean_selected_offenders_per_flagged_row'
   - '*_limit'
   - '*_percentage'
-  - '*'
 
 ignore:
   - '*_failed_pct'

@@ -97,7 +97,11 @@ if REPO_ROOT is None:
 if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
-from MASTER.common.config_loader import update_config_with_parameters
+from MASTER.common.config_loader import (
+    load_declared_parameter_names,
+    load_parameter_overrides,
+    update_config_with_parameters,
+)
 from MASTER.common.debug_plots import plot_debug_histograms
 from MASTER.common.execution_logger import set_station, start_timer
 from MASTER.common.file_selection import (
@@ -493,9 +497,11 @@ if CLI_ARGS.station is None:
 station = str(CLI_ARGS.station)
 set_station(station)
 
+filter_parameter_declared_keys: set[str] = set()
+filter_parameter_overrides: dict[str, object] = {}
 if filter_parameter_config_file_path.exists():
-    config = update_config_with_parameters(config, filter_parameter_config_file_path, station)
-    print(f"Warning: Loaded filter parameters from {filter_parameter_config_file_path}")
+    filter_parameter_declared_keys = load_declared_parameter_names(filter_parameter_config_file_path)
+    filter_parameter_overrides = load_parameter_overrides(filter_parameter_config_file_path, station)
 
 config = apply_step1_task_parameter_overrides(
     config_obj=config,
@@ -505,12 +511,16 @@ config = apply_step1_task_parameter_overrides(
     task_number=task_number,
     update_fn=update_config_with_parameters,
     log_fn=print,
+    exclude_keys=filter_parameter_declared_keys,
 )
 config = apply_step1_master_overrides(
     config_obj=config,
     master_config_root=config_root,
     log_fn=print,
 )
+if filter_parameter_config_file_path.exists():
+    config.update(filter_parameter_overrides)
+    print(f"Info: Loaded filter parameters from {filter_parameter_config_file_path}")
 process_only_qa_retry_files = bool(config.get("process_only_qa_retry_files", False))
 if process_only_qa_retry_files:
     print(
@@ -913,10 +923,10 @@ T_side_right_pre_cal_debug = config["T_side_right_pre_cal_debug"]
 Q_side_left_pre_cal_debug = config["Q_side_left_pre_cal_debug"]
 Q_side_right_pre_cal_debug = config["Q_side_right_pre_cal_debug"]
 
-T_side_left_pre_cal_default = config["T_side_left_pre_cal_default"]
-T_side_right_pre_cal_default = config["T_side_right_pre_cal_default"]
-Q_side_left_pre_cal_default = config["Q_side_left_pre_cal_default"]
-Q_side_right_pre_cal_default = config["Q_side_right_pre_cal_default"]
+T_side_left_pre_cal_default = config.get("T_side_left_pre_cal_default", -200)
+T_side_right_pre_cal_default = config.get("T_side_right_pre_cal_default", -100)
+Q_side_left_pre_cal_default = config.get("Q_side_left_pre_cal_default", 0)
+Q_side_right_pre_cal_default = config.get("Q_side_right_pre_cal_default", 500)
 
 T_side_left_pre_cal_ST = config["T_side_left_pre_cal_ST"]
 T_side_right_pre_cal_ST = config["T_side_right_pre_cal_ST"]
@@ -925,30 +935,12 @@ Q_side_right_pre_cal_ST = config["Q_side_right_pre_cal_ST"]
 
 # Pre-cal Sum & Diff
 T_dif_pre_cal_threshold = config.get("T_dif_pre_cal_threshold", 20)
-channel_combination_q_sum_left = config.get(
-    "channel_combination_q_sum_left",
-    config.get("plane_combination_q_sum_left", Q_side_left_pre_cal_default),
-)
-channel_combination_q_sum_right = config.get(
-    "channel_combination_q_sum_right",
-    config.get("plane_combination_q_sum_right", Q_side_right_pre_cal_default),
-)
-channel_combination_q_dif_threshold = config.get(
-    "channel_combination_q_dif_threshold",
-    config.get("plane_combination_q_dif_threshold", 200),
-)
-channel_combination_t_sum_left = config.get(
-    "channel_combination_t_sum_left",
-    config.get("plane_combination_t_sum_left", T_side_left_pre_cal_default),
-)
-channel_combination_t_sum_right = config.get(
-    "channel_combination_t_sum_right",
-    config.get("plane_combination_t_sum_right", T_side_right_pre_cal_default),
-)
-channel_combination_t_dif_threshold = config.get(
-    "channel_combination_t_dif_threshold",
-    config.get("plane_combination_t_dif_threshold", T_dif_pre_cal_threshold),
-)
+channel_combination_q_sum_left = float(config["channel_combination_q_sum_left"])
+channel_combination_q_sum_right = float(config["channel_combination_q_sum_right"])
+channel_combination_q_dif_threshold = float(config["channel_combination_q_dif_threshold"])
+channel_combination_t_sum_left = float(config["channel_combination_t_sum_left"])
+channel_combination_t_sum_right = float(config["channel_combination_t_sum_right"])
+channel_combination_t_dif_threshold = float(config["channel_combination_t_dif_threshold"])
 task1_channel_combination_limits_by_relation = _task1_load_channel_combination_relation_limits(
     config,
     base_q_sum_left=channel_combination_q_sum_left,
@@ -1757,8 +1749,9 @@ def _iter_task1_channel_relation_pairs(
 
 
 def _task1_default_q_left_for_channel(channel_key: tuple[int, str, int]) -> float:
-    _, side, _ = channel_key
-    return float(Q_F_left_pre_cal if side == "F" else Q_B_left_pre_cal)
+    _ = channel_key
+    self_relation_limits = task1_channel_combination_limits_by_relation.get("self", {})
+    return float(self_relation_limits.get("q_sum_left", channel_combination_q_sum_left))
 
 
 def _empty_task1_removed_channel_values_frame() -> pd.DataFrame:
@@ -3372,248 +3365,6 @@ def load_reprocessing_parameters_for_file(station_id: str, task_id: str, basenam
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-def calibrate_strip_T_diff(T_F, T_B, self_trigger_mode = False):
-    
-    if self_trigger_mode:
-        T_left_side = T_F_left_pre_cal_ST
-        T_right_side = T_F_right_pre_cal_ST
-    else:
-        T_left_side = T_F_left_pre_cal
-        T_right_side = T_F_right_pre_cal
-    
-    cond = (T_F != 0) & (T_F > T_left_side) & (T_F < T_right_side) & (T_B != 0) & (T_B > T_left_side) & (T_B < T_right_side)
-    
-    # Front
-    T_F = T_F[cond]
-    counts, bin_edges = np.histogram(T_F, bins='auto')
-    max_counts = np.max(counts)
-    min_counts = np.min(counts[counts > 0])
-    threshold = max_counts / 10**1.5
-    indices_above_threshold = np.where(counts > threshold)[0]
-    if indices_above_threshold.size > 0:
-        min_bin_edge_F = bin_edges[indices_above_threshold[0]]
-        max_bin_edge_F = bin_edges[indices_above_threshold[-1] + 1]  # +1 to get the upper edge of the last bin
-        # print(f"Minimum bin edge: {min_bin_edge_F}")
-        # print(f"Maximum bin edge: {max_bin_edge_F}")
-    else:
-        print("No bins have counts above the threshold, Front.")
-        threshold = (min_counts + max_counts) / 2
-        indices_above_threshold = np.where(counts > threshold)[0]
-        min_bin_edge_F = bin_edges[indices_above_threshold[0]]
-        max_bin_edge_F = bin_edges[indices_above_threshold[-1] + 1]
-    
-    # Back
-    T_B = T_B[cond]
-    counts, bin_edges = np.histogram(T_B, bins='auto')
-    max_counts = np.max(counts)
-    min_counts = np.min(counts[counts > 0])
-    threshold = max_counts / 10**1.5
-    indices_above_threshold = np.where(counts > threshold)[0]
-    if indices_above_threshold.size > 0:
-        min_bin_edge_B = bin_edges[indices_above_threshold[0]]
-        max_bin_edge_B = bin_edges[indices_above_threshold[-1] + 1]  # +1 to get the upper edge of the last bin
-        # print(f"Minimum bin edge: {min_bin_edge_B}")
-        # print(f"Maximum bin edge: {max_bin_edge_B}")
-    else:
-        print("No bins have counts above the threshold, Back.")
-        threshold = (min_counts + max_counts) / 2
-        indices_above_threshold = np.where(counts > threshold)[0]
-        min_bin_edge_B = bin_edges[indices_above_threshold[0]]
-        max_bin_edge_B = bin_edges[indices_above_threshold[-1] + 1]
-    
-    cond = (T_F > min_bin_edge_F) & (T_F < max_bin_edge_F) & (T_B > min_bin_edge_B) & (T_B < max_bin_edge_B)
-            
-    T_F = T_F[cond]
-    T_B = T_B[cond]
-    
-    # T_diff = ( T_F - T_B ) / 2
-    T_diff = ( T_B - T_F ) / 2
-    
-    # ------------------------------------------------------------------------------
-    
-    
-    T_rel_th = calibrate_strip_T_dif_T_rel_th
-    abs_th = calibrate_strip_T_dif_T_abs_th
-
-    # Apply mask to filter values within the threshold
-    mask = (np.abs(T_diff) < T_dif_pre_cal_threshold)
-    T_diff = T_diff[mask]
-    
-    # Remove zero values
-    T_diff = T_diff[T_diff != 0]
-    
-    if T_diff.size == 0:
-        return np.nan
-
-    # Calculate histogram
-    counts, bin_edges = np.histogram(T_diff, bins='auto')
-    
-    # Calculate the nunber of counts of the bin that has the most counts
-    max_counts = np.max(counts)
-    
-    # Find bins with at least one count
-    th = T_rel_th * max_counts
-    if th < abs_th:
-        th = abs_th
-    non_empty_bins = counts >= th
-
-    # Find the longest contiguous subset of non-empty bins
-    max_length = 0
-    current_length = 0
-    start_index = 0
-    temp_start = 0
-
-    for i, is_non_empty in enumerate(non_empty_bins):
-        if is_non_empty:
-            if current_length == 0:
-                temp_start = i
-            current_length += 1
-            if current_length > max_length:
-                max_length = current_length
-                start_index = temp_start
-                end_index = i
-        else:
-            current_length = 0
-
-    if max_length == 0:
-        return np.nan
-
-    # Reject edge-only/single-bin plateaus: they are unstable calibration anchors.
-    if max_length < 2 or start_index == 0 or end_index == (len(non_empty_bins) - 1):
-        return np.nan
-    
-    plateau_left = bin_edges[start_index]
-    plateau_right = bin_edges[end_index + 1]
-    
-    # Calculate the offset using the mean of the filtered values
-    offset = ( plateau_left + plateau_right ) / 2
-    
-    return offset
-
-def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
-    
-    translate_charge_cal = calibrate_strip_Q_pedestal_translate_charge_cal
-    percentile = calibrate_strip_Q_pedestal_percentile
-    
-    rel_th = calibrate_strip_Q_pedestal_rel_th
-    rel_th_cal = calibrate_strip_Q_pedestal_rel_th_cal
-    abs_th = calibrate_strip_Q_pedestal_abs_th
-    q_quantile = calibrate_strip_Q_pedestal_q_quantile # percentile
-    
-    # First let's tale good values of Time, we want to avoid outliers that might confuse the charge pedestal calibration
-    
-    if self_trigger_mode:
-        T_left_side = T_F_left_pre_cal_ST
-        T_right_side = T_F_right_pre_cal_ST
-    else:
-        T_left_side = T_F_left_pre_cal
-        T_right_side = T_F_right_pre_cal
-        
-    cond = (T_ch != 0) & (T_ch > T_left_side) & (T_ch < T_right_side)
-    T_ch = T_ch[cond]
-    Q_ch = Q_ch[cond]
-    Q_other = Q_other[cond]
-    
-    # Condition based on the charge difference: it cannot be too high
-    Q_dif = Q_ch - Q_other
-    
-    cond = ( Q_dif > np.percentile(Q_dif, percentile) ) & ( Q_dif < np.percentile(Q_dif, 100 - percentile ) )
-    T_ch = T_ch[cond]
-    Q_ch = Q_ch[cond]
-    
-    counts, bin_edges = np.histogram(T_ch, bins='auto')
-    max_counts = np.max(counts)
-    min_counts = np.min(counts[counts > 0])
-    threshold = max_counts / calibrate_strip_Q_pedestal_thr_factor
-    
-    indices_above_threshold = np.where(counts > threshold)[0]
-
-    if indices_above_threshold.size > 0:
-        min_bin_edge = bin_edges[indices_above_threshold[0]]
-        max_bin_edge = bin_edges[indices_above_threshold[-1] + 1]  # +1 to get the upper edge of the last bin
-    else:
-        print("No bins have counts above the threshold; Q pedestal calibration.")
-        threshold = (min_counts + max_counts) / calibrate_strip_Q_pedestal_thr_factor_2
-        indices_above_threshold = np.where(counts > threshold)[0]
-        min_bin_edge = bin_edges[indices_above_threshold[0]]
-        max_bin_edge = bin_edges[indices_above_threshold[-1] + 1]
-    
-    Q_ch = Q_ch[(T_ch > min_bin_edge) & (T_ch < max_bin_edge)]
-    
-    # First take the values that are not zero
-    Q_ch = Q_ch[Q_ch != 0]
-    
-    # Remove the values that are not in (50,500)
-    Q_ch = Q_ch[(Q_ch > Q_left_side) & (Q_ch < Q_right_side)]
-    
-    # Quantile filtering
-    Q_ch = Q_ch[Q_ch > np.percentile(Q_ch, q_quantile)]
-    
-    # Calculate histogram
-    counts, bin_edges = np.histogram(Q_ch, bins='auto')
-    
-    # Calculate the nunber of counts of the bin that has the most counts
-    max_counts = np.max(counts)
-    counts = counts[counts < max_counts]
-    max_counts = np.max(counts)
-    
-    # Find bins with at least one count
-    th = rel_th * max_counts
-    if th < abs_th:
-        th = abs_th
-    non_empty_bins = counts >= th
-
-    # Find the longest contiguous subset of non-empty bins
-    max_length = 0
-    current_length = 0
-    start_index = 0
-    temp_start = 0
-
-    for i, is_non_empty in enumerate(non_empty_bins):
-        if is_non_empty:
-            if current_length == 0:
-                temp_start = i
-            current_length += 1
-            if current_length > max_length:
-                max_length = current_length
-                start_index = temp_start
-        else:
-            current_length = 0
-
-    # Get the first bin edge of the longest subset
-    offset = bin_edges[start_index]
-    
-    # Second part --------------------------------------------------------------
-    Q_ch_cal = Q_ch - offset
-    
-    # Remove values outside the range (-2, 2)
-    Q_ch_cal = Q_ch_cal[(Q_ch_cal > pedestal_left) & (Q_ch_cal < pedestal_right)]
-    
-    # Calculate histogram
-    counts, bin_edges = np.histogram(Q_ch_cal, bins='auto')
-    
-    # Find the bin with the most counts
-    max_counts = np.max(counts)
-    max_bin_index = np.argmax(counts)
-    
-    # Calculate the threshold
-    threshold = rel_th_cal * max_counts
-    
-    # Start from the bin with the most counts and move left
-    offset_bin_index = max_bin_index
-    while offset_bin_index > 0 and counts[offset_bin_index] >= threshold:
-        offset_bin_index -= 1
-    
-    # Determine the X value (left edge) of the bin where the threshold is crossed
-    offset_cal = bin_edges[offset_bin_index]
-    
-    pedestal = offset
-    
-    if translate_charge_cal:
-        pedestal = pedestal - translate_charge_cal
-        
-    return pedestal
-
 enumerate = builtins.enumerate
 def polynomial(x, *coeffs):
     return sum(c * x**i for i, c in enumerate(coeffs))
@@ -4142,11 +3893,13 @@ if date_ranges:
     skipped_completed = completed_before - len(completed_files)
     if skipped_processing > 0:
         print(
-            f"[DATE_RANGE] Ignoring {skipped_processing} out-of-range file(s) in PROCESSING_DIRECTORY."
+            f"[DATE_RANGE] Ignoring {skipped_processing} out-of-range file(s) in PROCESSING_DIRECTORY.",
+            force=True,
         )
     if skipped_completed > 0:
         print(
-            f"[DATE_RANGE] Ignoring {skipped_completed} out-of-range file(s) in COMPLETED_DIRECTORY."
+            f"[DATE_RANGE] Ignoring {skipped_completed} out-of-range file(s) in COMPLETED_DIRECTORY.",
+            force=True,
         )
 
 active_qa_retry_basenames: set[str] = set()
@@ -5144,6 +4897,24 @@ for tt_value, count in sorted(raw_tt_counts.items()):
 
 if self_trigger:
     working_st_df = compute_tt(working_st_df, "raw_tt")
+
+_task1_self_plot_limits = task1_channel_combination_limits_by_relation.get("self", {})
+T_F_left_pre_cal = float(_task1_self_plot_limits.get("t_sum_left", channel_combination_t_sum_left))
+T_F_right_pre_cal = float(_task1_self_plot_limits.get("t_sum_right", channel_combination_t_sum_right))
+T_B_left_pre_cal = T_F_left_pre_cal
+T_B_right_pre_cal = T_F_right_pre_cal
+Q_F_left_pre_cal = float(_task1_self_plot_limits.get("q_sum_left", channel_combination_q_sum_left))
+Q_F_right_pre_cal = float(_task1_self_plot_limits.get("q_sum_right", channel_combination_q_sum_right))
+Q_B_left_pre_cal = Q_F_left_pre_cal
+Q_B_right_pre_cal = Q_F_right_pre_cal
+T_F_left_pre_cal_ST = T_F_left_pre_cal
+T_F_right_pre_cal_ST = T_F_right_pre_cal
+T_B_left_pre_cal_ST = T_B_left_pre_cal
+T_B_right_pre_cal_ST = T_B_right_pre_cal
+Q_F_left_pre_cal_ST = Q_F_left_pre_cal
+Q_F_right_pre_cal_ST = Q_F_right_pre_cal
+Q_B_left_pre_cal_ST = Q_B_left_pre_cal
+Q_B_right_pre_cal_ST = Q_B_right_pre_cal
 
 _debug_plot_filter_group(
     working_df,

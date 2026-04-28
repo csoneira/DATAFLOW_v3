@@ -1,0 +1,61 @@
+input:
+  stage_subdir: STAGE_2
+  input_filename: joined_stage_2.csv
+  time_column: time
+
+output:
+  stage_subdir: STAGE_3
+  output_filename: joined_stage_3.csv
+  coefficients_filename: correction_coefficients.csv
+  wide_summary_filename: correction_coefficients_wide.csv
+  plots_subdir: PLOTS
+
+plotting:
+  decorrelation_plot_limit_quantile: 0.05
+
+correction:
+  apply_high_order_correction: false
+  pressure_column: pressure_lab
+  temp_ground_column: temp_ground
+  temp_100mbar_column: temp_100mbar
+  height_100mbar_column: height_100mbar
+  lower_quantile: 0.01
+  upper_quantile: 0.99
+  pressure_uncertainty_mbar: 1.0
+  environmental_columns_to_interpolate:
+    - pressure_lab
+    - temp_ground
+    - temp_100mbar
+    - height_100mbar
+  target_columns: []
+  excluded_target_columns:
+    - temp_lab
+    - pressure_lab
+    - temp_ground
+    - temp_100mbar
+    - height_100mbar
+    - Q_event_mean
+
+stations:
+  MINGO01:
+    # These windows are excluded only from the coefficient fits.
+    # The final correction is still applied to all rows in the correction range.
+    # End bounds are exclusive.
+    exclude_fit_ranges:
+      - start: 2024-03-14
+        end: 2024-03-21
+      - start: 2024-03-24
+        end: 2024-03-28
+      - start: 2024-05-11
+        end: 2024-05-15
+      - start: 2024-05-19
+        end: 2024-06-01
+    correction_ranges:
+      - label: range_1
+        start: 2024-03-14
+        end: 2024-04-24
+        exclude_fit_ranges: []
+      - label: range_2
+        start: 2024-04-24
+        end: 2024-06-01
+        exclude_fit_ranges: []

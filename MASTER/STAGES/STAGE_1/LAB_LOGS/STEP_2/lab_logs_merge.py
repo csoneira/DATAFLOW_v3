@@ -17,8 +17,10 @@ Notes: Keep behavior configuration-driven and reproducible.
 from __future__ import annotations
 
 import argparse
+import io
 import re
 import shutil
+import subprocess
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
@@ -166,6 +168,35 @@ LAB_LOGS_CONFIG_SHARED = MASTER_CONFIG_ROOT / "STAGE_1" / "LAB_LOGS" / "config_l
 LAB_LOGS_CONFIG_STEP2 = MASTER_CONFIG_ROOT / "STAGE_1" / "LAB_LOGS" / "STEP_2" / "config_step_2.yaml"
 LAB_LOGS_OUTLIER_CSV_STEP2 = MASTER_CONFIG_ROOT / "STAGE_1" / "LAB_LOGS" / "STEP_2" / "config_step_2.csv"
 FILENAME_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
+
+
+@dataclass(frozen=True)
+class BackupSeriesSpec:
+    output_column: str
+    schema_kind: str
+    table: str
+
+
+BACKUP_SERIES_SPECS: Sequence[BackupSeriesSpec] = (
+    BackupSeriesSpec("sensors_ext_Temperature_ext", "station", "Temp"),
+    BackupSeriesSpec("sensors_ext_RH_ext", "station", "HR"),
+    BackupSeriesSpec("sensors_ext_Pressure_ext", "station", "Press"),
+    BackupSeriesSpec("sensors_int_Temperature_int", "DAQ01", "Temp"),
+    BackupSeriesSpec("sensors_int_RH_int", "DAQ01", "HR"),
+    BackupSeriesSpec("sensors_int_Pressure_int", "DAQ01", "Press"),
+)
+LOCAL_LOG_BACKUP_SPECS: Mapping[str, Sequence[str]] = {
+    "sensors_bus0": (
+        "sensors_ext_Temperature_ext",
+        "sensors_ext_RH_ext",
+        "sensors_ext_Pressure_ext",
+    ),
+    "sensors_bus1": (
+        "sensors_int_Temperature_int",
+        "sensors_int_RH_int",
+        "sensors_int_Pressure_int",
+    ),
+}
 
 
 def _load_yaml_mapping(path: Path) -> Mapping[str, object]:
@@ -501,6 +532,384 @@ def resolve_actual_path(path: Path, moves: Mapping[Path, Path]) -> Path:
     return moves.get(path, path)
 
 
+def _coerce_station_id(station: int | str) -> Optional[int]:
+    try:
+        return int(str(station).strip())
+    except Exception:
+        return None
+
+
+def _backup_schema_name(spec: BackupSeriesSpec, station_id: int) -> str:
+    if spec.schema_kind == "station":
+        return f"mingo0{station_id}"
+    return spec.schema_kind
+
+
+def _load_backup_restore_config() -> Mapping[str, object]:
+    shared_config = _load_yaml_mapping(LAB_LOGS_CONFIG_SHARED)
+    step2_config = _load_yaml_mapping(LAB_LOGS_CONFIG_STEP2)
+
+    for config in (step2_config, shared_config):
+        backup_config = config.get("backup_restore")
+        if isinstance(backup_config, Mapping):
+            return backup_config
+    return {}
+
+
+def _station_dump_path(
+    backup_config: Mapping[str, object],
+    station_id: int,
+) -> Optional[str]:
+    raw_paths = backup_config.get("station_dump_paths")
+    if not isinstance(raw_paths, Mapping):
+        return None
+
+    for key in (station_id, str(station_id), f"MINGO0{station_id}", f"mingo0{station_id}"):
+        value = raw_paths.get(key)
+        if value:
+            return str(value).strip()
+    return None
+
+
+def _local_log_backup_root(backup_config: Mapping[str, object]) -> Optional[Path]:
+    raw_root = backup_config.get("local_log_backup_root")
+    if not raw_root:
+        return None
+    root = Path(str(raw_root)).expanduser()
+    return root if root.exists() else None
+
+
+def _local_log_backup_host_dir(
+    backup_root: Path,
+    station_id: int,
+) -> Path:
+    return backup_root / "hosts" / f"mingo{station_id:02d}" / "current"
+
+
+def _load_local_backup_log(
+    path: Path,
+    output_columns: Sequence[str],
+) -> pd.DataFrame:
+    try:
+        df = pd.read_csv(
+            path,
+            sep=r"[;\s]+",
+            header=None,
+            engine="python",
+            on_bad_lines="skip",
+        )
+    except FileNotFoundError:
+        return pd.DataFrame(columns=["Time", *output_columns])
+
+    if df.empty:
+        return pd.DataFrame(columns=["Time", *output_columns])
+
+    expected_columns = 1 + 4 + len(output_columns)
+    if len(df.columns) > expected_columns:
+        df = df.iloc[:, :expected_columns]
+    elif len(df.columns) < expected_columns:
+        for _ in range(expected_columns - len(df.columns)):
+            df[len(df.columns)] = pd.NA
+
+    df.columns = [
+        "Time",
+        "Unused1",
+        "Unused2",
+        "Unused3",
+        "Unused4",
+        *output_columns,
+    ]
+    df["Time"] = pd.to_datetime(df["Time"], errors="coerce")
+    df = df.dropna(subset=["Time"])
+    for column in output_columns:
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+    return (
+        df.loc[:, ["Time", *output_columns]]
+        .drop_duplicates(subset=["Time"], keep="last")
+        .sort_values("Time")
+    )
+
+
+def restore_outputs_from_local_log_backup(
+    *,
+    station: int | str,
+    date_ranges: Sequence[Tuple[Optional[date], Optional[date]]],
+    output_root: Path,
+    dry_run: bool,
+    force_rebuild: bool,
+) -> bool:
+    backup_config = _load_backup_restore_config()
+    if not backup_config or not bool(backup_config.get("enabled", False)):
+        return False
+
+    backup_root = _local_log_backup_root(backup_config)
+    if backup_root is None:
+        return False
+
+    station_id = _coerce_station_id(station)
+    if station_id is None:
+        print(f"Local LOG_BACKUP restore skipped: invalid station identifier {station!r}.")
+        return False
+
+    requested_days = _enumerate_bounded_days(date_ranges)
+    if not requested_days:
+        print("Local LOG_BACKUP restore skipped: selected date ranges are not fully bounded by day.")
+        return False
+    if not force_rebuild and _backup_outputs_already_exist(output_root, requested_days):
+        print("Local LOG_BACKUP restore skipped: requested daily outputs already exist.")
+        return True
+
+    host_dir = _local_log_backup_host_dir(backup_root, station_id)
+    if not host_dir.exists():
+        print(f"Local LOG_BACKUP restore skipped: host directory not found: {host_dir}")
+        return False
+
+    day_count = 0
+    for day_value in requested_days:
+        frames: List[pd.DataFrame] = []
+        for sensor_name, output_columns in LOCAL_LOG_BACKUP_SPECS.items():
+            candidate_paths = (
+                host_dir / "done" / f"{sensor_name}_{day_value:%Y-%m-%d}.log",
+                host_dir / f"{sensor_name}_{day_value:%Y-%m-%d}.log",
+            )
+            source_path = next((path for path in candidate_paths if path.exists()), None)
+            if source_path is None:
+                continue
+            frame = _load_local_backup_log(source_path, output_columns)
+            if not frame.empty:
+                frames.append(frame)
+
+        if not frames:
+            continue
+
+        merged = frames[0]
+        for frame in frames[1:]:
+            merged = merged.merge(frame, on="Time", how="outer")
+        daily = (
+            merged.set_index("Time")
+            .sort_index()
+            .resample("1min")
+            .mean()
+            .reset_index()
+        )
+        output_parent = output_root / f"{day_value:%Y}" / f"{day_value:%m}"
+        output_path = output_parent / f"lab_logs_{day_value:%Y_%m_%d}.csv"
+        if dry_run:
+            print(f"  [dry-run] would restore {output_path} from local LOG_BACKUP")
+            day_count += 1
+            continue
+
+        output_parent.mkdir(parents=True, exist_ok=True)
+        daily.to_csv(output_path, index=False, float_format="%.5g")
+        day_count += 1
+
+    if day_count:
+        print(f"Restored {day_count} LAB_LOGS daily file(s) from local LOG_BACKUP at {backup_root}.")
+        return True
+
+    print("Local LOG_BACKUP restore found no usable historical sensor files.")
+    return False
+
+
+def _copy_lines_from_pg_restore(
+    ssh_host: str,
+    dump_path: str,
+    schema: str,
+    table: str,
+) -> List[str]:
+    command = [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=15",
+        ssh_host,
+        "pg_restore",
+        "-a",
+        "-n",
+        schema,
+        "-t",
+        table,
+        "-f",
+        "-",
+        dump_path,
+    ]
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        raise RuntimeError(
+            f"pg_restore failed for {schema}.{table} via {ssh_host}: {stderr or 'unknown error'}"
+        )
+
+    copy_lines: List[str] = []
+    in_copy = False
+    for line in result.stdout.splitlines():
+        if line.startswith("COPY "):
+            in_copy = True
+            continue
+        if not in_copy:
+            continue
+        if line == "\\.":
+            break
+        if line:
+            copy_lines.append(line)
+    return copy_lines
+
+
+def _load_backup_series(
+    ssh_host: str,
+    dump_path: str,
+    schema: str,
+    table: str,
+    output_column: str,
+) -> pd.DataFrame:
+    copy_lines = _copy_lines_from_pg_restore(ssh_host, dump_path, schema, table)
+    if not copy_lines:
+        return pd.DataFrame(columns=["Time", output_column])
+
+    df = pd.read_csv(
+        io.StringIO("\n".join(copy_lines)),
+        sep="\t",
+        header=None,
+        names=["Time", output_column],
+    )
+    df["Time"] = pd.to_datetime(df["Time"], errors="coerce")
+    df[output_column] = pd.to_numeric(df[output_column], errors="coerce")
+    df = df.dropna(subset=["Time"]).drop_duplicates(subset=["Time"], keep="last")
+    return df.sort_values("Time")
+
+
+def _enumerate_bounded_days(
+    ranges: Sequence[Tuple[Optional[date], Optional[date]]],
+) -> Optional[List[date]]:
+    if not ranges:
+        return None
+
+    days: List[date] = []
+    for start_day, end_day in ranges:
+        if start_day is None or end_day is None:
+            return None
+        current = start_day
+        while current <= end_day:
+            days.append(current)
+            current += timedelta(days=1)
+    return sorted(set(days))
+
+
+def _backup_outputs_already_exist(
+    output_root: Path,
+    requested_days: Sequence[date],
+) -> bool:
+    if not requested_days:
+        return False
+    return all(
+        (output_root / f"{day_value:%Y}" / f"{day_value:%m}" / f"lab_logs_{day_value:%Y_%m_%d}.csv").exists()
+        for day_value in requested_days
+    )
+
+
+def restore_outputs_from_backup(
+    *,
+    station: int | str,
+    date_ranges: Sequence[Tuple[Optional[date], Optional[date]]],
+    output_root: Path,
+    dry_run: bool,
+    force_rebuild: bool,
+) -> bool:
+    backup_config = _load_backup_restore_config()
+    if not backup_config:
+        return False
+    if not bool(backup_config.get("enabled", False)):
+        return False
+
+    station_id = _coerce_station_id(station)
+    if station_id is None:
+        print(f"Backup restore skipped: invalid station identifier {station!r}.")
+        return False
+
+    ssh_host = str(backup_config.get("ssh_host", "")).strip()
+    dump_path = _station_dump_path(backup_config, station_id)
+    if not ssh_host or not dump_path:
+        print(f"Backup restore skipped: missing ssh_host or dump path for station {station_id}.")
+        return False
+
+    requested_days = _enumerate_bounded_days(date_ranges)
+    if requested_days and not force_rebuild and _backup_outputs_already_exist(output_root, requested_days):
+        print("LAB_LOGS backup restore skipped: requested daily outputs already exist.")
+        return True
+
+    frames: List[pd.DataFrame] = []
+    for spec in BACKUP_SERIES_SPECS:
+        schema = _backup_schema_name(spec, station_id)
+        try:
+            series_df = _load_backup_series(
+                ssh_host=ssh_host,
+                dump_path=dump_path,
+                schema=schema,
+                table=spec.table,
+                output_column=spec.output_column,
+            )
+        except Exception as exc:
+            print(f"Warning: backup restore could not load {schema}.{spec.table}: {exc}")
+            continue
+        if not series_df.empty:
+            frames.append(series_df)
+
+    if not frames:
+        print("LAB_LOGS backup restore found no usable series.")
+        return False
+
+    merged = frames[0]
+    for frame in frames[1:]:
+        merged = merged.merge(frame, on="Time", how="outer")
+
+    merged["Time"] = pd.to_datetime(merged["Time"], errors="coerce")
+    merged = merged.dropna(subset=["Time"]).sort_values("Time")
+    merged = merged.drop_duplicates(subset=["Time"], keep="last")
+
+    if date_ranges:
+        mask = [datetime_in_ranges(ts.to_pydatetime(), date_ranges) for ts in merged["Time"]]
+        merged = merged.loc[mask]
+    if merged.empty:
+        print("LAB_LOGS backup restore found no rows inside the selected date ranges.")
+        return False
+
+    for column in merged.columns:
+        if column == "Time":
+            continue
+        merged[column] = pd.to_numeric(merged[column], errors="coerce")
+
+    day_count = 0
+    for day_key, day_frame in merged.groupby(merged["Time"].dt.date):
+        daily = (
+            day_frame.set_index("Time")
+            .sort_index()
+            .resample("1min")
+            .mean()
+            .reset_index()
+        )
+        output_parent = output_root / f"{day_key:%Y}" / f"{day_key:%m}"
+        output_path = output_parent / f"lab_logs_{day_key:%Y_%m_%d}.csv"
+        if dry_run:
+            print(f"  [dry-run] would restore {output_path} from database backup")
+            day_count += 1
+            continue
+
+        output_parent.mkdir(parents=True, exist_ok=True)
+        daily.to_csv(output_path, index=False, float_format="%.5g")
+        day_count += 1
+
+    print(
+        f"Restored {day_count} LAB_LOGS daily file(s) from backup {dump_path} via {ssh_host}."
+    )
+    return day_count > 0
+
+
 def main() -> int:
     args = parse_args()
 
@@ -575,9 +984,25 @@ def main() -> int:
         candidate_files = filtered_candidates
 
     if not candidate_files:
-        print("No cleaned lab log files found to process.")
-        # rebuild_big_csv(output_root, lab_logs_root / "big_log_lab_data.csv", args.dry_run)
-        # mark_status_complete(status_csv_path, status_timestamp)
+        print("No cleaned lab log files found to process. Trying local LOG_BACKUP restore.")
+        restored = restore_outputs_from_local_log_backup(
+            station=station,
+            date_ranges=date_ranges,
+            output_root=output_root,
+            dry_run=args.dry_run,
+            force_rebuild=args.all,
+        )
+        if not restored:
+            print("Local LOG_BACKUP restore did not produce data. Trying configured database backup restore.")
+            restored = restore_outputs_from_backup(
+            station=station,
+            date_ranges=date_ranges,
+            output_root=output_root,
+            dry_run=args.dry_run,
+            force_rebuild=args.all,
+            )
+        if not restored:
+            print("No LAB_LOGS backup data could be restored.")
         return 0
 
     day_data: Dict[date, Dict[str, pd.DataFrame]] = defaultdict(dict)

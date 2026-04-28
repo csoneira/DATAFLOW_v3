@@ -5,6 +5,7 @@ import argparse
 import json
 import logging
 from pathlib import Path
+import sys
 from typing import Any
 
 import matplotlib
@@ -13,17 +14,39 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from common import DEFAULT_CONFIG_PATH, cfg_path, ensure_output_dirs, load_config
+from common import DEFAULT_CONFIG_PATH, REPO_ROOT, cfg_path, ensure_output_dirs, get_trigger_type_selection, load_config
+
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from MASTER.common.selection_config import load_master_event_markers, parse_station_id
 
 
 def _configure_logging() -> None:
     logging.basicConfig(format="[%(levelname)s] STEP_2 - %(message)s", level=logging.INFO, force=True)
 
 
-def _resolve_efficiency_reference_columns(config: dict[str, Any]) -> list[str]:
+def _step2_config(config: dict[str, Any]) -> dict[str, Any]:
     step2_config = config.get("step2", {})
     if not isinstance(step2_config, dict):
-        step2_config = {}
+        return {}
+    return step2_config
+
+
+def _normalize_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off", ""}:
+            return False
+    return bool(value)
+
+
+def _resolve_efficiency_reference_columns(config: dict[str, Any]) -> list[str]:
+    step2_config = _step2_config(config)
 
     raw_planes = step2_config.get("efficiency_reference_planes", [2, 3])
     if isinstance(raw_planes, str):
@@ -58,9 +81,7 @@ def _resolve_efficiency_reference_columns(config: dict[str, Any]) -> list[str]:
 
 
 def _resolve_efficiency_reference_min(config: dict[str, Any]) -> float | None:
-    step2_config = config.get("step2", {})
-    if not isinstance(step2_config, dict):
-        step2_config = {}
+    step2_config = _step2_config(config)
 
     raw_min = step2_config.get("efficiency_reference_min")
     if raw_min in (None, "", "null", "None"):
@@ -70,6 +91,153 @@ def _resolve_efficiency_reference_min(config: dict[str, Any]) -> float | None:
     if minimum < 0.0:
         raise ValueError("step2.efficiency_reference_min must be >= 0.")
     return minimum
+
+
+def _resolve_efficiency_plot_ylim(config: dict[str, Any]) -> tuple[float | None, float | None]:
+    step2_config = _step2_config(config)
+    raw_ylim = step2_config.get("efficiency_plot_ylim", [None, 1.0])
+
+    if isinstance(raw_ylim, str):
+        text = raw_ylim.strip()
+        if not text:
+            raw_ylim = [None, 1.0]
+        else:
+            raw_ylim = json.loads(text)
+
+    if not isinstance(raw_ylim, (list, tuple)) or len(raw_ylim) != 2:
+        raise ValueError("step2.efficiency_plot_ylim must be a two-element list like [null, 1.0].")
+
+    limits: list[float | None] = []
+    for value in raw_ylim:
+        if value in (None, "", "null", "None"):
+            limits.append(None)
+        else:
+            limits.append(float(value))
+
+    bottom, top = limits
+    if bottom is not None and top is not None and bottom >= top:
+        raise ValueError("step2.efficiency_plot_ylim must satisfy bottom < top when both limits are set.")
+    return bottom, top
+
+
+def _resolve_plot_moving_average(config: dict[str, Any]) -> tuple[bool, int]:
+    step2_config = _step2_config(config)
+    enabled = _normalize_bool(
+        step2_config.get(
+            "plot_apply_moving_average",
+            step2_config.get("efficiency_plot_apply_moving_average", False),
+        )
+    )
+    kernel = int(
+        step2_config.get(
+            "plot_moving_average_kernel",
+            step2_config.get("efficiency_plot_moving_average_kernel", 5),
+        )
+    )
+    if kernel < 1:
+        raise ValueError("step2.plot_moving_average_kernel must be >= 1.")
+    return enabled, kernel
+
+
+def _resolve_selected_series_plot_metadata(config: dict[str, Any]) -> dict[str, str]:
+    selection = get_trigger_type_selection(config)
+    source_column = str(selection["selected_source_rate_column"])
+    display_label = str(selection.get("selected_display_label") or source_column)
+
+    if source_column.endswith("_count"):
+        return {
+            "source_column": source_column,
+            "display_label": display_label,
+            "quantity_title": "count",
+            "y_label": "Count",
+            "selected_label": f"Original {display_label}",
+            "corrected_label": "Corrected count",
+            "scatter_title": "Count vs eff_reference",
+        }
+    if source_column.endswith("_hz"):
+        return {
+            "source_column": source_column,
+            "display_label": display_label,
+            "quantity_title": "rate",
+            "y_label": "Rate [Hz]",
+            "selected_label": f"Original {display_label}",
+            "corrected_label": "Corrected rate",
+            "scatter_title": "Rate vs eff_reference",
+        }
+    return {
+        "source_column": source_column,
+        "display_label": display_label,
+        "quantity_title": "value",
+        "y_label": display_label,
+        "selected_label": f"Original {display_label}",
+        "corrected_label": f"Corrected {display_label}",
+        "scatter_title": f"{display_label} vs eff_reference",
+    }
+
+
+def _resolve_station_id(config: dict[str, Any]) -> int | None:
+    step5_config = config.get("step5", {})
+    if not isinstance(step5_config, dict):
+        return None
+    return parse_station_id(step5_config.get("station"))
+
+
+def _load_event_markers(config: dict[str, Any]) -> list[dict[str, object]]:
+    station_id = _resolve_station_id(config)
+    return [
+        {"time": marker.time, "label": marker.label}
+        for marker in load_master_event_markers(station=station_id)
+    ]
+
+
+def _add_event_markers(
+    ax: plt.Axes,
+    x_values: pd.Series,
+    event_markers: list[dict[str, object]],
+) -> None:
+    if not event_markers or not pd.api.types.is_datetime64_any_dtype(x_values):
+        return
+
+    valid_times = pd.to_datetime(x_values, errors="coerce", utc=True).dropna()
+    if valid_times.empty:
+        return
+    valid_times = valid_times.dt.tz_convert(None)
+    min_time = valid_times.min()
+    max_time = valid_times.max()
+
+    label_levels = [0.98, 0.86, 0.74]
+    for index, marker in enumerate(event_markers):
+        event_time = pd.to_datetime(marker["time"], errors="coerce", utc=True)
+        if pd.isna(event_time):
+            continue
+        event_time = event_time.tz_convert(None)
+        if event_time < min_time or event_time > max_time:
+            continue
+        ax.axvline(
+            event_time,
+            color="black",
+            linestyle="--",
+            linewidth=0.9,
+            alpha=0.7,
+        )
+        ax.annotate(
+            str(marker["label"]),
+            xy=(event_time, label_levels[index % len(label_levels)]),
+            xycoords=("data", "axes fraction"),
+            xytext=(3, 0),
+            textcoords="offset points",
+            rotation=90,
+            va="top",
+            ha="left",
+            fontsize=8,
+            color="black",
+            bbox={
+                "boxstyle": "round,pad=0.15",
+                "facecolor": "white",
+                "edgecolor": "none",
+                "alpha": 0.7,
+            },
+        )
 
 
 def _validate_columns(dataframe: pd.DataFrame, reference_columns: list[str]) -> None:
@@ -110,28 +278,86 @@ def _resolve_time_axis(dataframe: pd.DataFrame) -> tuple[pd.Series, str]:
     return pd.Series(range(len(dataframe)), dtype=float), "row_index"
 
 
-def _plot_rate_series(dataframe: pd.DataFrame, output_path: Path) -> None:
-    x_values, x_label = _resolve_time_axis(dataframe)
+def _prepare_efficiency_plot_frame(
+    dataframe: pd.DataFrame,
+    reference_columns: list[str],
+    *,
+    apply_moving_average: bool,
+    moving_average_kernel: int,
+) -> pd.DataFrame:
+    plot_frame = dataframe.copy()
+    numeric_columns = [*reference_columns, "eff_reference"]
+    plot_frame[numeric_columns] = plot_frame[numeric_columns].apply(pd.to_numeric, errors="coerce")
+    if not apply_moving_average or moving_average_kernel <= 1:
+        return plot_frame
+
+    plot_frame[numeric_columns] = plot_frame[numeric_columns].rolling(
+        window=moving_average_kernel,
+        min_periods=1,
+        center=True,
+    ).mean()
+    return plot_frame
+
+
+def _prepare_rate_plot_frame(
+    dataframe: pd.DataFrame,
+    *,
+    apply_moving_average: bool,
+    moving_average_kernel: int,
+) -> pd.DataFrame:
+    plot_frame = dataframe.copy()
+    numeric_columns = ["selected_rate_hz", "corrected_rate_hz"]
+    plot_frame[numeric_columns] = plot_frame[numeric_columns].apply(pd.to_numeric, errors="coerce")
+    if not apply_moving_average or moving_average_kernel <= 1:
+        return plot_frame
+
+    plot_frame[numeric_columns] = plot_frame[numeric_columns].rolling(
+        window=moving_average_kernel,
+        min_periods=1,
+        center=True,
+    ).mean()
+    return plot_frame
+
+
+def _plot_rate_series(
+    dataframe: pd.DataFrame,
+    output_path: Path,
+    *,
+    apply_moving_average: bool,
+    moving_average_kernel: int,
+    event_markers: list[dict[str, object]],
+    selected_series_meta: dict[str, str],
+) -> None:
+    plot_frame = _prepare_rate_plot_frame(
+        dataframe,
+        apply_moving_average=apply_moving_average,
+        moving_average_kernel=moving_average_kernel,
+    )
+    x_values, x_label = _resolve_time_axis(plot_frame)
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.plot(
         x_values,
-        dataframe["selected_rate_hz"].astype(float),
+        plot_frame["selected_rate_hz"].astype(float),
         marker="o",
         markersize=3,
         linewidth=1.4,
-        label="Original selected_rate_hz",
+        label=selected_series_meta["selected_label"],
     )
     ax.plot(
         x_values,
-        dataframe["corrected_rate_hz"].astype(float),
+        plot_frame["corrected_rate_hz"].astype(float),
         marker="o",
         markersize=3,
         linewidth=1.4,
-        label="Corrected rate",
+        label=selected_series_meta["corrected_label"],
     )
-    ax.set_title("Original and corrected rate time series")
+    title = f"Original and corrected {selected_series_meta['quantity_title']} time series"
+    if apply_moving_average and moving_average_kernel > 1:
+        title += f" | moving average = {moving_average_kernel}"
+    ax.set_title(title)
     ax.set_xlabel(x_label.replace("_", " "))
-    ax.set_ylabel("Rate [Hz]")
+    ax.set_ylabel(selected_series_meta["y_label"])
+    _add_event_markers(ax, x_values, event_markers)
     ax.grid(alpha=0.25)
     ax.legend()
     if pd.api.types.is_datetime64_any_dtype(x_values):
@@ -146,14 +372,25 @@ def _plot_reference_efficiency_series(
     dataframe: pd.DataFrame,
     output_path: Path,
     reference_columns: list[str],
+    *,
+    y_limits: tuple[float | None, float | None],
+    apply_moving_average: bool,
+    moving_average_kernel: int,
+    event_markers: list[dict[str, object]],
 ) -> None:
-    x_values, x_label = _resolve_time_axis(dataframe)
+    plot_frame = _prepare_efficiency_plot_frame(
+        dataframe,
+        reference_columns,
+        apply_moving_average=apply_moving_average,
+        moving_average_kernel=moving_average_kernel,
+    )
+    x_values, x_label = _resolve_time_axis(plot_frame)
     fig, ax = plt.subplots(figsize=(12, 6))
     colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728"]
     for idx, column in enumerate(reference_columns):
         ax.plot(
             x_values,
-            dataframe[column].astype(float),
+            plot_frame[column].astype(float),
             marker="o",
             markersize=3,
             linewidth=1.2,
@@ -162,7 +399,7 @@ def _plot_reference_efficiency_series(
         )
     ax.plot(
         x_values,
-        dataframe["eff_reference"].astype(float),
+        plot_frame["eff_reference"].astype(float),
         marker="o",
         markersize=3,
         linewidth=1.6,
@@ -170,10 +407,15 @@ def _plot_reference_efficiency_series(
         color="black",
     )
     selected_planes_label = ", ".join(column.replace("eff_empirical_", "P") for column in reference_columns)
-    ax.set_title(f"Selected empirical efficiencies over time | reference = mean({selected_planes_label})")
+    title = f"Selected empirical efficiencies over time | reference = mean({selected_planes_label})"
+    if apply_moving_average and moving_average_kernel > 1:
+        title += f" | moving average = {moving_average_kernel}"
+    ax.set_title(title)
     ax.set_xlabel(x_label.replace("_", " "))
     ax.set_ylabel("Empirical efficiency")
-    ax.set_ylim(-0.05, 1.05)
+    y_min, y_max = y_limits
+    ax.set_ylim(bottom=y_min, top=y_max)
+    _add_event_markers(ax, x_values, event_markers)
     ax.grid(alpha=0.25)
     ax.legend()
     if pd.api.types.is_datetime64_any_dtype(x_values):
@@ -184,7 +426,12 @@ def _plot_reference_efficiency_series(
     plt.close(fig)
 
 
-def _plot_eff_reference_vs_rates_scatter(dataframe: pd.DataFrame, output_path: Path) -> None:
+def _plot_eff_reference_vs_rates_scatter(
+    dataframe: pd.DataFrame,
+    output_path: Path,
+    *,
+    selected_series_meta: dict[str, str],
+) -> None:
     fig, ax = plt.subplots(figsize=(10, 6))
     eff_reference = pd.to_numeric(dataframe["eff_reference"], errors="coerce")
     selected_rate = pd.to_numeric(dataframe["selected_rate_hz"], errors="coerce")
@@ -198,7 +445,7 @@ def _plot_eff_reference_vs_rates_scatter(dataframe: pd.DataFrame, output_path: P
         selected_rate,
         s=14,
         alpha=0.65,
-        label="selected_rate_hz",
+        label=selected_series_meta["selected_label"],
         color=selected_color,
     )
     ax.scatter(
@@ -206,7 +453,7 @@ def _plot_eff_reference_vs_rates_scatter(dataframe: pd.DataFrame, output_path: P
         corrected_rate,
         s=14,
         alpha=0.65,
-        label="corrected_rate_hz",
+        label=selected_series_meta["corrected_label"],
         color=corrected_color,
     )
 
@@ -224,15 +471,22 @@ def _plot_eff_reference_vs_rates_scatter(dataframe: pd.DataFrame, output_path: P
         slope, intercept = np.polyfit(x, y, 1)
         x_line = np.linspace(x_line_start, x_line_end, 120)
         y_line = slope * x_line + intercept
-        ax.plot(x_line, y_line, linestyle="--", linewidth=1.8, color=color, label=label)
+        ax.plot(
+            x_line,
+            y_line,
+            linestyle="--",
+            linewidth=1.8,
+            color=color,
+            label=f"{label}: y = {slope:.3f}x {intercept:+.3f}",
+        )
 
     _add_linear_trend_line(eff_reference, selected_rate, selected_color, "selected trend")
     _add_linear_trend_line(eff_reference, corrected_rate, corrected_color, "corrected trend")
     ax.axvline(1.0, linestyle=":", linewidth=1.5, color="black", label="eff_reference = 1")
 
-    ax.set_title("Rate vs eff_reference")
+    ax.set_title(selected_series_meta["scatter_title"])
     ax.set_xlabel("eff_reference")
-    ax.set_ylabel("Rate [Hz]")
+    ax.set_ylabel(selected_series_meta["y_label"])
     ax.grid(alpha=0.25)
     ax.legend()
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -250,6 +504,10 @@ def run(config_path: str | Path | None = None) -> Path:
     output_path = cfg_path(config, "paths", "step2_scaled_output_csv")
     reference_columns = _resolve_efficiency_reference_columns(config)
     eff_reference_min = _resolve_efficiency_reference_min(config)
+    efficiency_plot_ylim = _resolve_efficiency_plot_ylim(config)
+    apply_plot_moving_average, plot_moving_average_kernel = _resolve_plot_moving_average(config)
+    selected_series_meta = _resolve_selected_series_plot_metadata(config)
+    event_markers = _load_event_markers(config)
 
     dataframe = pd.read_csv(input_path, low_memory=False)
     _validate_columns(dataframe, reference_columns)
@@ -260,11 +518,30 @@ def run(config_path: str | Path | None = None) -> Path:
     scaled.to_csv(output_path, index=False)
 
     plot_path = output_path.parent.parent / "PLOTS" / "real_data_selected_vs_corrected_rate.png"
-    _plot_rate_series(scaled, plot_path)
+    _plot_rate_series(
+        scaled,
+        plot_path,
+        apply_moving_average=apply_plot_moving_average,
+        moving_average_kernel=plot_moving_average_kernel,
+        event_markers=event_markers,
+        selected_series_meta=selected_series_meta,
+    )
     eff_plot_path = output_path.parent.parent / "PLOTS" / "real_data_eff2_eff3_series.png"
-    _plot_reference_efficiency_series(scaled, eff_plot_path, reference_columns)
+    _plot_reference_efficiency_series(
+        scaled,
+        eff_plot_path,
+        reference_columns,
+        y_limits=efficiency_plot_ylim,
+        apply_moving_average=apply_plot_moving_average,
+        moving_average_kernel=plot_moving_average_kernel,
+        event_markers=event_markers,
+    )
     scatter_plot_path = output_path.parent.parent / "PLOTS" / "real_data_eff_reference_vs_rate_scatter.png"
-    _plot_eff_reference_vs_rates_scatter(scaled, scatter_plot_path)
+    _plot_eff_reference_vs_rates_scatter(
+        scaled,
+        scatter_plot_path,
+        selected_series_meta=selected_series_meta,
+    )
 
     logging.info(
         "Wrote simplified scaled output with %d rows to %s",
@@ -277,6 +554,12 @@ def run(config_path: str | Path | None = None) -> Path:
             "Applied eff_reference minimum %.3f and dropped %d rows below threshold.",
             eff_reference_min,
             removed_rows,
+        )
+    logging.info("Efficiency-series plot y limits: bottom=%s top=%s", efficiency_plot_ylim[0], efficiency_plot_ylim[1])
+    if apply_plot_moving_average:
+        logging.info(
+            "Applied moving average to Step 2 time-series plots with kernel=%d.",
+            plot_moving_average_kernel,
         )
     logging.info("Wrote reference-efficiency time series plot to %s", eff_plot_path)
     logging.info("Wrote original vs corrected time series plot to %s", plot_path)

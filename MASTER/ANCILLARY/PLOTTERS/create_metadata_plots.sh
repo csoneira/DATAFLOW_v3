@@ -46,6 +46,11 @@ run_plotter \
   --config "$PLOTTERS_ROOT/METADATA/FILTER/filter_metadata_config.json"
 
 run_plotter \
+  "trigger_rates_metadata_plotter" \
+  python3 -u "$PLOTTERS_ROOT/METADATA/TRIGGER_RATES/trigger_rate_metadata_plotter.py" \
+  --config "$PLOTTERS_ROOT/METADATA/TRIGGER_RATES/trigger_rate_metadata_config.json"
+
+run_plotter \
   "noise_control_metadata_plotter" \
   python3 -u "$PLOTTERS_ROOT/METADATA/NOISE_CONTROL/noise_control_metadata_plotter.py" \
   --config "$PLOTTERS_ROOT/METADATA/NOISE_CONTROL/noise_control_metadata_config.json"

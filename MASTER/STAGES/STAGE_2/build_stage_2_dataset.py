@@ -52,9 +52,11 @@ from MASTER.common.selection_config import (
     parse_station_id,
     station_is_selected,
 )
+from MASTER.STAGES.STAGE_2.plot_joined_stage_groups import generate_joined_groups_plot
 
 
 CONFIG_PATH = get_master_config_root() / "STAGE_2" / "config_stage_2.yaml"
+PLOT_CONFIG_PATH = get_master_config_root() / "STAGE_2" / "plot_joined_stage_2_groups.yaml"
 DAY_STEM_RE = re.compile(r"_(\d{4})_(\d{2})_(\d{2})$")
 LEGACY_EVENT_SCHEMA_COLUMNS = {"1234_all", "events"}
 LEGACY_EVENT_RATE_PREFIXES = ("four_plane_R", "three_plane_R")
@@ -732,6 +734,19 @@ def main() -> int:
         time_column=output_time_column,
     )
     print(f"Rebuilt {big_output_path}")
+    try:
+        plot_output_path = stage2_root / "joined_stage_2_groups.png"
+        generate_joined_groups_plot(
+            big_output_path,
+            plot_output_path,
+            PLOT_CONFIG_PATH,
+            rate_column=count_column_name,
+            rate_title="Count",
+            rate_ylabel="Count",
+        )
+        print(f"Generated {plot_output_path}")
+    except Exception as exc:
+        print(f"Warning: unable to generate grouped Stage 2 plot: {exc}")
     print(
         "Join summary: "
         f"processed={processed_days}, skipped_up_to_date={skipped_up_to_date}, "

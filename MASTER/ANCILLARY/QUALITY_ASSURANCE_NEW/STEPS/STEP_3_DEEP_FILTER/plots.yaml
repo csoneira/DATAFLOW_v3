@@ -29,21 +29,14 @@ special:
       - plane_combination_filter_selected_offender_channels_pct
       - plane_combination_filter_multi_offender_rows_pct
 
-  - name: task1_scope_row_filters
+  - name: KEY_TASK1_PARAMETER_ROW_FILTERS
     tasks: [1]
     mode: panels
-    ncols: 4
+    ncols: 2
     sharey: true
     ylim: [0, 100]
     series_labels: [overall, self, same_strip, same_plane, any]
     panels:
-      - title: rows_flagged
-        columns:
-          - plane_combination_filter_flagged_rows_pct
-          - plane_combination_filter_rows_with_self_relation_failures_pct
-          - plane_combination_filter_rows_with_same_strip_relation_failures_pct
-          - plane_combination_filter_rows_with_same_plane_relation_failures_pct
-          - plane_combination_filter_rows_with_any_relation_failures_pct
       - title: q_sum_low
         columns:
           - plane_combination_filter_q_sum_low_rows_failed_pct
@@ -58,13 +51,6 @@ special:
           - plane_combination_filter_same_strip_q_sum_high_rows_failed_pct
           - plane_combination_filter_same_plane_q_sum_high_rows_failed_pct
           - plane_combination_filter_any_q_sum_high_rows_failed_pct
-      - title: q_dif
-        columns:
-          - plane_combination_filter_q_dif_rows_failed_pct
-          - plane_combination_filter_self_q_dif_rows_failed_pct
-          - plane_combination_filter_same_strip_q_dif_rows_failed_pct
-          - plane_combination_filter_same_plane_q_dif_rows_failed_pct
-          - plane_combination_filter_any_q_dif_rows_failed_pct
       - title: t_sum_low
         columns:
           - plane_combination_filter_t_sum_low_rows_failed_pct
@@ -79,6 +65,13 @@ special:
           - plane_combination_filter_same_strip_t_sum_high_rows_failed_pct
           - plane_combination_filter_same_plane_t_sum_high_rows_failed_pct
           - plane_combination_filter_any_t_sum_high_rows_failed_pct
+      - title: q_dif
+        columns:
+          - plane_combination_filter_q_dif_rows_failed_pct
+          - plane_combination_filter_self_q_dif_rows_failed_pct
+          - plane_combination_filter_same_strip_q_dif_rows_failed_pct
+          - plane_combination_filter_same_plane_q_dif_rows_failed_pct
+          - plane_combination_filter_any_q_dif_rows_failed_pct
       - title: t_dif
         columns:
           - plane_combination_filter_t_dif_rows_failed_pct
@@ -130,19 +123,14 @@ special:
       - strip_combination_filter_rows_with_plane_failures_pct
       - strip_combination_filter_rows_with_detector_failures_pct
 
-  - name: task2_common_scope_filters
+  - name: KEY_TASK2_PARAMETER_SCOPE_FILTERS
     tasks: [2]
     mode: panels
-    ncols: 4
+    ncols: 2
     sharey: true
     ylim: [0, 100]
     series_labels: [strip, plane, detector]
     panels:
-      - title: rows_flagged
-        columns:
-          - strip_combination_filter_rows_with_strip_failures_pct
-          - strip_combination_filter_rows_with_plane_failures_pct
-          - strip_combination_filter_rows_with_detector_failures_pct
       - title: q_sum_sum_low
         columns:
           - strip_combination_filter_strip_q_sum_sum_low_rows_failed_pct
@@ -153,11 +141,6 @@ special:
           - strip_combination_filter_strip_q_sum_sum_high_rows_failed_pct
           - strip_combination_filter_plane_q_sum_sum_high_rows_failed_pct
           - strip_combination_filter_detector_q_sum_sum_high_rows_failed_pct
-      - title: q_dif_sum
-        columns:
-          - strip_combination_filter_strip_q_dif_sum_rows_failed_pct
-          - strip_combination_filter_plane_q_dif_sum_rows_failed_pct
-          - strip_combination_filter_detector_q_dif_sum_rows_failed_pct
       - title: t_sum_sum_low
         columns:
           - strip_combination_filter_strip_t_sum_sum_low_rows_failed_pct
@@ -168,36 +151,39 @@ special:
           - strip_combination_filter_strip_t_sum_sum_high_rows_failed_pct
           - strip_combination_filter_plane_t_sum_sum_high_rows_failed_pct
           - strip_combination_filter_detector_t_sum_sum_high_rows_failed_pct
+      
+      - title: q_dif_sum
+        columns:
+          - strip_combination_filter_strip_q_dif_sum_rows_failed_pct
+          - strip_combination_filter_plane_q_dif_sum_rows_failed_pct
+          - strip_combination_filter_detector_q_dif_sum_rows_failed_pct
+      
+      - title: q_sum_dif
+        columns:
+          - null
+          - strip_combination_filter_plane_q_sum_dif_rows_failed_pct
+          - strip_combination_filter_detector_q_sum_dif_rows_failed_pct
+      - title: q_dif_dif
+        columns:
+          - null
+          - strip_combination_filter_plane_q_dif_dif_rows_failed_pct
+          - strip_combination_filter_detector_q_dif_dif_rows_failed_pct
+
+      - title: t_sum_dif
+        columns:
+          - null
+          - strip_combination_filter_plane_t_sum_dif_rows_failed_pct
+          - strip_combination_filter_detector_t_sum_dif_rows_failed_pct
+      - title: t_dif_dif
+        columns:
+          - null
+          - strip_combination_filter_plane_t_dif_dif_rows_failed_pct
+          - strip_combination_filter_detector_t_dif_dif_rows_failed_pct
       - title: t_dif_sum
         columns:
           - strip_combination_filter_strip_t_dif_sum_rows_failed_pct
           - strip_combination_filter_plane_t_dif_sum_rows_failed_pct
           - strip_combination_filter_detector_t_dif_sum_rows_failed_pct
-
-  - name: task2_differential_scope_filters
-    tasks: [2]
-    mode: panels
-    ncols: 4
-    sharey: true
-    ylim: [0, 100]
-    series_labels: [plane, detector]
-    panels:
-      - title: q_sum_dif
-        columns:
-          - strip_combination_filter_plane_q_sum_dif_rows_failed_pct
-          - strip_combination_filter_detector_q_sum_dif_rows_failed_pct
-      - title: q_dif_dif
-        columns:
-          - strip_combination_filter_plane_q_dif_dif_rows_failed_pct
-          - strip_combination_filter_detector_q_dif_dif_rows_failed_pct
-      - title: t_sum_dif
-        columns:
-          - strip_combination_filter_plane_t_sum_dif_rows_failed_pct
-          - strip_combination_filter_detector_t_sum_dif_rows_failed_pct
-      - title: t_dif_dif
-        columns:
-          - strip_combination_filter_plane_t_dif_dif_rows_failed_pct
-          - strip_combination_filter_detector_t_dif_dif_rows_failed_pct
 
   - name: task3_pre_filters
     tasks: [3]
@@ -214,18 +200,14 @@ special:
       - plane_combination_plane_rows_affected_pct
       - plane_combination_filter_values_zeroed_pct
 
-  - name: task3_shared_row_filters
+  - name: KEY_TASK3_SHARED_ROW_FILTERS
     tasks: [3]
     mode: panels
-    ncols: 4
+    ncols: 2
     sharey: true
     ylim: [0, 100]
     series_labels: [detector, plane]
     panels:
-      - title: rows_affected
-        columns:
-          - plane_combination_filter_rows_affected_pct
-          - plane_combination_plane_rows_affected_pct
       - title: q_sum_sum_low
         columns:
           - plane_combination_filter_q_sum_sum_low_rows_failed_pct

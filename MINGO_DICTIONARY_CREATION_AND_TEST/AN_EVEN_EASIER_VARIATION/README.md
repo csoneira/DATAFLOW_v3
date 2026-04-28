@@ -43,14 +43,38 @@ are ignored and only the rate choice matters:
 - `rate_family = "four_plane"` or `rate_family = "1234"` uses `rate_1234_hz`
 - `rate_family = "four_plane_robust_hz"` uses `four_plane_robust_hz`
 - `rate_family = "total"` uses `rate_total_hz`
+- `rate_family` can also be any numeric robust-metadata column directly, for example:
+  - `four_plane_robust_hz_union`
+  - `four_plane_robust_hz_intersection`
+  - `four_plane_robust_count_union`
+  - `four_plane_robust_count_intersection`
+  - `four_plane_robust_efficiency_union`
+
+Optional helpers for direct robust-column testing:
+
+- `selected_count_column`: explicit count column paired to the selected column
+- `selected_display_label`: plot label override for Step 2
+
+Robust metadata also offers multiple per-plane efficiency families. You can choose
+which one is mapped into `eff_empirical_1..4` with:
+
+- `robust_efficiency_variant = "default"` -> `eff1`, `eff2`, `eff3`, `eff4`
+- `robust_efficiency_variant = "plateau"` -> `eff1_plateau`, ...
+- `robust_efficiency_variant = "overall"` -> `eff1_overall`, ...
+- `robust_efficiency_variant = "median_x"` -> `eff1_median_x`, ...
 
 Step 2 scaling is controlled with:
 
 - `step2.efficiency_reference_planes`
 - `step2.efficiency_reference_min`
+- `step2.efficiency_plot_ylim`
+- `step2.plot_apply_moving_average`
+- `step2.plot_moving_average_kernel`
 
 Example:
 
 - `[3]` uses only `eff_empirical_3`
 - `[2, 3]` uses the mean of `eff_empirical_2` and `eff_empirical_3`
 - `0.2` drops rows where the derived `eff_reference` is below `0.2`
+- `[null, 1.0]` keeps the efficiency-plot lower bound automatic while fixing the top at `1.0`
+- `true` plus kernel `9` applies a centered 9-point moving average to both Step 2 time-series plots

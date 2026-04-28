@@ -688,6 +688,13 @@ if [[ "$config_setting" == "true" ]]; then
   skip_processed_exclusion=true
 fi
 
+random_batch_size=1
+random_batch_key="random_basenames_per_run_${station}"
+random_batch_raw=$(read_config_value "$random_batch_key" | tr -d '[:space:]')
+if [[ "$random_batch_raw" =~ ^[0-9]+$ ]] && (( random_batch_raw >= 1 )); then
+  random_batch_size=$random_batch_raw
+fi
+
 declare -A processed_basenames=()
 if $skip_processed_exclusion; then
   log_info "${config_key} is true in STEP_1/shared reprocessing config; NOT excluding processed basenames."
@@ -726,8 +733,14 @@ if $random_mode; then
     log_info "No basenames available for random selection."
     exit 0
   fi
-  selected_bases=($(printf '%s\n' "${random_candidates[@]}" | shuf -n1))
-  log_info "Randomly selected basename: ${selected_bases[0]}"
+  mapfile -t selected_bases < <(
+    printf '%s\n' "${random_candidates[@]}" | shuf -n "$random_batch_size"
+  )
+  if (( ${#selected_bases[@]} == 1 )); then
+    log_info "Randomly selected basename: ${selected_bases[0]}"
+  else
+    log_info "Randomly selected ${#selected_bases[@]} basenames (configured ${random_batch_size}): ${selected_bases[*]}"
+  fi
 elif $newest_mode; then
   mapfile -t newest_candidates < <(
     for base in "${metadata_basenames[@]}"; do
@@ -866,7 +879,11 @@ if [[ -s "$uncompressed_list_file" ]]; then
 fi
 
 if $random_mode; then
-  log_info "Fetching HLD files for MINGO0${station} using randomly selected basename ${selected_bases[0]}"
+  if (( ${#selected_bases[@]} == 1 )); then
+    log_info "Fetching HLD files for MINGO0${station} using randomly selected basename ${selected_bases[0]}"
+  else
+    log_info "Fetching HLD files for MINGO0${station} using ${#selected_bases[@]} randomly selected basenames"
+  fi
 elif $newest_mode; then
   log_info "Fetching HLD files for MINGO0${station} using newest basename ${selected_bases[0]} (--newest)"
 else

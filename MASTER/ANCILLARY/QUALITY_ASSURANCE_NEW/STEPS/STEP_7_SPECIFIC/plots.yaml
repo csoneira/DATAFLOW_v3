@@ -1,3 +1,15 @@
 default:
   default_ncols: 4
   default_max_columns_per_plot: 12
+
+special:
+  - name: streamer_percentages
+    tasks: [3]
+    mode: columns
+    ncols: 1
+    sharey: true
+    columns:
+      - streamer_P1
+      - streamer_P2
+      - streamer_P3
+      - streamer_P4

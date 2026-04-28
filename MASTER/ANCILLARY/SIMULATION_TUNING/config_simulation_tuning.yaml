@@ -32,20 +32,37 @@ induction_section:
   min_clusterlike_entries_per_plane: 200
 
 charge_spectrum:
+  # Compare one simulation file against one real-data file.
+  simulation_station: MINGO00
+  real_station: MINGO01
+
+  # Optional exact file picks. Keep null to let the script choose the best pair.
+  simulation_basename: null
+  real_basename: null
+
+  # Preferred streamer richness for the real-data file.
+  # This is a soft target: files below it remain eligible but rank lower.
+  # streamer_threshold_qsum: null -> reuse Task 3's configured streamer threshold.
+  streamer_threshold_qsum: null
+  real_streamer_min_percent: 5.0
+  # max_plane: at least one plane above threshold
+  # mean_plane: average across the 4 planes above threshold
+  # min_plane: all 4 planes above threshold
+  real_streamer_selector: max_plane
+
+  # Advisory efficiency closeness references for ranking/reporting.
+  # They are not hard cuts.
+  max_per_plane_efficiency_abs_difference: 0.05
+  max_mean_efficiency_abs_difference: 0.03
+
   # Use single-strip plane entries to reduce induction-width contamination.
   multiplicity_mode: single_strip_only
 
-  # Match simulated and real files by per-plane empirical efficiency.
-  efficiency_match_max_abs_difference: 0.05
-  efficiency_match_fallback_max_abs_difference: 0.15
-  max_pairs_per_plane: 80
-  min_pairs_per_plane: 6
-
-  # Deterministic subsampling keeps the study lightweight while preserving shape.
+  # Deterministic subsampling keeps the overlays lightweight while preserving shape.
   sample_entries_per_file: 1500
   min_positive_charge_ns: 0.05
 
-  # Histogram/fit controls for the charge-scale recommendation.
+  # Histogram/fit controls for the per-plane scale recommendation.
   hist_bin_count: 90
   alpha_min: 0.20
   alpha_max: 2.00

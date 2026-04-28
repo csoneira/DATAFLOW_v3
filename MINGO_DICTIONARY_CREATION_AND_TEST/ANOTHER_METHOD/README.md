@@ -80,6 +80,10 @@ source can be either the existing `trigger_type` CSVs or the newer
    - For `robust_efficiency`, the source is fixed to
      `TASK_4/task_4_metadata_robust_efficiency.csv` and only the rate choice
      matters: `rate_1234_hz` or `rate_total_hz`.
+   - Lets you choose how the 4-D efficiency query vector is built:
+     `minimal_empirical` keeps the four plane efficiencies as-is, while
+     `same_efficiency` averages a chosen plane set and queries the LUT with
+     `[eff, eff, eff, eff]`.
    - Applies the LUT with the same exact-match + fallback strategy used in
      Step 3.
    - Checks whether the real-data z positions in the requested window match the
@@ -105,8 +109,9 @@ To change the z-position vector, binning, or the Step 5 real-data station/date
 window, edit `config.json`. The rate input is controlled through
 `trigger_type_selection`, and the fallback behavior is controlled with
 `step3.lut_match_mode` / `step5.lut_match_mode` (`exact`,
-`nearest`, or `interpolate`) together with `lut_interpolation_k` and
-`lut_interpolation_power`.
+`nearest`, or `interpolate`). The interpolation hyperparameters
+`step3.lut_interpolation_k` and `step3.lut_interpolation_power` are shared by
+both Step 3 and Step 5.
 
 Metadata source selection is controlled with:
 - `trigger_type_selection.metadata_source` (`trigger_type` or `robust_efficiency`)
@@ -114,6 +119,12 @@ Metadata source selection is controlled with:
   - `trigger_type`: supports `total`, `four_plane`, `three_plane`, `two_plane`,
     `three_and_four_plane`, and `two_and_three_plane`
   - `robust_efficiency`: supports `1234` / `four_plane`, `four_plane_robust_hz`, and `total`
+  - when `metadata_source = "robust_efficiency"`, you can also choose
+    `trigger_type_selection.robust_efficiency_variant`:
+    - `default` -> `eff1`, `eff2`, `eff3`, `eff4`
+    - `plateau` -> `eff1_plateau`, ...
+    - `overall` -> `eff1_overall`, ...
+    - `median_x` -> `eff1_median_x`, ...
 - `trigger_type_selection.task_id`
 - `trigger_type_selection.stage_prefix`
 - `trigger_type_selection.offender_threshold`
@@ -135,6 +146,11 @@ Step 5 real-data slicing is controlled with:
 - `step5.min_events`
 - `step5.metadata_agg`
 - `step5.timestamp_column`
+- `step5.selected_feature_columns_mode`
+  - `minimal_empirical` -> use `[emp_eff_1, emp_eff_2, emp_eff_3, emp_eff_4]`
+  - `same_efficiency` -> average `step5.same_efficiency_planes` and use
+    `[eff, eff, eff, eff]`
+- `step5.same_efficiency_planes`
 
 Step 3 synthetic-input selection is controlled with:
 - `step3.input_source` (`training_dataset` or `legacy_synthetic_dataset`)

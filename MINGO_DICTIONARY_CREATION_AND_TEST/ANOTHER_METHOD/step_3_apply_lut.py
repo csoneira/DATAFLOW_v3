@@ -17,6 +17,7 @@ from common import (
     CANONICAL_EFF_COLUMNS,
     DEFAULT_CONFIG_PATH,
     PLOTS_DIR,
+    ROBUST_EFFICIENCY_VARIANT_TO_SUFFIX,
     TASK_FINAL_STAGE_PREFIX,
     TT_FOUR_PLANE_LABEL,
     TT_RATE_LABELS,
@@ -83,10 +84,12 @@ def _derive_robust_synthetic_features(
     empirical_columns = [f"eff_empirical_{idx}" for idx in range(1, 5)]
     selected_rate_column = str(selection["rate_family_column"])
     selected_source_rate_column = str(selection["selected_source_rate_column"])
+    efficiency_variant = str(selection.get("robust_efficiency_variant", "default"))
+    efficiency_suffix = ROBUST_EFFICIENCY_VARIANT_TO_SUFFIX[efficiency_variant]
     source_mode: str | None = None
     used_stage_prefix: str | None = None
 
-    direct_robust_columns = [f"eff{idx}" for idx in range(1, 5)] + ["rate_1234_hz", "rate_total_hz"]
+    direct_robust_columns = [f"eff{idx}{efficiency_suffix}" for idx in range(1, 5)] + ["rate_1234_hz", "rate_total_hz"]
     if selected_source_rate_column not in direct_robust_columns:
         direct_robust_columns.append(selected_source_rate_column)
     if all(column in out.columns for column in direct_robust_columns):
@@ -104,7 +107,7 @@ def _derive_robust_synthetic_features(
         )
         out["total_rate_hz"] = pd.to_numeric(out["rate_total_hz"], errors="coerce")
         for plane_idx in range(1, 5):
-            out[f"eff_empirical_{plane_idx}"] = pd.to_numeric(out[f"eff{plane_idx}"], errors="coerce")
+            out[f"eff_empirical_{plane_idx}"] = pd.to_numeric(out[f"eff{plane_idx}{efficiency_suffix}"], errors="coerce")
     canonical_required_columns = empirical_columns + ["four_plane_rate_hz", "total_rate_hz"]
     if selected_rate_column not in canonical_required_columns:
         canonical_required_columns.append(selected_rate_column)
@@ -191,6 +194,7 @@ def _derive_robust_synthetic_features(
         "two_plane_count",
         "three_plane_count",
         "four_plane_count",
+        "four_plane_robust_count",
         "three_and_four_plane_count",
         "two_and_three_plane_count",
         "total_count",
@@ -198,7 +202,14 @@ def _derive_robust_synthetic_features(
         if column not in out.columns:
             out[column] = pd.Series(np.nan, index=out.index, dtype=float)
 
-    selected_count_column = selected_rate_column.replace("_rate_hz", "_count")
+    if str(selection.get("metadata_source", "trigger_type")) == "robust_efficiency":
+        selected_count_column = {
+            "four_plane_rate_hz": "four_plane_count",
+            "four_plane_robust_hz": "four_plane_robust_count",
+            "total_rate_hz": "total_count",
+        }.get(selected_rate_column, selected_rate_column.replace("_rate_hz", "_count"))
+    else:
+        selected_count_column = selected_rate_column.replace("_rate_hz", "_count")
     out["selected_rate_hz"] = pd.to_numeric(out[selected_rate_column], errors="coerce")
     if selected_count_column in out.columns:
         out["selected_rate_count"] = pd.to_numeric(out[selected_count_column], errors="coerce")
@@ -219,6 +230,7 @@ def _derive_robust_synthetic_features(
         "rate_family": selection["rate_family"],
         "rate_family_column": selected_rate_column,
         "selected_source_rate_column": selection["selected_source_rate_column"],
+        "robust_efficiency_variant": efficiency_variant,
         "plain_column_fallback_used": bool(source_mode != "robust_efficiency_columns"),
         "source_rate_columns": source_rate_columns,
         "source_count_columns": {
@@ -268,8 +280,7 @@ def _resolve_lut_match_settings(config: dict) -> tuple[str, int | None, float]:
 
     raw_mode = step3_config.get("lut_match_mode")
     if raw_mode in (None, "", "null", "None"):
-        allow_nearest = bool(step3_config.get("allow_nearest_lut_match", True))
-        match_mode = "nearest" if allow_nearest else "exact"
+        match_mode = "nearest"
     else:
         normalized = str(raw_mode).strip().lower()
         match_mode = {

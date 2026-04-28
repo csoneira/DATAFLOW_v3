@@ -17,6 +17,7 @@ from common import (
     CANONICAL_Z_COLUMNS,
     DEFAULT_CONFIG_PATH,
     PLOTS_DIR,
+    ROBUST_EFFICIENCY_VARIANT_TO_SUFFIX,
     STEP1_OUTPUT_COLUMNS,
     canonicalize_trigger_value,
     cfg_path,
@@ -255,7 +256,9 @@ def _resolve_step1_input_dataframe(config: dict) -> tuple[pd.DataFrame, dict[str
             )
             if column in header
         ]
-        required_efficiency_columns = [f"eff{idx}" for idx in range(1, 5)]
+        efficiency_variant = str(trigger_selection.get("robust_efficiency_variant", "default"))
+        efficiency_suffix = ROBUST_EFFICIENCY_VARIANT_TO_SUFFIX[efficiency_variant]
+        required_efficiency_columns = [f"eff{idx}{efficiency_suffix}" for idx in range(1, 5)]
         needed = ["param_hash"] + required_efficiency_columns + required_rate_columns + required_count_columns
         missing_required_columns = [
             column for column in ["param_hash"] + required_efficiency_columns + required_rate_columns if column not in header

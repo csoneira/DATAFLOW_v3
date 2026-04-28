@@ -209,6 +209,7 @@ TASK4_PLOT_ALIASES: tuple[str, ...] = (
     "track_consistency_loo_residuals",
     "strip_hit_occupancy",
     "track_based_efficiency",
+    "total_event_charge_histogram",
     "track_based_efficiency_tt_stability",
     "track_based_efficiency_vs_theta",
     "timtrack_projection_ellipse_contours",
@@ -393,6 +394,51 @@ def close_direct_pdf_writer() -> None:
 
 
 atexit.register(close_direct_pdf_writer)
+
+
+def _resolve_task4_total_event_charge_series(
+    df: pd.DataFrame,
+) -> tuple[pd.Series | None, str | None]:
+    for charge_column in ("charge_event", "tim_charge_event"):
+        if charge_column not in df.columns:
+            continue
+        candidate = pd.to_numeric(df[charge_column], errors="coerce")
+        if candidate.notna().sum() > 0 and (candidate > 0).any():
+            return candidate.astype(float), charge_column
+
+    plane_sum_columns = [
+        column_name
+        for column_name in ("P1_Q_sum_final", "P2_Q_sum_final", "P3_Q_sum_final", "P4_Q_sum_final")
+        if column_name in df.columns
+    ]
+    if plane_sum_columns:
+        candidate = (
+            df.loc[:, plane_sum_columns]
+            .apply(pd.to_numeric, errors="coerce")
+            .fillna(0.0)
+            .sum(axis=1)
+            .astype(float)
+        )
+        if candidate.notna().sum() > 0 and (candidate > 0).any():
+            return candidate, "+".join(plane_sum_columns)
+
+    strip_columns = [
+        column_name
+        for column_name in df.columns
+        if re.fullmatch(r"Q_P[1-4]s[1-4]", str(column_name))
+    ]
+    if strip_columns:
+        candidate = (
+            df.loc[:, strip_columns]
+            .apply(pd.to_numeric, errors="coerce")
+            .fillna(0.0)
+            .sum(axis=1)
+            .astype(float)
+        )
+        if candidate.notna().sum() > 0 and (candidate > 0).any():
+            return candidate, "+".join(strip_columns)
+
+    return None, None
 
 # Warning Filters
 warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
@@ -1214,7 +1260,7 @@ create_reject_plots = config.get("create_reject_plots", False)
 if create_reject_plots:
     save_rejected_rows = True
 print(
-    f"Warning: reject-plots config -> create_reject_plots={create_reject_plots} "
+    f"Info: reject-plots config -> create_reject_plots={create_reject_plots} "
     f"save_rejected_rows={save_rejected_rows} save_plots={save_plots}"
 )
 reject_plot_hist_bins = int(config.get("reject_plot_hist_bins", 60))
@@ -1532,11 +1578,13 @@ if date_ranges:
     skipped_completed = completed_before - len(completed_files)
     if skipped_processing > 0:
         print(
-            f"[DATE_RANGE] Ignoring {skipped_processing} out-of-range file(s) in PROCESSING_DIRECTORY."
+            f"[DATE_RANGE] Ignoring {skipped_processing} out-of-range file(s) in PROCESSING_DIRECTORY.",
+            force=True,
         )
     if skipped_completed > 0:
         print(
-            f"[DATE_RANGE] Ignoring {skipped_completed} out-of-range file(s) in COMPLETED_DIRECTORY."
+            f"[DATE_RANGE] Ignoring {skipped_completed} out-of-range file(s) in COMPLETED_DIRECTORY.",
+            force=True,
         )
 
 active_qa_retry_basenames: set[str] = set()
@@ -7216,14 +7264,15 @@ def _histogram_bin_indices(values, bins):
     return out
 
 
-def _select_robust_plateau_fired_event_indices(
+def _select_robust_plateau_event_indices(
     axis_payload,
     *,
     axis_values,
-    fired,
     bins,
     accepted_indices,
     tolerance,
+    fired=None,
+    fired_only=False,
 ):
     eff_vals = np.asarray(axis_payload.get("eff", []), dtype=float)
     den_vals = np.asarray(axis_payload.get("den", []), dtype=float)
@@ -7239,11 +7288,17 @@ def _select_robust_plateau_fired_event_indices(
 
     accepted_index = pd.Index(accepted_indices)
     bin_indices = _histogram_bin_indices(axis_values, bins)
-    fired_arr = np.asarray(fired, dtype=float)
-    if len(accepted_index) != len(bin_indices) or len(fired_arr) != len(bin_indices):
+    if len(accepted_index) != len(bin_indices):
         return None
 
-    selected = (fired_arr > 0.5) & (bin_indices >= 0)
+    selected = bin_indices >= 0
+    if fired_only:
+        if fired is None:
+            return None
+        fired_arr = np.asarray(fired, dtype=float)
+        if len(fired_arr) != len(bin_indices):
+            return None
+        selected &= fired_arr > 0.5
     if np.any(selected):
         in_plateau = np.zeros(selected.shape, dtype=bool)
         in_plateau[selected] = plateau_bins[bin_indices[selected]]
@@ -7376,9 +7431,13 @@ def _compute_track_based_efficiency_payload(
         "config": dict(cfg_eff),
         "edges": edges,
         "plane_results": {},
+        "trigger_source": "",
     }
 
-    required = ("x", "y", "xp", "yp", "theta", "definitive_tt")
+    trigger_source = "fit_tt" if "fit_tt" in df_plot.columns else "definitive_tt"
+    payload["trigger_source"] = trigger_source
+
+    required = ("x", "y", "xp", "yp", "theta", trigger_source)
     missing = [col for col in required if col not in df_plot.columns]
     if missing:
         payload["reason"] = f"missing_required_columns:{','.join(missing)}"
@@ -7393,7 +7452,7 @@ def _compute_track_based_efficiency_payload(
         pd.to_numeric(df_plot["theta"], errors="coerce").to_numpy(dtype=float)
     )
     dtt_all = (
-        pd.to_numeric(df_plot["definitive_tt"], errors="coerce")
+        pd.to_numeric(df_plot[trigger_source], errors="coerce")
         .fillna(0)
         .to_numpy(dtype=np.int32)
     )
@@ -7441,6 +7500,7 @@ def _compute_track_based_efficiency_payload(
                     "selected_center": np.nan,
                 },
             },
+            "robust_x_plateau_accepted_indices": None,
             "robust_x_plateau_fired_indices": None,
         }
 
@@ -7490,13 +7550,21 @@ def _compute_track_based_efficiency_payload(
 
             plane_result["x"] = _make_efficiency_curve(x_acc, fired_acc, edges["x"])
             plane_result["y"] = _make_efficiency_curve(y_acc, fired_acc, edges["y"])
-            plane_result["robust_x_plateau_fired_indices"] = _select_robust_plateau_fired_event_indices(
+            plane_result["robust_x_plateau_accepted_indices"] = _select_robust_plateau_event_indices(
                 plane_result["x"],
                 axis_values=x_acc,
-                fired=fired_acc,
                 bins=edges["x"],
                 accepted_indices=accepted_index,
                 tolerance=_ROBUST_EFFICIENCY_PLATEAU_TOLERANCE,
+            )
+            plane_result["robust_x_plateau_fired_indices"] = _select_robust_plateau_event_indices(
+                plane_result["x"],
+                axis_values=x_acc,
+                bins=edges["x"],
+                accepted_indices=accepted_index,
+                tolerance=_ROBUST_EFFICIENCY_PLATEAU_TOLERANCE,
+                fired=fired_acc,
+                fired_only=True,
             )
             any_plane_available = True
 
@@ -7628,70 +7696,159 @@ def _build_robust_efficiency_row(
         "filename_base": filename_base,
         "execution_timestamp": execution_timestamp,
         "param_hash": param_hash,
+        "robust_efficiency_trigger_source": (
+            str(payload.get("trigger_source", "")) if isinstance(payload, dict) else ""
+        ),
     }
 
     plane_results = payload.get("plane_results", {}) if isinstance(payload, dict) else {}
-    robust_plateau_index = None
-    robust_plateau_available = True
+    plane_plateau_indices: dict[int, pd.Index] = {}
+    plane_plateau_accepted_indices: dict[int, pd.Index] = {}
     for plane in range(1, 5):
         plane_result = plane_results.get(plane, {}) if isinstance(plane_results, dict) else {}
         axis_payload = plane_result.get("x", {}) if isinstance(plane_result, dict) else {}
         eff_vals = np.asarray(axis_payload.get("eff", []), dtype=float)
         den_vals = np.asarray(axis_payload.get("den", []), dtype=float)
         valid = np.isfinite(eff_vals) & np.isfinite(den_vals) & (den_vals > 0)
-        row[f"eff{plane}"] = float(np.nanmedian(eff_vals[valid])) if np.any(valid) else np.nan
+        median_eff = float(np.nanmedian(eff_vals[valid])) if np.any(valid) else np.nan
+        overall_eff_percent = plane_result.get("overall_eff", np.nan) if isinstance(plane_result, dict) else np.nan
+        overall_eff_fraction = (
+            float(overall_eff_percent) / 100.0
+            if np.isfinite(overall_eff_percent)
+            else np.nan
+        )
         row[f"eff{plane}_n_valid_bins"] = int(np.sum(valid))
         if np.any(valid):
             plateau_bins = valid & (
-                np.abs(eff_vals - row[f"eff{plane}"]) <= _ROBUST_EFFICIENCY_PLATEAU_TOLERANCE
+                np.abs(eff_vals - median_eff) <= _ROBUST_EFFICIENCY_PLATEAU_TOLERANCE
             )
             row[f"eff{plane}_n_plateau_bins"] = int(np.sum(plateau_bins))
         else:
             row[f"eff{plane}_n_plateau_bins"] = 0
+        row[f"eff{plane}_median_x"] = median_eff
+        row[f"eff{plane}_overall"] = overall_eff_fraction
 
-        plateau_indices = (
+        plateau_accepted = (
+            plane_result.get("robust_x_plateau_accepted_indices", None)
+            if isinstance(plane_result, dict)
+            else None
+        )
+        if plateau_accepted is not None:
+            plateau_accepted_index = pd.Index(plateau_accepted)
+            plane_plateau_accepted_indices[plane] = plateau_accepted_index
+            row[f"eff{plane}_plateau_n_denom"] = int(len(plateau_accepted_index))
+        else:
+            row[f"eff{plane}_plateau_n_denom"] = np.nan
+
+        plateau_fired = (
             plane_result.get("robust_x_plateau_fired_indices", None)
             if isinstance(plane_result, dict)
             else None
         )
-        if plateau_indices is None:
-            robust_plateau_available = False
+        if plateau_fired is None:
+            row[f"eff{plane}_plateau_n_num"] = np.nan
+            row[f"eff{plane}_plateau"] = overall_eff_fraction
+            row[f"eff{plane}"] = overall_eff_fraction
             continue
+        plateau_fired_index = pd.Index(plateau_fired)
+        plane_plateau_indices[plane] = plateau_fired_index
+        row[f"eff{plane}_plateau_n_num"] = int(len(plateau_fired_index))
 
-        plateau_index = pd.Index(plateau_indices)
-        robust_plateau_index = (
-            plateau_index
-            if robust_plateau_index is None
-            else robust_plateau_index.union(plateau_index, sort=False)
+        plateau_eff = np.nan
+        if plane in plane_plateau_accepted_indices and len(plane_plateau_accepted_indices[plane]) > 0:
+            plateau_eff = float(len(plateau_fired_index) / len(plane_plateau_accepted_indices[plane]))
+        row[f"eff{plane}_plateau"] = plateau_eff
+        row[f"eff{plane}"] = (
+            plateau_eff
+            if np.isfinite(plateau_eff)
+            else overall_eff_fraction
         )
 
+    fit_tt_1234_index = None
     if "fit_tt" in df_events.columns:
         tt_values = pd.to_numeric(df_events["fit_tt"], errors="coerce").to_numpy(dtype=float)
-        n_events_1234 = int(np.sum(tt_values == 1234.0))
+        fit_tt_1234_index = pd.Index(df_events.index[tt_values == 1234.0])
+        n_events_1234 = int(len(fit_tt_1234_index))
     else:
         n_events_1234 = None
 
     total_events = int(len(df_events))
     denom = float(denominator_seconds) if np.isfinite(denominator_seconds) else 0.0
+    row["count_rate_denominator_seconds"] = int(round(denom)) if denom > 0.0 else 0
+    row["four_plane_count"] = int(n_events_1234) if n_events_1234 is not None else np.nan
+    row["total_count"] = int(total_events)
     if n_events_1234 is not None and denom > 0.0:
         row["rate_1234_hz"] = float(n_events_1234 / denom)
     else:
         row["rate_1234_hz"] = np.nan
 
-    if robust_plateau_available and robust_plateau_index is not None and "fit_tt" in df_events.columns and denom > 0.0:
-        fit_tt_series = pd.to_numeric(df_events["fit_tt"], errors="coerce")
-        fit_tt_1234_index = df_events.index[fit_tt_series == 1234.0]
-        n_events_four_plane_robust = int(
-            len(robust_plateau_index.intersection(pd.Index(fit_tt_1234_index), sort=False))
-        )
-        row["four_plane_robust_hz"] = float(n_events_four_plane_robust / denom)
+    union_available_index = None
+    intersection_available_index = None
+    if fit_tt_1234_index is not None and plane_plateau_indices:
+        plateau_fit_indices = [
+            plateau_index.intersection(fit_tt_1234_index, sort=False)
+            for plateau_index in plane_plateau_indices.values()
+        ]
+        union_available_index = plateau_fit_indices[0]
+        intersection_available_index = plateau_fit_indices[0]
+        for plateau_index in plateau_fit_indices[1:]:
+            union_available_index = union_available_index.union(plateau_index, sort=False)
+            intersection_available_index = intersection_available_index.intersection(plateau_index, sort=False)
+
+    if union_available_index is not None:
+        row["four_plane_robust_count_union"] = int(len(union_available_index))
+        row["four_plane_robust_hz_union"] = float(len(union_available_index) / denom) if denom > 0.0 else np.nan
     else:
+        row["four_plane_robust_count_union"] = np.nan
+        row["four_plane_robust_hz_union"] = np.nan
+
+    if intersection_available_index is not None:
+        row["four_plane_robust_count_intersection"] = int(len(intersection_available_index))
+        row["four_plane_robust_hz_intersection"] = (
+            float(len(intersection_available_index) / denom)
+            if denom > 0.0
+            else np.nan
+        )
+    else:
+        row["four_plane_robust_count_intersection"] = np.nan
+        row["four_plane_robust_hz_intersection"] = np.nan
+
+    if fit_tt_1234_index is not None and len(plane_plateau_indices) == 4 and union_available_index is not None:
+        n_events_four_plane_robust = int(len(union_available_index))
+        row["four_plane_robust_count"] = n_events_four_plane_robust
+        row["four_plane_robust_hz"] = float(n_events_four_plane_robust / denom) if denom > 0.0 else np.nan
+    else:
+        row["four_plane_robust_count"] = np.nan
         row["four_plane_robust_hz"] = np.nan
 
     if denom > 0.0:
         row["rate_total_hz"] = float(total_events / denom)
     else:
         row["rate_total_hz"] = np.nan
+
+    if n_events_1234 is not None and int(n_events_1234) > 0:
+        union_count = row.get("four_plane_robust_count_union", np.nan)
+        intersection_count = row.get("four_plane_robust_count_intersection", np.nan)
+        default_count = row.get("four_plane_robust_count", np.nan)
+        row["four_plane_robust_efficiency_union"] = (
+            float(union_count) / float(n_events_1234)
+            if np.isfinite(union_count)
+            else np.nan
+        )
+        row["four_plane_robust_efficiency_intersection"] = (
+            float(intersection_count) / float(n_events_1234)
+            if np.isfinite(intersection_count)
+            else np.nan
+        )
+        row["four_plane_robust_efficiency"] = (
+            float(default_count) / float(n_events_1234)
+            if np.isfinite(default_count)
+            else np.nan
+        )
+    else:
+        row["four_plane_robust_efficiency_union"] = np.nan
+        row["four_plane_robust_efficiency_intersection"] = np.nan
+        row["four_plane_robust_efficiency"] = np.nan
     return row
 
 
@@ -13839,6 +13996,117 @@ def _pipeline_compute_start_timestamp(base: str) -> str:
 # Create and save the PDF -----------------------------------------------------
 # -----------------------------------------------------------------------------
 
+_task4_charge_series = None
+_task4_charge_source = None
+_task4_charge_series, _task4_charge_source = _resolve_task4_total_event_charge_series(working_df)
+if _task4_charge_source is not None:
+    print(f"TASK_4 charge_event source: {_task4_charge_source}")
+
+if (
+    _task4_charge_series is not None
+    and (create_essential_plots or create_plots)
+    and task4_plot_enabled("total_event_charge_histogram")
+):
+    _task4_charge_quantile = float(config.get("total_event_charge_histogram_upper_quantile", 0.5))
+    if not np.isfinite(_task4_charge_quantile):
+        _task4_charge_quantile = 0.5
+    _task4_charge_quantile = min(max(_task4_charge_quantile, 0.01), 0.999)
+
+    _task4_charge_plot_values = pd.to_numeric(_task4_charge_series, errors="coerce")
+    _task4_charge_plot_values = _task4_charge_plot_values[
+        np.isfinite(_task4_charge_plot_values.to_numpy(dtype=float, copy=False))
+    ]
+    _task4_charge_plot_values = _task4_charge_plot_values[_task4_charge_plot_values >= 0.0]
+
+    _task4_definitive_tt_series = pd.to_numeric(
+        working_df.get("definitive_tt", pd.Series(np.nan, index=working_df.index)),
+        errors="coerce",
+    )
+    _task4_hist_panels = [
+        ("Total", None),
+        ("1234", 1234),
+        ("123", 123),
+        ("234", 234),
+        ("124", 124),
+        ("134", 134),
+        ("12", 12),
+        ("23", 23),
+        ("34", 34),
+    ]
+
+    _task4_charge_upper = float(_task4_charge_plot_values.quantile(_task4_charge_quantile))
+    if not np.isfinite(_task4_charge_upper) or _task4_charge_upper <= 0:
+        _task4_charge_upper = 1.0
+    _task4_charge_upper = max(_task4_charge_upper, 0.25)
+    _task4_bin_width = 0.25
+    _task4_bins = np.arange(0.0, _task4_charge_upper + _task4_bin_width, _task4_bin_width)
+    if _task4_bins.size < 2:
+        _task4_bins = np.array([0.0, max(_task4_charge_upper, _task4_bin_width)])
+
+    _task4_fig, _task4_axes = plt.subplots(
+        3,
+        3,
+        figsize=(12, 12),
+        sharex=True,
+        sharey=True,
+    )
+    _task4_axes = np.asarray(_task4_axes).reshape(3, 3)
+
+    for _task4_ax, (_task4_title, _task4_tt_value) in zip(_task4_axes.flat, _task4_hist_panels):
+        if _task4_tt_value is None:
+            _task4_subset = _task4_charge_plot_values
+        else:
+            _task4_tt_mask = _task4_definitive_tt_series == _task4_tt_value
+            _task4_subset = _task4_charge_series.loc[_task4_tt_mask]
+            _task4_subset = pd.to_numeric(_task4_subset, errors="coerce")
+            _task4_subset = _task4_subset[
+                np.isfinite(_task4_subset.to_numpy(dtype=float, copy=False))
+            ]
+            _task4_subset = _task4_subset[_task4_subset >= 0.0]
+
+        _task4_subset = _task4_subset[_task4_subset <= _task4_charge_upper]
+        _task4_ax.hist(
+            _task4_subset,
+            bins=_task4_bins,
+            color="C1",
+            histtype="step",
+            linewidth=1.0,
+        )
+        _task4_ax.set_title(_task4_title, fontsize=10)
+        _task4_ax.set_yscale("log")
+        _task4_ax.set_xlim(0, _task4_charge_upper)
+        _task4_ax.grid(True, alpha=0.25)
+
+    for _task4_ax in _task4_axes[-1, :]:
+        _task4_ax.set_xlabel("Total event charge")
+    for _task4_ax in _task4_axes[:, 0]:
+        _task4_ax.set_ylabel("Count")
+
+    _task4_fig.suptitle(
+        f"Total event charge histograms up to q={_task4_charge_quantile:.2f}",
+        fontsize=12,
+    )
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
+
+    if save_plots:
+        _task4_charge_plot_name = f"{fig_idx}_total_event_charge_histogram.png"
+        fig_idx += 1
+        _task4_charge_plot_path = os.path.join(
+            base_directories["figure_directory"],
+            _task4_charge_plot_name,
+        )
+        plot_list.append(_task4_charge_plot_path)
+        save_plot_figure(
+            _task4_charge_plot_path,
+            format="png",
+            alias="total_event_charge_histogram",
+        )
+    if show_plots:
+        plt.show()
+    plt.close(_task4_fig)
+elif _task4_charge_series is None:
+    print("[WARN] TASK_4 total_event_charge_histogram skipped: no usable charge_event source.")
+
 # Force PDF creation when Task 4 plotting is enabled.
 if create_plots:
     create_pdf = True
@@ -14447,78 +14715,64 @@ metadata_robust_efficiency_csv_path = save_metadata(
         "filename_base",
         "execution_timestamp",
         "param_hash",
+        "robust_efficiency_trigger_source",
+        "count_rate_denominator_seconds",
         "eff1",
+        "eff1_plateau",
+        "eff1_overall",
+        "eff1_median_x",
+        "eff1_plateau_n_num",
+        "eff1_plateau_n_denom",
         "eff1_n_valid_bins",
         "eff1_n_plateau_bins",
         "eff2",
+        "eff2_plateau",
+        "eff2_overall",
+        "eff2_median_x",
+        "eff2_plateau_n_num",
+        "eff2_plateau_n_denom",
         "eff2_n_valid_bins",
         "eff2_n_plateau_bins",
         "eff3",
+        "eff3_plateau",
+        "eff3_overall",
+        "eff3_median_x",
+        "eff3_plateau_n_num",
+        "eff3_plateau_n_denom",
         "eff3_n_valid_bins",
         "eff3_n_plateau_bins",
         "eff4",
+        "eff4_plateau",
+        "eff4_overall",
+        "eff4_median_x",
+        "eff4_plateau_n_num",
+        "eff4_plateau_n_denom",
         "eff4_n_valid_bins",
         "eff4_n_plateau_bins",
+        "four_plane_count",
+        "four_plane_robust_count",
+        "four_plane_robust_count_union",
+        "four_plane_robust_count_intersection",
+        "total_count",
         "rate_1234_hz",
         "four_plane_robust_hz",
+        "four_plane_robust_hz_union",
+        "four_plane_robust_hz_intersection",
+        "four_plane_robust_efficiency",
+        "four_plane_robust_efficiency_union",
+        "four_plane_robust_efficiency_intersection",
         "rate_total_hz",
     ),
+    replace_existing_basename=True,
 )
 print(f"Metadata (robust_efficiency) CSV updated at: {metadata_robust_efficiency_csv_path}")
 
 # Ensure the fitted parquet always carries an event-level total charge for
 # downstream TASK_5 / STEP_2 aggregation.
-_task4_charge_series = None
-for _task4_charge_column in ("charge_event", "tim_charge_event"):
-    if _task4_charge_column not in working_df.columns:
-        continue
-    _candidate = pd.to_numeric(working_df[_task4_charge_column], errors="coerce")
-    if _candidate.notna().sum() > 0 and (_candidate > 0).any():
-        _task4_charge_series = _candidate.astype(float)
-        print(f"TASK_4 charge_event source: {_task4_charge_column}")
-        break
-
 if _task4_charge_series is None:
-    _task4_plane_sum_columns = [
-        column_name
-        for column_name in ("P1_Q_sum_final", "P2_Q_sum_final", "P3_Q_sum_final", "P4_Q_sum_final")
-        if column_name in working_df.columns
-    ]
-    if _task4_plane_sum_columns:
-        _candidate = (
-            working_df.loc[:, _task4_plane_sum_columns]
-            .apply(pd.to_numeric, errors="coerce")
-            .fillna(0.0)
-            .sum(axis=1)
-            .astype(float)
-        )
-        if _candidate.notna().sum() > 0 and (_candidate > 0).any():
-            _task4_charge_series = _candidate
-            print(
-                "TASK_4 charge_event source: "
-                + "+".join(_task4_plane_sum_columns)
-            )
-
-if _task4_charge_series is None:
-    _task4_strip_columns = [
-        column_name
-        for column_name in working_df.columns
-        if re.fullmatch(r"Q_P[1-4]s[1-4]", str(column_name))
-    ]
-    if _task4_strip_columns:
-        _candidate = (
-            working_df.loc[:, _task4_strip_columns]
-            .apply(pd.to_numeric, errors="coerce")
-            .fillna(0.0)
-            .sum(axis=1)
-            .astype(float)
-        )
-        if _candidate.notna().sum() > 0 and (_candidate > 0).any():
-            _task4_charge_series = _candidate
-            print(
-                "TASK_4 charge_event source: "
-                + "+".join(_task4_strip_columns)
-            )
+    _task4_charge_series, _task4_charge_source = _resolve_task4_total_event_charge_series(working_df)
+    if _task4_charge_source is not None:
+        print(f"TASK_4 charge_event source: {_task4_charge_source}")
 
 if _task4_charge_series is not None:
     working_df["charge_event"] = _task4_charge_series.astype(float)

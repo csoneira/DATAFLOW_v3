@@ -1,6 +1,6 @@
 # Fixed
-xlim_mm: 1000
-ylim_mm: 1000
+xlim_mm: 1250
+ylim_mm: 1250
 z_plane_mm: 100
 seed: null
 c_mm_per_ns: 299.792458

@@ -79,6 +79,9 @@ DEFAULT_TRIGGER_VALUES: Tuple[str, ...] = (
 DEFAULT_LINE_WIDTH = 1.2
 DEFAULT_MARKER_SIZE = 10.0
 DEFAULT_Y_MIN_HZ = 0.0
+DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+MONTH_ONLY_RE = re.compile(r"^\d{4}-\d{2}$")
+YEAR_ONLY_RE = re.compile(r"^\d{4}$")
 
 METADATA_FILENAME_TEMPLATE = "task_{task_id}_metadata_trigger_type.csv"
 METADATA_TIMESTAMP_FMT = "%Y-%m-%d_%H.%M.%S"
@@ -230,6 +233,76 @@ def extract_timestamp_from_basename(value: str) -> Optional[datetime]:
     )
 
 
+def _next_month_start(ts: pd.Timestamp) -> pd.Timestamp:
+    if ts.month == 12:
+        return pd.Timestamp(year=ts.year + 1, month=1, day=1)
+    return pd.Timestamp(year=ts.year, month=ts.month + 1, day=1)
+
+
+def _next_year_start(ts: pd.Timestamp) -> pd.Timestamp:
+    return pd.Timestamp(year=ts.year + 1, month=1, day=1)
+
+
+def _parse_date_bound(raw_value: object, *, bound_name: str, is_end: bool) -> Optional[pd.Timestamp]:
+    if raw_value in (None, ""):
+        return None
+
+    text = str(raw_value).strip()
+    if not text:
+        return None
+
+    if YEAR_ONLY_RE.fullmatch(text):
+        parsed = pd.Timestamp(year=int(text), month=1, day=1)
+        return _next_year_start(parsed) if is_end else parsed
+
+    if MONTH_ONLY_RE.fullmatch(text):
+        parsed = pd.Timestamp(f"{text}-01")
+        return _next_month_start(parsed) if is_end else parsed
+
+    if DATE_ONLY_RE.fullmatch(text):
+        parsed = pd.Timestamp(text)
+        return parsed + pd.Timedelta(days=1) if is_end else parsed
+
+    try:
+        parsed = pd.Timestamp(text)
+    except Exception as exc:
+        raise ValueError(
+            f"Invalid {bound_name} date bound: {raw_value!r}. "
+            "Use null, YYYY, YYYY-MM, YYYY-MM-DD, or a full timestamp."
+        ) from exc
+
+    if pd.isna(parsed):
+        raise ValueError(
+            f"Invalid {bound_name} date bound: {raw_value!r}. "
+            "Use null, YYYY, YYYY-MM, YYYY-MM-DD, or a full timestamp."
+        )
+    return parsed
+
+
+def parse_date_range(raw_value: object) -> Optional[Tuple[Optional[pd.Timestamp], Optional[pd.Timestamp]]]:
+    if raw_value is None:
+        return None
+
+    if isinstance(raw_value, dict):
+        start_raw = raw_value.get("start")
+        end_raw = raw_value.get("end")
+    elif isinstance(raw_value, (list, tuple)) and len(raw_value) == 2:
+        start_raw, end_raw = raw_value
+    else:
+        raise ValueError(
+            "date_range must be null, a two-item array [start, end], or an object "
+            "with {\"start\": ..., \"end\": ...}."
+        )
+
+    start = _parse_date_bound(start_raw, bound_name="start", is_end=False)
+    end = _parse_date_bound(end_raw, bound_name="end", is_end=True)
+    if start is None and end is None:
+        return None
+    if start is not None and end is not None and start >= end:
+        raise ValueError("date_range start must be earlier than end.")
+    return start, end
+
+
 def _ordered_unique(values: Iterable[str]) -> List[str]:
     seen: Set[str] = set()
     ordered: List[str] = []
@@ -371,6 +444,7 @@ def load_task_metadata(
     task_id: int,
     allowed_basenames: Set[str],
     trigger_values: Sequence[str],
+    date_range: Optional[Tuple[Optional[pd.Timestamp], Optional[pd.Timestamp]]] = None,
 ) -> pd.DataFrame:
     metadata_csv = (
         STATIONS_ROOT
@@ -429,6 +503,15 @@ def load_task_metadata(
     df = df[df["file_timestamp"].notna()].copy()
     if df.empty:
         return pd.DataFrame()
+
+    if date_range is not None:
+        start, end = date_range
+        if start is not None:
+            df = df[df["file_timestamp"] >= start]
+        if end is not None:
+            df = df[df["file_timestamp"] < end]
+        if df.empty:
+            return pd.DataFrame()
 
     prefix = TASK_FINAL_PREFIX[task_id]
     for trigger_value in trigger_values:
@@ -654,6 +737,7 @@ def main() -> None:
         tasks = normalize_task_selection(config.get("tasks", list(TASK_IDS)))
 
     trigger_values = normalize_trigger_values(config.get("trigger_values", list(DEFAULT_TRIGGER_VALUES)))
+    date_range = parse_date_range(config.get("date_range"))
     line_width = float(config.get("line_width", DEFAULT_LINE_WIDTH))
     marker_size = float(config.get("marker_size", DEFAULT_MARKER_SIZE))
     y_min_hz = float(config.get("y_min_hz", DEFAULT_Y_MIN_HZ))
@@ -673,6 +757,7 @@ def main() -> None:
                 task_id=task_id,
                 allowed_basenames=allowed_basenames,
                 trigger_values=trigger_values,
+                date_range=date_range,
             )
         station_payload[station] = (task_payload, len(allowed_basenames))
 

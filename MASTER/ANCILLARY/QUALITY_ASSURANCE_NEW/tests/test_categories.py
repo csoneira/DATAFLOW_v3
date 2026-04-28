@@ -68,6 +68,36 @@ class CategoryTests(unittest.TestCase):
         self.assertEqual(int(by_column.loc["correct_angle", "effective_plot"]), 1)
         self.assertEqual(int(by_column.loc["correct_angle", "effective_quality"]), 1)
 
+    def test_shorthand_quality_rule_promotes_matching_limit_column(self) -> None:
+        df = pd.DataFrame(
+            {
+                "plane_combination_plane_q_dif_sum_low_limit": [1.0, 1.1],
+                "plane_combination_plane_q_dif_sum_low_rows_failed_pct": [2.0, 3.0],
+            }
+        )
+
+        manifest_df = build_column_manifest(
+            df,
+            {
+                "quality_and_plot": ["q_dif_sum_low"],
+                "plot_only": ["*_rows_failed_pct", "*_limit"],
+            },
+        )
+        by_column = manifest_df.set_index("column_name")
+
+        self.assertEqual(
+            by_column.loc["plane_combination_plane_q_dif_sum_low_limit", "requested_category"],
+            "quality_and_plot",
+        )
+        self.assertEqual(
+            int(by_column.loc["plane_combination_plane_q_dif_sum_low_limit", "effective_quality"]),
+            1,
+        )
+        self.assertEqual(
+            by_column.loc["plane_combination_plane_q_dif_sum_low_rows_failed_pct", "requested_category"],
+            "plot_only",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

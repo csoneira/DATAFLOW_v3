@@ -19,17 +19,30 @@ import yaml
 
 log = logging.getLogger("compare_task4_efficiency")
 
-ROOT_DIR = Path(__file__).resolve().parents[3]
-STATIONS_ROOT = ROOT_DIR / "STATIONS"
+
+def _find_repo_root(script_path: Path) -> Path:
+    for candidate in script_path.resolve().parents:
+        if (candidate / "MASTER").is_dir() and (candidate / "STATIONS").is_dir():
+            return candidate
+    raise RuntimeError(f"Could not locate DATAFLOW_v3 repo root from {script_path}")
+
+
+REPO_ROOT = _find_repo_root(Path(__file__))
+MASTER_ROOT = REPO_ROOT / "MASTER"
+
+STATIONS_ROOT = REPO_ROOT / "STATIONS"
 DEFAULT_CONFIG_PATH = (
-    ROOT_DIR
-    / "MASTER"
+    MASTER_ROOT
     / "CONFIG_FILES"
     / "STAGE_1"
     / "EVENT_DATA"
     / "STEP_1"
     / "TASK_4"
     / "config_task_4.yaml"
+)
+DEFAULT_COMPARE_CONFIG_PATH = (
+    Path(__file__).resolve().parent
+    / "config_compare_task4_robust_vs_three_to_four_efficiency.yaml"
 )
 OUTPUT_DIR = Path(__file__).resolve().parent / "OUTPUTS" / "TASK_4_ROBUST_VS_THREE_TO_FOUR"
 
@@ -78,6 +91,11 @@ def _parse_args() -> argparse.Namespace:
         default=str(OUTPUT_DIR),
         help="Directory where per-station figures will be written.",
     )
+    parser.add_argument(
+        "--compare-config",
+        default=str(DEFAULT_COMPARE_CONFIG_PATH),
+        help="Ancillary YAML config with optional per-station z-position filters.",
+    )
     return parser.parse_args()
 
 
@@ -115,6 +133,26 @@ def _metadata_path(station_id: int, source_name: str) -> Path:
         / "METADATA"
         / f"task_4_metadata_{source_name}.csv"
     )
+
+
+def _station_name(station_id: int) -> str:
+    return f"MINGO{station_id:02d}"
+
+
+def _station_z_filter(compare_config_path: Path, station_id: int) -> tuple[int, int, int, int] | None:
+    if not compare_config_path.exists():
+        return None
+    config = _load_yaml(compare_config_path)
+    raw_mapping = config.get("station_z_positions_mm", {})
+    if not isinstance(raw_mapping, dict):
+        return None
+    raw_value = raw_mapping.get(_station_name(station_id))
+    if not isinstance(raw_value, (list, tuple)) or len(raw_value) != 4:
+        return None
+    try:
+        return tuple(int(float(value)) for value in raw_value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _parse_execution_timestamp(series: pd.Series) -> pd.Series:
@@ -161,22 +199,32 @@ def _parse_filename_timestamp(filename_base: object) -> pd.Timestamp:
     return pd.Timestamp(dt, tz="UTC")
 
 
-def _load_station_comparison_dataframe(station_id: int) -> pd.DataFrame:
+def _load_station_comparison_dataframe(
+    station_id: int,
+    *,
+    compare_config_path: Path,
+) -> pd.DataFrame:
     robust_path = _metadata_path(station_id, "robust_efficiency")
     trigger_path = _metadata_path(station_id, "trigger_type")
+    specific_path = _metadata_path(station_id, "specific")
     if not robust_path.exists():
         raise FileNotFoundError(f"Missing robust-efficiency metadata: {robust_path}")
     if not trigger_path.exists():
         raise FileNotFoundError(f"Missing trigger-type metadata: {trigger_path}")
+    if not specific_path.exists():
+        raise FileNotFoundError(f"Missing specific metadata: {specific_path}")
 
     robust_columns = ["filename_base", "execution_timestamp", *_ROBUST_EFF_COLUMNS.values()]
     trigger_columns = ["filename_base", "execution_timestamp", _FOUR_PLANE_COLUMN, *_THREE_PLANE_NUMERATOR_COLUMNS.values()]
+    specific_columns = ["filename_base", "execution_timestamp", "z_P1", "z_P2", "z_P3", "z_P4"]
 
     robust_df = pd.read_csv(robust_path, usecols=robust_columns, low_memory=False)
     trigger_df = pd.read_csv(trigger_path, usecols=trigger_columns, low_memory=False)
+    specific_df = pd.read_csv(specific_path, usecols=specific_columns, low_memory=False)
 
     robust_df = _aggregate_latest_per_filename(robust_df)
     trigger_df = _aggregate_latest_per_filename(trigger_df)
+    specific_df = _aggregate_latest_per_filename(specific_df)
 
     merged = robust_df.merge(
         trigger_df,
@@ -184,8 +232,26 @@ def _load_station_comparison_dataframe(station_id: int) -> pd.DataFrame:
         how="inner",
         suffixes=("_robust", "_trigger"),
     )
+    merged = merged.merge(
+        specific_df[["filename_base", "z_P1", "z_P2", "z_P3", "z_P4"]],
+        on="filename_base",
+        how="inner",
+    )
     if merged.empty:
         raise ValueError(f"No matching filename_base rows found for station {station_id:02d}")
+
+    z_filter = _station_z_filter(compare_config_path, station_id)
+    if z_filter is not None:
+        for idx, column_name in enumerate(("z_P1", "z_P2", "z_P3", "z_P4")):
+            merged[column_name] = pd.to_numeric(merged[column_name], errors="coerce")
+        mask = np.ones(len(merged), dtype=bool)
+        for idx, column_name in enumerate(("z_P1", "z_P2", "z_P3", "z_P4")):
+            mask &= merged[column_name].round().astype("Int64") == int(z_filter[idx])
+        merged = merged.loc[mask].copy()
+        if merged.empty:
+            raise ValueError(
+                f"No rows found for station {station_id:02d} with z positions {z_filter}"
+            )
 
     four_plane = pd.to_numeric(merged[_FOUR_PLANE_COLUMN], errors="coerce")
     valid_denominator = four_plane.where(four_plane > 0.0)
@@ -193,7 +259,7 @@ def _load_station_comparison_dataframe(station_id: int) -> pd.DataFrame:
         derived_column = f"eff{plane_idx}_three_to_four"
         numerator = pd.to_numeric(merged[_THREE_PLANE_NUMERATOR_COLUMNS[plane_idx]], errors="coerce")
         merged[robust_column] = pd.to_numeric(merged[robust_column], errors="coerce")
-        merged[derived_column] = 1.0 - numerator / valid_denominator
+        merged[derived_column] = valid_denominator / (valid_denominator + numerator)
 
     merged["file_time_utc"] = merged["filename_base"].map(_parse_filename_timestamp)
     if "execution_timestamp_robust" in merged.columns:
@@ -243,7 +309,7 @@ def _plot_station_comparison(dataframe: pd.DataFrame, station_id: int, output_di
             linewidth=1.2,
             linestyle="--",
             alpha=0.95,
-            label="1 - three_plane / four_plane",
+            label="four_plane / (four_plane + three_plane)",
         )
         axis.set_ylim(0.0, 1.02)
         axis.set_ylabel(f"Eff P{plane_idx}")
@@ -278,15 +344,25 @@ def _plot_station_comparison(dataframe: pd.DataFrame, station_id: int, output_di
     scatter_ax.set_ylim(0.0, 1.0)
     scatter_ax.set_box_aspect(1.0)
     scatter_ax.set_xlabel("Robust efficiency")
-    scatter_ax.set_ylabel("1 - three_plane / four_plane")
+    scatter_ax.set_ylabel("four_plane / (four_plane + three_plane)")
     scatter_ax.set_title("Robust vs three-to-four")
     scatter_ax.grid(alpha=0.25)
     scatter_ax.legend(loc="upper left", fontsize=8, frameon=False)
 
-    station_name = f"MINGO{station_id:02d}"
-    fig.suptitle(f"{station_name} Task 4 efficiency comparison | matched rows = {len(dataframe)}", fontsize=14)
+    station_name = _station_name(station_id)
+    z_label = "unknown z"
+    if {"z_P1", "z_P2", "z_P3", "z_P4"} <= set(dataframe.columns):
+        z_values = [
+            int(round(float(pd.to_numeric(dataframe.iloc[0][column_name], errors="coerce"))))
+            for column_name in ("z_P1", "z_P2", "z_P3", "z_P4")
+        ]
+        z_label = "/".join(str(value) for value in z_values)
+    fig.suptitle(
+        f"{station_name} Task 4 efficiency comparison | z = {z_label} mm | matched rows = {len(dataframe)}",
+        fontsize=14,
+    )
 
-    output_path = output_dir / f"{station_name}_task4_robust_vs_three_to_four.png"
+    output_path = output_dir / f"{station_name}_task4_robust_vs_three_to_four_z_{z_label.replace('/', '_')}.png"
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
     return output_path
@@ -296,6 +372,7 @@ def main() -> None:
     _configure_logging()
     args = _parse_args()
     config_path = Path(args.config).expanduser().resolve()
+    compare_config_path = Path(args.compare_config).expanduser().resolve()
     output_dir = Path(args.output_dir).expanduser().resolve()
 
     station_ids = _selected_station_ids(config_path, args.stations)
@@ -304,7 +381,10 @@ def main() -> None:
     written = 0
     for station_id in station_ids:
         try:
-            comparison_df = _load_station_comparison_dataframe(station_id)
+            comparison_df = _load_station_comparison_dataframe(
+                station_id,
+                compare_config_path=compare_config_path,
+            )
         except FileNotFoundError as exc:
             log.warning("%s", exc)
             continue

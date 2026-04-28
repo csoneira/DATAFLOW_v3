@@ -95,7 +95,11 @@ if REPO_ROOT is None:
 if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
-from MASTER.common.config_loader import update_config_with_parameters
+from MASTER.common.config_loader import (
+    load_declared_parameter_names,
+    load_parameter_overrides,
+    update_config_with_parameters,
+)
 from MASTER.common.debug_plots import plot_debug_histograms
 from MASTER.common.execution_logger import set_station, start_timer
 from MASTER.common.file_selection import (
@@ -709,9 +713,11 @@ if CLI_ARGS.station is None:
 station = str(CLI_ARGS.station)
 set_station(station)
 
+filter_parameter_declared_keys: set[str] = set()
+filter_parameter_overrides: dict[str, object] = {}
 if filter_parameter_config_file_path.exists():
-    config = update_config_with_parameters(config, filter_parameter_config_file_path, station)
-    print(f"Warning: Loaded filter parameters from {filter_parameter_config_file_path}")
+    filter_parameter_declared_keys = load_declared_parameter_names(filter_parameter_config_file_path)
+    filter_parameter_overrides = load_parameter_overrides(filter_parameter_config_file_path, station)
 
 config = apply_step1_task_parameter_overrides(
     config_obj=config,
@@ -721,12 +727,16 @@ config = apply_step1_task_parameter_overrides(
     task_number=task_number,
     update_fn=update_config_with_parameters,
     log_fn=print,
+    exclude_keys=filter_parameter_declared_keys,
 )
 config = apply_step1_master_overrides(
     config_obj=config,
     master_config_root=config_root,
     log_fn=print,
 )
+if filter_parameter_config_file_path.exists():
+    config.update(filter_parameter_overrides)
+    print(f"Info: Loaded filter parameters from {filter_parameter_config_file_path}")
 process_only_qa_retry_files = bool(config.get("process_only_qa_retry_files", False))
 if process_only_qa_retry_files:
     print(
@@ -909,96 +919,72 @@ Y_RPC_left = -Y_RPC_abs
 plane_combination_plane_q_sum_sum_left = float(
     config.get(
         "plane_combination_plane_q_sum_sum_left",
-        config.get(
-            "plane_combination_same_plane_q_sum_sum_left",
-            config.get("plane_combination_self_q_sum_sum_left", Q_RPC_left),
-        ),
+        Q_RPC_left,
     )
 )
 plane_combination_plane_q_sum_sum_right = float(
     config.get(
         "plane_combination_plane_q_sum_sum_right",
-        config.get(
-            "plane_combination_same_plane_q_sum_sum_right",
-            config.get("plane_combination_self_q_sum_sum_right", Q_RPC_right),
-        ),
+        Q_RPC_right,
     )
 )
 plane_combination_plane_q_dif_sum_threshold = abs(
     float(
         config.get(
             "plane_combination_plane_q_dif_sum_threshold",
-            config.get(
-                "plane_combination_same_plane_q_dif_sum_threshold",
-                config.get("plane_combination_self_q_dif_sum_threshold", Q_dif_RPC_abs),
-            ),
+            Q_dif_RPC_abs,
         )
     )
 )
 plane_combination_plane_t_sum_sum_left = float(
     config.get(
         "plane_combination_plane_t_sum_sum_left",
-        config.get(
-            "plane_combination_same_plane_t_sum_sum_left",
-            config.get("plane_combination_self_t_sum_sum_left", T_sum_RPC_left),
-        ),
+        T_sum_RPC_left,
     )
 )
 plane_combination_plane_t_sum_sum_right = float(
     config.get(
         "plane_combination_plane_t_sum_sum_right",
-        config.get(
-            "plane_combination_same_plane_t_sum_sum_right",
-            config.get("plane_combination_self_t_sum_sum_right", T_sum_RPC_right),
-        ),
+        T_sum_RPC_right,
     )
 )
 plane_combination_plane_t_dif_sum_threshold = abs(
     float(
         config.get(
             "plane_combination_plane_t_dif_sum_threshold",
-            config.get(
-                "plane_combination_same_plane_t_dif_sum_threshold",
-                config.get("plane_combination_self_t_dif_sum_threshold", T_dif_RPC_abs),
-            ),
+            T_dif_RPC_abs,
         )
     )
 )
 plane_combination_plane_y_sum_left = float(
     config.get(
         "plane_combination_plane_y_sum_left",
-        config.get(
-            "plane_combination_same_plane_y_sum_left",
-            config.get("plane_combination_self_y_sum_left", Y_RPC_left),
-        ),
+        Y_RPC_left,
     )
 )
 plane_combination_plane_y_sum_right = float(
     config.get(
         "plane_combination_plane_y_sum_right",
-        config.get(
-            "plane_combination_same_plane_y_sum_right",
-            config.get("plane_combination_self_y_sum_right", Y_RPC_right),
-        ),
+        Y_RPC_right,
     )
 )
 plane_combination_detector_q_sum_sum_left = float(
     config.get(
         "plane_combination_detector_q_sum_sum_left",
-        config.get("plane_combination_any_q_sum_sum_left", config.get("plane_combination_q_sum_sum_left", Q_RPC_left)),
+        Q_RPC_left,
     )
 )
 plane_combination_detector_q_sum_sum_right = float(
     config.get(
         "plane_combination_detector_q_sum_sum_right",
-        config.get("plane_combination_any_q_sum_sum_right", config.get("plane_combination_q_sum_sum_right", Q_RPC_right)),
+        Q_RPC_right,
     )
 )
 plane_combination_detector_q_sum_dif_threshold = abs(
     float(
         config.get(
             "plane_combination_detector_q_sum_dif_threshold",
-            config.get("plane_combination_any_q_sum_dif_threshold", config.get("plane_combination_q_sum_dif_threshold", Q_RPC_right)),
+            Q_RPC_right,
         )
     )
 )
@@ -1006,7 +992,7 @@ plane_combination_detector_q_dif_sum_threshold = abs(
     float(
         config.get(
             "plane_combination_detector_q_dif_sum_threshold",
-            config.get("plane_combination_any_q_dif_sum_threshold", config.get("plane_combination_q_dif_sum_threshold", Q_dif_RPC_abs)),
+            Q_dif_RPC_abs,
         )
     )
 )
@@ -1014,30 +1000,27 @@ plane_combination_detector_q_dif_dif_threshold = abs(
     float(
         config.get(
             "plane_combination_detector_q_dif_dif_threshold",
-            config.get("plane_combination_any_q_dif_dif_threshold", config.get("plane_combination_q_dif_dif_threshold", Q_dif_RPC_abs)),
+            Q_dif_RPC_abs,
         )
     )
 )
 plane_combination_detector_t_sum_sum_left = float(
     config.get(
         "plane_combination_detector_t_sum_sum_left",
-        config.get("plane_combination_any_t_sum_sum_left", config.get("plane_combination_t_sum_sum_left", T_sum_RPC_left)),
+        T_sum_RPC_left,
     )
 )
 plane_combination_detector_t_sum_sum_right = float(
     config.get(
         "plane_combination_detector_t_sum_sum_right",
-        config.get("plane_combination_any_t_sum_sum_right", config.get("plane_combination_t_sum_sum_right", T_sum_RPC_right)),
+        T_sum_RPC_right,
     )
 )
 plane_combination_detector_t_sum_dif_threshold = abs(
     float(
         config.get(
             "plane_combination_detector_t_sum_dif_threshold",
-            config.get(
-                "plane_combination_any_t_sum_dif_threshold",
-                config.get("plane_combination_t_sum_dif_threshold", max(abs(T_sum_RPC_left), abs(T_sum_RPC_right))),
-            ),
+            max(abs(T_sum_RPC_left), abs(T_sum_RPC_right)),
         )
     )
 )
@@ -1045,7 +1028,7 @@ plane_combination_detector_t_dif_sum_threshold = abs(
     float(
         config.get(
             "plane_combination_detector_t_dif_sum_threshold",
-            config.get("plane_combination_any_t_dif_sum_threshold", config.get("plane_combination_t_dif_sum_threshold", T_dif_RPC_abs)),
+            T_dif_RPC_abs,
         )
     )
 )
@@ -1053,27 +1036,27 @@ plane_combination_detector_t_dif_dif_threshold = abs(
     float(
         config.get(
             "plane_combination_detector_t_dif_dif_threshold",
-            config.get("plane_combination_any_t_dif_dif_threshold", config.get("plane_combination_t_dif_dif_threshold", T_dif_RPC_abs)),
+            T_dif_RPC_abs,
         )
     )
 )
 plane_combination_detector_y_sum_left = float(
     config.get(
         "plane_combination_detector_y_sum_left",
-        config.get("plane_combination_any_y_sum_left", config.get("plane_combination_y_sum_left", Y_RPC_left)),
+        Y_RPC_left,
     )
 )
 plane_combination_detector_y_sum_right = float(
     config.get(
         "plane_combination_detector_y_sum_right",
-        config.get("plane_combination_any_y_sum_right", config.get("plane_combination_y_sum_right", Y_RPC_right)),
+        Y_RPC_right,
     )
 )
 plane_combination_detector_y_dif_threshold = abs(
     float(
         config.get(
             "plane_combination_detector_y_dif_threshold",
-            config.get("plane_combination_any_y_dif_threshold", config.get("plane_combination_y_dif_threshold", Y_RPC_abs)),
+            Y_RPC_abs,
         )
     )
 )
@@ -1092,7 +1075,7 @@ print(
 det_pos_filter = config.get("det_pos_filter", 800)
 det_theta_left_filter = config.get("det_theta_left_filter", 0)
 det_theta_right_filter = config.get("det_theta_right_filter", 1.5708)
-det_phi_filter_abs = abs(float(config.get("det_phi_filter_abs", config.get("det_phi_right_filter", 3.141592))))
+det_phi_filter_abs = abs(float(config.get("det_phi_filter_abs", 3.141592)))
 det_phi_right_filter = det_phi_filter_abs
 det_phi_left_filter = -det_phi_filter_abs
 det_slowness_filter_left = config.get("det_slowness_filter_left", -0.02)
@@ -2111,6 +2094,13 @@ def store_task3_charge_topology_metadata(
         plane_is_streamer = plane_digits == 2
         any_streamer |= plane_is_streamer
         streamer_plane_multiplicity += plane_is_streamer.astype(int)
+
+        plane_streamer_count = int(np.count_nonzero(plane_is_streamer))
+        metadata[f"streamer_P{plane}"] = (
+            round(100.0 * plane_streamer_count / total_events, 6)
+            if total_events > 0 and streamer_threshold is not None and np.isfinite(streamer_threshold)
+            else ""
+        )
 
         for state_digit, state_name in state_name_by_digit.items():
             state_count = int(np.count_nonzero(plane_digits == state_digit))
@@ -4118,7 +4108,7 @@ Y_RPC_left = -Y_RPC_abs
 det_pos_filter = config.get("det_pos_filter", 800)
 det_theta_left_filter = config.get("det_theta_left_filter", 0)
 det_theta_right_filter = config.get("det_theta_right_filter", 1.5708)
-det_phi_filter_abs = abs(float(config.get("det_phi_filter_abs", config.get("det_phi_right_filter", 3.141592))))
+det_phi_filter_abs = abs(float(config.get("det_phi_filter_abs", 3.141592)))
 det_phi_right_filter = det_phi_filter_abs
 det_phi_left_filter = -det_phi_filter_abs
 det_slowness_filter_left = config.get("det_slowness_filter_left", -0.02)
@@ -4428,7 +4418,7 @@ Y_RPC_left = -Y_RPC_abs
 det_pos_filter = config.get("det_pos_filter", 800)
 det_theta_left_filter = config.get("det_theta_left_filter", 0)
 det_theta_right_filter = config.get("det_theta_right_filter", 1.5708)
-det_phi_filter_abs = abs(float(config.get("det_phi_filter_abs", config.get("det_phi_right_filter", 3.141592))))
+det_phi_filter_abs = abs(float(config.get("det_phi_filter_abs", 3.141592)))
 det_phi_right_filter = det_phi_filter_abs
 det_phi_left_filter = -det_phi_filter_abs
 det_slowness_filter_left = config.get("det_slowness_filter_left", -0.02)
@@ -5008,11 +4998,13 @@ if date_ranges:
     skipped_completed = completed_before - len(completed_files)
     if skipped_processing > 0:
         print(
-            f"[DATE_RANGE] Ignoring {skipped_processing} out-of-range file(s) in PROCESSING_DIRECTORY."
+            f"[DATE_RANGE] Ignoring {skipped_processing} out-of-range file(s) in PROCESSING_DIRECTORY.",
+            force=True,
         )
     if skipped_completed > 0:
         print(
-            f"[DATE_RANGE] Ignoring {skipped_completed} out-of-range file(s) in COMPLETED_DIRECTORY."
+            f"[DATE_RANGE] Ignoring {skipped_completed} out-of-range file(s) in COMPLETED_DIRECTORY.",
+            force=True,
         )
 
 active_qa_retry_basenames: set[str] = set()

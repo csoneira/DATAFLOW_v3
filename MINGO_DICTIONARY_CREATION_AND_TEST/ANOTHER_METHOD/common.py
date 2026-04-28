@@ -74,6 +74,11 @@ ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN = {
     "four_plane": "rate_1234_hz",
     "four_plane_robust_hz": "four_plane_robust_hz",
 }
+ROBUST_RATE_FAMILY_TO_COUNT_COLUMN = {
+    "total": "total_count",
+    "four_plane": "four_plane_count",
+    "four_plane_robust_hz": "four_plane_robust_count",
+}
 ROBUST_RATE_FAMILY_ALIASES = {
     "global": "total",
     "all": "total",
@@ -95,7 +100,32 @@ ROBUST_RATE_FAMILY_ALIASES = {
 ROBUST_OPTIONAL_COUNT_COLUMNS = {
     "total": ["total_count", "count_total", "rate_total_count"],
     "four_plane": ["four_plane_count", "count_1234", "rate_1234_count"],
-    "four_plane_robust_hz": ["four_plane_robust_count", "count_four_plane_robust"],
+    "four_plane_robust_hz": ["four_plane_robust_count", "four_plane_robust_count_union", "count_four_plane_robust"],
+}
+ROBUST_DIAGNOSTIC_COLUMNS = [
+    "four_plane_robust_count_union",
+    "four_plane_robust_count_intersection",
+    "four_plane_robust_hz_union",
+    "four_plane_robust_hz_intersection",
+]
+ROBUST_EFFICIENCY_VARIANT_TO_SUFFIX = {
+    "default": "",
+    "plateau": "_plateau",
+    "overall": "_overall",
+    "median_x": "_median_x",
+}
+ROBUST_EFFICIENCY_VARIANT_ALIASES = {
+    "": "default",
+    "default": "default",
+    "base": "default",
+    "plain": "default",
+    "nominal": "default",
+    "eff": "default",
+    "plateau": "plateau",
+    "overall": "overall",
+    "median_x": "median_x",
+    "median": "median_x",
+    "x_median": "median_x",
 }
 DEFAULT_ROBUST_EFFICIENCY_TASK_ID = 4
 DERIVED_RATE_COLUMNS = [
@@ -111,6 +141,7 @@ DERIVED_COUNT_COLUMNS = [
     "two_plane_count",
     "three_plane_count",
     "four_plane_count",
+    "four_plane_robust_count",
     "three_and_four_plane_count",
     "two_and_three_plane_count",
     "total_count",
@@ -121,7 +152,7 @@ STEP1_OUTPUT_COLUMNS = (
     + [f"eff_empirical_{idx}" for idx in range(1, 5)]
     + DERIVED_RATE_COLUMNS
     + DERIVED_COUNT_COLUMNS
-    + ["selected_rate_hz", "selected_rate_count", "rate_hz", "sim_flux_cm2_min", "num_events"]
+    + ["count_rate_denominator_seconds", "selected_rate_hz", "selected_rate_count", "rate_hz", "sim_flux_cm2_min", "num_events"]
 )
 
 
@@ -180,6 +211,14 @@ def get_trigger_type_selection(config: dict[str, Any]) -> dict[str, Any]:
     metadata_source_raw = str(raw.get("metadata_source", "trigger_type")).strip().lower()
     metadata_source = TRIGGER_METADATA_SOURCE_ALIASES.get(metadata_source_raw, metadata_source_raw)
     if metadata_source == "robust_efficiency":
+        efficiency_variant_raw = str(raw.get("robust_efficiency_variant", "default")).strip().lower()
+        efficiency_variant = ROBUST_EFFICIENCY_VARIANT_ALIASES.get(efficiency_variant_raw, efficiency_variant_raw)
+        if efficiency_variant not in ROBUST_EFFICIENCY_VARIANT_TO_SUFFIX:
+            raise ValueError(
+                "Unsupported trigger_type_selection.robust_efficiency_variant: "
+                f"{raw.get('robust_efficiency_variant')!r}. Supported values are: "
+                + ", ".join(sorted(ROBUST_EFFICIENCY_VARIANT_TO_SUFFIX))
+            )
         rate_family_raw = str(raw.get("rate_family", "1234")).strip().lower()
         rate_family = ROBUST_RATE_FAMILY_ALIASES.get(rate_family_raw, rate_family_raw)
         if rate_family not in ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN:
@@ -199,6 +238,7 @@ def get_trigger_type_selection(config: dict[str, Any]) -> dict[str, Any]:
             "rate_family": rate_family,
             "rate_family_column": ROBUST_RATE_FAMILY_TO_COLUMN[rate_family],
             "selected_source_rate_column": selected_source_rate_column,
+            "robust_efficiency_variant": efficiency_variant,
         }
     if metadata_source != "trigger_type":
         raise ValueError(
@@ -319,8 +359,10 @@ def _derive_robust_efficiency_features(
     dataframe: pd.DataFrame,
     selection: dict[str, Any],
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
+    efficiency_variant = str(selection.get("robust_efficiency_variant", "default"))
+    efficiency_suffix = ROBUST_EFFICIENCY_VARIANT_TO_SUFFIX[efficiency_variant]
     required_columns = [
-        f"eff{idx}" for idx in range(1, 5)
+        f"eff{idx}{efficiency_suffix}" for idx in range(1, 5)
     ] + [
         ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["total"],
         ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["four_plane"],
@@ -343,6 +385,11 @@ def _derive_robust_efficiency_features(
     )
 
     out = dataframe.copy()
+    out["count_rate_denominator_seconds"] = (
+        pd.to_numeric(out["count_rate_denominator_seconds"], errors="coerce")
+        if "count_rate_denominator_seconds" in out.columns
+        else pd.Series(np.nan, index=out.index, dtype=float)
+    )
     out["two_plane_rate_hz"] = pd.Series(np.nan, index=out.index, dtype=float)
     out["three_plane_rate_hz"] = pd.Series(np.nan, index=out.index, dtype=float)
     out["four_plane_rate_hz"] = pd.to_numeric(out[ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["four_plane"]], errors="coerce")
@@ -357,19 +404,37 @@ def _derive_robust_efficiency_features(
 
     out["two_plane_count"] = pd.Series(np.nan, index=out.index, dtype=float)
     out["three_plane_count"] = pd.Series(np.nan, index=out.index, dtype=float)
-    out["four_plane_count"] = _optional_numeric_series(out, four_plane_count_source)
-    out["four_plane_robust_count"] = _optional_numeric_series(out, four_plane_robust_count_source)
+    out["four_plane_count"] = _resolved_count_series(
+        out,
+        rate_column=ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["four_plane"],
+        count_column=four_plane_count_source,
+    )
+    out["four_plane_robust_count"] = _resolved_count_series(
+        out,
+        rate_column=ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["four_plane_robust_hz"],
+        count_column=four_plane_robust_count_source,
+    )
     out["three_and_four_plane_count"] = pd.Series(np.nan, index=out.index, dtype=float)
     out["two_and_three_plane_count"] = pd.Series(np.nan, index=out.index, dtype=float)
-    out["total_count"] = _optional_numeric_series(out, total_count_source)
+    out["total_count"] = _resolved_count_series(
+        out,
+        rate_column=ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["total"],
+        count_column=total_count_source,
+    )
+    for column_name in ROBUST_DIAGNOSTIC_COLUMNS:
+        if column_name in out.columns:
+            out[column_name] = pd.to_numeric(out[column_name], errors="coerce")
 
+    efficiency_source_columns: dict[str, str] = {}
     for plane_idx in range(1, 5):
-        out[f"eff_empirical_{plane_idx}"] = pd.to_numeric(out[f"eff{plane_idx}"], errors="coerce")
+        source_column = f"eff{plane_idx}{efficiency_suffix}"
+        out[f"eff_empirical_{plane_idx}"] = pd.to_numeric(out[source_column], errors="coerce")
+        efficiency_source_columns[f"plane_{plane_idx}"] = source_column
 
     selected_rate_column = str(selection["rate_family_column"])
-    selected_count_column = selected_rate_column.replace("_rate_hz", "_count")
-    out["selected_rate_hz"] = out[selected_rate_column]
-    out["selected_rate_count"] = out[selected_count_column] if selected_count_column in out.columns else np.nan
+    selected_count_column = ROBUST_RATE_FAMILY_TO_COUNT_COLUMN[str(selection["rate_family"])]
+    out["selected_rate_hz"] = pd.to_numeric(out[selected_rate_column], errors="coerce")
+    out["selected_rate_count"] = pd.to_numeric(out[selected_count_column], errors="coerce")
     out["rate_hz"] = out["selected_rate_hz"]
 
     metadata = {
@@ -385,6 +450,8 @@ def _derive_robust_efficiency_features(
         "rate_family": selection["rate_family"],
         "rate_family_column": selected_rate_column,
         "selected_source_rate_column": selection["selected_source_rate_column"],
+        "robust_efficiency_variant": efficiency_variant,
+        "robust_efficiency_source_columns": efficiency_source_columns,
         "plain_column_fallback_used": False,
         "source_rate_columns": {
             "four_plane": ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["four_plane"],
@@ -482,6 +549,11 @@ def derive_trigger_rate_features(
     }
 
     out = dataframe.copy()
+    out["count_rate_denominator_seconds"] = (
+        pd.to_numeric(out["count_rate_denominator_seconds"], errors="coerce")
+        if "count_rate_denominator_seconds" in out.columns
+        else pd.Series(np.nan, index=out.index, dtype=float)
+    )
     component_rates = {
         label: pd.to_numeric(out[source_columns[label]], errors="coerce")
         for label in TT_RATE_LABELS
@@ -506,6 +578,7 @@ def derive_trigger_rate_features(
     out["two_plane_count"] = _safe_sum_series(out.assign(**{f"__{k}": v for k, v in component_counts.items()}), [f"__{label}" for label in TT_TWO_PLANE_LABELS])
     out["three_plane_count"] = _safe_sum_series(out.assign(**{f"__{k}": v for k, v in component_counts.items()}), [f"__{label}" for label in TT_THREE_PLANE_LABELS])
     out["four_plane_count"] = component_counts[TT_FOUR_PLANE_LABEL]
+    out["four_plane_robust_count"] = pd.Series(np.nan, index=out.index, dtype=float)
     out["three_and_four_plane_count"] = out["three_plane_count"] + out["four_plane_count"]
     out["two_and_three_plane_count"] = out["two_plane_count"] + out["three_plane_count"]
     out["total_count"] = out["two_plane_count"] + out["three_plane_count"] + out["four_plane_count"]

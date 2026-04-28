@@ -1038,11 +1038,13 @@ if date_ranges:
     skipped_completed = completed_before - len(completed_files)
     if skipped_processing > 0:
         print(
-            f"[DATE_RANGE] Ignoring {skipped_processing} out-of-range file(s) in PROCESSING_DIRECTORY."
+            f"[DATE_RANGE] Ignoring {skipped_processing} out-of-range file(s) in PROCESSING_DIRECTORY.",
+            force=True,
         )
     if skipped_completed > 0:
         print(
-            f"[DATE_RANGE] Ignoring {skipped_completed} out-of-range file(s) in COMPLETED_DIRECTORY."
+            f"[DATE_RANGE] Ignoring {skipped_completed} out-of-range file(s) in COMPLETED_DIRECTORY.",
+            force=True,
         )
 active_qa_retry_basenames: set[str] = set()
 if process_only_qa_retry_files:
@@ -3303,7 +3305,6 @@ if task5_plot_enabled("polar_theta_phi_definitive_tt_2d_detail_pre"):
         theta_vals = df_tt['theta'].dropna()
         phi_vals = df_tt['phi'].dropna()
 
-        # Apply range filtering
         # Apply range filtering
         df_tt = df_filtered[df_filtered['definitive_tt'] == tt_val].copy()
         mask = (

@@ -20,7 +20,6 @@ from common import (
     load_config,
     cfg_path,
     derive_trigger_rate_features,
-    format_selected_rate_name,
 )
 
 ROOT_DIR = Path(__file__).resolve().parent
@@ -249,6 +248,18 @@ def _selected_output_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
         "file_timestamp_utc",
         "execution_timestamp_utc",
         "selected_rate_hz",
+        "selected_rate_count",
+        "count_rate_denominator_seconds",
+        "four_plane_rate_hz",
+        "four_plane_count",
+        "four_plane_robust_hz",
+        "four_plane_robust_count",
+        "four_plane_robust_hz_union",
+        "four_plane_robust_count_union",
+        "four_plane_robust_hz_intersection",
+        "four_plane_robust_count_intersection",
+        "total_rate_hz",
+        "total_count",
         *CANONICAL_EFF_COLUMNS,
     ]
     available = [column for column in columns if column in dataframe.columns]
@@ -273,13 +284,6 @@ def run(config_path: str | Path | None = None) -> Path:
     timestamp_column = str(step5_config.get("timestamp_column", "execution_timestamp"))
 
     trigger_selection = get_trigger_type_selection(config)
-    selected_rate_name = format_selected_rate_name(
-        stage_prefix=trigger_selection.get("stage_prefix"),
-        rate_family_column=str(trigger_selection["rate_family_column"]),
-        offender_threshold=trigger_selection["offender_threshold"],
-        metadata_source=str(trigger_selection.get("metadata_source", "trigger_type")),
-    )
-
     output_path = cfg_path(config, "paths", "output_csv")
     collected = _collect_real_data_slice(
         config=config,
@@ -306,6 +310,16 @@ def run(config_path: str | Path | None = None) -> Path:
     selected.to_csv(output_path, index=False)
 
     logging.info("Wrote selected real-data file with %d rows to %s", len(selected), output_path)
+    logging.info(
+        "Selected source column: %s | selected count column: %s",
+        trigger_selection.get("selected_source_rate_column"),
+        trigger_selection.get("selected_count_column"),
+    )
+    if str(trigger_selection.get("metadata_source")) == "robust_efficiency":
+        logging.info(
+            "Robust efficiency variant used for eff_empirical_<plane>: %s",
+            trigger_selection.get("robust_efficiency_variant"),
+        )
     return output_path
 
 

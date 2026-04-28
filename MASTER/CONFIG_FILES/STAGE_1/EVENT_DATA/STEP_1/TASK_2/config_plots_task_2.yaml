@@ -9,7 +9,7 @@ plots:
   scatter_new_calibration: usual
   new_calibration_calibrated_charge: usual
   scatter_new_calibration_calibrated_charge: usual
-  charge_dif_vs_charge_sum_cal: usual
+  charge_dif_vs_charge_sum_cal: essential
   timing: usual
   grand_figure_q_pedestal: usual
   grand_figure_q_pedestal_zoom: usual
@@ -54,7 +54,7 @@ plots:
   time_front_vs_back: usual
   channel_matrix_tq: usual
   strip_pair_matrix_by_planepair: usual
-  strip_combination_filter_by_tt: essential
+  strip_combination_filter_by_tt: usual
   rejected_histograms_clean_tt: usual
   rejected_histograms_q_sum_zero: usual
   rejected_histograms_cal_tt: usual

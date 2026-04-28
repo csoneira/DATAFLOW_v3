@@ -7,6 +7,7 @@ import json
 import logging
 import re
 from pathlib import Path
+import sys
 from typing import Any
 
 import matplotlib
@@ -15,6 +16,13 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+
+ROOT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = ROOT_DIR.parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from MASTER.common.selection_config import load_master_event_markers
 
 from common import (
     CANONICAL_EFF_COLUMNS,
@@ -40,8 +48,6 @@ _OFFENDER_RATE_RE = re.compile(
     r"^(?P<scope>plane_combination_filter|strip_combination_filter)_rows_with_(?P<count>\d+)_selected_offenders_rate_hz$"
 )
 
-ROOT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = ROOT_DIR.parents[1]
 STATIONS_ROOT = REPO_ROOT / "STATIONS"
 ONLINE_RUN_DICTIONARY_ROOT = (
     REPO_ROOT
@@ -91,6 +97,128 @@ def _normalize_task_ids(raw: object, fallback: list[int]) -> list[int]:
                 continue
         return sorted(set(parsed)) or list(fallback)
     return list(fallback)
+
+
+def _resolve_efficiency_plot_ylim(config: dict[str, Any]) -> tuple[float | None, float | None]:
+    step5_config = config.get("step5", {})
+    if not isinstance(step5_config, dict):
+        step5_config = {}
+
+    raw_ylim = step5_config.get("efficiency_plot_ylim", [0.0, 1.05])
+    if isinstance(raw_ylim, str):
+        text = raw_ylim.strip()
+        if not text:
+            raw_ylim = [0.0, 1.05]
+        else:
+            raw_ylim = json.loads(text)
+
+    if not isinstance(raw_ylim, (list, tuple)) or len(raw_ylim) != 2:
+        raise ValueError("step5.efficiency_plot_ylim must be a two-element list like [null, 1.0].")
+
+    limits: list[float | None] = []
+    for value in raw_ylim:
+        if value in (None, "", "null", "None"):
+            limits.append(None)
+        else:
+            limits.append(float(value))
+
+    bottom, top = limits
+    if bottom is not None and top is not None and bottom >= top:
+        raise ValueError("step5.efficiency_plot_ylim must satisfy bottom < top when both limits are set.")
+    return bottom, top
+
+
+def _resolve_step5_feature_vector_config(config: dict[str, Any]) -> dict[str, Any]:
+    step5_config = config.get("step5", {})
+    if not isinstance(step5_config, dict):
+        step5_config = {}
+
+    raw_mode = step5_config.get("selected_feature_columns_mode", "minimal_empirical")
+    mode_text = "" if raw_mode in (None, "", "null", "None") else str(raw_mode).strip().lower()
+    mode_aliases = {
+        "default": "minimal_empirical",
+        "minimal": "minimal_empirical",
+        "per_plane": "minimal_empirical",
+        "same_eff": "same_efficiency",
+    }
+    mode = mode_aliases.get(mode_text, mode_text or "minimal_empirical")
+    if mode not in {"minimal_empirical", "same_efficiency"}:
+        raise ValueError(
+            "step5.selected_feature_columns_mode must be 'minimal_empirical' or 'same_efficiency'."
+        )
+
+    if mode != "same_efficiency":
+        return {
+            "mode": mode,
+            "source_columns": list(CANONICAL_EFF_COLUMNS),
+            "same_efficiency_planes": None,
+        }
+
+    raw_planes = step5_config.get("same_efficiency_planes", step5_config.get("efficiency_reference_planes", [2, 3]))
+    if isinstance(raw_planes, str):
+        text = raw_planes.strip()
+        if not text:
+            raw_planes = [2, 3]
+        else:
+            try:
+                decoded = json.loads(text)
+            except json.JSONDecodeError:
+                decoded = [piece.strip() for piece in text.split(",") if piece.strip()]
+            raw_planes = decoded
+
+    if isinstance(raw_planes, (int, float)) and not isinstance(raw_planes, bool):
+        raw_planes = [int(raw_planes)]
+
+    if not isinstance(raw_planes, (list, tuple)) or not raw_planes:
+        raise ValueError("step5.same_efficiency_planes must be a non-empty list of plane numbers between 1 and 4.")
+
+    planes: list[int] = []
+    for value in raw_planes:
+        plane = int(value)
+        if plane < 1 or plane > 4:
+            raise ValueError(
+                "step5.same_efficiency_planes contains an invalid plane index "
+                f"{plane}. Valid values are 1, 2, 3, 4."
+            )
+        if plane not in planes:
+            planes.append(plane)
+
+    return {
+        "mode": mode,
+        "source_columns": [f"emp_eff_{plane}" for plane in planes],
+        "same_efficiency_planes": planes,
+    }
+
+
+def _build_step5_query_columns(
+    dataframe: pd.DataFrame,
+    *,
+    efficiency_bin_width: float,
+    feature_vector_config: dict[str, Any],
+) -> tuple[pd.DataFrame, list[str], list[str]]:
+    work = dataframe.copy()
+    mode = str(feature_vector_config.get("mode", "minimal_empirical"))
+    query_columns: list[str] = []
+
+    if mode == "same_efficiency":
+        same_eff_source_columns = list(feature_vector_config["source_columns"])
+        same_eff_series = work[same_eff_source_columns].apply(pd.to_numeric, errors="coerce").mean(axis=1)
+        raw_columns: list[str] = []
+        for column in CANONICAL_EFF_COLUMNS:
+            raw_column = f"query_raw_{column}"
+            query_column = f"query_{column}"
+            work[raw_column] = same_eff_series
+            work[query_column] = quantize_efficiency_series(work[raw_column], efficiency_bin_width)
+            raw_columns.append(raw_column)
+            query_columns.append(query_column)
+        return work, query_columns, raw_columns
+
+    raw_columns = list(CANONICAL_EFF_COLUMNS)
+    for column in CANONICAL_EFF_COLUMNS:
+        query_column = f"query_{column}"
+        work[query_column] = quantize_efficiency_series(work[column], efficiency_bin_width)
+        query_columns.append(query_column)
+    return work, query_columns, raw_columns
 
 
 def _parse_time_bound(value: object, *, end_of_day: bool) -> pd.Timestamp | None:
@@ -386,13 +514,7 @@ def _resolve_lut_match_settings(
 ) -> tuple[str, int | None, float]:
     raw_mode = step5_config.get("lut_match_mode", step3_config.get("lut_match_mode"))
     if raw_mode in (None, "", "null", "None"):
-        allow_nearest = bool(
-            step5_config.get(
-                "allow_nearest_lut_match",
-                step3_config.get("allow_nearest_lut_match", True),
-            )
-        )
-        match_mode = "nearest" if allow_nearest else "exact"
+        match_mode = "nearest"
     else:
         normalized = str(raw_mode).strip().lower()
         match_mode = {
@@ -401,13 +523,10 @@ def _resolve_lut_match_settings(
             "interpolation": "interpolate",
         }.get(normalized, normalized)
 
-    interpolation_k_raw = step5_config.get("lut_interpolation_k", step3_config.get("lut_interpolation_k", 8))
+    interpolation_k_raw = step3_config.get("lut_interpolation_k", 8)
     interpolation_k = None if interpolation_k_raw in (None, "", "null", "None") else int(interpolation_k_raw)
 
-    interpolation_power_raw = step5_config.get(
-        "lut_interpolation_power",
-        step3_config.get("lut_interpolation_power", 2.0),
-    )
+    interpolation_power_raw = step3_config.get("lut_interpolation_power", 2.0)
     interpolation_power = (
         2.0 if interpolation_power_raw in (None, "", "null", "None") else float(interpolation_power_raw)
     )
@@ -554,11 +673,73 @@ def _resolve_time_axis(dataframe: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series
     return ordered, pd.Series(np.arange(len(ordered)), dtype=float), "row_index"
 
 
+def _load_event_markers_for_station(station_id: int) -> list[dict[str, object]]:
+    return [
+        {"time": marker.time, "label": marker.label}
+        for marker in load_master_event_markers(station=station_id)
+    ]
+
+
+def _add_event_markers(
+    axes: list[plt.Axes] | tuple[plt.Axes, ...],
+    x_values: pd.Series,
+    event_markers: list[dict[str, object]],
+) -> None:
+    if not event_markers or not pd.api.types.is_datetime64_any_dtype(x_values):
+        return
+
+    valid_times = pd.to_datetime(x_values, errors="coerce", utc=True).dropna()
+    if valid_times.empty:
+        return
+    valid_times = valid_times.dt.tz_convert(None)
+    min_time = valid_times.min()
+    max_time = valid_times.max()
+
+    label_levels = [0.98, 0.86, 0.74]
+    top_axis = axes[0]
+    for index, marker in enumerate(event_markers):
+        event_time = pd.to_datetime(marker["time"], errors="coerce", utc=True)
+        if pd.isna(event_time):
+            continue
+        event_time = event_time.tz_convert(None)
+        if event_time < min_time or event_time > max_time:
+            continue
+        level = label_levels[index % len(label_levels)]
+        for axis in axes:
+            axis.axvline(
+                event_time,
+                color="black",
+                linestyle="--",
+                linewidth=0.9,
+                alpha=0.7,
+            )
+        top_axis.annotate(
+            str(marker["label"]),
+            xy=(event_time, level),
+            xycoords=("data", "axes fraction"),
+            xytext=(3, 0),
+            textcoords="offset points",
+            rotation=90,
+            va="top",
+            ha="left",
+            fontsize=8,
+            color="black",
+            bbox={
+                "boxstyle": "round,pad=0.15",
+                "facecolor": "white",
+                "edgecolor": "none",
+                "alpha": 0.7,
+            },
+        )
+
+
 def _plot_real_rate_correction(
     dataframe: pd.DataFrame,
     output_path: Path,
     *,
     rate_column_name: str,
+    event_markers: list[dict[str, object]],
+    efficiency_plot_ylim: tuple[float | None, float | None],
 ) -> str:
     ordered, x_values, x_label = _resolve_time_axis(dataframe)
     fig, axes = plt.subplots(
@@ -569,12 +750,18 @@ def _plot_real_rate_correction(
         height_ratios=[2.0, 1.2],
     )
 
-    axes[0].plot(x_values, ordered["rate_hz"], marker="o", linewidth=1.6, label="Observed rate")
+    axes[0].plot(x_values,
+        ordered["rate_hz"],
+        marker="o",
+        linewidth=0.35,
+        markersize=3.0,
+        label="Observed rate")
     axes[0].plot(
         x_values,
         ordered["corrected_rate_to_perfect_hz"],
         marker="o",
-        linewidth=1.6,
+        linewidth=0.35,
+        markersize=3.0,
         label="LUT-corrected rate",
     )
     axes[0].set_ylabel("Rate [Hz]")
@@ -591,16 +778,19 @@ def _plot_real_rate_correction(
             x_values,
             ordered[column],
             marker="o",
-            linewidth=1.4,
-            markersize=4,
+            linewidth=0.45,
+            markersize=2.8,
             color=plane_colors[idx],
             label=f"Plane {idx + 1} eff",
         )
     axes[1].set_xlabel(x_label.replace("_", " "))
     axes[1].set_ylabel("Empirical efficiency")
-    axes[1].set_ylim(0.0, 1.05)
+    eff_y_min, eff_y_max = efficiency_plot_ylim
+    axes[1].set_ylim(bottom=eff_y_min, top=eff_y_max)
     axes[1].grid(alpha=0.25)
     axes[1].legend(ncol=2)
+
+    _add_event_markers(list(axes), x_values, event_markers)
 
     if pd.api.types.is_datetime64_any_dtype(x_values):
         fig.autofmt_xdate()
@@ -616,6 +806,7 @@ def _plot_real_correction_diagnostics(
     output_path: Path,
     *,
     rate_column_name: str,
+    event_markers: list[dict[str, object]],
 ) -> str:
     ordered, x_values, x_label = _resolve_time_axis(dataframe)
     sequence = np.arange(len(ordered))
@@ -632,15 +823,19 @@ def _plot_real_correction_diagnostics(
     # Max distance is 2.0 because each of 4 efficiencies lives in [0,1].
     trust_score = np.clip(1.0 - (lut_eff_distance / 2.0), 0.0, 1.0)
 
-    fig, axes = plt.subplots(1, 3, figsize=(17, 5), constrained_layout=True)
+    fig = plt.figure(figsize=(17, 9), constrained_layout=True)
+    grid = fig.add_gridspec(2, 2, height_ratios=[1.0, 1.15])
+    observed_axis = fig.add_subplot(grid[0, 0])
+    proximity_axis = fig.add_subplot(grid[0, 1])
+    scale_axis = fig.add_subplot(grid[1, :])
 
-    scatter = axes[0].scatter(
+    scatter = observed_axis.scatter(
         ordered["rate_hz"],
         ordered["corrected_rate_to_perfect_hz"],
         c=sequence,
         cmap="viridis",
-        s=42,
-        alpha=0.85,
+        s=20,
+        alpha=0.8,
     )
     finite_rates = pd.concat(
         [ordered["rate_hz"], ordered["corrected_rate_to_perfect_hz"]],
@@ -650,47 +845,48 @@ def _plot_real_correction_diagnostics(
     if finite_rates.size:
         low = float(np.min(finite_rates))
         high = float(np.max(finite_rates))
-        axes[0].plot([low, high], [low, high], linestyle="--", linewidth=1.2, color="black", alpha=0.7)
-    axes[0].set_title(f"Observed vs corrected rate\nrate column: {rate_column_name}")
-    axes[0].set_xlabel(f"Observed rate [Hz]\n({rate_column_name})")
-    axes[0].set_ylabel(f"Corrected rate [Hz]\n(from {rate_column_name})")
-    axes[0].grid(alpha=0.25)
+        observed_axis.plot([low, high], [low, high], linestyle="--", linewidth=1.2, color="black", alpha=0.7)
+    observed_axis.set_title(f"Observed vs corrected rate\nrate column: {rate_column_name}")
+    observed_axis.set_xlabel(f"Observed rate [Hz]\n({rate_column_name})")
+    observed_axis.set_ylabel(f"Corrected rate [Hz]\n(from {rate_column_name})")
+    observed_axis.grid(alpha=0.25)
 
-    axes[1].plot(
+    scale_axis.plot(
         x_values,
         ordered["lut_scale_factor"],
         marker="o",
-        linewidth=1.6,
+        linewidth=1.3,
+        markersize=3.0,
         color="#8B1E3F",
         label="LUT scale factor",
     )
-    axes[1].set_title("Scale factor vs time")
-    axes[1].set_xlabel(x_label.replace("_", " "))
-    axes[1].set_ylabel("Scale factor")
-    axes[1].grid(alpha=0.25)
-    axes[1].legend()
+    scale_axis.set_title("Scale factor vs time")
+    scale_axis.set_xlabel(x_label.replace("_", " "))
+    scale_axis.set_ylabel("Scale factor")
+    scale_axis.grid(alpha=0.25)
+    scale_axis.legend()
 
-    axes[2].plot(
+    proximity_axis.plot(
         x_values,
         lut_eff_distance,
         marker="o",
         linewidth=1.4,
-        markersize=4,
+        markersize=3.0,
         color="#1F6FEB",
         label="LUT efficiency distance",
     )
-    axes[2].set_title("LUT proximity / trust vs time")
-    axes[2].set_xlabel(x_label.replace("_", " "))
-    axes[2].set_ylabel("Distance in eff space")
-    axes[2].grid(alpha=0.25)
+    proximity_axis.set_title("LUT proximity / trust vs time")
+    proximity_axis.set_xlabel(x_label.replace("_", " "))
+    proximity_axis.set_ylabel("Distance in eff space")
+    proximity_axis.grid(alpha=0.25)
 
-    trust_axis = axes[2].twinx()
+    trust_axis = proximity_axis.twinx()
     trust_axis.plot(
         x_values,
         trust_score,
         marker="s",
         linewidth=1.3,
-        markersize=3.5,
+        markersize=2.8,
         color="#E67E22",
         alpha=0.8,
         label="Trust score",
@@ -698,14 +894,16 @@ def _plot_real_correction_diagnostics(
     trust_axis.set_ylim(0.0, 1.05)
     trust_axis.set_ylabel("Trust [0-1]")
 
-    distance_lines, distance_labels = axes[2].get_legend_handles_labels()
+    distance_lines, distance_labels = proximity_axis.get_legend_handles_labels()
     trust_lines, trust_labels = trust_axis.get_legend_handles_labels()
-    axes[2].legend(distance_lines + trust_lines, distance_labels + trust_labels, loc="upper right")
+    proximity_axis.legend(distance_lines + trust_lines, distance_labels + trust_labels, loc="upper right")
+
+    _add_event_markers([scale_axis, proximity_axis], x_values, event_markers)
 
     if pd.api.types.is_datetime64_any_dtype(x_values):
         fig.autofmt_xdate()
 
-    cbar = fig.colorbar(scatter, ax=axes, shrink=0.92)
+    cbar = fig.colorbar(scatter, ax=[observed_axis, proximity_axis, scale_axis], shrink=0.92)
     cbar.set_label("Time-series order")
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
@@ -1115,6 +1313,7 @@ def run(config_path: str | Path | None = None) -> Path:
     min_events = None if min_events_raw in (None, "", "null", "None") else float(min_events_raw)
     metadata_agg = str(step5_config.get("metadata_agg", "latest")).strip().lower()
     timestamp_column = str(step5_config.get("timestamp_column", "execution_timestamp"))
+    efficiency_plot_ylim = _resolve_efficiency_plot_ylim(config)
 
     trigger_selection = get_trigger_type_selection(config)
     task_ids = [int(trigger_selection.get("metadata_task_id", trigger_selection["task_id"]))]
@@ -1157,12 +1356,12 @@ def run(config_path: str | Path | None = None) -> Path:
     efficiency_bin_width = float(
         lut_meta.get("efficiency_bin_width", config.get("step2", {}).get("efficiency_bin_width", 0.02))
     )
-
-    query_columns: list[str] = []
-    for column in CANONICAL_EFF_COLUMNS:
-        query_column = f"query_{column}"
-        work[query_column] = quantize_efficiency_series(work[column], efficiency_bin_width)
-        query_columns.append(query_column)
+    feature_vector_config = _resolve_step5_feature_vector_config(config)
+    work, query_columns, raw_query_columns = _build_step5_query_columns(
+        work,
+        efficiency_bin_width=efficiency_bin_width,
+        feature_vector_config=feature_vector_config,
+    )
 
     lut_lookup = lut_dataframe.rename(columns={column: f"lut_{column}" for column in CANONICAL_EFF_COLUMNS})
     merged = work.merge(
@@ -1180,7 +1379,7 @@ def run(config_path: str | Path | None = None) -> Path:
         merged,
         lut_dataframe,
         query_columns=query_columns,
-        raw_columns=CANONICAL_EFF_COLUMNS,
+        raw_columns=raw_query_columns,
         match_mode=match_mode,
         interpolation_k=interpolation_k,
         interpolation_power=interpolation_power,
@@ -1239,16 +1438,20 @@ def run(config_path: str | Path | None = None) -> Path:
     coverage_path = output_path.with_name("step5_lut_query_coverage.csv")
     query_coverage = _build_query_coverage_diagnostics(merged, lut_diagnostics, query_columns)
     query_coverage.to_csv(coverage_path, index=False)
+    event_markers = _load_event_markers_for_station(station_id)
 
     time_axis_column_used = _plot_real_rate_correction(
         merged,
         PLOTS_DIR / "step5_real_rate_correction.png",
         rate_column_name=rate_column_name,
+        event_markers=event_markers,
+        efficiency_plot_ylim=efficiency_plot_ylim,
     )
     _plot_real_correction_diagnostics(
         merged,
         PLOTS_DIR / "step5_real_correction_diagnostics.png",
         rate_column_name=rate_column_name,
+        event_markers=event_markers,
     )
     _plot_lut_vs_real_efficiency_coverage(
         merged,
@@ -1278,6 +1481,9 @@ def run(config_path: str | Path | None = None) -> Path:
         "lut_file": str(lut_path),
         "lut_comments": lut_comments,
         "efficiency_bin_width": efficiency_bin_width,
+        "selected_feature_columns_mode": feature_vector_config["mode"],
+        "same_efficiency_planes": feature_vector_config.get("same_efficiency_planes"),
+        "selected_feature_source_columns": feature_vector_config["source_columns"],
         "lut_match_mode_requested": match_mode,
         "lut_interpolation_k": interpolation_k,
         "lut_interpolation_power": interpolation_power,

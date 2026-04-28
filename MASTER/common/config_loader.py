@@ -182,6 +182,24 @@ def load_parameter_overrides(
     return overrides
 
 
+def load_declared_parameter_names(csv_path: str | Path) -> Set[str]:
+    """Return every declared parameter name from *csv_path*."""
+    parameter_csv_path = Path(csv_path)
+    if not parameter_csv_path.exists():
+        raise FileNotFoundError(f"Configuration parameters file not found: {csv_path}")
+
+    declared: Set[str] = set()
+    with parameter_csv_path.open("r", newline="", encoding="utf-8") as csv_file:
+        reader = csv.DictReader(csv_file)
+        if reader.fieldnames is None:
+            raise ValueError(f"Configuration parameters file has no header: {csv_path}")
+        for row in reader:
+            parameter_name = (row.get("parameter") or "").strip()
+            if parameter_name:
+                declared.add(parameter_name)
+    return declared
+
+
 def update_config_with_parameters(
     config: Dict[str, Any],
     csv_path: str | Path,

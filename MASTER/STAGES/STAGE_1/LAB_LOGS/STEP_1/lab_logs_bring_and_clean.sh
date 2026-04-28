@@ -76,6 +76,18 @@ fi
 station=${args[0]}
 echo "Station: $station"
 
+log_info() {
+  echo "[INFO] $*"
+}
+
+log_warn() {
+  echo "[WARN] $*" >&2
+}
+
+log_error() {
+  echo "[ERROR] $*" >&2
+}
+
 if [[ ! "$station" =~ ^[1-4]$ ]]; then
   log_error "Invalid station number. Please provide a number between 1 and 4."
   exit 1
@@ -322,6 +334,7 @@ local_destination="${STEP1_INPUT_UNPROCESSED}"
 OUTPUT_DIR="${STEP1_OUTPUT}"
 rsync_file_list=""
 filtered_rsync_file_list=""
+fetch_status="not-run"
 
 cleanup_tmp_files() {
     [[ -n "$rsync_file_list" ]] && rm -f "$rsync_file_list"
@@ -386,19 +399,39 @@ if ssh "${SSH_OPTS[@]}" "$mingo_direction" "$remote_find_cmd" > "$rsync_file_lis
                 --files-from="$filtered_rsync_file_list" \
                 --from0 \
                 "$mingo_direction:/home/rpcuser/logs/" "${local_destination}/"; then
+                fetch_status="rsync-error"
                 log_warn "rsync encountered an error while fetching lab logs."
+            else
+                fetch_status="transferred"
             fi
         else
-            echo "No .log files eligible for transfer after filters."
+            fetch_status="no-eligible-files"
+            log_info "No .log files eligible for transfer after filters."
         fi
     else
-        echo "No .log files found to transfer."
+        fetch_status="no-remote-files"
+        log_info "No .log files found to transfer."
     fi
 else
+    fetch_status="remote-list-error"
     log_warn "unable to list remote lab logs from ${mingo_direction}."
 fi
 
-echo 'Received data from remote computer'
+case "$fetch_status" in
+    transferred)
+        log_info "Received lab log data from ${mingo_direction}."
+        ;;
+    no-eligible-files)
+        log_info "Remote lab log directory is reachable, but no files matched the local filters."
+        ;;
+    no-remote-files)
+        log_info "Remote lab log directory is reachable, but it currently contains no .log files."
+        ;;
+    rsync-error|remote-list-error)
+        log_error "LAB_LOGS fetch failed for ${mingo_direction}."
+        exit 1
+        ;;
+esac
 
 move_to_completed() {
     local file_path=$1
