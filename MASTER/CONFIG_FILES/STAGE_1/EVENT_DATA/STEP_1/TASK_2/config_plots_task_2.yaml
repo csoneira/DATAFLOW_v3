@@ -1,5 +1,5 @@
 plots:
-  debug_suite: debug
+  debug_suite: essential
   usual_suite: usual
   essential_suite: essential
   strip_activation_matrix_before_after: usual
@@ -9,7 +9,7 @@ plots:
   scatter_new_calibration: usual
   new_calibration_calibrated_charge: usual
   scatter_new_calibration_calibrated_charge: usual
-  charge_dif_vs_charge_sum_cal: essential
+  charge_dif_vs_charge_sum_cal: usual
   timing: usual
   grand_figure_q_pedestal: usual
   grand_figure_q_pedestal_zoom: usual

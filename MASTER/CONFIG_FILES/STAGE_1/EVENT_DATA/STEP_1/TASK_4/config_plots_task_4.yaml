@@ -1,32 +1,32 @@
 plots:
-  debug_suite: debug
+  debug_suite: essential
   usual_suite: usual
   essential_suite: essential
-  all_channels_charge: usual
+  all_channels_charge: essential
   flat_values_histogram: usual
   detached_timeseries_combo: usual
   detached_residuals_combo: usual
   timtrack_timeseries_combo: usual
   timtrack_residuals_combo: usual
-  combined_timeseries_combo: usual
+  combined_timeseries_combo: essential
   combined_residuals_combo: usual
   hist_core_errs_combined: usual
-  hist_core_errs_combined_with_fits: usual
+  hist_core_errs_combined_with_fits: essential
   stat_window_accumulation: usual
   trigger_types_raw_and_list: usual
   trigger_types_tracking_and_list: usual
   trigger_types_tracking_and_raw: usual
   trigger_types_definitive_tt_and_raw: usual
-  timtrack_results_hexbin_combination_projections: usual
+  timtrack_results_hexbin_combination_projections: essential
   theta_det_theta_zoom_tracking_tt: usual
   polar_theta_phi_definitive_tt_2d: usual
   polar_theta_phi_tracking_tt_2d: usual
   events_per_second_by_plane_cardinality_double_row: usual
-  timtrack_residuals_gaussian: usual
-  external_residuals_gaussian: usual
+  timtrack_residuals_gaussian: essential
+  external_residuals_gaussian: essential
   event_display_sample: usual
-  track_consistency_loo_residuals: usual
-  strip_hit_occupancy: usual
+  track_consistency_loo_residuals: essential
+  strip_hit_occupancy: essential
   track_based_efficiency: essential
   total_event_charge_histogram: essential
   track_based_efficiency_tt_stability: usual
@@ -34,10 +34,10 @@ plots:
   timtrack_projection_ellipse_contours: usual
   timtrack_projection_scaled_angle_comparison: usual
   chi2_offender_populations: usual
-  offender_angle_populations: usual
+  offender_angle_populations: essential
   offender_kinematics_populations: usual
   offender_tt_balance: usual
-  offender_zigzag_populations: usual
+  offender_zigzag_populations: essential
   chi2_charge_populations: usual
   chi2_residuals_populations: usual
   event_display_sample_3fold: usual

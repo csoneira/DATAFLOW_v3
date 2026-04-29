@@ -866,7 +866,7 @@ def main() -> None:
         z_positions = geometry_rows[["P1", "P2", "P3", "P4"]].drop_duplicates().reset_index(drop=True)
         _log_info(
             "Unique geometry/trigger rows (from selected station configs/date ranges): "
-            f"{len(geometry_rows)}; unique z rows={len(z_positions)} stations={selected_station_ids} "
+            f"{len(geometry_rows)}; unique z rows=f{len(z_positions)}, which are f{z_positions}, stations={selected_station_ids} "
             f"effective_date_ranges={effective_ranges_by_station if any(effective_ranges_by_station.values()) else 'all'}"
         )
     elif z_override.empty:

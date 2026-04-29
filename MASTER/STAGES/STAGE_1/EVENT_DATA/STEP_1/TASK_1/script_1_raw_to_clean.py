@@ -161,6 +161,7 @@ from MASTER.common.step1_shared import (
     set_global_rate_from_tt_rates,
     load_step1_task_plot_catalog,
     resolve_step1_plot_options,
+    step1_logging_enabled,
     step1_task_plot_enabled,
     validate_step1_input_file_args,
     y_pos,
@@ -288,6 +289,12 @@ print = build_step1_filtered_print(
     debug_mode_getter=lambda: bool(globals().get("debug_mode", False)),
     raw_print=builtins.print,
 )
+FILTER_METRICS_LOGGING_ENABLED = step1_logging_enabled("filter_metrics")[0]
+
+
+def _log_filter_metrics_message(message: str) -> None:
+    if FILTER_METRICS_LOGGING_ENABLED:
+        print(message)
 
 def safe_move(source_path: str, dest_path: str) -> str:
     """Move *source_path* to *dest_path* with explicit diagnostics on failure."""
@@ -1625,7 +1632,9 @@ def record_activity_metric(name: str, affected: float, total: float, label: str 
     """Record a generic percentage metric."""
     pct = 0.0 if total == 0 else 100.0 * float(affected) / float(total)
     filter_metrics[name] = round(pct, 4)
-    print(f"[filter-metrics] {name}: {label} {affected} of {total} ({pct:.2f}%)")
+    _log_filter_metrics_message(
+        f"[filter-metrics] {name}: {label} {affected} of {total} ({pct:.2f}%)"
+    )
 
 def record_filter_metric(name: str, removed: float, total: float) -> None:
     """Record percentage removed for a filter."""
@@ -1806,34 +1815,39 @@ def collect_task1_zeroed_channel_values(
     if not channel_map:
         return _empty_task1_removed_channel_values_frame()
 
-    aligned_reference = reference_df.reindex(current_df.index).copy()
+    aligned_reference = reference_df.reindex(current_df.index, copy=False)
+    current_index = current_df.index.to_numpy(copy=False)
     payload_frames: list[pd.DataFrame] = []
     for channel_key, cols in channel_map.items():
         if cols["Q"] not in current_df.columns or cols["T"] not in current_df.columns:
             continue
-        ref_q = pd.to_numeric(aligned_reference[cols["Q"]], errors="coerce").fillna(0)
-        ref_t = pd.to_numeric(aligned_reference[cols["T"]], errors="coerce").fillna(0)
-        cur_q = pd.to_numeric(current_df[cols["Q"]], errors="coerce").fillna(0)
-        cur_t = pd.to_numeric(current_df[cols["T"]], errors="coerce").fillna(0)
+        ref_q = pd.to_numeric(aligned_reference[cols["Q"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        ref_t = pd.to_numeric(aligned_reference[cols["T"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        cur_q = pd.to_numeric(current_df[cols["Q"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        cur_t = pd.to_numeric(current_df[cols["T"]], errors="coerce").fillna(0).to_numpy(dtype=float)
         q_zeroed = (ref_q != 0) & (cur_q == 0)
         t_zeroed = (ref_t != 0) & (cur_t == 0)
         zeroed_mask = q_zeroed | t_zeroed
-        if not zeroed_mask.any():
+        if not np.any(zeroed_mask):
             continue
 
-        channel_payload = _task1_build_removed_channel_values_frame(
-            aligned_reference,
-            channel_key,
-            ref_q,
-            ref_t,
-            zeroed_mask.to_numpy(dtype=bool),
-            pass_label,
+        plane, side, strip = channel_key
+        payload_frames.append(
+            pd.DataFrame(
+                {
+                    "row_index": current_index[zeroed_mask],
+                    "channel": _task1_channel_label(channel_key),
+                    "plane": plane,
+                    "side": side,
+                    "strip": strip,
+                    "Q": ref_q[zeroed_mask],
+                    "T": ref_t[zeroed_mask],
+                    "pass_label": pass_label,
+                    "Q_zeroed": q_zeroed[zeroed_mask],
+                    "T_zeroed": t_zeroed[zeroed_mask],
+                }
+            )
         )
-        if channel_payload.empty:
-            continue
-        channel_payload["Q_zeroed"] = q_zeroed.reindex(channel_payload["row_index"]).to_numpy(dtype=bool)
-        channel_payload["T_zeroed"] = t_zeroed.reindex(channel_payload["row_index"]).to_numpy(dtype=bool)
-        payload_frames.append(channel_payload)
 
     if not payload_frames:
         return _empty_task1_removed_channel_values_frame()
@@ -4441,12 +4455,12 @@ if task1_plot_enabled("event_total_charge_raw"):
 
 _prof["s_data_read_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
+_t_filter_date_select = _t_sec
 print("----------------------------------------------------------------------")
 print("-------------------------- Filter 1: by date -------------------------")
 print("----------------------------------------------------------------------")
 
-read_df = read_df.loc[read_df["datetime"].between(left_limit_time, right_limit_time)].copy()
-gc.collect()
+read_df = read_df.loc[read_df["datetime"].between(left_limit_time, right_limit_time)]
 if not pd.api.types.is_datetime64_any_dtype(read_df["datetime"]):
     raise ValueError("The index is not a DatetimeIndex. Check 'datetime' column formatting.")
 
@@ -4454,19 +4468,18 @@ if not pd.api.types.is_datetime64_any_dtype(read_df["datetime"]):
 print(read_df['column_6'].value_counts())
 # Take only the rows in which column_6 is equal to 1
 
-self_trigger_df = read_df.loc[read_df['column_6'] == 2].copy()
-selected_df = read_df.loc[read_df['column_6'] == 1].copy()
-del read_df
-self_trigger = not self_trigger_df.empty # If self_trigger_df has values, define an indicator as True
+selected_mask = read_df["column_6"] == 1
+self_trigger_mask = read_df["column_6"] == 2
+self_trigger = bool(self_trigger_mask.any())  # If self-trigger rows exist, define an indicator as True
 
-raw_data_len = len(selected_df)
+raw_data_len = int(selected_mask.sum())
 if raw_data_len == 0 and not self_trigger:
     print("No coincidence nor self-trigger events.")
     sys.exit(1)
 
 # Note that the middle between start and end time could also be taken. This is for calibration storage.
-if "datetime" in selected_df.columns:
-    datetime_series = pd.to_datetime(selected_df["datetime"], errors="coerce").dropna()
+if "datetime" in read_df.columns:
+    datetime_series = pd.to_datetime(read_df.loc[selected_mask, "datetime"], errors="coerce").dropna()
 else:
     datetime_series = pd.Series(dtype="datetime64[ns]")
 if datetime_series.empty:
@@ -4482,9 +4495,9 @@ datetime_value = datetime_series.iloc[0]
 end_datetime_value = datetime_series.iloc[-1]
 
 if self_trigger:
-    print(self_trigger_df)
-    if "datetime" in self_trigger_df.columns:
-        datetime_series_st = pd.to_datetime(self_trigger_df["datetime"], errors="coerce").dropna()
+    print(read_df.loc[self_trigger_mask])
+    if "datetime" in read_df.columns:
+        datetime_series_st = pd.to_datetime(read_df.loc[self_trigger_mask, "datetime"], errors="coerce").dropna()
     else:
         datetime_series_st = pd.Series(dtype="datetime64[ns]")
     if datetime_series_st.empty:
@@ -4499,6 +4512,8 @@ start_time = datetime_value
 end_time = end_datetime_value
 datetime_str = str(datetime_value)
 save_filename_suffix = datetime_str.replace(' ', "_").replace(':', ".").replace('-', ".")
+_prof["s_filter_date_select_s"] = round(time.perf_counter() - _t_filter_date_select, 2)
+_t_geometry_resolve = time.perf_counter()
 
 # -------------------------------------------------------------------------------
 # ------------ Input file and data managing to select configuration -------------
@@ -4624,6 +4639,8 @@ save_filename = f"list_events_{save_filename_suffix}.txt"
 save_pdf_filename = f"mingo{str(station).zfill(2)}_task1_{save_filename_suffix}.pdf"
 
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
+_prof["s_geometry_resolve_s"] = round(time.perf_counter() - _t_geometry_resolve, 2)
+_t_frame_init = time.perf_counter()
 
 # Check if the file exists and its size
 if os.path.exists(save_filename):
@@ -4652,13 +4669,13 @@ for key, idx_range in column_indices.items():
         channel_source_columns.append(source_column)
         channel_rename_map[source_column] = target_column
 
-working_df = selected_df.loc[:, ["event_id", "datetime", *channel_source_columns]].copy()
+working_df = read_df.loc[selected_mask, ["event_id", "datetime", *channel_source_columns]].copy()
 working_df = working_df.rename(columns=channel_rename_map)
 # Track rows that later drop out of Task 1 so their original indexed values stay inspectable.
 removed_rows_df = working_df.iloc[0:0].copy()
 tracking_base_index = working_df.index.copy()
 original_columns_store: dict[str, pd.Series] = {}
-channel_pair_plot_reference_df = pd.DataFrame(index=working_df.index.copy())
+channel_pair_plot_reference_df = pd.DataFrame(index=working_df.index)
 
 
 def snapshot_original_columns_once(
@@ -4772,7 +4789,6 @@ if status_execution_date is not None:
     )
 
 snapshot_original_columns_once(working_df, ["datetime"])
-working_df["datetime"] = selected_df['datetime']
 working_df = working_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
 
 # print("Columns right after initial assignment (before raw_tt computation):")
@@ -4793,7 +4809,7 @@ if found_matching_conf and conf_value is not None:
                 working_df[[col2, col4]] = working_df[[col4, col2]].values  # swap columns
 
 if self_trigger:
-    working_st_df = self_trigger_df.loc[:, ["event_id", "datetime", *channel_source_columns]].copy()
+    working_st_df = read_df.loc[self_trigger_mask, ["event_id", "datetime", *channel_source_columns]].copy()
     working_st_df = working_st_df.rename(columns=channel_rename_map)
     working_st_df = working_st_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
     
@@ -4809,10 +4825,7 @@ if self_trigger:
                     col4 = f'{key}_4'
                     working_st_df[[col2, col4]] = working_st_df[[col4, col2]].values  # swap columns
 
-del selected_df
-if self_trigger:
-    del self_trigger_df
-gc.collect()
+del read_df
 
 # ----------------------------------------------------------------------------------
 # Count the number of non-zero entries per channel in the whole dataframe ----------
@@ -4828,6 +4841,8 @@ for key, idx_range in column_indices.items():
         count = (working_df[colname] != 0).sum()
         global_var_name = f"{key}_{i}_entries_original"
         global_variables[global_var_name] = count
+_prof["s_frame_init_s"] = round(time.perf_counter() - _t_frame_init, 2)
+_t_raw_tt_overview = time.perf_counter()
 
 # ----------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------
@@ -4909,6 +4924,7 @@ Q_F_left_pre_cal_ST = Q_F_left_pre_cal
 Q_F_right_pre_cal_ST = Q_F_right_pre_cal
 Q_B_left_pre_cal_ST = Q_B_left_pre_cal
 Q_B_right_pre_cal_ST = Q_B_right_pre_cal
+_prof["s_raw_tt_overview_s"] = round(time.perf_counter() - _t_raw_tt_overview, 2)
 
 _debug_plot_filter_group(
     working_df,
@@ -6782,12 +6798,10 @@ metadata_deep_fiter_csv_path = save_metadata(
 )
 print(f"Metadata (deep_fiter) CSV updated at: {metadata_deep_fiter_csv_path}")
 
-noise_control_events_per_second_meta = build_events_per_second_metadata(
-    task1_problematic_channel_count_snapshot
-)
+events_per_second_meta = build_events_per_second_metadata(working_df)
 try:
     noise_control_rate_denominator_seconds = int(
-        noise_control_events_per_second_meta.get("events_per_second_total_seconds", 0) or 0
+        events_per_second_meta.get("events_per_second_total_seconds", 0) or 0
     )
 except (TypeError, ValueError):
     noise_control_rate_denominator_seconds = 0
@@ -6930,7 +6944,7 @@ print(f"Metadata (pattern) CSV updated at: {metadata_pattern_csv_path}")
 # Specific metadata ------------------------------------------------------------
 # -------------------------------------------------------------------------------
 
-global_variables.update(build_events_per_second_metadata(working_df))
+global_variables.update(events_per_second_meta)
 ensure_global_count_keys(("raw_tt", "clean_tt", "raw_to_clean_tt"))
 add_normalized_count_metadata(
     global_variables,
@@ -7040,22 +7054,26 @@ channel_removed_values_base = os.path.join(
     channel_removed_values_output_directory,
     f"removed_channel_values_{basename_no_ext}",
 )
-task1_removed_channel_values_df = task1_removed_channel_values_df.copy()
-task1_removed_channel_values_df["filename_base"] = filename_base
-task1_removed_channel_values_df.to_parquet(
-    f"{channel_removed_values_base}.parquet",
-    engine="pyarrow",
-    compression="zstd",
-    index=False,
-)
-task1_removed_channel_values_df.to_csv(
-    f"{channel_removed_values_base}.csv",
-    index=False,
-)
-print(f"Removed channel-value parquet saved to: {channel_removed_values_base}.parquet")
-print(f"Removed channel-value CSV saved to: {channel_removed_values_base}.csv")
+if not task1_removed_channel_values_df.empty:
+    task1_removed_channel_values_output_df = task1_removed_channel_values_df.assign(
+        filename_base=filename_base
+    )
+    task1_removed_channel_values_output_df.to_parquet(
+        f"{channel_removed_values_base}.parquet",
+        engine="pyarrow",
+        compression="zstd",
+        index=False,
+    )
+    task1_removed_channel_values_output_df.to_csv(
+        f"{channel_removed_values_base}.csv",
+        index=False,
+    )
+    print(f"Removed channel-value parquet saved to: {channel_removed_values_base}.parquet")
+    print(f"Removed channel-value CSV saved to: {channel_removed_values_base}.csv")
+else:
+    print("Removed channel-value export skipped: no zeroed channel values recorded.")
 
-if track_removed_rows:
+if track_removed_rows and not removed_rows_df.empty:
     tracking_output_directory = base_directories["tracking_directory"]
     os.makedirs(tracking_output_directory, exist_ok=True)
 
@@ -7067,8 +7085,6 @@ if track_removed_rows:
         tracking_output_directory,
         f"original_cols_{basename_no_ext}",
     )
-    original_columns_df = build_original_columns_frame()
-
     removed_rows_df.to_parquet(
         f"{removed_rows_base}.parquet",
         engine="pyarrow",
@@ -7076,15 +7092,19 @@ if track_removed_rows:
         index=True,
     )
     removed_rows_df.to_csv(f"{removed_rows_base}.csv", index=True)
-    original_columns_df.to_parquet(
-        f"{original_cols_base}.parquet",
-        engine="pyarrow",
-        compression="zstd",
-        index=True,
-    )
     print(f"Removed-row tracking parquet saved to: {removed_rows_base}.parquet")
     print(f"Removed-row tracking CSV saved to: {removed_rows_base}.csv")
-    print(f"Original-column snapshot parquet saved to: {original_cols_base}.parquet")
+    if original_columns_store:
+        original_columns_df = build_original_columns_frame()
+        original_columns_df.to_parquet(
+            f"{original_cols_base}.parquet",
+            engine="pyarrow",
+            compression="zstd",
+            index=True,
+        )
+        print(f"Original-column snapshot parquet saved to: {original_cols_base}.parquet")
+elif track_removed_rows:
+    print("Removed-row tracking export skipped: no rows were removed.")
 
 # Ensure no figure handles remain open before persistence/final move.
 plt.close("all")

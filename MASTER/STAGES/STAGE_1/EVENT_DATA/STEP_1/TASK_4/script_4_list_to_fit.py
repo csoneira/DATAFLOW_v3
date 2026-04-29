@@ -151,6 +151,7 @@ from MASTER.common.step1_shared import (
     set_global_rate_from_tt_rates,
     load_step1_task_plot_catalog,
     resolve_step1_plot_options,
+    step1_logging_enabled,
     step1_task_plot_enabled,
     validate_step1_input_file_args,
     y_pos,
@@ -283,6 +284,12 @@ print = build_step1_filtered_print(
     debug_mode_getter=lambda: bool(globals().get("debug_mode", False)),
     raw_print=builtins.print,
 )
+FILTER_METRICS_LOGGING_ENABLED = step1_logging_enabled("filter_metrics")[0]
+
+
+def _log_filter_metrics_message(message: str) -> None:
+    if FILTER_METRICS_LOGGING_ENABLED:
+        print(message)
 
 def safe_move(source_path: str, dest_path: str) -> str:
     """Move *source_path* to *dest_path* with explicit diagnostics on failure."""
@@ -2305,7 +2312,9 @@ def record_filter_metric(name: str, removed: float, total: float) -> None:
     """Record percentage removed for a filter."""
     pct = 0.0 if total == 0 else 100.0 * float(removed) / float(total)
     filter_metrics[name] = round(pct, 4)
-    print(f"[filter-metrics] {name}: removed {removed} of {total} ({pct:.2f}%)")
+    _log_filter_metrics_message(
+        f"[filter-metrics] {name}: removed {removed} of {total} ({pct:.2f}%)"
+    )
 
 def record_residual_sigmas(df: pd.DataFrame) -> None:
     """Fit Gaussian sigmas for residual columns per track combination and plane."""
@@ -14110,6 +14119,7 @@ elif _task4_charge_series is None:
 # Force PDF creation when Task 4 plotting is enabled.
 if create_plots:
     create_pdf = True
+_finalize_stage_t0 = _t_sec
 
 if create_pdf:
     print(f"Creating PDF with all plots in {save_pdf_path}")
@@ -14154,6 +14164,8 @@ if files:  # Check if the directory contains any files
 if os.path.exists(figure_directory):
     print("Removing figure directory...")
     os.rmdir(figure_directory)
+_prof["s_pdf_finalize_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 
 # Move the original datafile to COMPLETED -------------------------------------
 print("Moving file to COMPLETED directory...")
@@ -14169,6 +14181,8 @@ if user_file_selection == False:
     else:
         print(f"Input file already absent (maybe previously processed): {file_path}")
         print("Skipping move; fitted output stays in OUTPUT_FILES.")
+_prof["s_file_move_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 
 # Store the current time at the end
 end_execution_time_counting = datetime.now()
@@ -14754,6 +14768,8 @@ metadata_robust_efficiency_csv_path = save_metadata(
     replace_existing_basename=True,
 )
 print(f"Metadata (robust_efficiency) CSV updated at: {metadata_robust_efficiency_csv_path}")
+_prof["s_metadata_write_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 
 # Ensure the fitted parquet always carries an event-level total charge for
 # downstream TASK_5 / STEP_2 aggregation.
@@ -14779,6 +14795,8 @@ working_df.to_parquet(
     index=False,
 )
 print(f"Listed dataframe saved to: {OUT_PATH}")
+_prof["s_output_write_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 
 # Move the original datafile to COMPLETED -------------------------------------
 print("Moving file to COMPLETED directory...")
@@ -14804,6 +14822,7 @@ if status_execution_date is not None:
         param_hash=str(global_variables.get("param_hash", "")),
     )
 _prof["s_save_finish_s"] = round(time.perf_counter() - _t_sec, 2)
+_prof["s_finalize_s"] = round(time.perf_counter() - _finalize_stage_t0, 2)
 _prof["filename_base"] = filename_base
 _prof["execution_timestamp"] = execution_timestamp
 _prof["param_hash"] = param_hash_value

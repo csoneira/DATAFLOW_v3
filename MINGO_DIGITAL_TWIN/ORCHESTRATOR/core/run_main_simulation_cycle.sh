@@ -58,6 +58,7 @@ REPAIR_MESH_IDS_SCRIPT="${DT_DIR}/ORCHESTRATOR/maintenance/repair_param_mesh_ste
 PRUNE_MESH_SCRIPT="${DT_DIR}/ORCHESTRATOR/maintenance/prune_completed_param_mesh_rows.py"
 PRUNE_FINAL_SCRIPT="${DT_DIR}/ORCHESTRATOR/maintenance/prune_step_final_params.py"
 SANITIZE_SCRIPT="${DT_DIR}/ORCHESTRATOR/maintenance/sanitize_sim_runs.py"
+PURGE_BACKPRESSURE_QUEUE_SCRIPT="${DT_DIR}/ORCHESTRATOR/maintenance/purge_simulation_queue_backpressure.py"
 CASCADE_CLEANUP_HELPER="${DT_DIR}/ORCHESTRATOR/helpers/cascade_cleanup_intersteps.py"
 FREQUENCY_CONFIG_FILE_DEFAULT="${DT_DIR}/CONFIG_FILES/sim_main_pipeline_frequency.conf"
 
@@ -539,6 +540,8 @@ cleanup_consumed_intermediates() {
 run_enqueue_phase() {
   local mesh_before=0 mesh_after=0 rows_added=0
   local enqueue_failed=0
+  local backpressure_purge_enabled="${SIM_BACKPRESSURE_PURGE_ENABLED:-1}"
+  local backpressure_purge_fraction="${SIM_BACKPRESSURE_PURGE_FRACTION:-0.5}"
 
   mkdir -p "$(dirname "${SIM_ENQUEUE_LOCK}")"
   exec {enqueue_fd}> "${SIM_ENQUEUE_LOCK}"
@@ -551,6 +554,21 @@ run_enqueue_phase() {
   if ! frequency_gate_allows_run; then
     exec {enqueue_fd}>&-
     return 0
+  fi
+
+  if [[ "${backpressure_purge_enabled}" != "0" && "${backpressure_purge_enabled}" != "1" ]]; then
+    backpressure_purge_enabled="1"
+  fi
+  if [[ "${backpressure_purge_enabled}" == "1" ]]; then
+    if [[ -f "${PURGE_BACKPRESSURE_QUEUE_SCRIPT}" ]]; then
+      if ! run_stage "purge_backpressure_queue" /usr/bin/env python3 "${PURGE_BACKPRESSURE_QUEUE_SCRIPT}" --fraction-of-limit "${backpressure_purge_fraction}"; then
+        log_warn "stage=purge_backpressure_queue status=non_fatal_failure"
+      fi
+    else
+      log_info "stage=purge_backpressure_queue status=skipped reason=missing_script"
+    fi
+  else
+    log_info "stage=purge_backpressure_queue status=skipped reason=disabled"
   fi
 
   if backpressure_gate_allows_step0; then

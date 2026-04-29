@@ -153,6 +153,7 @@ from MASTER.common.step1_shared import (
     set_global_rate_from_tt_rates,
     load_step1_task_plot_catalog,
     resolve_step1_plot_options,
+    step1_logging_enabled,
     step1_task_plot_enabled,
     validate_step1_input_file_args,
     y_pos,
@@ -417,6 +418,12 @@ print = build_step1_filtered_print(
     debug_mode_getter=lambda: bool(globals().get("debug_mode", False)),
     raw_print=builtins.print,
 )
+FILTER_METRICS_LOGGING_ENABLED = step1_logging_enabled("filter_metrics")[0]
+
+
+def _log_filter_metrics_message(message: str) -> None:
+    if FILTER_METRICS_LOGGING_ENABLED:
+        print(message)
 
 def safe_move(source_path: str, dest_path: str) -> str:
     """Move *source_path* to *dest_path* with explicit diagnostics on failure."""
@@ -1966,7 +1973,9 @@ def record_filter_metric(name: str, removed: float, total: float) -> None:
     """Record percentage removed for a filter."""
     pct = 0.0 if total == 0 else 100.0 * float(removed) / float(total)
     filter_metrics[name] = round(pct, 4)
-    print(f"[filter-metrics] {name}: removed {removed} of {total} ({pct:.2f}%)")
+    _log_filter_metrics_message(
+        f"[filter-metrics] {name}: removed {removed} of {total} ({pct:.2f}%)"
+    )
 
 # Keep fit_tt from Task 4 when present; compute only if missing.
 if "fit_tt" not in working_df.columns:
@@ -3898,6 +3907,7 @@ working_df = df
 # Create and save the PDF -----------------------------------------------------
 # -----------------------------------------------------------------------------
 
+_finalize_stage_t0 = _t_sec
 if create_pdf:
     print(f"Creating PDF with all plots in {save_pdf_path}")
     existing_pngs = collect_saved_plot_paths(plot_list, base_directories["figure_directory"])
@@ -3935,6 +3945,8 @@ if create_pdf:
             os.rmdir(figure_directory)
         else:
             print(f"Figure directory not empty, skipping removal: {figure_directory}")
+_prof["s_pdf_finalize_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 
 # Path to save the cleaned dataframe
 # Create output directory if it does not exist.
@@ -4249,6 +4261,8 @@ metadata_specific_csv_path = save_metadata(
     ),
 )
 print(f"Metadata (specific) CSV updated at: {metadata_specific_csv_path}")
+_prof["s_metadata_write_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 
 # Ensure no figure handles remain open before persistence/final move.
 plt.close("all")
@@ -4262,6 +4276,8 @@ working_df.to_parquet(
 )
 # working_df.to_csv(OUT_PATH.replace('.h5', '.csv'), index=False)
 print(f"Listed dataframe saved to: {OUT_PATH}")
+_prof["s_output_write_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 
 # Move the original datafile to COMPLETED -------------------------------------
 print("Moving file to COMPLETED directory...")
@@ -4283,6 +4299,8 @@ if status_execution_date is not None:
         param_hash=str(global_variables.get("param_hash", "")),
     )
 
+_prof["s_file_move_s"] = round(time.perf_counter() - _t_sec, 2)
+_prof["s_finalize_s"] = round(time.perf_counter() - _finalize_stage_t0, 2)
 _prof["filename_base"] = filename_base
 _prof["execution_timestamp"] = execution_timestamp
 _prof["param_hash"] = param_hash_value

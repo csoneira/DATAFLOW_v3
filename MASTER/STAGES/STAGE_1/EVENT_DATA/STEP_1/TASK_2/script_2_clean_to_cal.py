@@ -166,6 +166,7 @@ from MASTER.common.step1_shared import (
     set_global_rate_from_tt_rates,
     load_step1_task_plot_catalog,
     resolve_step1_plot_options,
+    step1_logging_enabled,
     step1_task_plot_enabled,
     validate_step1_input_file_args,
     y_pos,
@@ -358,6 +359,12 @@ print = build_step1_filtered_print(
     debug_mode_getter=lambda: bool(globals().get("debug_mode", False)),
     raw_print=builtins.print,
 )
+FILTER_METRICS_LOGGING_ENABLED = step1_logging_enabled("filter_metrics")[0]
+
+
+def _log_filter_metrics_message(message: str) -> None:
+    if FILTER_METRICS_LOGGING_ENABLED:
+        print(message)
 
 def safe_move(source_path: str, dest_path: str) -> str:
     """Move *source_path* to *dest_path* with explicit diagnostics on failure."""
@@ -1813,7 +1820,9 @@ def record_activity_metric(name: str, affected: float, total: float, label: str 
     """Record a generic percentage metric."""
     pct = 0.0 if total == 0 else 100.0 * float(affected) / float(total)
     filter_metrics[name] = round(pct, 4)
-    print(f"[filter-metrics] {name}: {label} {affected} of {total} ({pct:.2f}%)")
+    _log_filter_metrics_message(
+        f"[filter-metrics] {name}: {label} {affected} of {total} ({pct:.2f}%)"
+    )
 
 def record_filter_metric(name: str, removed: float, total: float) -> None:
     """Record percentage removed for a filter."""
@@ -2206,7 +2215,9 @@ def record_zeroing_step_metrics(
     if not tracked_columns or before_nonzero_mask.size == 0:
         filter_metrics[rows_metric] = 0.0
         filter_metrics[values_metric] = 0.0
-        print(f"[filter-metrics] {step_prefix}: no tracked columns available.")
+        _log_filter_metrics_message(
+            f"[filter-metrics] {step_prefix}: no tracked columns available."
+        )
         return
 
     after_values = after_df.loc[:, tracked_columns].to_numpy(copy=False)
@@ -2214,7 +2225,7 @@ def record_zeroing_step_metrics(
     if n_rows == 0:
         filter_metrics[rows_metric] = 0.0
         filter_metrics[values_metric] = 0.0
-        print(f"[filter-metrics] {step_prefix}: no rows available.")
+        _log_filter_metrics_message(f"[filter-metrics] {step_prefix}: no rows available.")
         return
 
     before_nonzero = before_nonzero_mask[:n_rows]
@@ -2318,7 +2329,9 @@ def record_strip_zeroing_trigger_metrics(step_prefix: str, df_before: pd.DataFra
     if n_rows == 0 or n_strips == 0:
         for metric_name in metrics_to_seed:
             filter_metrics[metric_name] = 0.0
-        print(f"[filter-metrics] {step_prefix}: no strip blocks available for trigger analysis.")
+        _log_filter_metrics_message(
+            f"[filter-metrics] {step_prefix}: no strip blocks available for trigger analysis."
+        )
         return
 
     total_blocks = n_rows * n_strips
@@ -5573,7 +5586,20 @@ elif simulated_param_hash:
 
 # Unzeroed snapshot: preserved before any value-zeroing operations.
 # All diagnostic plots (rejected-event scatters, front-vs-back, channel matrix) use this.
-working_df_unzeroed = working_df.copy()
+task2_unzeroed_snapshot_needed = any(
+    (
+        task2_plot_requested("rejected_scatter_clean_tt"),
+        task2_plot_requested("rejected_scatter_q_sum_zero"),
+        task2_plot_requested("rejected_scatter_cal_tt"),
+        task2_plot_requested("charge_front_vs_back", essential=True),
+        task2_plot_requested("time_front_vs_back", essential=True),
+        task2_plot_requested("channel_matrix_tq"),
+        task2_plot_requested("rejected_histograms_clean_tt"),
+        task2_plot_requested("rejected_histograms_q_sum_zero"),
+        task2_plot_requested("rejected_histograms_cal_tt"),
+    )
+)
+working_df_unzeroed = working_df.copy() if task2_unzeroed_snapshot_needed else None
 
 if create_debug_plots:
     incoming_patterns = [
@@ -5643,7 +5669,11 @@ record_filter_metric(
     original_number_of_events if original_number_of_events else 0,
 )
 # Track which indices were removed by each row-dropping filter for diagnostic plots.
-_diag_rejected_clean_tt_idx = working_df_unzeroed.index.difference(working_df.index)
+_diag_rejected_clean_tt_idx = (
+    working_df_unzeroed.index.difference(working_df.index)
+    if working_df_unzeroed is not None
+    else working_df.index[:0]
+)
 _diag_idx_after_clean_tt = working_df.index.copy()
 
 # --- Continue your calibration or analysis code here ---
@@ -7291,6 +7321,8 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
 
 _prof["s_data_read_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
+_t_charge_pedestal_main = _t_sec
+_t_charge_pedestal_st = None
 if apply_charge_side:
     print("--------------------------------------------------------------------------")
     print("-------------------- Charge pedestal calibration -------------------------")
@@ -7604,7 +7636,9 @@ if apply_charge_side:
                 plt.show()
             plt.close(fig_Q)
 
+    _prof["s_charge_pedestal_main_s"] = round(time.perf_counter() - _t_charge_pedestal_main, 2)
     if self_trigger and calibration_work_st_df is not None:
+        _t_charge_pedestal_st = time.perf_counter()
         print("--------------------------------------------------------------------------")
         print("---------------- SELF TRIGGER Charge pedestal calibration-----------------")
         print("--------------------------------------------------------------------------")
@@ -7806,10 +7840,17 @@ if apply_charge_side:
 else:
     print("Skipping charge side calibration (mode=null).")
 
-
+if _t_charge_pedestal_st is not None:
+    _prof["s_charge_pedestal_st_s"] = round(time.perf_counter() - _t_charge_pedestal_st, 2)
+elif self_trigger and calibration_work_st_df is not None:
+    _prof["s_charge_pedestal_st_s"] = 0.0
+else:
+    _prof["s_charge_pedestal_st_s"] = 0.0
 
 _prof["s_charge_pedestal_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
+_t_pos_offset_main = _t_sec
+_t_pos_offset_st = None
 if apply_T_dif_calibration:
     print("----------------------------------------------------------------------")
     print("------------------- Position offset calibration ----------------------")
@@ -7915,7 +7956,9 @@ if apply_T_dif_calibration:
             if show_plots: plt.show()
             plt.close(fig_Q)
 
+    _prof["s_pos_offset_main_s"] = round(time.perf_counter() - _t_pos_offset_main, 2)
     if self_trigger and calibration_work_st_df is not None:
+        _t_pos_offset_st = time.perf_counter()
         print("----------------------------------------------------------------------")
         print("------------------- Position offset calibration ----------------------")
         print("----------------------------------------------------------------------")
@@ -8009,7 +8052,12 @@ if apply_T_dif_calibration:
 else:
     print("Skipping T_dif calibration (mode=null).")
 
-    
+if _t_pos_offset_st is not None:
+    _prof["s_pos_offset_st_s"] = round(time.perf_counter() - _t_pos_offset_st, 2)
+elif self_trigger and calibration_work_st_df is not None:
+    _prof["s_pos_offset_st_s"] = 0.0
+else:
+    _prof["s_pos_offset_st_s"] = 0.0
 
 # ----------------------------------------------------------------------------------
 # -------------------------- Semisums and semidifferences --------------------------
@@ -8079,7 +8127,8 @@ task2_charge_component_backup_df_qfb = (
 # Augment the unzeroed snapshot with sum/dif columns computed from its own F/B data.
 # The snapshot was taken before this loop ran, so it only has raw F/B columns.
 # We add sum/dif here (pre-zeroing) so diagnostic plots that need Q_sum/T_sum work.
-working_df_unzeroed = build_task2_strip_component_columns(working_df_unzeroed)
+if working_df_unzeroed is not None:
+    working_df_unzeroed = build_task2_strip_component_columns(working_df_unzeroed)
 
 # Count non-zero entries in the new _T_sum, _T_diff, _Q_sum, _Q_diff columns
 def record_strip_entries(df: pd.DataFrame, suffix: str) -> None:
@@ -8220,8 +8269,10 @@ task2_calibration_gate_topologies: dict[str, tuple[int, ...]] = {
     "134": (1, 3, 4),
 }
 
+task2_calibration_gate_plot_needed = task2_plot_requested("calibration_charge_gates", essential=True)
 calibration_charge_gate_prefilter_dfs: dict[str, pd.DataFrame] = {}
 calibration_charge_gate_filtered_dfs: dict[str, pd.DataFrame] = {}
+naive_efficiency_counts: dict[str, int] = {}
 
 for _topology_label, _required_planes in task2_calibration_gate_topologies.items():
     _required_set = set(_required_planes)
@@ -8244,19 +8295,10 @@ for _topology_label, _required_planes in task2_calibration_gate_topologies.items
         strip_charge_threshold=calibration_strip_charge_threshold,
     )
 
-    calibration_charge_gate_prefilter_dfs[_topology_label] = working_df.loc[_prefilter_mask].copy()
-    calibration_charge_gate_filtered_dfs[_topology_label] = working_df.loc[_filtered_mask].copy()
-
-calibration_work_df_1234 = calibration_charge_gate_filtered_dfs["1234"].copy()
-calibration_work_df_123 = calibration_charge_gate_filtered_dfs["123"].copy()
-calibration_work_df_234 = calibration_charge_gate_filtered_dfs["234"].copy()
-calibration_work_df_124 = calibration_charge_gate_filtered_dfs["124"].copy()
-calibration_work_df_134 = calibration_charge_gate_filtered_dfs["134"].copy()
-
-naive_efficiency_counts = {
-    topology_label: int(len(topology_df))
-    for topology_label, topology_df in calibration_charge_gate_filtered_dfs.items()
-}
+    naive_efficiency_counts[_topology_label] = int(np.count_nonzero(_filtered_mask))
+    if task2_calibration_gate_plot_needed:
+        calibration_charge_gate_prefilter_dfs[_topology_label] = working_df.loc[_prefilter_mask].copy()
+        calibration_charge_gate_filtered_dfs[_topology_label] = working_df.loc[_filtered_mask].copy()
 print(
     "[task2-naive-efficiency-counts] "
     + " ".join(
@@ -10029,6 +10071,10 @@ if time_calibration_mode is not None:
                 f"[PROFILE][TASK_2] old_timing_method event-matrix build: {time.perf_counter() - old_timing_prep_start:.2f}s",
                 force=True,
             )
+            _prof["s_time_sum_old_timing_matrix_build_s"] = round(
+                time.perf_counter() - old_timing_prep_start,
+                2,
+            )
             
             # The old code to do this -----------------------------
             
@@ -10119,6 +10165,10 @@ if time_calibration_mode is not None:
             print(
                 f"[PROFILE][TASK_2] old_timing_method strip-pair accumulation: {time.perf_counter() - old_timing_accum_start:.2f}s",
                 force=True,
+            )
+            _prof["s_time_sum_old_timing_strip_accum_s"] = round(
+                time.perf_counter() - old_timing_accum_start,
+                2,
             )
 
             if create_plots:
@@ -11601,6 +11651,9 @@ if create_pdf:
             os.rmdir(figure_directory)
         else:
             print(f"Figure directory not empty, skipping removal: {figure_directory}")
+_prof["s_pdf_finalize_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
+_finalize_stage_t0 = _t_sec
 
 # Path to save the cleaned dataframe
 # Create output directory if it does not exist.
@@ -12264,8 +12317,6 @@ if task2_plot_requested("time_calibrated_filtered_removed_zeroes", essential=Tru
 # Data purity
 data_purity = final_number_of_events / original_number_of_events * 100
 
-# End of the execution time
-_prof["s_finalize_s"] = round(time.perf_counter() - _t_sec, 2)
 end_time_execution = datetime.now()
 execution_time = end_time_execution - start_execution_time_counting
 # In minutes
@@ -12593,6 +12644,8 @@ metadata_specific_csv_path = save_metadata(
     ),
 )
 print(f"Metadata (specific) CSV updated at: {metadata_specific_csv_path}")
+_prof["s_metadata_write_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 
 if track_removed_rows_task2:
     tracking_output_directory = base_directories["tracking_directory"]
@@ -12631,6 +12684,8 @@ plt.close("all")
 # Save to HDF5 file
 working_df.to_parquet(OUT_PATH, engine="pyarrow", compression="zstd", index=False)
 print(f"Calibrated dataframe saved to: {OUT_PATH}")
+_prof["s_output_write_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 
 # Move the original datafile to COMPLETED -------------------------------------
 print("Moving file to COMPLETED directory...")
@@ -12655,6 +12710,8 @@ if status_execution_date is not None:
         param_hash=str(global_variables.get("param_hash", "")),
     )
 
+_prof["s_file_move_s"] = round(time.perf_counter() - _t_sec, 2)
+_prof["s_finalize_s"] = round(time.perf_counter() - _finalize_stage_t0, 2)
 _prof["filename_base"] = filename_base
 _prof["execution_timestamp"] = execution_timestamp
 _prof["param_hash"] = param_hash_value

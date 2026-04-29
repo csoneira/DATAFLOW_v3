@@ -14,6 +14,7 @@ Primary entrypoints:
 Operational maintenance and repair scripts used by cron and/or core orchestrators:
 
 - `ensure_sim_hashes.py`
+- `purge_simulation_queue_backpressure.py`
 - `prune_completed_param_mesh_rows.py`
 - `prune_step_final_params.py`
 - `repair_param_mesh_step_ids.py`

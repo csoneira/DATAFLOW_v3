@@ -159,6 +159,7 @@ from MASTER.common.step1_shared import (
     save_metadata,
     select_exact_minimum_vertex_cover,
     set_global_rate_from_tt_rates,
+    step1_logging_enabled,
     validate_step1_input_file_args,
     y_pos,
 )
@@ -279,6 +280,12 @@ print = build_step1_filtered_print(
     debug_mode_getter=lambda: bool(globals().get("debug_mode", False)),
     raw_print=builtins.print,
 )
+FILTER_METRICS_LOGGING_ENABLED = step1_logging_enabled("filter_metrics")[0]
+
+
+def _log_filter_metrics_message(message: str) -> None:
+    if FILTER_METRICS_LOGGING_ENABLED:
+        print(message)
 
 def safe_move(source_path: str, dest_path: str) -> str:
     """Move *source_path* to *dest_path* with explicit diagnostics on failure."""
@@ -1326,14 +1333,18 @@ def record_filter_metric(name: str, removed: float, total: float) -> None:
     """Record percentage removed for a filter."""
     pct = 0.0 if total == 0 else 100.0 * float(removed) / float(total)
     filter_metrics[name] = round(pct, 4)
-    print(f"[filter-metrics] {name}: removed {removed} of {total} ({pct:.2f}%)")
+    _log_filter_metrics_message(
+        f"[filter-metrics] {name}: removed {removed} of {total} ({pct:.2f}%)"
+    )
 
 
 def record_activity_metric(name: str, affected: float, total: float, label: str = "affected") -> None:
     """Record a generic percentage metric for non-row-removal filter activity."""
     pct = 0.0 if total == 0 else 100.0 * float(affected) / float(total)
     filter_metrics[name] = round(pct, 4)
-    print(f"[filter-metrics] {name}: {label} {affected} of {total} ({pct:.2f}%)")
+    _log_filter_metrics_message(
+        f"[filter-metrics] {name}: {label} {affected} of {total} ({pct:.2f}%)"
+    )
 
 
 def _task3_drop_legacy_deep_filter_field(column_name: str) -> bool:
@@ -5493,6 +5504,7 @@ for plane_index, z_value in enumerate(z_positions, start=1):
 
 _prof["s_data_read_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
+_t_topology_core = _t_sec
 print("----------------------------------------------------------------------")
 print("---------------- Binary topology of active strips --------------------")
 print("----------------------------------------------------------------------")
@@ -5572,6 +5584,7 @@ print(f"adj_dis column added: adj={_n_adj:,}  dis={_n_dis:,}  dis_fraction={glob
 
 cal_strip_patterns = build_task3_full_strip_pattern_series(working_df)
 store_pattern_rates(pattern_metadata, cal_strip_patterns, "cal_strip_pattern", working_df)
+_prof["s_topology_core_s"] = round(time.perf_counter() - _t_topology_core, 2)
 
 if task3_plot_enabled("active_strip_patterns_overview"):
 
@@ -6601,6 +6614,7 @@ if calculate_sigmas_adjacent:
 
 _prof["s_multi_strip_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
+_t_y_position_core = _t_sec
 print("----------------------------------------------------------------------")
 print("----------------------- Y position calculation -----------------------")
 print("----------------------------------------------------------------------")
@@ -6671,6 +6685,7 @@ if y_new_method:
 
     # Insert all new Y_ columns at once
     working_df = pd.concat([working_df, pd.DataFrame(y_columns, index=working_df.index)], axis=1)
+    _prof["s_y_position_core_s"] = round(time.perf_counter() - _t_y_position_core, 2)
 
 if task3_plot_enabled("y_position_by_cal_tt"):
 
@@ -6839,6 +6854,7 @@ if self_trigger:
 
 _prof["s_last_comprobation_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
+_t_rpc_vars_core = _t_sec
 print("----------------------------------------------------------------------")
 print("----------------- Setting the variables of each RPC ------------------")
 print("----------------------------------------------------------------------")
@@ -6888,6 +6904,7 @@ for i_plane in range(1, 5):
     final_columns[f'P{i_plane}_Q_dif_final'] = q_dif_final
 
 working_df = pd.concat([working_df, pd.DataFrame(final_columns, index=working_df.index)], axis=1)
+_prof["s_rpc_vars_core_s"] = round(time.perf_counter() - _t_rpc_vars_core, 2)
 
 if task3_plot_enabled("rpc_variables_hexbin"):
     fig, axes = plt.subplots(4, 10, figsize=(40, 20))  # 10 combinations per plane
@@ -10169,6 +10186,9 @@ if task3_plot_enabled("strip_activation_matrix_before_after"):
     )
 
 finalize_saved_plots_to_pdf()
+_prof["s_pdf_finalize_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
+_finalize_stage_t0 = _t_sec
 
 # Final number of events
 final_number_of_events = len(working_df)
@@ -10185,8 +10205,6 @@ if VERBOSE:
 # Data purity
 data_purity = final_number_of_events / original_number_of_events * 100
 
-# End of the execution time
-_prof["s_finalize_s"] = round(time.perf_counter() - _t_sec, 2)
 end_time_execution = datetime.now()
 execution_time = end_time_execution - start_execution_time_counting
 # In minutes
@@ -10492,6 +10510,8 @@ metadata_specific_csv_path = save_metadata(
     ),
 )
 print(f"Metadata (specific) CSV updated at: {metadata_specific_csv_path}")
+_prof["s_metadata_write_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 
 # Ensure no figure handles remain open before persistence/final move.
 plt.close("all")
@@ -10504,6 +10524,8 @@ working_df.to_parquet(
     index=False,
 )
 print(f"Listed dataframe saved to: {OUT_PATH}")
+_prof["s_output_write_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 
 # Move the original datafile to COMPLETED -------------------------------------
 print("Moving file to COMPLETED directory...")
@@ -10525,6 +10547,8 @@ if status_execution_date is not None:
         param_hash=str(global_variables.get("param_hash", "")),
     )
 
+_prof["s_file_move_s"] = round(time.perf_counter() - _t_sec, 2)
+_prof["s_finalize_s"] = round(time.perf_counter() - _finalize_stage_t0, 2)
 _prof["filename_base"] = filename_base
 _prof["execution_timestamp"] = execution_timestamp
 _prof["param_hash"] = param_hash_value

@@ -1,4 +1,4 @@
-stations: [1]
+stations: [1, 2, 4]
 
 date_range:
   start: 2024-03

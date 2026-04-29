@@ -18,12 +18,14 @@ from __future__ import annotations
 import argparse
 import csv
 import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import pandas as pd
+from matplotlib.backends.backend_pdf import PdfPages
 
 THIS_FILE = Path(__file__).resolve()
 PLOTTER_DIR = THIS_FILE.parent
@@ -32,6 +34,10 @@ DT_ROOT = next(
     THIS_FILE.parents[3],
 )
 REPO_ROOT = DT_ROOT.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from MASTER.common.plot_utils import pdf_save_rasterized_page
 
 DEFAULT_FREQUENCY_CONFIG = DT_ROOT / "CONFIG_FILES" / "sim_main_pipeline_frequency.conf"
 DEFAULT_MESH_PATH = DT_ROOT / "INTERSTEPS" / "STEP_0_TO_1" / "param_mesh.csv"
@@ -539,7 +545,11 @@ def build_plot(history_df: pd.DataFrame, output_path: Path) -> None:
                  fontsize=13, fontweight="bold")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=160)
+    if output_path.suffix.lower() == ".pdf":
+        with PdfPages(output_path) as pdf:
+            pdf_save_rasterized_page(pdf, fig, dpi=160)
+    else:
+        fig.savefig(output_path, dpi=160)
     plt.close(fig)
 
 

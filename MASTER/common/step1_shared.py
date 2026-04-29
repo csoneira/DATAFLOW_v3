@@ -68,6 +68,12 @@ STEP1_METADATA_OUTPUT_TYPES: Tuple[str, ...] = (
 STEP1_METADATA_OUTPUT_DEFAULTS: Dict[str, bool] = {
     metadata_type: True for metadata_type in STEP1_METADATA_OUTPUT_TYPES
 }
+STEP1_LOG_OUTPUT_TYPES: Tuple[str, ...] = (
+    "filter_metrics",
+)
+STEP1_LOG_OUTPUT_DEFAULTS: Dict[str, bool] = {
+    logging_type: True for logging_type in STEP1_LOG_OUTPUT_TYPES
+}
 
 EVENTS_PER_SECOND_MAX = 40
 EVENTS_PER_SECOND_COLUMNS = [
@@ -1014,6 +1020,43 @@ def load_step1_metadata_output_overrides(
                 resolved[metadata_type] = _normalize_bool_setting(loaded.get(legacy_key), True)
 
     return config_path, resolved
+
+
+@lru_cache(maxsize=None)
+def load_step1_logging_output_overrides(
+    master_config_root: str | Path | None = None,
+) -> tuple[Path, Dict[str, bool]]:
+    root = (
+        Path(master_config_root).expanduser()
+        if master_config_root is not None
+        else get_master_config_root()
+    )
+    config_path = root / STEP1_MASTER_CONFIG_RELATIVE_PATH
+    loaded = load_yaml_mapping(config_path)
+
+    output_node = loaded.get("logging_outputs")
+    if not isinstance(output_node, Mapping):
+        output_node = loaded.get("step_1_logging_outputs")
+    if not isinstance(output_node, Mapping):
+        output_node = {}
+
+    resolved = dict(STEP1_LOG_OUTPUT_DEFAULTS)
+    for logging_type in STEP1_LOG_OUTPUT_TYPES:
+        if logging_type in output_node:
+            resolved[logging_type] = _normalize_bool_setting(output_node.get(logging_type), True)
+
+    return config_path, resolved
+
+
+def step1_logging_enabled(
+    logging_type: str,
+    *,
+    master_config_root: str | Path | None = None,
+) -> tuple[bool, Path]:
+    config_path, resolved = load_step1_logging_output_overrides(
+        master_config_root=master_config_root,
+    )
+    return resolved.get(logging_type, True), config_path
 
 
 def infer_step1_metadata_type(metadata_path: str | Path) -> str | None:

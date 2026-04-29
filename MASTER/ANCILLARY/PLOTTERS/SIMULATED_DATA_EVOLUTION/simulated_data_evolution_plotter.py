@@ -860,6 +860,30 @@ def _add_stage_legend(
     )
 
 
+def _unique_geometry_vectors(frame: pd.DataFrame) -> List[Tuple[float, float, float, float]]:
+    geometry_columns = ["z_p1", "z_p2", "z_p3", "z_p4"]
+    if not set(geometry_columns).issubset(frame.columns):
+        return []
+
+    geom_frame = frame.loc[:, geometry_columns].apply(pd.to_numeric, errors="coerce")
+    geom_frame = geom_frame.dropna(how="any").drop_duplicates().sort_values(geometry_columns)
+    return [tuple(float(value) for value in row) for row in geom_frame.to_numpy()]
+
+
+def _filter_frame_to_geometry(
+    frame: pd.DataFrame,
+    geometry: Tuple[float, float, float, float],
+) -> pd.DataFrame:
+    mask = pd.Series(True, index=frame.index)
+    for column, value in zip(("z_p1", "z_p2", "z_p3", "z_p4"), geometry):
+        mask &= np.isclose(pd.to_numeric(frame[column], errors="coerce"), float(value), atol=1e-9)
+    return frame.loc[mask].copy()
+
+
+def _format_geometry_label(geometry: Tuple[float, float, float, float]) -> str:
+    return " / ".join(f"{float(value):g}" for value in geometry) + " mm"
+
+
 def plot_stage_colored_parameter_matrix(
     frame: pd.DataFrame,
     param_list: Sequence[str],
@@ -872,6 +896,8 @@ def plot_stage_colored_parameter_matrix(
     alpha: float,
     execution_recency_col: Optional[str],
     execution_log_scale_seconds: float,
+    pdf: Optional[PdfPages] = None,
+    page_title_suffix: Optional[str] = None,
 ) -> None:
     n = len(param_list)
     if n == 0:
@@ -972,10 +998,15 @@ def plot_stage_colored_parameter_matrix(
         f"Simulated Data Evolution ({total} files) | Tracked in MASTER pipeline: "
         f"{tracked}/{total} ({(tracked / max(total, 1)) * 100.0:.1f}%)"
     )
-    title = "Stage-Colored Simulation Parameter Matrix"
+    title_lines = ["Stage-Colored Simulation Parameter Matrix"]
+    if page_title_suffix:
+        title_lines.append(page_title_suffix)
     if execution_recency_col is not None:
-        title += f"\nExecution-time axes use log recency vs now (scale={execution_log_scale_seconds:.0f}s)"
-    full_title = title + "\n" + subtitle
+        title_lines.append(
+            f"Execution-time axes use log recency vs now (scale={execution_log_scale_seconds:.0f}s)"
+        )
+    title_lines.append(subtitle)
+    full_title = "\n".join(title_lines)
     title_line_count = full_title.count("\n") + 1
     reserved_top = 0.90 - 0.04 * max(title_line_count - 2, 0)
     top_margin = max(0.78, min(0.90, reserved_top))
@@ -985,7 +1016,16 @@ def plot_stage_colored_parameter_matrix(
     fig.subplots_adjust(left=0.06, right=0.84, bottom=0.08, top=top_margin, wspace=0.05, hspace=0.05)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with PdfPages(output_path) as pdf:
+    if pdf is None:
+        with PdfPages(output_path) as pdf_handle:
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="AutoDateLocator was unable to pick an appropriate interval.*",
+                    category=UserWarning,
+                )
+                pdf_save_rasterized_page(pdf_handle, fig, dpi=170)
+    else:
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore",
@@ -1183,20 +1223,50 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         scale_seconds=float(execution_log_scale_seconds),
     )
 
+    geometry_vectors = _unique_geometry_vectors(sim_df)
     try:
-        plot_stage_colored_parameter_matrix(
-            frame=sim_df,
-            param_list=plot_param_list,
-            stage_order=stage_order,
-            stage_labels=stage_labels,
-            stage_colors=stage_colors,
-            display_labels=display_labels,
-            output_path=output_path,
-            point_size=float(point_size),
-            alpha=float(alpha),
-            execution_recency_col=execution_recency_col,
-            execution_log_scale_seconds=float(execution_log_scale_seconds),
-        )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with PdfPages(output_path) as pdf:
+            if len(geometry_vectors) > 1:
+                plot_stage_colored_parameter_matrix(
+                    frame=sim_df,
+                    param_list=plot_param_list,
+                    stage_order=stage_order,
+                    stage_labels=stage_labels,
+                    stage_colors=stage_colors,
+                    display_labels=display_labels,
+                    output_path=output_path,
+                    point_size=float(point_size),
+                    alpha=float(alpha),
+                    execution_recency_col=execution_recency_col,
+                    execution_log_scale_seconds=float(execution_log_scale_seconds),
+                    pdf=pdf,
+                    page_title_suffix=f"All geometries | unique geometries = {len(geometry_vectors)}",
+                )
+            for geometry in geometry_vectors or [()]:
+                if geometry:
+                    geometry_frame = _filter_frame_to_geometry(sim_df, geometry)
+                    page_suffix = (
+                        f"Geometry z = {_format_geometry_label(geometry)} | rows = {len(geometry_frame)}"
+                    )
+                else:
+                    geometry_frame = sim_df
+                    page_suffix = "All available rows"
+                plot_stage_colored_parameter_matrix(
+                    frame=geometry_frame,
+                    param_list=plot_param_list,
+                    stage_order=stage_order,
+                    stage_labels=stage_labels,
+                    stage_colors=stage_colors,
+                    display_labels=display_labels,
+                    output_path=output_path,
+                    point_size=float(point_size),
+                    alpha=float(alpha),
+                    execution_recency_col=execution_recency_col,
+                    execution_log_scale_seconds=float(execution_log_scale_seconds),
+                    pdf=pdf,
+                    page_title_suffix=page_suffix,
+                )
     except Exception as exc:
         print(f"[simulated_data_evolution_plotter] Plot failed: {exc}", file=sys.stderr)
         return 1
@@ -1207,6 +1277,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         for idx in stage_order
     )
     print(f"[simulated_data_evolution_plotter] Saved PDF to {output_path}")
+    print(f"[simulated_data_evolution_plotter] Geometry pages: {max(len(geometry_vectors), 1)}")
     print(f"[simulated_data_evolution_plotter] Stage counts: {ordered_count_summary}")
 
     sim_basenames = set(sim_df["basename"].astype(str))
