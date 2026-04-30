@@ -10,7 +10,7 @@ timeseries_and_fits: false
 complete_reanalysis: false
 # create_plots options: null | debug | usual | essential | all
 # Task 4 plot alias statuses live in config_plots_task_4.yaml
-create_plots: null
+create_plots: essential
 keep_all_columns_output: true
 save_rejected_rows: false
 create_reject_plots: false

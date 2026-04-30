@@ -149,7 +149,7 @@ MASTER_STAGE_ROOT=/home/mingo/DATAFLOW_v3/MASTER/STAGES
 # --------------------------------------------------------------------------------
 
 # STAGE_0 - SIMULATION - COPY SIMULATED DATA -------------------------------------
-*/10 * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh --tag sim_ingest --max-mem-pct 90 --max-swap-pct 95 --max-cpu-pct 90 -- /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_ingest_station_data.lock /usr/bin/env python3 $MASTER_STAGE_ROOT/STAGE_0/SIMULATION/ingest_simulated_station_data.py >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/SIMULATION/ingest_simulated_station_data.log 2>&1
+*/10 * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh --tag sim_ingest --max-mem-pct 90 --max-swap-pct 95 --max-cpu-pct 0 -- /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_ingest_station_data.lock /usr/bin/env python3 $MASTER_STAGE_ROOT/STAGE_0/SIMULATION/ingest_simulated_station_data.py >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_0/SIMULATION/ingest_simulated_station_data.log 2>&1
 
 
 # --------------------------------------------------------------------------------

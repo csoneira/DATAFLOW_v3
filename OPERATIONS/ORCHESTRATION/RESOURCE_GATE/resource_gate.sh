@@ -120,6 +120,16 @@ MAX_SWAP_PCT="${MAX_SWAP_PCT:-95}"
 MAX_SWAP_KB="${MAX_SWAP_KB:-4194304}"
 MAX_CPU_PCT="${MAX_CPU_PCT:-95}"
 
+mem_gate_enabled=0
+swap_pct_gate_enabled=0
+swap_kb_gate_enabled=0
+cpu_gate_enabled=0
+
+[[ "$MAX_MEM_PCT" =~ ^-?[0-9]+$ && "$MAX_MEM_PCT" -gt 0 ]] && mem_gate_enabled=1
+[[ "$MAX_SWAP_PCT" =~ ^-?[0-9]+$ && "$MAX_SWAP_PCT" -gt 0 ]] && swap_pct_gate_enabled=1
+[[ "$MAX_SWAP_KB" =~ ^-?[0-9]+$ && "$MAX_SWAP_KB" -gt 0 ]] && swap_kb_gate_enabled=1
+[[ "$MAX_CPU_PCT" =~ ^-?[0-9]+$ && "$MAX_CPU_PCT" -gt 0 ]] && cpu_gate_enabled=1
+
 log_line() {
   local level="$1"
   local msg="$2"
@@ -159,7 +169,10 @@ fi
 
 cpu_used_pct="$(max_cpu_usage_pct || echo 0)"
 
-if (( mem_used_pct >= MAX_MEM_PCT || swap_used_pct >= MAX_SWAP_PCT || swap_used_kb >= MAX_SWAP_KB || cpu_used_pct >= MAX_CPU_PCT )); then
+if (( (mem_gate_enabled == 1 && mem_used_pct >= MAX_MEM_PCT) || \
+      (swap_pct_gate_enabled == 1 && swap_used_pct >= MAX_SWAP_PCT) || \
+      (swap_kb_gate_enabled == 1 && swap_used_kb >= MAX_SWAP_KB) || \
+      (cpu_gate_enabled == 1 && cpu_used_pct >= MAX_CPU_PCT) )); then
   log_line "WARN" "Resources high: Mem ${mem_used_pct}% (limit ${MAX_MEM_PCT}), Swap ${swap_used_pct}%/${swap_used_kb}k (limit ${MAX_SWAP_PCT}%/${MAX_SWAP_KB}k), CPU ${cpu_used_pct}% (limit ${MAX_CPU_PCT}). Skipping command."
   exit 0
 fi

@@ -2640,6 +2640,7 @@ def apply_task3_plane_combination_filter(
     detector_y_sum_left: float,
     detector_y_sum_right: float,
     detector_y_dif_threshold: float,
+    apply_changes: bool = True,
 ) -> dict[str, object]:
     """
     Apply the final Task 3 plane-consistency filter in one offender pass.
@@ -3100,7 +3101,8 @@ def apply_task3_plane_combination_filter(
             values = pd.to_numeric(df_input[cols[variable_name]], errors="coerce").fillna(0)
             summary["values_zeroed"] += int((values[fail_mask] != 0).sum())
         any_row_affected |= fail_mask
-        df_input.loc[fail_mask, list(cols.values())] = 0
+        if apply_changes:
+            df_input.loc[fail_mask, list(cols.values())] = 0
 
     summary["rows_affected"] = int(np.count_nonzero(any_row_affected))
     top_offenders = sorted(
@@ -7765,6 +7767,65 @@ working_df.loc[:, "cal_to_list_tt"] = (
 refresh_global_count_metadata(
     working_df,
     ("cal_tt", "list_tt", "cal_to_list_tt"),
+)
+
+task3_final_filter_dry_run_summary = apply_task3_plane_combination_filter(
+    working_df,
+    plane_q_sum_sum_left=plane_combination_plane_q_sum_sum_left,
+    plane_q_sum_sum_right=plane_combination_plane_q_sum_sum_right,
+    plane_q_dif_sum_threshold=plane_combination_plane_q_dif_sum_threshold,
+    plane_t_sum_sum_left=plane_combination_plane_t_sum_sum_left,
+    plane_t_sum_sum_right=plane_combination_plane_t_sum_sum_right,
+    plane_t_dif_sum_threshold=plane_combination_plane_t_dif_sum_threshold,
+    plane_y_sum_left=plane_combination_plane_y_sum_left,
+    plane_y_sum_right=plane_combination_plane_y_sum_right,
+    detector_q_sum_sum_left=plane_combination_detector_q_sum_sum_left,
+    detector_q_sum_sum_right=plane_combination_detector_q_sum_sum_right,
+    detector_q_sum_dif_threshold=plane_combination_detector_q_sum_dif_threshold,
+    detector_q_dif_sum_threshold=plane_combination_detector_q_dif_sum_threshold,
+    detector_q_dif_dif_threshold=plane_combination_detector_q_dif_dif_threshold,
+    detector_t_sum_sum_left=plane_combination_detector_t_sum_sum_left,
+    detector_t_sum_sum_right=plane_combination_detector_t_sum_sum_right,
+    detector_t_sum_dif_threshold=plane_combination_detector_t_sum_dif_threshold,
+    detector_t_dif_sum_threshold=plane_combination_detector_t_dif_sum_threshold,
+    detector_t_dif_dif_threshold=plane_combination_detector_t_dif_dif_threshold,
+    detector_y_sum_left=plane_combination_detector_y_sum_left,
+    detector_y_sum_right=plane_combination_detector_y_sum_right,
+    detector_y_dif_threshold=plane_combination_detector_y_dif_threshold,
+    apply_changes=False,
+)
+task3_final_filter_dry_run_has_effect = int(
+    (
+        int(task3_final_filter_dry_run_summary.get("rows_affected", 0)) > 0
+        or int(task3_final_filter_dry_run_summary.get("values_zeroed", 0)) > 0
+        or int(task3_final_filter_dry_run_summary.get("failed_pair_any", 0)) > 0
+    )
+)
+global_variables["plane_combination_filter_dry_run_has_effect"] = task3_final_filter_dry_run_has_effect
+global_variables["plane_combination_filter_dry_run_input_rows"] = int(
+    task3_final_filter_dry_run_summary.get("input_rows", len(working_df))
+)
+global_variables["plane_combination_filter_dry_run_rows_affected"] = int(
+    task3_final_filter_dry_run_summary.get("rows_affected", 0)
+)
+global_variables["plane_combination_filter_dry_run_flagged_rows"] = int(
+    task3_final_filter_dry_run_summary.get("flagged_rows", 0)
+)
+global_variables["plane_combination_filter_dry_run_values_zeroed"] = int(
+    task3_final_filter_dry_run_summary.get("values_zeroed", 0)
+)
+global_variables["plane_combination_filter_dry_run_failed_pair_any"] = int(
+    task3_final_filter_dry_run_summary.get("failed_pair_any", 0)
+)
+print(
+    "[TASK3_FINAL_FILTER_DRY_RUN] "
+    f"has_effect={'yes' if task3_final_filter_dry_run_has_effect else 'no'} "
+    f"input_rows={global_variables['plane_combination_filter_dry_run_input_rows']} "
+    f"flagged_rows={global_variables['plane_combination_filter_dry_run_flagged_rows']} "
+    f"rows_affected={global_variables['plane_combination_filter_dry_run_rows_affected']} "
+    f"values_zeroed={global_variables['plane_combination_filter_dry_run_values_zeroed']} "
+    f"failed_pair_any={global_variables['plane_combination_filter_dry_run_failed_pair_any']}",
+    force=True,
 )
 
 task3_plane_activation_filtered = store_task3_plane_activation_snapshot(

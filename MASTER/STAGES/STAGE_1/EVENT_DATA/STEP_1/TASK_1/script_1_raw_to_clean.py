@@ -128,6 +128,7 @@ from MASTER.common.reprocessing_utils import (
     QA_REPROCESSING_METADATA_KEYS,
     apply_qa_reprocessing_context,
     canonical_processing_basename,
+    filter_filenames_other_than_qa_retry_basenames,
     filter_filenames_by_qa_retry_basenames,
     get_reprocessing_value,
     load_active_qa_retry_basenames,
@@ -523,9 +524,14 @@ if filter_parameter_config_file_path.exists():
     config.update(filter_parameter_overrides)
     print(f"Info: Loaded filter parameters from {filter_parameter_config_file_path}")
 process_only_qa_retry_files = bool(config.get("process_only_qa_retry_files", False))
+prioritize_other_than_qa_files = bool(config.get("prioritize_other_than_qa_files", True))
 if process_only_qa_retry_files:
     print(
         "[QA_ONLY] Enabled by STEP_1 shared config: only files present in the active QA retry list will be processed."
+    )
+elif prioritize_other_than_qa_files:
+    print(
+        "[QA_PRIORITY] Enabled by STEP_1 shared config: non-QA files will be preferred over QA retry files."
     )
 
 selection_config = load_selection_for_paths(
@@ -3911,6 +3917,9 @@ if date_ranges:
         )
 
 active_qa_retry_basenames: set[str] = set()
+preferred_unprocessed_files: list[str] = []
+preferred_processing_files: list[str] = []
+preferred_completed_files: list[str] = []
 if process_only_qa_retry_files:
     active_qa_retry_basenames = load_active_qa_retry_basenames(
         station,
@@ -3935,6 +3944,40 @@ if process_only_qa_retry_files:
         f"PROCESSING={len(processing_files)} "
         f"COMPLETED={len(completed_files)}"
     )
+elif prioritize_other_than_qa_files:
+    active_qa_retry_basenames = load_active_qa_retry_basenames(
+        station,
+        repo_root=repo_root,
+    )
+    preferred_unprocessed_files = filter_filenames_other_than_qa_retry_basenames(
+        unprocessed_files,
+        active_qa_retry_basenames,
+    )
+    preferred_processing_files = filter_filenames_other_than_qa_retry_basenames(
+        processing_files,
+        active_qa_retry_basenames,
+    )
+    preferred_completed_files = filter_filenames_other_than_qa_retry_basenames(
+        completed_files,
+        active_qa_retry_basenames,
+    )
+    if active_qa_retry_basenames:
+        print(
+            "[QA_PRIORITY] Active QA basenames="
+            f"{len(active_qa_retry_basenames)} | preferred non-QA files: "
+            f"UNPROCESSED={len(preferred_unprocessed_files)}/{len(unprocessed_files)} "
+            f"PROCESSING={len(preferred_processing_files)}/{len(processing_files)} "
+            f"COMPLETED={len(preferred_completed_files)}/{len(completed_files)}"
+        )
+
+
+def _preferred_non_qa_or_all(
+    file_names: list[str],
+    preferred_non_qa_file_names: list[str],
+) -> list[str]:
+    if prioritize_other_than_qa_files and preferred_non_qa_file_names:
+        return preferred_non_qa_file_names
+    return file_names
 
 task_1_z_priority_settings = _load_task_1_z_priority_settings(config)
 simulated_z_lookup: dict[str, tuple[float, float, float, float]] = {}
@@ -3961,7 +4004,7 @@ if user_file_selection:
 else:
     if last_file_test:
         latest_unprocessed = _select_latest_candidate_with_z_priority(
-            unprocessed_files,
+            _preferred_non_qa_or_all(unprocessed_files, preferred_unprocessed_files),
             station,
             task_1_z_priority_settings,
             simulated_z_lookup,
@@ -3980,7 +4023,7 @@ else:
 
         else:
             latest_processing = _select_latest_candidate_with_z_priority(
-                processing_files,
+                _preferred_non_qa_or_all(processing_files, preferred_processing_files),
                 station,
                 task_1_z_priority_settings,
                 simulated_z_lookup,
@@ -4000,7 +4043,7 @@ else:
 
             else:
                 latest_completed = _select_latest_candidate_with_z_priority(
-                    completed_files,
+                    _preferred_non_qa_or_all(completed_files, preferred_completed_files),
                     station,
                     task_1_z_priority_settings,
                     simulated_z_lookup,
@@ -4022,7 +4065,7 @@ else:
     else:
         if unprocessed_files:
             priority_file = _select_latest_candidate_with_z_priority(
-                unprocessed_files,
+                _preferred_non_qa_or_all(unprocessed_files, preferred_unprocessed_files),
                 station,
                 task_1_z_priority_settings,
                 simulated_z_lookup,
@@ -4039,7 +4082,9 @@ else:
                 print(f"File moved to PROCESSING: {processing_file_path}")
             else:
                 print("Selecting a random file in UNPROCESSED...")
-                file_name = random.choice(unprocessed_files)
+                file_name = random.choice(
+                    _preferred_non_qa_or_all(unprocessed_files, preferred_unprocessed_files)
+                )
                 unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
                 processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
                 completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
@@ -4050,7 +4095,7 @@ else:
 
         elif processing_files:
             priority_file = _select_latest_candidate_with_z_priority(
-                processing_files,
+                _preferred_non_qa_or_all(processing_files, preferred_processing_files),
                 station,
                 task_1_z_priority_settings,
                 simulated_z_lookup,
@@ -4069,7 +4114,9 @@ else:
                 print(f"File moved to ERROR: {processing_file_path}")
             else:
                 print("Selecting a random file in PROCESSING...")
-                file_name = random.choice(processing_files)
+                file_name = random.choice(
+                    _preferred_non_qa_or_all(processing_files, preferred_processing_files)
+                )
                 processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
                 completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
 
@@ -4083,7 +4130,7 @@ else:
         elif completed_files:
             if complete_reanalysis:
                 priority_file = _select_latest_candidate_with_z_priority(
-                    completed_files,
+                    _preferred_non_qa_or_all(completed_files, preferred_completed_files),
                     station,
                     task_1_z_priority_settings,
                     simulated_z_lookup,
@@ -4099,7 +4146,9 @@ else:
                     print(f"File moved to PROCESSING: {processing_file_path}")
                 else:
                     print("Selecting a random file in COMPLETED...")
-                    file_name = random.choice(completed_files)
+                    file_name = random.choice(
+                        _preferred_non_qa_or_all(completed_files, preferred_completed_files)
+                    )
                     completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
                     processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
 
@@ -6625,6 +6674,45 @@ working_df.loc[:, "raw_to_clean_tt"] = (
 refresh_global_count_metadata(
     working_df,
     ("raw_tt", "clean_tt", "raw_to_clean_tt"),
+)
+
+task1_final_filter_dry_run_summary = apply_task1_plane_combination_filter(
+    working_df,
+    relation_limits_by_type=task1_channel_combination_limits_by_relation,
+    apply_changes=False,
+)
+task1_final_filter_dry_run_has_effect = int(
+    (
+        int(task1_final_filter_dry_run_summary.get("rows_affected", 0)) > 0
+        or int(task1_final_filter_dry_run_summary.get("values_zeroed", 0)) > 0
+        or int(task1_final_filter_dry_run_summary.get("failed_pair_any", 0)) > 0
+    )
+)
+global_variables["plane_combination_filter_dry_run_has_effect"] = task1_final_filter_dry_run_has_effect
+global_variables["plane_combination_filter_dry_run_input_rows"] = int(
+    task1_final_filter_dry_run_summary.get("input_rows", len(working_df))
+)
+global_variables["plane_combination_filter_dry_run_rows_affected"] = int(
+    task1_final_filter_dry_run_summary.get("rows_affected", 0)
+)
+global_variables["plane_combination_filter_dry_run_flagged_rows"] = int(
+    task1_final_filter_dry_run_summary.get("flagged_rows", 0)
+)
+global_variables["plane_combination_filter_dry_run_values_zeroed"] = int(
+    task1_final_filter_dry_run_summary.get("values_zeroed", 0)
+)
+global_variables["plane_combination_filter_dry_run_failed_pair_any"] = int(
+    task1_final_filter_dry_run_summary.get("failed_pair_any", 0)
+)
+print(
+    "[TASK1_FINAL_FILTER_DRY_RUN] "
+    f"has_effect={'yes' if task1_final_filter_dry_run_has_effect else 'no'} "
+    f"input_rows={global_variables['plane_combination_filter_dry_run_input_rows']} "
+    f"flagged_rows={global_variables['plane_combination_filter_dry_run_flagged_rows']} "
+    f"rows_affected={global_variables['plane_combination_filter_dry_run_rows_affected']} "
+    f"values_zeroed={global_variables['plane_combination_filter_dry_run_values_zeroed']} "
+    f"failed_pair_any={global_variables['plane_combination_filter_dry_run_failed_pair_any']}",
+    force=True,
 )
 
 clean_channel_patterns = build_task1_channel_pattern_series(working_df)

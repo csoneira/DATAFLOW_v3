@@ -3122,6 +3122,7 @@ def apply_task2_unified_strip_combination_filter(
     *,
     limits_by_relation: dict[str, dict[str, float | None]],
     snapshot_originals=None,
+    apply_changes: bool = True,
 ) -> dict[str, object]:
     """Apply same-strip, same-plane, and detector strip logic in one offender solve."""
     strip_map = _task2_strip_component_columns_map(df_input)
@@ -3503,14 +3504,15 @@ def apply_task2_unified_strip_combination_filter(
         changed_columns.extend(cols.values())
 
     summary["rows_affected"] = int(np.count_nonzero(any_row_affected))
-    if changed_columns and snapshot_originals is not None:
+    if apply_changes and changed_columns and snapshot_originals is not None:
         snapshot_originals(df_input, list(dict.fromkeys(changed_columns)))
 
-    for strip_key, fail_mask in strip_fail_masks.items():
-        if strip_key not in strip_map or not np.any(fail_mask):
-            continue
-        cols = strip_map[strip_key]
-        df_input.loc[fail_mask, list(cols.values())] = 0
+    if apply_changes:
+        for strip_key, fail_mask in strip_fail_masks.items():
+            if strip_key not in strip_map or not np.any(fail_mask):
+                continue
+            cols = strip_map[strip_key]
+            df_input.loc[fail_mask, list(cols.values())] = 0
 
     top_offenders = sorted(
         (
@@ -11750,6 +11752,45 @@ _diag_rejected_cal_tt_idx = _diag_idx_after_q_sum.difference(working_df.index)
 refresh_global_count_metadata(
     working_df,
     ("clean_tt", "cal_tt", "clean_to_cal_tt"),
+)
+
+task2_final_filter_dry_run_summary = apply_task2_unified_strip_combination_filter(
+    working_df,
+    limits_by_relation=task2_strip_combination_limits_by_relation,
+    apply_changes=False,
+)
+task2_final_filter_dry_run_has_effect = int(
+    (
+        int(task2_final_filter_dry_run_summary.get("rows_affected", 0)) > 0
+        or int(task2_final_filter_dry_run_summary.get("values_zeroed", 0)) > 0
+        or int(task2_final_filter_dry_run_summary.get("failed_pair_any", 0)) > 0
+    )
+)
+global_variables["strip_combination_filter_dry_run_has_effect"] = task2_final_filter_dry_run_has_effect
+global_variables["strip_combination_filter_dry_run_input_rows"] = int(
+    task2_final_filter_dry_run_summary.get("input_rows", len(working_df))
+)
+global_variables["strip_combination_filter_dry_run_rows_affected"] = int(
+    task2_final_filter_dry_run_summary.get("rows_affected", 0)
+)
+global_variables["strip_combination_filter_dry_run_flagged_rows"] = int(
+    task2_final_filter_dry_run_summary.get("flagged_rows", 0)
+)
+global_variables["strip_combination_filter_dry_run_values_zeroed"] = int(
+    task2_final_filter_dry_run_summary.get("values_zeroed", 0)
+)
+global_variables["strip_combination_filter_dry_run_failed_pair_any"] = int(
+    task2_final_filter_dry_run_summary.get("failed_pair_any", 0)
+)
+print(
+    "[TASK2_FINAL_FILTER_DRY_RUN] "
+    f"has_effect={'yes' if task2_final_filter_dry_run_has_effect else 'no'} "
+    f"input_rows={global_variables['strip_combination_filter_dry_run_input_rows']} "
+    f"flagged_rows={global_variables['strip_combination_filter_dry_run_flagged_rows']} "
+    f"rows_affected={global_variables['strip_combination_filter_dry_run_rows_affected']} "
+    f"values_zeroed={global_variables['strip_combination_filter_dry_run_values_zeroed']} "
+    f"failed_pair_any={global_variables['strip_combination_filter_dry_run_failed_pair_any']}",
+    force=True,
 )
 
 final_number_of_events = len(working_df)

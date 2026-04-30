@@ -43,13 +43,17 @@ selection:
     - start: 2024-09-23 # mingo01 HV scan
       end: 2024-10-05
       stations: [1]
-    - start: 2026-01-03 # mingo02 HV scan
-      end: 2026-01-14
+    - start: 2026-12-03 # mingo02 HV scan,  end actually on 2026-01-03, i extended because it finisehd
+      end: 2026-02-14 # end actually on 2026-01-14, i extended because it finisehd
       stations: [2]
     - start: 2025-02-25 # mingo04 HV scan
-      end: 2025-03-10
+      end: 2025-05-10 # end actually on 2025-03-10, i extended because it finisehd
       stations: [4]
     # Forbush Decrease 2024-03-24, Quiet epoch 2024-04-13, Forbush Decrease 2024-05-09
     - start: 2024-03-14
       end: 2024-06-10
+      stations: [1]
+    # Extended period
+    - start: 2024-03-14
+      end: 2024-10-05
       stations: [1]

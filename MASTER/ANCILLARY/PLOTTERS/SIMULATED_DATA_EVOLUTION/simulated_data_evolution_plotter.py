@@ -374,6 +374,44 @@ def load_stage_basenames(stage: StageSpec) -> set[str]:
     }
 
 
+def load_stage_execution_timestamp_map(stage: StageSpec) -> Dict[str, pd.Timestamp]:
+    if not stage.csv_path.exists():
+        return {}
+    try:
+        raw = pd.read_csv(stage.csv_path, low_memory=False)
+    except Exception as exc:  # pragma: no cover - defensive
+        print(
+            f"[simulated_data_evolution_plotter] Failed to read {stage.csv_path}: {exc}",
+            file=sys.stderr,
+        )
+        return {}
+
+    basename_col = next((col for col in stage.basename_columns if col in raw.columns), None)
+    if basename_col is None or "execution_timestamp" not in raw.columns:
+        return {}
+
+    frame = raw[[basename_col, "execution_timestamp"]].copy()
+    frame["basename"] = frame[basename_col].map(normalize_basename)
+    frame["execution_dt"] = pd.to_datetime(
+        frame["execution_timestamp"],
+        errors="coerce",
+        format="%Y-%m-%d_%H.%M.%S",
+    )
+    missing_mask = frame["execution_dt"].isna()
+    if missing_mask.any():
+        frame.loc[missing_mask, "execution_dt"] = pd.to_datetime(
+            frame.loc[missing_mask, "execution_timestamp"],
+            errors="coerce",
+            utc=False,
+        )
+    frame = frame.dropna(subset=["basename", "execution_dt"])
+    if frame.empty:
+        return {}
+
+    frame = frame.sort_values(["basename", "execution_dt"]).groupby("basename").tail(1)
+    return dict(zip(frame["basename"], frame["execution_dt"]))
+
+
 def build_chained_stage_sets(stages: Sequence[StageSpec]) -> Dict[int, set[str]]:
     stage_sets: Dict[int, set[str]] = {}
     ordered = sorted(stages, key=lambda stage: stage.index)
@@ -389,6 +427,22 @@ def build_chained_stage_sets(stages: Sequence[StageSpec]) -> Dict[int, set[str]]
 
 def build_raw_stage_sets(stages: Sequence[StageSpec]) -> Dict[int, set[str]]:
     return {stage.index: load_stage_basenames(stage) for stage in stages}
+
+
+def add_stage_execution_columns(
+    df: pd.DataFrame,
+    stages: Sequence[StageSpec],
+) -> pd.DataFrame:
+    result = df.copy()
+    for stage in stages:
+        if stage.index < 1:
+            continue
+        timestamp_map = load_stage_execution_timestamp_map(stage)
+        if not timestamp_map:
+            continue
+        col = f"__task_{stage.index}_execution_dt"
+        result[col] = pd.to_datetime(result["basename"].map(timestamp_map), errors="coerce")
+    return result
 
 
 def build_latest_stage_map(
@@ -884,6 +938,42 @@ def _format_geometry_label(geometry: Tuple[float, float, float, float]) -> str:
     return " / ".join(f"{float(value):g}" for value in geometry) + " mm"
 
 
+def _format_rate_summary_from_timestamp_column(
+    frame: pd.DataFrame,
+    timestamp_col: str,
+    label: str,
+) -> Optional[str]:
+    if timestamp_col not in frame.columns:
+        return None
+
+    execution_utc = pd.to_datetime(frame[timestamp_col], errors="coerce", utc=True).dropna().sort_values()
+    if len(execution_utc) < 2:
+        return None
+
+    first_ts = execution_utc.iloc[0]
+    last_ts = execution_utc.iloc[-1]
+    span_seconds = float((last_ts - first_ts).total_seconds())
+    if span_seconds <= 0.0:
+        return None
+
+    total_rate_h = float(len(execution_utc) / (span_seconds / 3600.0))
+
+    recent_window = pd.Timedelta(hours=6)
+    recent_start = max(first_ts, last_ts - recent_window)
+    recent_mask = execution_utc >= recent_start
+    recent_count = int(recent_mask.sum())
+    recent_span_seconds = float((last_ts - recent_start).total_seconds())
+    recent_rate_text = "n/a"
+    if recent_count >= 2 and recent_span_seconds > 0.0:
+        recent_rate_h = float(recent_count / (recent_span_seconds / 3600.0))
+        recent_rate_text = f"{recent_rate_h:.2f} files/h (last 6h)"
+
+    return (
+        f"{label} rate ≈ {total_rate_h:.2f} files/h overall"
+        f" | {recent_rate_text}"
+    )
+
+
 def plot_stage_colored_parameter_matrix(
     frame: pd.DataFrame,
     param_list: Sequence[str],
@@ -1001,6 +1091,13 @@ def plot_stage_colored_parameter_matrix(
     title_lines = ["Stage-Colored Simulation Parameter Matrix"]
     if page_title_suffix:
         title_lines.append(page_title_suffix)
+    for timestamp_col, label in (
+        ("__task_1_execution_dt", "Task 1 completion"),
+        ("__task_5_execution_dt", "Task 5 completion"),
+    ):
+        rate_summary = _format_rate_summary_from_timestamp_column(frame, timestamp_col, label)
+        if rate_summary:
+            title_lines.append(rate_summary)
     if execution_recency_col is not None:
         title_lines.append(
             f"Execution-time axes use log recency vs now (scale={execution_log_scale_seconds:.0f}s)"
@@ -1202,6 +1299,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     sim_df = normalize_sim_params(sim_df)
     sim_df = add_stage_columns(sim_df, latest_stage_by_basename, stage_labels, stage_colors)
+    sim_df = add_stage_execution_columns(sim_df, stages)
 
     param_list = expand_params(params, sim_df)
     if not param_list:

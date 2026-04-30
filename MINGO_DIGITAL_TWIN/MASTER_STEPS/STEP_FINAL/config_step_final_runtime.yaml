@@ -9,10 +9,10 @@ param_mesh_sim_run: none
 param_mesh_mismatch_strategy: auto_repair
 output_dir: ../../SIMULATED_DATA
 registry_enabled: false
-chunk_rows: 50000
-target_rows: 50000
+chunk_rows: 100000
+target_rows: 100000
 files_per_station_conf: 1
 payload_sampling: sequential_random_start
 allow_reuse_when_short: false
 truncate_at_day_end: false
-subsample_rows: [50000, 100000]
+subsample_rows: [100000]

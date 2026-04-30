@@ -227,6 +227,21 @@ def filter_filenames_by_qa_retry_basenames(
     ]
 
 
+def filter_filenames_other_than_qa_retry_basenames(
+    file_names: list[str] | tuple[str, ...] | set[str],
+    qa_basenames: set[str],
+) -> list[str]:
+    """Keep only filenames whose canonical basename is not present in *qa_basenames*."""
+
+    if not qa_basenames:
+        return [str(file_name) for file_name in file_names]
+    return [
+        str(file_name)
+        for file_name in file_names
+        if canonical_processing_basename(file_name) not in qa_basenames
+    ]
+
+
 def apply_qa_reprocessing_context(
     target: MutableMapping[str, object],
     context: Mapping[str, object] | None,

@@ -80,6 +80,25 @@ def _resolve_efficiency_reference_columns(config: dict[str, Any]) -> list[str]:
     return [f"eff_empirical_{plane}" for plane in planes]
 
 
+def _resolve_efficiency_reference_mode(config: dict[str, Any]) -> str:
+    step2_config = _step2_config(config)
+    raw_mode = str(step2_config.get("efficiency_reference_mode", "mean_power4")).strip().lower()
+    aliases = {
+        "mean": "mean_power4",
+        "average": "mean_power4",
+        "avg": "mean_power4",
+        "mean_power4": "mean_power4",
+        "product": "product",
+        "prod": "product",
+    }
+    mode = aliases.get(raw_mode, raw_mode)
+    if mode not in {"mean_power4", "product"}:
+        raise ValueError(
+            "step2.efficiency_reference_mode must be one of: mean_power4, product."
+        )
+    return mode
+
+
 def _resolve_efficiency_reference_min(config: dict[str, Any]) -> float | None:
     step2_config = _step2_config(config)
 
@@ -249,10 +268,27 @@ def _validate_columns(dataframe: pd.DataFrame, reference_columns: list[str]) -> 
         )
 
 
-def _apply_simplified_scale(dataframe: pd.DataFrame, reference_columns: list[str]) -> pd.DataFrame:
+def _reference_mode_label(reference_columns: list[str], reference_mode: str) -> str:
+    selected_planes_label = ", ".join(column.replace("eff_empirical_", "P") for column in reference_columns)
+    if reference_mode == "product":
+        return f"product({selected_planes_label})"
+    return f"mean({selected_planes_label})^4"
+
+
+def _apply_simplified_scale(
+    dataframe: pd.DataFrame,
+    reference_columns: list[str],
+    reference_mode: str,
+) -> pd.DataFrame:
     work = dataframe.copy()
-    work["eff_reference"] = work[reference_columns].astype(float).mean(axis=1)
-    work["scale_factor"] = 1.0 / (work["eff_reference"] ** 4)
+    reference_frame = work[reference_columns].apply(pd.to_numeric, errors="coerce")
+    if reference_mode == "product":
+        work["eff_reference"] = reference_frame.prod(axis=1, min_count=len(reference_columns))
+        work["scale_factor"] = 1.0 / work["eff_reference"]
+    else:
+        work["eff_reference"] = reference_frame.mean(axis=1)
+        work["scale_factor"] = 1.0 / (work["eff_reference"] ** 4)
+    work["eff_reference_mode"] = reference_mode
     work["corrected_rate_hz"] = work["selected_rate_hz"].astype(float) * work["scale_factor"].astype(float)
     return work
 
@@ -384,6 +420,7 @@ def _plot_reference_efficiency_series(
     output_path: Path,
     reference_columns: list[str],
     *,
+    reference_mode: str,
     y_limits: tuple[float | None, float | None],
     apply_moving_average: bool,
     moving_average_kernel: int,
@@ -417,8 +454,10 @@ def _plot_reference_efficiency_series(
         label="eff_reference",
         color="black",
     )
-    selected_planes_label = ", ".join(column.replace("eff_empirical_", "P") for column in reference_columns)
-    title = f"Selected empirical efficiencies over time | reference = mean({selected_planes_label})"
+    title = (
+        "Selected empirical efficiencies over time | reference = "
+        + _reference_mode_label(reference_columns, reference_mode)
+    )
     if apply_moving_average and moving_average_kernel > 1:
         title += f" | moving average = {moving_average_kernel}"
     ax.set_title(title)
@@ -514,6 +553,7 @@ def run(config_path: str | Path | None = None) -> Path:
     input_path = cfg_path(config, "paths", "output_csv")
     output_path = cfg_path(config, "paths", "step2_scaled_output_csv")
     reference_columns = _resolve_efficiency_reference_columns(config)
+    reference_mode = _resolve_efficiency_reference_mode(config)
     eff_reference_min = _resolve_efficiency_reference_min(config)
     efficiency_plot_ylim = _resolve_efficiency_plot_ylim(config)
     apply_plot_moving_average, plot_moving_average_kernel = _resolve_plot_moving_average(config)
@@ -522,13 +562,13 @@ def run(config_path: str | Path | None = None) -> Path:
 
     dataframe = pd.read_csv(input_path, low_memory=False)
     _validate_columns(dataframe, reference_columns)
-    scaled = _apply_simplified_scale(dataframe, reference_columns)
+    scaled = _apply_simplified_scale(dataframe, reference_columns, reference_mode)
     scaled, removed_rows = _filter_by_eff_reference_min(scaled, eff_reference_min)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     scaled.to_csv(output_path, index=False)
 
-    plot_path = output_path.parent.parent / "PLOTS" / "real_data_selected_vs_corrected_rate.png"
+    plot_path = output_path.parent.parent / "PLOTS" / "step2_01_selected_vs_corrected_rate.png"
     _plot_rate_series(
         scaled,
         plot_path,
@@ -537,17 +577,18 @@ def run(config_path: str | Path | None = None) -> Path:
         event_markers=event_markers,
         selected_series_meta=selected_series_meta,
     )
-    eff_plot_path = output_path.parent.parent / "PLOTS" / "real_data_eff2_eff3_series.png"
+    eff_plot_path = output_path.parent.parent / "PLOTS" / "step2_02_eff_reference_series.png"
     _plot_reference_efficiency_series(
         scaled,
         eff_plot_path,
         reference_columns,
+        reference_mode=reference_mode,
         y_limits=efficiency_plot_ylim,
         apply_moving_average=apply_plot_moving_average,
         moving_average_kernel=plot_moving_average_kernel,
         event_markers=event_markers,
     )
-    scatter_plot_path = output_path.parent.parent / "PLOTS" / "real_data_eff_reference_vs_rate_scatter.png"
+    scatter_plot_path = output_path.parent.parent / "PLOTS" / "step2_03_eff_reference_vs_rate_scatter.png"
     _plot_eff_reference_vs_rates_scatter(
         scaled,
         scatter_plot_path,
@@ -560,6 +601,10 @@ def run(config_path: str | Path | None = None) -> Path:
         output_path,
     )
     logging.info("Efficiency reference columns used: %s", reference_columns)
+    logging.info(
+        "Efficiency reference mode: %s",
+        _reference_mode_label(reference_columns, reference_mode),
+    )
     if eff_reference_min is not None:
         logging.info(
             "Applied eff_reference minimum %.3f and dropped %d rows below threshold.",
@@ -580,7 +625,7 @@ def run(config_path: str | Path | None = None) -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Apply a simplified scale factor based on mean(selected empirical efficiencies)^4."
+        description="Apply a simplified scale factor based on either mean(selected empirical efficiencies)^4 or their product."
     )
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Path to config JSON file.")
     args = parser.parse_args()

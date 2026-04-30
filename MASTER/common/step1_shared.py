@@ -49,6 +49,7 @@ STEP1_TASK_OVERRIDE_KEYS: Tuple[str, ...] = (
     "create_plots",
     "keep_all_columns_output",
     "process_only_qa_retry_files",
+    "prioritize_other_than_qa_files",
 )
 STEP1_METADATA_OUTPUT_TYPES: Tuple[str, ...] = (
     "activation",

@@ -68,6 +68,8 @@ DEFAULT_FREE_X_STATIONS: Tuple[str, ...] = ("MINGO01",)
 DEFAULT_PANEL_HEIGHT_RATIOS: Tuple[float, float, float] = (1.0, 4.0, 1.0)
 DEFAULT_MIDDLE_LOG_SCALE_SECONDS = 600.0
 NOW_Y_MARGIN_MINUTES = 10.0
+ETA_SHORT_WINDOW = timedelta(minutes=10)
+ETA_MEDIUM_WINDOW = timedelta(hours=2)
 
 TASK_IDS: Tuple[int, ...] = (1, 2, 3, 4, 5)
 BASENAME_TIMESTAMP_DIGITS = 11
@@ -779,6 +781,50 @@ def _estimate_remaining_from_window(
     return pd.Timedelta(seconds=max(0.0, remaining_seconds))
 
 
+def _build_window_eta_comment(
+    *,
+    label: str,
+    timestamps: pd.Series,
+    progress: pd.Series,
+    current_ts: pd.Timestamp,
+    current_progress: float,
+    first_progress_timestamp: pd.Timestamp,
+    window: Optional[timedelta],
+) -> str:
+    if window is None:
+        remaining = _estimate_remaining_from_window(
+            0.0,
+            current_progress,
+            current_ts - first_progress_timestamp,
+        )
+        if remaining is None:
+            return f"ETA using the full final-stage history: unavailable"
+        return (
+            "ETA using the full final-stage history: "
+            f"about {_format_eta_duration(remaining)}"
+        )
+
+    window_start = current_ts - window
+    anchor_ts = max(window_start, first_progress_timestamp)
+    progress_start = _progress_value_at_or_before(
+        timestamps,
+        progress,
+        anchor_ts,
+    )
+    elapsed = current_ts - anchor_ts
+    remaining = _estimate_remaining_from_window(
+        progress_start,
+        current_progress,
+        elapsed,
+    )
+    if remaining is None:
+        return f"ETA using the last {label} final-stage pace: stalled / unavailable"
+    return (
+        f"ETA using the last {label} final-stage pace: "
+        f"about {_format_eta_duration(remaining)}"
+    )
+
+
 def build_eta_progress_series(stages: Sequence[StageSpec]) -> pd.DataFrame:
     ordered_stages = sorted(stages, key=lambda stage: stage.index)
     if not ordered_stages:
@@ -824,11 +870,12 @@ def estimate_time_left_comments(
     completeness_df: pd.DataFrame,
     stages: Sequence[StageSpec],
     current_timestamp: pd.Timestamp,
-) -> Tuple[str, str]:
+) -> Tuple[str, str, str]:
     eta_progress_df = build_eta_progress_series(stages)
     if eta_progress_df.empty:
         return (
-            "ETA using the last 1h final-stage pace: unavailable",
+            "ETA using the last 10 min final-stage pace: unavailable",
+            "ETA using the last 2 h final-stage pace: unavailable",
             "ETA using the full final-stage history: unavailable",
         )
 
@@ -844,7 +891,8 @@ def estimate_time_left_comments(
 
     if current_progress >= 99.5:
         return (
-            "ETA using the last 1h final-stage pace: practically finished",
+            "ETA using the last 10 min final-stage pace: practically finished",
+            "ETA using the last 2 h final-stage pace: practically finished",
             "ETA using the full final-stage history: practically finished",
         )
 
@@ -852,7 +900,8 @@ def estimate_time_left_comments(
     if not started_mask.any():
         unavailable = f"unavailable until {final_stage.label} starts"
         return (
-            f"ETA using the last 1h final-stage pace: {unavailable}",
+            f"ETA using the last 10 min final-stage pace: {unavailable}",
+            f"ETA using the last 2 h final-stage pace: {unavailable}",
             f"ETA using the full final-stage history: {unavailable}",
         )
 
@@ -863,41 +912,35 @@ def estimate_time_left_comments(
     elif first_progress_timestamp.tzinfo is not None and current_ts.tzinfo is None:
         current_ts = current_ts.tz_localize(first_progress_timestamp.tzinfo)
 
-    all_data_remaining = _estimate_remaining_from_window(
-        0.0,
-        current_progress,
-        current_ts - first_progress_timestamp,
+    short_comment = _build_window_eta_comment(
+        label="10 min",
+        timestamps=timestamps,
+        progress=progress,
+        current_ts=current_ts,
+        current_progress=current_progress,
+        first_progress_timestamp=first_progress_timestamp,
+        window=ETA_SHORT_WINDOW,
+    )
+    medium_comment = _build_window_eta_comment(
+        label="2 h",
+        timestamps=timestamps,
+        progress=progress,
+        current_ts=current_ts,
+        current_progress=current_progress,
+        first_progress_timestamp=first_progress_timestamp,
+        window=ETA_MEDIUM_WINDOW,
+    )
+    all_data_comment = _build_window_eta_comment(
+        label="full history",
+        timestamps=timestamps,
+        progress=progress,
+        current_ts=current_ts,
+        current_progress=current_progress,
+        first_progress_timestamp=first_progress_timestamp,
+        window=None,
     )
 
-    last_hour_start = current_ts - timedelta(hours=1)
-    progress_one_hour_ago = _progress_value_at_or_before(
-        timestamps,
-        progress,
-        last_hour_start,
-    )
-    last_hour_remaining = _estimate_remaining_from_window(
-        progress_one_hour_ago,
-        current_progress,
-        pd.Timedelta(hours=1),
-    )
-
-    if last_hour_remaining is None:
-        last_hour_comment = "ETA using the last 1h final-stage pace: stalled / unavailable"
-    else:
-        last_hour_comment = (
-            "ETA using the last 1h final-stage pace: "
-            f"about {_format_eta_duration(last_hour_remaining)}"
-        )
-
-    if all_data_remaining is None:
-        all_data_comment = "ETA using the full final-stage history: unavailable"
-    else:
-        all_data_comment = (
-            "ETA using the full final-stage history: "
-            f"about {_format_eta_duration(all_data_remaining)}"
-        )
-
-    return last_hour_comment, all_data_comment
+    return short_comment, medium_comment, all_data_comment
 
 
 def _scatter_stage_points(
@@ -1336,7 +1379,8 @@ def plot_station_page(
     if data.empty:
         title = (
             f"{station} - Definitive execution map\n"
-            "ETA using the last 1h final-stage pace: unavailable\n"
+            "ETA using the last 10 min final-stage pace: unavailable\n"
+            "ETA using the last 2 h final-stage pace: unavailable\n"
             "ETA using the full final-stage history: unavailable"
         )
         fig, ax = plt.subplots(figsize=(13, 5))
@@ -1364,14 +1408,15 @@ def plot_station_page(
         now = pd.Timestamp.utcnow().tz_convert(y_min.tzinfo)
 
     completeness_for_plot = extend_completeness_to_timestamp(completeness_df, now)
-    last_hour_eta_comment, all_data_eta_comment = estimate_time_left_comments(
+    short_eta_comment, medium_eta_comment, all_data_eta_comment = estimate_time_left_comments(
         completeness_for_plot,
         stages,
         now,
     )
     title = (
         f"{station} - Definitive execution map\n"
-        f"{last_hour_eta_comment}\n"
+        f"{short_eta_comment}\n"
+        f"{medium_eta_comment}\n"
         f"{all_data_eta_comment}"
     )
 
