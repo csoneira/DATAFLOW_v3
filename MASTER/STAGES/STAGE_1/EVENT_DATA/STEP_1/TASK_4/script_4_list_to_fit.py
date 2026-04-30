@@ -97,7 +97,11 @@ if REPO_ROOT is None:
 if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
-from MASTER.common.config_loader import update_config_with_parameters
+from MASTER.common.config_loader import (
+    load_declared_parameter_names,
+    load_parameter_overrides,
+    update_config_with_parameters,
+)
 from MASTER.common.debug_plots import plot_debug_histograms
 from MASTER.common.execution_logger import set_station, start_timer
 from MASTER.common.file_selection import (
@@ -478,6 +482,14 @@ parameter_config_file_path = (
     / "TASK_4"
     / "config_parameters_task_4.csv"
 )
+filter_parameter_config_file_path = (
+    config_root
+    / "STAGE_1"
+    / "EVENT_DATA"
+    / "STEP_1"
+    / "TASK_4"
+    / "config_filter_parameters_task_4.csv"
+)
 fallback_parameter_config_file_path = (
     config_root
     / "STAGE_1"
@@ -489,6 +501,10 @@ print(f"Using config file: {config_file_path}")
 print(f"Using plot catalog file: {plot_catalog_file_path}")
 with config_file_path.open("r", encoding="utf-8") as config_file:
     config = yaml.safe_load(config_file)
+filter_parameter_config_file_path = filter_parameter_config_file_path.with_name(
+    str(config.get("filter_parameter_config_csv", filter_parameter_config_file_path.name))
+)
+print(f"Using filter parameter config file: {filter_parameter_config_file_path}")
 task4_plot_status_by_alias = load_step1_task_plot_catalog(
     plot_catalog_file_path,
     TASK4_PLOT_ALIASES,
@@ -1138,6 +1154,17 @@ if CLI_ARGS.station is None:
 station = str(CLI_ARGS.station)
 set_station(station)
 
+use_filter_parameter_config = bool(config.get("use_filter_parameter_config", True))
+filter_parameter_declared_keys: set[str] = set()
+filter_parameter_overrides: dict[str, object] = {}
+if use_filter_parameter_config and filter_parameter_config_file_path.exists():
+    filter_parameter_declared_keys = load_declared_parameter_names(filter_parameter_config_file_path)
+    filter_parameter_overrides = load_parameter_overrides(filter_parameter_config_file_path, station)
+elif use_filter_parameter_config:
+    print(f"Warning: Requested filter parameter config not found: {filter_parameter_config_file_path}")
+else:
+    print("Info: Skipping filter parameter config (use_filter_parameter_config=false).")
+
 config = apply_step1_task_parameter_overrides(
     config_obj=config,
     station_id=station,
@@ -1146,12 +1173,16 @@ config = apply_step1_task_parameter_overrides(
     task_number=task_number,
     update_fn=update_config_with_parameters,
     log_fn=print,
+    exclude_keys=filter_parameter_declared_keys,
 )
 config = apply_step1_master_overrides(
     config_obj=config,
     master_config_root=config_root,
     log_fn=print,
 )
+if use_filter_parameter_config and filter_parameter_config_file_path.exists():
+    config.update(filter_parameter_overrides)
+    print(f"Info: Loaded filter parameters from {filter_parameter_config_file_path}")
 process_only_qa_retry_files = bool(config.get("process_only_qa_retry_files", False))
 if process_only_qa_retry_files:
     print(
@@ -1885,6 +1916,89 @@ def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[s
     df.loc[:, column_name] = tt_str.replace("", "0").astype(int)
     return df
 
+
+def compute_fit_tt_from_charge(df: pd.DataFrame) -> pd.Series:
+    """
+    Compute fit_tt from observed plane activity, constrained by list_tt.
+
+    A plane can only be active in fit_tt if it was already active in list_tt
+    (keep-or-diminish rule). Plane activity is then validated from charge-like
+    observables; this intentionally avoids extension/projection-only occupancy.
+    """
+    charge_threshold = _task4_parse_optional_float(config.get("fit_tt_plane_charge_threshold"))
+    if charge_threshold is None:
+        charge_threshold = 0.0
+
+    list_tt_series: pd.Series | None = None
+    if "list_tt" in df.columns:
+        list_tt_series = pd.to_numeric(df["list_tt"], errors="coerce").fillna(0).astype(int)
+    elif "processed_tt" in df.columns:
+        list_tt_series = pd.to_numeric(df["processed_tt"], errors="coerce").fillna(0).astype(int)
+
+    if list_tt_series is not None:
+        list_tt_labels = list_tt_series.astype(str)
+    else:
+        list_tt_labels = pd.Series("", index=df.index, dtype="object")
+
+    tt_str = pd.Series("", index=df.index, dtype="object")
+    for plane in range(1, 5):
+        if list_tt_series is not None:
+            allowed_by_list_tt = list_tt_labels.str.contains(str(plane), regex=False)
+        else:
+            allowed_by_list_tt = pd.Series(True, index=df.index)
+
+        candidate_columns: list[str] = [
+            col_name
+            for col_name in (
+                f"charge_{plane}",
+                f"tim_charge_{plane}",
+                f"P{plane}_Q_sum_final",
+            )
+            if col_name in df.columns
+        ]
+        if not candidate_columns:
+            candidate_columns = [
+                f"Q_P{plane}s{strip}" for strip in range(1, 5) if f"Q_P{plane}s{strip}" in df.columns
+            ]
+        if not candidate_columns:
+            continue
+
+        charge_values = (
+            df.loc[:, candidate_columns]
+            .apply(pd.to_numeric, errors="coerce")
+            .fillna(0.0)
+        )
+        has_charge = charge_values.gt(float(charge_threshold)).any(axis=1)
+        plane_active = allowed_by_list_tt & has_charge
+        tt_str = tt_str.where(~plane_active, tt_str + str(plane))
+    return tt_str.replace("", "0").astype(int)
+
+
+def _task4_parse_optional_float(raw_value: object) -> float | None:
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, str) and raw_value.strip().lower() in {"", "none", "null"}:
+        return None
+    try:
+        parsed = float(raw_value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(parsed):
+        return None
+    return float(parsed)
+
+
+def _task4_parse_filter_columns(raw_value: object, default: Iterable[str]) -> list[str]:
+    if raw_value is None:
+        source = list(default)
+    elif isinstance(raw_value, str):
+        source = [chunk.strip() for chunk in re.split(r"[\s,;]+", raw_value) if chunk.strip()]
+    elif isinstance(raw_value, (list, tuple, set, np.ndarray, pd.Series)):
+        source = [str(item).strip() for item in raw_value if str(item).strip()]
+    else:
+        source = list(default)
+    return list(dict.fromkeys(source))
+
 list_tt_columns = {
     i_plane: [
         f"P{i_plane}_T_sum_final",
@@ -2273,6 +2387,7 @@ FILTER_METRIC_NAMES: tuple[str, ...] = (
     "definitive_t0_zero_rows_pct",
     "definitive_theta_zero_rows_pct",
     "definitive_phi_zero_rows_pct",
+    "final_filter_rows_removed_pct",
     "data_purity_percentage",
     "all_components_zero_rows_removed_pct",
     "fit_tt_lt_10_rows_removed_pct",
@@ -4207,10 +4322,23 @@ else:
 # Put every value close to 0 to effectively 0 -------------------------------
 # ---------------------------------------------------------------------------
 
-# Filter the values inside the machine number window ------------------------
-remove_small = bool(config.get("remove_small", False))
-remove_small_eps = float(config.get("remove_small_eps", 1e-7))
-eps = remove_small_eps  # Threshold
+# Filter controls used by final/legacy filtering blocks ---------------------
+final_filter_remove_small_default = _coerce_config_bool(
+    config.get("final_filter_remove_small", False),
+    default=False,
+)
+final_filter_remove_small_eps_default = _task4_config_float(
+    config,
+    "final_filter_remove_small_eps",
+    default=1e-7,
+)
+apply_legacy_final_filters = _coerce_config_bool(
+    config.get("final_filter_apply_legacy_final_filters", False),
+    default=False,
+)
+if not apply_legacy_final_filters:
+    print("Info: Legacy Task 4 in-place filtering disabled; using consolidated final filtering block.")
+eps = final_filter_remove_small_eps_default  # Threshold
 def is_small_nonzero(x):
     return isinstance(x, (int, float)) and x != 0 and abs(x) < eps
 
@@ -4333,7 +4461,7 @@ def plot_ts_err_with_hist(df, base_cols, time_col, title):
         plt.show()
     plt.close()
 
-if remove_small:
+if final_filter_remove_small_default and apply_legacy_final_filters:
     # Filter the small values ----------------------------------------------------
     if create_debug_plots:
         numeric_cols = working_df.select_dtypes(include=[np.number]).columns.tolist()
@@ -5719,6 +5847,10 @@ def compute_definitive_tt(df_input: pd.DataFrame) -> pd.Series:
     return tt_str.replace("", "0").astype(int)
 
 working_df["definitive_tt"] = compute_definitive_tt(working_df)
+# fit_tt must exist before track-based efficiency payload/plots are computed.
+working_df["fit_tt"] = compute_fit_tt_from_charge(working_df)
+# Keep downstream definitive_tt consumers aligned with the new fit_tt baseline.
+working_df["definitive_tt"] = working_df["fit_tt"]
 
 _task4_make_combined_timeseries = (
     (create_essential_plots or create_plots)
@@ -6492,8 +6624,11 @@ if time_window_fitting:
 low_tt_zeroed_df = pd.DataFrame()
 low_tt_mask = np.zeros(len(working_df), dtype=bool)
 low_tt_zeroed_count = 0
-low_tt_min = int(config.get("low_tt_min", 10))
-low_tt_zero_cols = config.get("low_tt_zero_cols", ["x", "xp", "y", "yp", "t0", "s"])
+low_tt_min = int(config.get("final_filter_fit_tt_min", 10))
+low_tt_zero_cols = config.get(
+    "final_filter_legacy_low_tt_zero_cols",
+    ["x", "xp", "y", "yp", "t0", "s"],
+)
 if not isinstance(low_tt_zero_cols, (list, tuple)):
     low_tt_zero_cols = [c for c in re.split(r"[\\s,;]+", str(low_tt_zero_cols).strip()) if c]
 raw_tt_series = working_df["raw_tt"] if "raw_tt" in working_df.columns else pd.Series(0, index=working_df.index)
@@ -6512,12 +6647,15 @@ if create_debug_plots:
             out_dir=debug_plot_directory,
             fig_idx=debug_fig_idx,
         )
-low_tt_mask = (
-    (working_df["tracking_tt"] < low_tt_min)
-    | (working_df["list_tt"] < low_tt_min)
-    | (raw_tt_series < low_tt_min)
-    | (working_df["definitive_tt"] < low_tt_min)
-)
+if apply_legacy_final_filters:
+    low_tt_mask = (
+        (working_df["tracking_tt"] < low_tt_min)
+        | (working_df["list_tt"] < low_tt_min)
+        | (raw_tt_series < low_tt_min)
+        | (working_df["definitive_tt"] < low_tt_min)
+    )
+else:
+    low_tt_mask = np.zeros(len(working_df), dtype=bool)
 low_tt_zeroed_count = int(low_tt_mask.sum())
 if low_tt_zeroed_count > 0:
     cols_to_zero = [c for c in low_tt_zero_cols if c in working_df.columns]
@@ -6642,14 +6780,14 @@ if create_plots or create_essential_plots:
 working_df = working_df.copy()
 
 # Remove rows with zeros in key places ----------------------------------------
-definitive_nonzero_cols = config.get("definitive_nonzero_cols", ["x", "y", "s", "t0", "theta", "phi"])
+definitive_nonzero_cols = config.get("final_filter_nonzero_cols", ["x", "y", "s", "t0", "theta", "phi"])
 if not isinstance(definitive_nonzero_cols, (list, tuple)):
     definitive_nonzero_cols = [
         c for c in re.split(r"[\\s,;]+", str(definitive_nonzero_cols).strip()) if c
     ]
-cols_to_check = [c for c in definitive_nonzero_cols if c in working_df.columns]
+cols_to_check = [c for c in definitive_nonzero_cols if c in working_df.columns] if apply_legacy_final_filters else []
 
-if remove_small:
+if final_filter_remove_small_default and apply_legacy_final_filters:
     # Remove small, non-zero values -----------------------------------------------
     if create_debug_plots and cols_to_check:
         debug_thresholds = {col: [-eps, eps] for col in cols_to_check}
@@ -7036,6 +7174,9 @@ cond = base_cond & pd.to_numeric(
     working_df["tim_th_chi_sigmafit_1234"], errors="coerce"
 ).lt(100)
 df_plot_ancillary = working_df.loc[cond].copy()
+# Efficiency diagnostics should use the full activity-based event table,
+# not the chi2/charge-clipped ancillary subset used for other plots.
+df_efficiency_source = working_df.copy()
 
 # -----------------------------------------------------------------------------------------------------------------------------
 
@@ -7862,12 +8003,15 @@ def _compute_track_based_efficiency_payload(
         "edges": edges,
         "plane_results": {},
         "trigger_source": "",
+        "pool_source": "",
     }
 
     trigger_source = "fit_tt"
     payload["trigger_source"] = trigger_source
+    pool_source = trigger_source
+    payload["pool_source"] = pool_source
 
-    required = tuple(_required_track_efficiency_hit_columns()) + (trigger_source,)
+    required = tuple(_required_track_efficiency_hit_columns()) + (trigger_source, pool_source)
     missing = [col for col in required if col not in df_plot.columns]
     if missing:
         if trigger_source in missing:
@@ -7880,6 +8024,11 @@ def _compute_track_based_efficiency_payload(
     x_hits_all, y_hits_all = _extract_track_efficiency_hit_arrays(df_plot, tdiff_to_x)
     dtt_all = (
         pd.to_numeric(df_plot[trigger_source], errors="coerce")
+        .fillna(0)
+        .to_numpy(dtype=np.int32)
+    )
+    pool_tt_all = (
+        pd.to_numeric(df_plot[pool_source], errors="coerce")
         .fillna(0)
         .to_numpy(dtype=np.int32)
     )
@@ -7939,7 +8088,9 @@ def _compute_track_based_efficiency_payload(
             z_arr,
             plane - 1,
         )
-        pool_mask = np.isin(dtt_all, plane_pool_tt[plane]) & projection["valid"]
+        # Denominator/numerator are both defined from fit_tt combinations:
+        # pool in {3-plane,1234}, fired in {1234}.
+        pool_mask = np.isin(pool_tt_all, plane_pool_tt[plane]) & projection["valid"]
         if int(np.sum(pool_mask)) < int(cfg_eff["min_pool_events"]):
             payload["plane_results"][plane] = plane_result
             continue
@@ -8784,7 +8935,7 @@ def _summarize_projection_scaling(payload: dict[str, object]) -> dict[str, objec
 
 efficiency_metadata_cfg = _resolve_task4_efficiency_metadata_cfg(config)
 efficiency_metadata_payload = _compute_track_based_efficiency_payload(
-    df_plot_ancillary,
+    df_efficiency_source,
     cfg_eff=efficiency_metadata_cfg,
     z_positions=z_positions,
     tdiff_to_x=tdiff_to_x,
@@ -8795,6 +8946,16 @@ efficiency_metadata_payload = _compute_track_based_efficiency_payload(
     y_pos_p13=np.asarray(y_pos_P1_and_P3, dtype=float),
     y_pos_p24=np.asarray(y_pos_P2_and_P4, dtype=float),
 )
+if {"fit_tt", "list_tt"}.issubset(df_efficiency_source.columns):
+    _fit_tt_counts = pd.to_numeric(df_efficiency_source["fit_tt"], errors="coerce").fillna(0).astype(int).value_counts()
+    _list_tt_counts = pd.to_numeric(df_efficiency_source["list_tt"], errors="coerce").fillna(0).astype(int).value_counts()
+    global_variables["efficiency_source_fit_tt_1234_count"] = int(_fit_tt_counts.get(1234, 0))
+    global_variables["efficiency_source_list_tt_1234_count"] = int(_list_tt_counts.get(1234, 0))
+    print(
+        "[track_based_efficiency] source counts: "
+        f"fit_tt_1234={int(_fit_tt_counts.get(1234, 0))} "
+        f"list_tt_1234={int(_list_tt_counts.get(1234, 0))}"
+    )
 if not bool(efficiency_metadata_payload.get("available", False)):
     print(
         "[track_based_efficiency] metadata payload unavailable: "
@@ -9316,7 +9477,7 @@ if (
 # ---------------------------------------------------------------------------
 if (create_essential_plots or create_plots) and task4_plot_enabled("track_based_efficiency_tt_stability"):
     _tts_cols_need = tuple(_required_track_efficiency_hit_columns()) + ("fit_tt", "raw_tt", "list_tt")
-    _tts_have = all(c in df_plot_ancillary.columns for c in _tts_cols_need)
+    _tts_have = all(c in df_efficiency_source.columns for c in _tts_cols_need)
     if _tts_have:
         z_arr_tts = np.asarray(z_positions, dtype=float)
 
@@ -9329,10 +9490,10 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("track_based_
 
         fig, axes = plt.subplots(3, 4, figsize=(18, 13), squeeze=False)
 
-        x_hits_tts, y_hits_tts = _extract_track_efficiency_hit_arrays(df_plot_ancillary, tdiff_to_x)
-        dtt_all_tts = pd.to_numeric(df_plot_ancillary["fit_tt"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
-        raw_tt_tts = pd.to_numeric(df_plot_ancillary["raw_tt"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
-        list_tt_tts = pd.to_numeric(df_plot_ancillary["list_tt"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
+        x_hits_tts, y_hits_tts = _extract_track_efficiency_hit_arrays(df_efficiency_source, tdiff_to_x)
+        dtt_all_tts = pd.to_numeric(df_efficiency_source["fit_tt"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
+        raw_tt_tts = pd.to_numeric(df_efficiency_source["raw_tt"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
+        list_tt_tts = pd.to_numeric(df_efficiency_source["list_tt"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
         unchanged_mask_tts = (raw_tt_tts == list_tt_tts)
 
         n_x_bins_tts = 15
@@ -14773,7 +14934,8 @@ if component_cols:
         len(working_df) + removed_all_zero if (len(working_df) + removed_all_zero) else 0,
     )
 
-# Compute fit_tt before pruning columns, since it depends on P*_..._final fields.
+# Compute extension_tt from reconstructed plane-final fields.
+# Keep fit_tt as charge-based occupancy to avoid extension-only plane counting.
 fit_tt_columns = {
     i_plane: [
         f"P{i_plane}_T_sum_final",
@@ -14784,7 +14946,8 @@ fit_tt_columns = {
     ]
     for i_plane in range(1, 5)
 }
-working_df = compute_tt(working_df, "fit_tt", fit_tt_columns)
+working_df = compute_tt(working_df, "extension_tt", fit_tt_columns)
+working_df["fit_tt"] = compute_fit_tt_from_charge(working_df)
 
 # Store TimTrack convergence controls in specific metadata for later studies.
 global_variables["timtrack_d0"] = float(d0)
@@ -14917,7 +15080,10 @@ if run_timtrack_fit:
 else:
     global_variables["fit_compare_median_relerr_timtrack_s_to_1_over_c"] = np.nan
 
-tt_columns_desired = ['event_id', 'datetime', 'raw_tt', 'clean_tt', 'cal_tt', 'list_tt', 'tracking_tt', 'definitive_tt', 'fit_tt']
+tt_columns_desired = [
+    'event_id', 'datetime', 'raw_tt', 'clean_tt', 'cal_tt',
+    'list_tt', 'tracking_tt', 'extension_tt', 'definitive_tt', 'fit_tt'
+]
 tt_columns_present = [col for col in tt_columns_desired if col in working_df.columns]
 param_hash_cols = ["param_hash"] if "param_hash" in working_df.columns else []
 upstream_offender_count_cols = [
@@ -14988,23 +15154,218 @@ if VERBOSE:
 # working_df = working_df[(working_df[Q_cols] != 0).any(axis=1)]
 
 print(f"Original number of events in the dataframe: {original_number_of_events}")
-fit_tt_total = len(working_df)
-if create_debug_plots and "fit_tt" in working_df.columns:
-    debug_fig_idx = plot_debug_histograms(
-        working_df,
-        ["fit_tt"],
-        {"fit_tt": [10]},
-        title=f"Task 4 pre-filter: fit_tt >= 10 [NON-TUNABLE] (station {station})",
-        out_dir=debug_plot_directory,
-        fig_idx=debug_fig_idx,
+def apply_task4_final_filter(
+    df_input: pd.DataFrame,
+    *,
+    apply_changes: bool,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, int | float]]:
+    input_rows = int(len(df_input))
+    if input_rows == 0:
+        return df_input.copy(), pd.DataFrame(), {
+            "input_rows": 0,
+            "rows_affected": 0,
+            "values_zeroed": 0,
+            "rows_failed_fit_tt_min": 0,
+            "rows_failed_nonzero_required": 0,
+        }
+
+    working = df_input.copy() if apply_changes else df_input
+    summary: dict[str, int | float] = {
+        "input_rows": input_rows,
+        "rows_affected": 0,
+        "values_zeroed": 0,
+        "rows_failed_fit_tt_min": 0,
+        "rows_failed_nonzero_required": 0,
+    }
+    final_mask = np.ones(input_rows, dtype=bool)
+    fail_reason_parts = np.empty(input_rows, dtype=object)
+    fail_reason_parts.fill("")
+
+    final_filter_remove_small = _coerce_config_bool(
+        config.get("final_filter_remove_small", False),
+        default=False,
     )
-fit_tt_mask = working_df["fit_tt"].notna() & (working_df["fit_tt"] >= 10)
-working_df = working_df.loc[fit_tt_mask].copy()
+    final_filter_remove_small_eps = _task4_config_float(
+        config,
+        "final_filter_remove_small_eps",
+        default=1e-7,
+    )
+    if final_filter_remove_small:
+        small_mask = working.map(
+            lambda x: isinstance(x, (int, float)) and x != 0 and abs(x) < final_filter_remove_small_eps
+        )
+        nonzero_numeric_mask = working.map(lambda x: isinstance(x, (int, float)) and x != 0)
+        total_nonzero = int(nonzero_numeric_mask.sum().sum())
+        total_small = int(small_mask.sum().sum())
+        rows_with_small = int(small_mask.any(axis=1).sum())
+        summary["values_zeroed"] = total_small
+        summary["rows_with_small_values"] = rows_with_small
+        if apply_changes and total_small > 0:
+            working = working.mask(small_mask, 0)
+        record_filter_metric(
+            "small_values_zeroed_event_pct",
+            rows_with_small,
+            input_rows if input_rows else 0,
+        )
+        record_filter_metric(
+            "small_values_zeroed_value_pct",
+            total_small,
+            total_nonzero if total_nonzero else 0,
+        )
+    else:
+        record_filter_metric("small_values_zeroed_event_pct", 0, input_rows if input_rows else 0)
+        record_filter_metric("small_values_zeroed_value_pct", 0, input_rows if input_rows else 0)
+
+    fit_tt_min = int(config.get("final_filter_fit_tt_min", 10))
+    fit_tt_series = pd.to_numeric(working.get("fit_tt", 0), errors="coerce").fillna(0)
+    fit_tt_pass = fit_tt_series >= fit_tt_min
+    fit_tt_fail = ~fit_tt_pass.to_numpy(dtype=bool, copy=False)
+    summary["rows_failed_fit_tt_min"] = int(fit_tt_fail.sum())
+    final_mask &= ~fit_tt_fail
+    fail_reason_parts[fit_tt_fail] = np.where(
+        fail_reason_parts[fit_tt_fail] == "",
+        f"fit_tt<{fit_tt_min}",
+        fail_reason_parts[fit_tt_fail] + f";fit_tt<{fit_tt_min}",
+    )
+
+    required_nonzero_cols = _task4_parse_filter_columns(
+        config.get("final_filter_nonzero_cols", ["x", "y", "s", "t0", "theta", "phi"]),
+        default=("x", "y", "s", "t0", "theta", "phi"),
+    )
+    required_nonzero_cols = [col for col in required_nonzero_cols if col in working.columns]
+    if required_nonzero_cols:
+        nonzero_mask = np.ones(input_rows, dtype=bool)
+        for col in required_nonzero_cols:
+            col_values = pd.to_numeric(working[col], errors="coerce")
+            nonzero_mask &= np.isfinite(col_values.to_numpy(dtype=float, copy=False))
+            nonzero_mask &= col_values.to_numpy(dtype=float, copy=False) != 0
+        nonzero_fail = ~nonzero_mask
+        summary["rows_failed_nonzero_required"] = int(nonzero_fail.sum())
+        final_mask &= ~nonzero_fail
+        fail_reason_parts[nonzero_fail] = np.where(
+            fail_reason_parts[nonzero_fail] == "",
+            "required_nonzero_violation",
+            fail_reason_parts[nonzero_fail] + ";required_nonzero_violation",
+        )
+
+    variable_specs = (
+        ("x", "final_filter_x_min", "final_filter_x_max"),
+        ("y", "final_filter_y_min", "final_filter_y_max"),
+        ("s", "final_filter_s_min", "final_filter_s_max"),
+        ("t0", "final_filter_t0_min", "final_filter_t0_max"),
+        ("theta", "final_filter_theta_min", "final_filter_theta_max"),
+        ("phi", "final_filter_phi_min", "final_filter_phi_max"),
+    )
+    for variable_name, left_key, right_key in variable_specs:
+        if variable_name not in working.columns:
+            continue
+        left_limit = _task4_parse_optional_float(config.get(left_key))
+        right_limit = _task4_parse_optional_float(config.get(right_key))
+        if left_limit is None and right_limit is None:
+            continue
+        values = pd.to_numeric(working[variable_name], errors="coerce").to_numpy(dtype=float, copy=False)
+        pass_mask = np.isfinite(values)
+        if left_limit is not None:
+            pass_mask &= values >= left_limit
+        if right_limit is not None:
+            pass_mask &= values <= right_limit
+        fail_mask = ~pass_mask
+        summary[f"rows_failed_{variable_name}_range"] = int(fail_mask.sum())
+        final_mask &= ~fail_mask
+        fail_reason_parts[fail_mask] = np.where(
+            fail_reason_parts[fail_mask] == "",
+            f"{variable_name}_out_of_range",
+            fail_reason_parts[fail_mask] + f";{variable_name}_out_of_range",
+        )
+
+    rows_affected = int((~final_mask).sum())
+    summary["rows_affected"] = rows_affected
+    summary["flagged_rows"] = rows_affected
+    summary["failed_pair_any"] = rows_affected
+    if not apply_changes:
+        return df_input, pd.DataFrame(), summary
+
+    filtered_df = working.loc[final_mask].copy()
+    rejected_df = working.loc[~final_mask].copy()
+    if not rejected_df.empty:
+        rejected_df["reject_stage"] = "final_filtering"
+        rejected_df["reject_reason"] = fail_reason_parts[~final_mask]
+    return filtered_df, rejected_df, summary
+
+
+task4_final_filter_dry_run_summary = apply_task4_final_filter(
+    working_df,
+    apply_changes=False,
+)[2]
+task4_final_filter_dry_run_has_effect = int(
+    (
+        int(task4_final_filter_dry_run_summary.get("rows_affected", 0)) > 0
+        or int(task4_final_filter_dry_run_summary.get("values_zeroed", 0)) > 0
+        or int(task4_final_filter_dry_run_summary.get("failed_pair_any", 0)) > 0
+    )
+)
+global_variables["task4_final_filter_dry_run_has_effect"] = task4_final_filter_dry_run_has_effect
+global_variables["task4_final_filter_dry_run_input_rows"] = int(
+    task4_final_filter_dry_run_summary.get("input_rows", len(working_df))
+)
+global_variables["task4_final_filter_dry_run_rows_affected"] = int(
+    task4_final_filter_dry_run_summary.get("rows_affected", 0)
+)
+global_variables["task4_final_filter_dry_run_flagged_rows"] = int(
+    task4_final_filter_dry_run_summary.get("flagged_rows", 0)
+)
+global_variables["task4_final_filter_dry_run_values_zeroed"] = int(
+    task4_final_filter_dry_run_summary.get("values_zeroed", 0)
+)
+global_variables["task4_final_filter_dry_run_failed_pair_any"] = int(
+    task4_final_filter_dry_run_summary.get("failed_pair_any", 0)
+)
+print(
+    "[TASK4_FINAL_FILTER_DRY_RUN] "
+    f"has_effect={'yes' if task4_final_filter_dry_run_has_effect else 'no'} "
+    f"input_rows={global_variables['task4_final_filter_dry_run_input_rows']} "
+    f"flagged_rows={global_variables['task4_final_filter_dry_run_flagged_rows']} "
+    f"rows_affected={global_variables['task4_final_filter_dry_run_rows_affected']} "
+    f"values_zeroed={global_variables['task4_final_filter_dry_run_values_zeroed']} "
+    f"failed_pair_any={global_variables['task4_final_filter_dry_run_failed_pair_any']}",
+    force=True,
+)
+
+working_df, task4_final_filter_rejected_df, task4_final_filter_summary = apply_task4_final_filter(
+    working_df,
+    apply_changes=True,
+)
+
+fit_tt_total = int(task4_final_filter_summary.get("input_rows", len(working_df)))
+fit_tt_removed = int(task4_final_filter_summary.get("rows_failed_fit_tt_min", 0))
 record_filter_metric(
     "fit_tt_lt_10_rows_removed_pct",
-    fit_tt_total - int(fit_tt_mask.sum()),
+    fit_tt_removed,
     fit_tt_total if fit_tt_total else 0,
 )
+record_filter_metric(
+    "final_filter_rows_removed_pct",
+    int(task4_final_filter_summary.get("rows_affected", 0)),
+    fit_tt_total if fit_tt_total else 0,
+)
+
+if "fit_tt" in working_df.columns:
+    working_df["definitive_tt"] = pd.to_numeric(working_df["fit_tt"], errors="coerce").fillna(0).astype(int)
+
+if save_rejected_rows and not task4_final_filter_rejected_df.empty:
+    os.makedirs(rejected_files_directory, exist_ok=True)
+    final_rejected_path = os.path.join(
+        rejected_files_directory,
+        f"rejected_final_filtering_{basename_no_ext}.parquet",
+    )
+    task4_final_filter_rejected_df.to_parquet(
+        final_rejected_path,
+        engine="pyarrow",
+        compression="zstd",
+        index=False,
+    )
+    print(f"Rejected rows (final filtering) saved to: {final_rejected_path}")
+
 list_tt_int = pd.to_numeric(working_df["list_tt"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
 fit_tt_int = pd.to_numeric(working_df["fit_tt"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
 

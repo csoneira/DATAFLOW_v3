@@ -46,6 +46,9 @@ selection:
     - start: 2026-12-03 # mingo02 HV scan,  end actually on 2026-01-03, i extended because it finisehd
       end: 2026-02-14 # end actually on 2026-01-14, i extended because it finisehd
       stations: [2]
+    - start: 2025-08-19 # mingo03 change of trigger epoch in between
+      end: 2025-10-28
+      stations: [3]
     - start: 2025-02-25 # mingo04 HV scan
       end: 2025-05-10 # end actually on 2025-03-10, i extended because it finisehd
       stations: [4]
