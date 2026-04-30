@@ -29,6 +29,7 @@ TELEGRAM_DIR = Path(__file__).resolve().parent
 TOKEN_PATH = TELEGRAM_DIR / "API_TOKEN.txt"
 RESTART_SCRIPT = TELEGRAM_DIR / "kill_bot_and_restart.sh"
 TERMINAL_PASSWORD_PATH = TELEGRAM_DIR / "TERMINAL_PASSWORD.txt"
+WELCOME_MESSAGE_PATH = TELEGRAM_DIR / "WELCOME_MESSAGE.txt"
 
 PDF_TARGETS = {
     "definitive_execution_report": {
@@ -140,6 +141,17 @@ PDF_TARGETS = {
         / "trigger_rate_metadata_report.pdf",
         "description": "Trigger-rate metadata report",
     },
+    "configurations_metadata_report": {
+        "path": BASE_DIR
+        / "MASTER"
+        / "ANCILLARY"
+        / "PLOTTERS"
+        / "METADATA"
+        / "CONFIGURATIONS"
+        / "PLOTS"
+        / "configurations_metadata_report.pdf",
+        "description": "Configuration z-position metadata report",
+    },
     "rates_metadata_report": {
         "path": BASE_DIR
         / "MASTER"
@@ -233,6 +245,7 @@ PDF_COMMAND_ALIASES: dict[str, tuple[str, ...]] = {
     "noise_control_efficiency_task3": ("noise_eff3",),
     "noise_control_plane_combination_rate_report": ("noise_plane",),
     "trigger_rate_metadata_report": ("trig_rate",),
+    "configurations_metadata_report": ("config_meta",),
     "rates_metadata_report": ("rates_meta",),
     "execution_metadata_report": ("exec_meta",),
     "efficiency_metadata_report": ("eff_meta",),
@@ -256,8 +269,7 @@ CLEANER_SCRIPT = (
 )
 MAX_MESSAGE_CHARS = 3500
 TERMINAL_COMMAND_TIMEOUT_SEC = 300
-
-HELP_TEXT = (
+DEFAULT_HELP_TEXT = (
     "===========================================\n"
     "      mingo_analysis_bot - Command Guide\n"
     "===========================================\n\n"
@@ -282,6 +294,7 @@ HELP_TEXT = (
     "  /exec_map - Definitive execution map PDF.\n"
     "  /filter_meta - Filter metadata PDF.\n"
     "  /trig_rate - Trigger-rate metadata PDF.\n"
+    "  /config_meta - Configuration z-position metadata PDF.\n"
     "  /rates_meta - Rates metadata PDF.\n"
     "  /exec_meta - Execution metadata PDF.\n"
     "  /eff_meta - Efficiency metadata PDF.\n"
@@ -299,6 +312,18 @@ HELP_TEXT = (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 
+def load_help_text(path: Path) -> str:
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        logging.warning("Welcome/help message file not found at %s; using built-in default.", path)
+        return DEFAULT_HELP_TEXT
+    if not text:
+        logging.warning("Welcome/help message file %s is empty; using built-in default.", path)
+        return DEFAULT_HELP_TEXT
+    return text
+
+
 def load_token(token_path: Path) -> str:
     try:
         token = token_path.read_text(encoding="utf-8").strip()
@@ -310,6 +335,7 @@ def load_token(token_path: Path) -> str:
 
 
 bot = telebot.TeleBot(load_token(TOKEN_PATH))
+HELP_TEXT = load_help_text(WELCOME_MESSAGE_PATH)
 TERMINAL_ACTIVE_CHATS: set[int] = set()
 TERMINAL_CHAT_CWDS: dict[int, Path] = {}
 TASK_PDF_PENDING_CHATS: dict[int, dict[str, object]] = {}

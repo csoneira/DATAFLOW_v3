@@ -490,7 +490,7 @@ def run(config_path: str | Path | None = None) -> Path:
     prepared, observed_efficiency_limit_meta = apply_observed_efficiency_upper_limits(
         collected,
         observed_efficiency_limits,
-        mode="clip",
+        mode="drop",
     )
     for plane_idx in range(1, 5):
         prepared[f"eff_empirical_raw_{plane_idx}"] = pd.to_numeric(prepared[f"eff_empirical_{plane_idx}"], errors="coerce")
@@ -534,7 +534,7 @@ def run(config_path: str | Path | None = None) -> Path:
         "timestamp_column": timestamp_column,
         "trigger_selection": trigger_selection,
         "collection": collection_meta,
-        "observed_efficiency_upper_limit_application": observed_efficiency_limit_meta,
+        "observed_efficiency_upper_limit_filter": observed_efficiency_limit_meta,
         "fit_application": fit_application_meta,
         "plots": {
             "efficiency_time_series": None if time_series_plot is None else str(time_series_plot),
@@ -555,7 +555,7 @@ def run(config_path: str | Path | None = None) -> Path:
         log.info("corrected_eff is disabled; raw empirical efficiencies were passed through unchanged.")
     if observed_efficiency_limit_meta["affected_rows_total"] > 0:
         log.info(
-            "Applied observed-efficiency upper limits %s. Affected rows by plane: %s",
+            "Dropped rows above observed-efficiency upper limits %s. Affected rows by plane: %s",
             observed_efficiency_limit_meta["limits_by_plane"],
             observed_efficiency_limit_meta["affected_rows_by_plane"],
         )

@@ -20,6 +20,8 @@ source can be either the existing `trigger_type` CSVs or the newer
      columns in the Step 1 output CSV.
    - Keeps the four empirical efficiencies, the z-position vector, the
      configured rate column, the simulated flux, and the number of events.
+   - Drops rows whose empirical efficiencies exceed the configured
+     `step1.observed_efficiency_upper_limits`.
    - Filters on the configured z-position vector and minimum number of events.
    - If `step1.z_position_vector` is `null`, the most frequent z-vector is used.
    - Writes a compact parameter-space overview plot for `flux + the four efficiencies`.
@@ -80,6 +82,8 @@ source can be either the existing `trigger_type` CSVs or the newer
    - For `robust_efficiency`, the source is fixed to
      `TASK_4/task_4_metadata_robust_efficiency.csv` and only the rate choice
      matters: `rate_1234_hz` or `rate_total_hz`.
+   - Drops real rows whose empirical efficiencies exceed the configured
+     `step1.observed_efficiency_upper_limits`.
    - Lets you choose how the 4-D efficiency query vector is built:
      `minimal_empirical` keeps the four plane efficiencies as-is, while
      `same_efficiency` averages a chosen plane set and queries the LUT with
@@ -138,6 +142,7 @@ Step 1 source paths are controlled with:
 - `step1.use_mingo00_param_hash_source` (set `false` to use legacy `collected_data_csv`)
 - `step1.simulation_params_csv`
 - `step1.metadata_root` (or the older `step1.trigger_type_metadata_root`)
+- `step1.observed_efficiency_upper_limits`
 
 Step 5 real-data slicing is controlled with:
 - `step5.station`

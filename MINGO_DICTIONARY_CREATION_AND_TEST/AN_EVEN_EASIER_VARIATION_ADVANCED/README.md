@@ -73,7 +73,7 @@ Key Step 1 output:
 Observed-efficiency upper limits are applied in two places:
 
 - Step 0: training points above the plane limit are excluded from the polynomial fit
-- Step 1: real observed values above the plane limit are clipped before correction
+- Step 1: real rows above the plane limit are dropped before any later correction or plotting
 
 This is useful for noisy empirical tails, for example setting planes 1 and 4 to `0.8`.
 

@@ -59,7 +59,9 @@ def apply_observed_efficiency_upper_limits(
         raise ValueError("Observed-efficiency upper-limit mode must be 'clip' or 'drop'.")
 
     work = dataframe.copy()
+    row_count_before = int(len(work))
     counts_by_plane: dict[str, int] = {}
+    over_union_mask = pd.Series(False, index=work.index, dtype=bool)
     for plane_idx, limit in sorted(limits.items()):
         column = f"eff_empirical_{plane_idx}"
         if column not in work.columns:
@@ -67,17 +69,20 @@ def apply_observed_efficiency_upper_limits(
         numeric = pd.to_numeric(work[column], errors="coerce")
         over_mask = numeric.notna() & (numeric > float(limit))
         counts_by_plane[str(plane_idx)] = int(over_mask.sum())
+        over_union_mask = over_union_mask | over_mask
         if mode == "clip":
             numeric.loc[over_mask] = float(limit)
-        else:
-            numeric.loc[over_mask] = np.nan
         work[column] = numeric
+    if mode == "drop" and bool(over_union_mask.any()):
+        work = work.loc[~over_union_mask].copy()
 
     metadata = {
         "mode": mode,
         "limits_by_plane": {str(key): float(value) for key, value in sorted(limits.items())},
         "affected_rows_by_plane": counts_by_plane,
-        "affected_rows_total": int(sum(counts_by_plane.values())),
+        "affected_rows_total": int(over_union_mask.sum()) if mode == "drop" else int(sum(counts_by_plane.values())),
+        "row_count_before": row_count_before,
+        "row_count_after": int(len(work)),
     }
     return work, metadata
 
@@ -295,6 +300,7 @@ def load_mingo00_training_dataframe(config: dict[str, Any]) -> tuple[pd.DataFram
     merged = sim_params_df.merge(metadata_df, on="param_hash", how="inner")
     if merged.empty:
         raise ValueError("MINGO00 param-hash merge produced no rows.")
+    rows_after_param_hash_merge = int(len(merged))
 
     merged, trigger_info = derive_trigger_rate_features(merged, config, allow_plain_fallback=False)
     observed_efficiency_limits = resolve_observed_efficiency_upper_limits(config)
@@ -310,7 +316,8 @@ def load_mingo00_training_dataframe(config: dict[str, Any]) -> tuple[pd.DataFram
         "mingo00_metadata_csv": str(metadata_path),
         "rows_simulation_params": int(len(sim_params_df)),
         "rows_mingo00_metadata": int(len(metadata_df)),
-        "rows_after_param_hash_merge": int(len(merged)),
+        "rows_after_param_hash_merge": rows_after_param_hash_merge,
+        "rows_after_observed_efficiency_upper_limit_filter": int(len(merged)),
         "trigger_selection": trigger_info,
         "observed_efficiency_upper_limit_filter": observed_efficiency_limit_meta,
     }

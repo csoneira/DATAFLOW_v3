@@ -1974,6 +1974,48 @@ def compute_fit_tt_from_charge(df: pd.DataFrame) -> pd.Series:
     return tt_str.replace("", "0").astype(int)
 
 
+TASK4_PRIMARY_TT_COLUMN = "fit_tt"
+TASK4_COMPAT_TT_COLUMN = "definitive_tt"
+TASK4_EXTENSION_TT_COLUMNS: dict[int, list[str]] = {
+    i_plane: [
+        f"P{i_plane}_T_sum_final",
+        f"P{i_plane}_T_dif_final",
+        f"P{i_plane}_Q_sum_final",
+        f"P{i_plane}_Q_dif_final",
+        f"P{i_plane}_Y_final",
+    ]
+    for i_plane in range(1, 5)
+}
+
+
+def get_task4_tt_column(df_input: pd.DataFrame, preferred: str = TASK4_PRIMARY_TT_COLUMN) -> str | None:
+    if preferred in df_input.columns:
+        return preferred
+    if TASK4_COMPAT_TT_COLUMN in df_input.columns:
+        return TASK4_COMPAT_TT_COLUMN
+    return None
+
+
+def get_task4_tt_series(df_input: pd.DataFrame, preferred: str = TASK4_PRIMARY_TT_COLUMN) -> pd.Series:
+    tt_col = get_task4_tt_column(df_input, preferred=preferred)
+    if tt_col is None:
+        return pd.Series(0, index=df_input.index, dtype=int)
+    return pd.to_numeric(df_input[tt_col], errors="coerce").fillna(0).astype(int)
+
+
+def refresh_task4_trigger_columns(
+    df_input: pd.DataFrame,
+    *,
+    include_compatibility_alias: bool = True,
+) -> pd.DataFrame:
+    df_output = compute_tt(df_input, "extension_tt", TASK4_EXTENSION_TT_COLUMNS)
+    fit_tt_series = compute_fit_tt_from_charge(df_output)
+    df_output.loc[:, TASK4_PRIMARY_TT_COLUMN] = fit_tt_series
+    if include_compatibility_alias:
+        df_output.loc[:, TASK4_COMPAT_TT_COLUMN] = fit_tt_series
+    return df_output
+
+
 def _task4_parse_optional_float(raw_value: object) -> float | None:
     if raw_value is None:
         return None
@@ -2054,10 +2096,6 @@ ITINERARY_FILE_PATH = Path(
     f"{home_path}/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
 )
 
-fast_mode = False
-debug_mode = False
-last_file_test = config["last_file_test"]
-
 def load_iteration_settings(cfg):
     number_of_det_executions = max(1, int(cfg.get("number_of_det_executions", 1)))
     number_of_tt_executions = max(1, int(cfg.get("number_of_tt_executions", 1)))
@@ -2070,287 +2108,257 @@ def load_iteration_settings(cfg):
         cfg.get("limit_number", None),
     )
 
-(
-    number_of_det_executions,
-    fixed_speed,
-    res_ana_removing_planes,
-    number_of_tt_executions,
-    complete_reanalysis,
-    limit_number,
-) = load_iteration_settings(config)
-limit = limit_number is not None
 
-fit_method = str(config.get("fit_method", "both")).strip().lower()
-if fit_method not in {"detached", "timtrack", "both"}:
-    print(f"Warning: Invalid fit_method='{fit_method}'. Falling back to 'both'.")
-    fit_method = "both"
-run_detached_fit = fit_method in {"detached", "both"}
-run_timtrack_fit = fit_method in {"timtrack", "both"}
-print(f"Fitting mode selected: fit_method='{fit_method}'")
+def initialize_task4_runtime_context(
+    cfg: dict[str, object],
+    metadata_store: dict[str, object],
+    namespace: dict[str, object],
+    *,
+    announce_fit_method: bool = False,
+    announce_geometry: bool = False,
+) -> dict[str, object]:
+    runtime: dict[str, object] = {
+        "fast_mode": False,
+        "debug_mode": False,
+        "last_file_test": cfg["last_file_test"],
+        "crontab_execution": cfg["crontab_execution"],
+    }
 
-# Charge calibration to fC
+    (
+        number_of_det_executions,
+        fixed_speed,
+        res_ana_removing_planes,
+        number_of_tt_executions,
+        complete_reanalysis,
+        limit_number,
+    ) = load_iteration_settings(cfg)
+    runtime.update(
+        {
+            "number_of_det_executions": number_of_det_executions,
+            "fixed_speed": fixed_speed,
+            "res_ana_removing_planes": res_ana_removing_planes,
+            "number_of_tt_executions": number_of_tt_executions,
+            "complete_reanalysis": complete_reanalysis,
+            "limit_number": limit_number,
+            "limit": limit_number is not None,
+        }
+    )
 
-# Charge front-back
+    fit_method = str(cfg.get("fit_method", "both")).strip().lower()
+    if fit_method not in {"detached", "timtrack", "both"}:
+        print(f"Warning: Invalid fit_method='{fit_method}'. Falling back to 'both'.")
+        fit_method = "both"
+    runtime.update(
+        {
+            "fit_method": fit_method,
+            "run_detached_fit": fit_method in {"detached", "both"},
+            "run_timtrack_fit": fit_method in {"timtrack", "both"},
+        }
+    )
+    if announce_fit_method:
+        print(f"Fitting mode selected: fit_method='{fit_method}'")
 
-# Slewing correction
+    runtime.update(
+        {
+            "T_side_left_pre_cal_debug": cfg.get("T_side_left_pre_cal_debug", -500),
+            "T_side_right_pre_cal_debug": cfg.get("T_side_right_pre_cal_debug", 500),
+            "T_side_left_pre_cal_default": cfg.get("T_side_left_pre_cal_default", -200),
+            "T_side_right_pre_cal_default": cfg.get("T_side_right_pre_cal_default", -100),
+            "T_side_left_pre_cal_ST": cfg.get("T_side_left_pre_cal_ST", -200),
+            "T_side_right_pre_cal_ST": cfg.get("T_side_right_pre_cal_ST", -50),
+        }
+    )
 
-# Time filtering
+    runtime["T_sum_RPC_left"] = _task4_config_float(
+        cfg,
+        "T_sum_RPC_left",
+        "plane_combination_plane_t_sum_sum_left",
+        "plane_combination_same_plane_t_sum_sum_left",
+        "plane_combination_self_t_sum_sum_left",
+        default=-25.0,
+    )
+    runtime["T_sum_RPC_right"] = _task4_config_float(
+        cfg,
+        "T_sum_RPC_right",
+        "plane_combination_plane_t_sum_sum_right",
+        "plane_combination_same_plane_t_sum_sum_right",
+        "plane_combination_self_t_sum_sum_right",
+        default=25.0,
+    )
 
-# Time calibration
+    det_phi_filter_abs = abs(
+        float(cfg.get("det_phi_filter_abs", cfg.get("det_phi_right_filter", 3.141592)))
+    )
+    runtime.update(
+        {
+            "det_pos_filter": cfg["det_pos_filter"],
+            "det_theta_left_filter": cfg["det_theta_left_filter"],
+            "det_theta_right_filter": cfg["det_theta_right_filter"],
+            "det_phi_filter_abs": det_phi_filter_abs,
+            "det_phi_right_filter": det_phi_filter_abs,
+            "det_phi_left_filter": -det_phi_filter_abs,
+            "det_slowness_filter_left": cfg["det_slowness_filter_left"],
+            "det_slowness_filter_right": cfg["det_slowness_filter_right"],
+            "det_res_ystr_filter": cfg["det_res_ystr_filter"],
+            "det_res_tsum_filter": cfg["det_res_tsum_filter"],
+            "det_res_tdif_filter": cfg["det_res_tdif_filter"],
+            "det_ext_res_ystr_filter": cfg["det_ext_res_ystr_filter"],
+            "det_ext_res_tsum_filter": cfg["det_ext_res_tsum_filter"],
+            "det_ext_res_tdif_filter": cfg["det_ext_res_tdif_filter"],
+            "proj_filter": cfg["proj_filter"],
+            "res_ystr_filter": cfg["res_ystr_filter"],
+            "res_tsum_filter": cfg["res_tsum_filter"],
+            "res_tdif_filter": cfg["res_tdif_filter"],
+            "ext_res_ystr_filter": cfg["ext_res_ystr_filter"],
+            "ext_res_tsum_filter": cfg["ext_res_tsum_filter"],
+            "ext_res_tdif_filter": cfg["ext_res_tdif_filter"],
+            "delta_s_left": cfg.get("delta_s_left", -0.0003),
+            "delta_s_right": cfg.get("delta_s_right", 0.0003),
+            "coincidence_window_cal_ns": cfg["coincidence_window_cal_ns"],
+            "coincidence_window_cal_number_of_points": cfg["coincidence_window_cal_number_of_points"],
+            "beta": cfg["beta"],
+            "strip_speed_factor_of_c": cfg["strip_speed_factor_of_c"],
+            "strip_length": cfg["strip_length"],
+            "narrow_strip": cfg["narrow_strip"],
+            "wide_strip": cfg["wide_strip"],
+            "d0": cfg["d0"],
+            "cocut": cfg["cocut"],
+            "iter_max": cfg["iter_max"],
+            "anc_sy": cfg["anc_sy"],
+            "anc_sts": cfg["anc_sts"],
+            "anc_std": cfg["anc_std"],
+            "anc_sz": cfg["anc_sz"],
+            "n_planes_timtrack": cfg["n_planes_timtrack"],
+            "T_clip_min_debug": cfg.get("T_clip_min_debug", -500),
+            "T_clip_max_debug": cfg.get("T_clip_max_debug", 500),
+            "Q_clip_min_debug": cfg.get("Q_clip_min_debug", -500),
+            "Q_clip_max_debug": cfg.get("Q_clip_max_debug", 500),
+            "num_bins_debug": cfg.get("num_bins_debug", 100),
+            "T_clip_min_default": cfg.get("T_clip_min_default", -300),
+            "T_clip_max_default": cfg.get("T_clip_max_default", 100),
+            "Q_clip_min_default": cfg.get("Q_clip_min_default", 0),
+            "Q_clip_max_default": cfg.get("Q_clip_max_default", 500),
+            "num_bins_default": cfg.get("num_bins_default", 100),
+            "T_clip_min_ST": cfg.get("T_clip_min_ST", -300),
+            "T_clip_max_ST": cfg.get("T_clip_max_ST", 100),
+            "Q_clip_min_ST": cfg.get("Q_clip_min_ST", 0),
+            "Q_clip_max_ST": cfg.get("Q_clip_max_ST", 500),
+            "time_window_fitting": cfg["time_window_fitting"],
+            "charge_plot_limit_left": cfg["charge_plot_limit_left"],
+            "charge_plot_limit_right": cfg["charge_plot_limit_right"],
+            "charge_plot_event_limit_right": cfg.get("charge_plot_event_limit_right", 400),
+            "Q_sum_color": "orange",
+            "Q_dif_color": "red",
+            "T_sum_color": "blue",
+            "T_dif_color": "green",
+        }
+    )
 
-# Y position
+    runtime["pos_filter"] = runtime["det_pos_filter"]
+    runtime["t0_left_filter"] = runtime["T_sum_RPC_left"]
+    runtime["t0_right_filter"] = runtime["T_sum_RPC_right"]
+    runtime["slowness_filter_left"] = runtime["det_slowness_filter_left"]
+    runtime["slowness_filter_right"] = runtime["det_slowness_filter_right"]
+    runtime["theta_left_filter"] = runtime["det_theta_left_filter"]
+    runtime["theta_right_filter"] = runtime["det_theta_right_filter"]
+    runtime["phi_left_filter"] = runtime["det_phi_left_filter"]
+    runtime["phi_right_filter"] = runtime["det_phi_right_filter"]
 
-# RPC variables
+    fig_idx, plot_list = ensure_plot_state(namespace)
+    runtime["fig_idx"] = fig_idx
+    runtime["plot_list"] = plot_list
 
-# Pre-cal Front & Back
-T_side_left_pre_cal_debug = config.get("T_side_left_pre_cal_debug", -500)
-T_side_right_pre_cal_debug = config.get("T_side_right_pre_cal_debug", 500)
+    runtime["time_dif_distance"] = 30
+    runtime["time_dif_reference"] = np.array([
+        [-0.0573, 0.031275, 1.033875, 0.761475],
+        [-0.914, -0.873975, -0.19815, 0.452025],
+        [0.8769, 1.2008, 1.014, 2.43915],
+        [1.508825, 2.086375, 1.6876, 3.023575],
+    ])
+    runtime["charge_sum_distance"] = 30
+    runtime["charge_sum_reference"] = np.array([
+        [89.4319, 98.19605, 95.99055, 91.83875],
+        [96.55775, 94.50385, 94.9254, 91.0775],
+        [92.12985, 92.23395, 90.60545, 95.5214],
+        [93.75635, 93.57425, 93.07055, 89.27305],
+    ])
+    runtime["charge_dif_distance"] = 30
+    runtime["charge_dif_reference"] = np.array([
+        [4.512, 0.58715, 1.3204, -1.3918],
+        [-4.50885, 0.918, -3.39445, -0.12325],
+        [-3.8931, -3.28515, 3.27295, 1.0554],
+        [-2.29505, 0.012, 2.49045, -2.14565],
+    ])
+    runtime["time_sum_distance"] = 30
+    runtime["time_sum_reference"] = np.array([
+        [0.0, -0.3886308, -0.53020947, 0.33711737],
+        [-0.80494094, -0.68836069, -2.01289387, -1.13481931],
+        [-0.23899338, -0.51373738, 0.50845317, 0.11685095],
+        [0.33586385, 1.08329847, 0.91410244, 0.58815813],
+    ])
 
-T_side_left_pre_cal_default = config.get("T_side_left_pre_cal_default", -200)
-T_side_right_pre_cal_default = config.get("T_side_right_pre_cal_default", -100)
+    runtime["T_F_left_pre_cal"] = runtime["T_side_left_pre_cal_default"]
+    runtime["T_F_right_pre_cal"] = runtime["T_side_right_pre_cal_default"]
+    runtime["T_B_left_pre_cal"] = runtime["T_side_left_pre_cal_default"]
+    runtime["T_B_right_pre_cal"] = runtime["T_side_right_pre_cal_default"]
+    runtime["T_F_left_pre_cal_ST"] = runtime["T_side_left_pre_cal_ST"]
+    runtime["T_F_right_pre_cal_ST"] = runtime["T_side_right_pre_cal_ST"]
+    runtime["T_B_left_pre_cal_ST"] = runtime["T_side_left_pre_cal_ST"]
+    runtime["T_B_right_pre_cal_ST"] = runtime["T_side_right_pre_cal_ST"]
 
-T_side_left_pre_cal_ST = config.get("T_side_left_pre_cal_ST", -200)
-T_side_right_pre_cal_ST = config.get("T_side_right_pre_cal_ST", -50)
+    y_widths = [
+        np.array([runtime["wide_strip"], runtime["wide_strip"], runtime["wide_strip"], runtime["narrow_strip"]]),
+        np.array([runtime["narrow_strip"], runtime["wide_strip"], runtime["wide_strip"], runtime["wide_strip"]]),
+    ]
+    runtime["y_widths"] = y_widths
+    runtime["y_pos_T"] = [y_pos(y_widths[0]), y_pos(y_widths[1])]
+    runtime["y_width_P1_and_P3"] = y_widths[0]
+    runtime["y_width_P2_and_P4"] = y_widths[1]
+    runtime["y_pos_P1_and_P3"] = y_pos(runtime["y_width_P1_and_P3"])
+    runtime["y_pos_P2_and_P4"] = y_pos(runtime["y_width_P2_and_P4"])
+    runtime["total_width"] = np.sum(runtime["y_width_P1_and_P3"])
 
-# Pre-cal Sum & Diff
+    c_mm_ns = c / 1000000
+    runtime["c_mm_ns"] = c_mm_ns
+    if announce_geometry:
+        print(c_mm_ns)
 
-# Post-calibration
+    runtime["muon_speed"] = runtime["beta"] * c_mm_ns
+    runtime["strip_speed"] = runtime["strip_speed_factor_of_c"] * c_mm_ns
+    runtime["tdiff_to_x"] = runtime["strip_speed"]
+    runtime["vc"] = runtime["beta"] * c_mm_ns
+    runtime["sc"] = 1 / runtime["vc"]
+    runtime["ss"] = 1 / runtime["strip_speed"]
+    runtime["nplan"] = runtime["n_planes_timtrack"]
+    runtime["lenx"] = runtime["strip_length"]
+    runtime["anc_sx"] = runtime["tdiff_to_x"] * runtime["anc_std"]
 
-# Once calculated the RPC variables
-T_sum_RPC_left = _task4_config_float(
-    config,
-    "T_sum_RPC_left",
-    "plane_combination_plane_t_sum_sum_left",
-    "plane_combination_same_plane_t_sum_sum_left",
-    "plane_combination_self_t_sum_sum_left",
-    default=-25.0,
+    runtime["T_clip_min"] = runtime["T_clip_min_default"]
+    runtime["T_clip_max"] = runtime["T_clip_max_default"]
+    runtime["Q_clip_min"] = runtime["Q_clip_min_default"]
+    runtime["Q_clip_max"] = runtime["Q_clip_max_default"]
+    runtime["num_bins"] = runtime["num_bins_default"]
+
+    metadata_store["unc_y"] = runtime["anc_sy"]
+    metadata_store["unc_tsum"] = runtime["anc_sts"]
+    metadata_store["unc_tdif"] = runtime["anc_std"]
+    return runtime
+
+globals().update(
+    initialize_task4_runtime_context(
+        config,
+        global_variables,
+        globals(),
+        announce_fit_method=True,
+        announce_geometry=True,
+    )
 )
-T_sum_RPC_right = _task4_config_float(
-    config,
-    "T_sum_RPC_right",
-    "plane_combination_plane_t_sum_sum_right",
-    "plane_combination_same_plane_t_sum_sum_right",
-    "plane_combination_self_t_sum_sum_right",
-    default=25.0,
-)
 
-# Alternative fitter filter
-det_pos_filter = config["det_pos_filter"]
-det_theta_left_filter = config["det_theta_left_filter"]
-det_theta_right_filter = config["det_theta_right_filter"]
-det_phi_filter_abs = abs(float(config.get("det_phi_filter_abs", config.get("det_phi_right_filter", 3.141592))))
-det_phi_right_filter = det_phi_filter_abs
-det_phi_left_filter = -det_phi_filter_abs
-det_slowness_filter_left = config["det_slowness_filter_left"]
-det_slowness_filter_right = config["det_slowness_filter_right"]
 
-det_res_ystr_filter = config["det_res_ystr_filter"]
-det_res_tsum_filter = config["det_res_tsum_filter"]
-det_res_tdif_filter = config["det_res_tdif_filter"]
-det_ext_res_ystr_filter = config["det_ext_res_ystr_filter"]
-det_ext_res_tsum_filter = config["det_ext_res_tsum_filter"]
-det_ext_res_tdif_filter = config["det_ext_res_tdif_filter"]
 
-# TimTrack filter
-proj_filter = config["proj_filter"]
-res_ystr_filter = config["res_ystr_filter"]
-res_tsum_filter = config["res_tsum_filter"]
-res_tdif_filter = config["res_tdif_filter"]
-ext_res_ystr_filter = config["ext_res_ystr_filter"]
-ext_res_tsum_filter = config["ext_res_tsum_filter"]
-ext_res_tdif_filter = config["ext_res_tdif_filter"]
 
-# Fitting comparison
-delta_s_left = config.get("delta_s_left", -0.0003)
-delta_s_right = config.get("delta_s_right", 0.0003)
 
-# Calibrations
-coincidence_window_cal_ns = config["coincidence_window_cal_ns"]
-coincidence_window_cal_number_of_points = config["coincidence_window_cal_number_of_points"]
 
-# Pedestal charge calibration
-
-# Front-back charge
-
-# Variables to modify
-beta = config["beta"]
-strip_speed_factor_of_c = config["strip_speed_factor_of_c"]
-
-# X
-strip_length = config["strip_length"]
-narrow_strip = config["narrow_strip"]
-wide_strip = config["wide_strip"]
-
-# Timtrack parameters
-d0 = config["d0"]
-cocut = config["cocut"]
-iter_max = config["iter_max"]
-anc_sy = config["anc_sy"]
-anc_sts = config["anc_sts"]
-anc_std = config["anc_std"]
-anc_sz = config["anc_sz"]
-
-n_planes_timtrack = config["n_planes_timtrack"]
-
-# Plotting options
-T_clip_min_debug = config.get("T_clip_min_debug", -500)
-T_clip_max_debug = config.get("T_clip_max_debug", 500)
-Q_clip_min_debug = config.get("Q_clip_min_debug", -500)
-Q_clip_max_debug = config.get("Q_clip_max_debug", 500)
-num_bins_debug = config.get("num_bins_debug", 100)
-
-T_clip_min_default = config.get("T_clip_min_default", -300)
-T_clip_max_default = config.get("T_clip_max_default", 100)
-Q_clip_min_default = config.get("Q_clip_min_default", 0)
-Q_clip_max_default = config.get("Q_clip_max_default", 500)
-num_bins_default = config.get("num_bins_default", 100)
-
-T_clip_min_ST = config.get("T_clip_min_ST", -300)
-T_clip_max_ST = config.get("T_clip_max_ST", 100)
-Q_clip_min_ST = config.get("Q_clip_min_ST", 0)
-Q_clip_max_ST = config.get("Q_clip_max_ST", 500)
-
-time_window_fitting = config["time_window_fitting"]
-
-charge_plot_limit_left = config["charge_plot_limit_left"]
-charge_plot_limit_right = config["charge_plot_limit_right"]
-charge_plot_event_limit_right = config.get("charge_plot_event_limit_right", 400)
-
-# -----------------------------------------------------------------------------
-# Some variables that define the analysis, define a dictionary with the variables:
-# 'purity_of_data', etc.
-# -----------------------------------------------------------------------------
-
-# -----------------------------------------------------------------------------
-# Variables to not touch unless necessary -------------------------------------
-# -----------------------------------------------------------------------------
-Q_sum_color = 'orange'
-Q_dif_color = 'red'
-T_sum_color = 'blue'
-T_dif_color = 'green'
-
-pos_filter = det_pos_filter
-t0_left_filter = T_sum_RPC_left
-t0_right_filter = T_sum_RPC_right
-slowness_filter_left = det_slowness_filter_left
-slowness_filter_right = det_slowness_filter_right
-
-theta_left_filter = det_theta_left_filter
-theta_right_filter = det_theta_right_filter
-phi_left_filter = det_phi_left_filter
-phi_right_filter = det_phi_right_filter
-
-fig_idx, plot_list = ensure_plot_state(globals())
-
-# Time dif calibration (time_dif_reference)
-time_dif_distance = 30
-time_dif_reference = np.array([
-    [-0.0573, 0.031275, 1.033875, 0.761475],
-    [-0.914, -0.873975, -0.19815, 0.452025],
-    [0.8769, 1.2008, 1.014, 2.43915],
-    [1.508825, 2.086375, 1.6876, 3.023575]
-])
-
-# Charge sum pedestal (charge_sum_reference)
-charge_sum_distance = 30
-charge_sum_reference = np.array([
-    [89.4319, 98.19605, 95.99055, 91.83875],
-    [96.55775, 94.50385, 94.9254, 91.0775],
-    [92.12985, 92.23395, 90.60545, 95.5214],
-    [93.75635, 93.57425, 93.07055, 89.27305]
-])
-
-# Charge dif calibration (charge_dif_reference)
-charge_dif_distance = 30
-charge_dif_reference = np.array([
-    [4.512, 0.58715, 1.3204, -1.3918],
-    [-4.50885, 0.918, -3.39445, -0.12325],
-    [-3.8931, -3.28515, 3.27295, 1.0554],
-    [-2.29505, 0.012, 2.49045, -2.14565]
-])
-
-# Time sum calibration (time_sum_reference)
-time_sum_distance = 30
-time_sum_reference = np.array([
-    [0.0, -0.3886308, -0.53020947, 0.33711737],
-    [-0.80494094, -0.68836069, -2.01289387, -1.13481931],
-    [-0.23899338, -0.51373738, 0.50845317, 0.11685095],
-    [0.33586385, 1.08329847, 0.91410244, 0.58815813]
-])
-
-if False:
-    print('Working in fast mode.')
-
-if False:
-    print('Working in debug mode.')
-
-if False:
-    T_F_left_pre_cal = T_side_left_pre_cal_debug
-    T_F_right_pre_cal = T_side_right_pre_cal_debug
-
-    T_B_left_pre_cal = T_side_left_pre_cal_debug
-    T_B_right_pre_cal = T_side_right_pre_cal_debug
-
-else:
-    T_F_left_pre_cal = T_side_left_pre_cal_default  #-130
-    T_F_right_pre_cal = T_side_right_pre_cal_default
-
-    T_B_left_pre_cal = T_side_left_pre_cal_default
-    T_B_right_pre_cal = T_side_right_pre_cal_default
-
-T_F_left_pre_cal_ST = T_side_left_pre_cal_ST  #-115
-T_F_right_pre_cal_ST = T_side_right_pre_cal_ST
-T_B_left_pre_cal_ST = T_side_left_pre_cal_ST
-T_B_right_pre_cal_ST = T_side_right_pre_cal_ST
-
-# Y ---------------------------------------------------------------------------
-y_widths = [np.array([wide_strip, wide_strip, wide_strip, narrow_strip]), 
-            np.array([narrow_strip, wide_strip, wide_strip, wide_strip])]
-
-y_pos_T = [y_pos(y_widths[0]), y_pos(y_widths[1])]
-y_width_P1_and_P3 = y_widths[0]
-y_width_P2_and_P4 = y_widths[1]
-y_pos_P1_and_P3 = y_pos(y_width_P1_and_P3)
-y_pos_P2_and_P4 = y_pos(y_width_P2_and_P4)
-total_width = np.sum(y_width_P1_and_P3)
-
-c_mm_ns = c/1000000
-print(c_mm_ns)
-
-# Miscelanous ----------------------------
-muon_speed = beta * c_mm_ns
-strip_speed = strip_speed_factor_of_c * c_mm_ns # 200 mm/ns
-tdiff_to_x = strip_speed # Factor to transform t_diff to X
-
-# Not-Hardcoded
-vc    = beta * c_mm_ns # mm/ns
-sc    = 1/vc
-ss    = 1/strip_speed # slowness of the signal in the strip
-nplan = n_planes_timtrack
-lenx  = strip_length
-anc_sx = tdiff_to_x * anc_std # 2 cm
-
-if False:
-    T_clip_min = T_clip_min_debug
-    T_clip_max = T_clip_max_debug
-    Q_clip_min = Q_clip_min_debug
-    Q_clip_max = Q_clip_max_debug
-    num_bins = num_bins_debug
-else:
-    T_clip_min = T_clip_min_default
-    T_clip_max = T_clip_max_default
-    Q_clip_min = Q_clip_min_default
-    Q_clip_max = Q_clip_max_default
-    num_bins = num_bins_default
-
-T_clip_min_ST = T_clip_min_ST
-T_clip_max_ST = T_clip_max_ST
-Q_clip_min_ST = Q_clip_min_ST
-Q_clip_max_ST = Q_clip_max_ST
-
-global_variables['unc_y'] = anc_sy
-global_variables['unc_tsum'] = anc_sts
-global_variables['unc_tdif'] = anc_std
 
 TRACK_COMBINATIONS: tuple[str, ...] = (
     "12", "13", "14", "23", "24", "34",
@@ -2471,7 +2479,9 @@ def compute_timtrack_gaussian_sigma_chi2(
     output_col: str = "tim_th_chi_sigmafit_1234",
 ) -> None:
     """Build a 1234-only chi2 using Gaussian-fit residual sigmas from timtrack residual columns."""
-    if "definitive_tt" not in sigma_source_df.columns or "definitive_tt" not in target_df.columns:
+    sigma_tt_col = get_task4_tt_column(sigma_source_df)
+    target_tt_col = get_task4_tt_column(target_df)
+    if sigma_tt_col is None or target_tt_col is None:
         target_df[output_col] = np.nan
         return
 
@@ -2480,7 +2490,7 @@ def compute_timtrack_gaussian_sigma_chi2(
         ("tsum", "tim_res_tsum"),
         ("tdif", "tim_res_tdif"),
     )
-    sigma_source_tt = pd.to_numeric(sigma_source_df["definitive_tt"], errors="coerce")
+    sigma_source_tt = pd.to_numeric(sigma_source_df[sigma_tt_col], errors="coerce")
     sigma_fit_df = sigma_source_df.loc[sigma_source_tt == float(combo_tt)]
 
     mu_vector = []
@@ -2517,7 +2527,7 @@ def compute_timtrack_gaussian_sigma_chi2(
         pd.to_numeric(target_df[col], errors="coerce").to_numpy(dtype=float, copy=False)
         for col in residual_cols
     ])
-    target_tt = pd.to_numeric(target_df["definitive_tt"], errors="coerce").to_numpy(dtype=float, copy=False)
+    target_tt = pd.to_numeric(target_df[target_tt_col], errors="coerce").to_numpy(dtype=float, copy=False)
     valid_rows = (target_tt == float(combo_tt)) & np.isfinite(residual_matrix).all(axis=1)
     if np.any(valid_rows):
         scaled = (residual_matrix[valid_rows] - mu_vector_arr) / sigma_vector_arr
@@ -2611,279 +2621,16 @@ if not reprocessing_parameters.empty:
 
 self_trigger = bool(config.get("self_trigger", False))
 
-fast_mode = False
-debug_mode = False
-last_file_test = config["last_file_test"]
-
-# Accessing all the variables from the configuration
-crontab_execution = config["crontab_execution"]
-
-(
-    number_of_det_executions,
-    fixed_speed,
-    res_ana_removing_planes,
-    number_of_tt_executions,
-    complete_reanalysis,
-    limit_number,
-) = load_iteration_settings(config)
-limit = limit_number is not None
-
-# Charge calibration to fC
-
-# Charge front-back
-
-# Slewing correction
-
-# Time filtering
-
-# Time calibration
-
-# Y position
-
-# RPC variables
-
-# Pre-cal Front & Back
-T_side_left_pre_cal_debug = config.get("T_side_left_pre_cal_debug", -500)
-T_side_right_pre_cal_debug = config.get("T_side_right_pre_cal_debug", 500)
-
-T_side_left_pre_cal_default = config.get("T_side_left_pre_cal_default", -200)
-T_side_right_pre_cal_default = config.get("T_side_right_pre_cal_default", -100)
-
-T_side_left_pre_cal_ST = config.get("T_side_left_pre_cal_ST", -200)
-T_side_right_pre_cal_ST = config.get("T_side_right_pre_cal_ST", -50)
-
-# Pre-cal Sum & Diff
-
-# Post-calibration
-
-# Once calculated the RPC variables
-T_sum_RPC_left = _task4_config_float(
-    config,
-    "T_sum_RPC_left",
-    "plane_combination_plane_t_sum_sum_left",
-    "plane_combination_same_plane_t_sum_sum_left",
-    "plane_combination_self_t_sum_sum_left",
-    default=-25.0,
-)
-T_sum_RPC_right = _task4_config_float(
-    config,
-    "T_sum_RPC_right",
-    "plane_combination_plane_t_sum_sum_right",
-    "plane_combination_same_plane_t_sum_sum_right",
-    "plane_combination_self_t_sum_sum_right",
-    default=25.0,
+globals().update(
+    initialize_task4_runtime_context(
+        config,
+        global_variables,
+        globals(),
+    )
 )
 
-# Alternative fitter filter
-det_pos_filter = config["det_pos_filter"]
-det_theta_left_filter = config["det_theta_left_filter"]
-det_theta_right_filter = config["det_theta_right_filter"]
-det_phi_filter_abs = abs(float(config.get("det_phi_filter_abs", config.get("det_phi_right_filter", 3.141592))))
-det_phi_right_filter = det_phi_filter_abs
-det_phi_left_filter = -det_phi_filter_abs
-det_slowness_filter_left = config["det_slowness_filter_left"]
-det_slowness_filter_right = config["det_slowness_filter_right"]
 
-det_res_ystr_filter = config["det_res_ystr_filter"]
-det_res_tsum_filter = config["det_res_tsum_filter"]
-det_res_tdif_filter = config["det_res_tdif_filter"]
 
-# TimTrack filter
-proj_filter = config["proj_filter"]
-res_ystr_filter = config["res_ystr_filter"]
-res_tsum_filter = config["res_tsum_filter"]
-res_tdif_filter = config["res_tdif_filter"]
-ext_res_ystr_filter = config["ext_res_ystr_filter"]
-ext_res_tsum_filter = config["ext_res_tsum_filter"]
-ext_res_tdif_filter = config["ext_res_tdif_filter"]
-
-# Fitting comparison
-delta_s_left = config.get("delta_s_left", -0.0003)
-delta_s_right = config.get("delta_s_right", 0.0003)
-
-# Calibrations
-coincidence_window_cal_ns = config["coincidence_window_cal_ns"]
-coincidence_window_cal_number_of_points = config["coincidence_window_cal_number_of_points"]
-
-# Pedestal charge calibration
-
-# Front-back charge
-
-# Variables to modify
-beta = config["beta"]
-strip_speed_factor_of_c = config["strip_speed_factor_of_c"]
-
-# X
-strip_length = config["strip_length"]
-narrow_strip = config["narrow_strip"]
-wide_strip = config["wide_strip"]
-
-# Timtrack parameters
-d0 = config["d0"]
-cocut = config["cocut"]
-iter_max = config["iter_max"]
-anc_sy = config["anc_sy"]
-anc_sts = config["anc_sts"]
-anc_std = config["anc_std"]
-anc_sz = config["anc_sz"]
-
-n_planes_timtrack = config["n_planes_timtrack"]
-
-# Plotting options
-T_clip_min_debug = config.get("T_clip_min_debug", -500)
-T_clip_max_debug = config.get("T_clip_max_debug", 500)
-Q_clip_min_debug = config.get("Q_clip_min_debug", -500)
-Q_clip_max_debug = config.get("Q_clip_max_debug", 500)
-num_bins_debug = config.get("num_bins_debug", 100)
-
-T_clip_min_default = config.get("T_clip_min_default", -300)
-T_clip_max_default = config.get("T_clip_max_default", 100)
-Q_clip_min_default = config.get("Q_clip_min_default", 0)
-Q_clip_max_default = config.get("Q_clip_max_default", 500)
-num_bins_default = config.get("num_bins_default", 100)
-
-T_clip_min_ST = config.get("T_clip_min_ST", -300)
-T_clip_max_ST = config.get("T_clip_max_ST", 100)
-Q_clip_min_ST = config.get("Q_clip_min_ST", 0)
-Q_clip_max_ST = config.get("Q_clip_max_ST", 500)
-
-time_window_fitting = config["time_window_fitting"]
-
-charge_plot_limit_left = config["charge_plot_limit_left"]
-charge_plot_limit_right = config["charge_plot_limit_right"]
-charge_plot_event_limit_right = config.get("charge_plot_event_limit_right", 400)
-
-# -----------------------------------------------------------------------------
-# Some variables that define the analysis, define a dictionary with the variables:
-# 'purity_of_data', etc.
-# -----------------------------------------------------------------------------
-
-# -----------------------------------------------------------------------------
-# Variables to not touch unless necessary -------------------------------------
-# -----------------------------------------------------------------------------
-Q_sum_color = 'orange'
-Q_dif_color = 'red'
-T_sum_color = 'blue'
-T_dif_color = 'green'
-
-pos_filter = det_pos_filter
-t0_left_filter = T_sum_RPC_left
-t0_right_filter = T_sum_RPC_right
-slowness_filter_left = det_slowness_filter_left
-slowness_filter_right = det_slowness_filter_right
-
-theta_left_filter = det_theta_left_filter
-theta_right_filter = det_theta_right_filter
-phi_left_filter = det_phi_left_filter
-phi_right_filter = det_phi_right_filter
-
-fig_idx, plot_list = ensure_plot_state(globals())
-
-# Time dif calibration (time_dif_reference)
-time_dif_distance = 30
-time_dif_reference = np.array([
-    [-0.0573, 0.031275, 1.033875, 0.761475],
-    [-0.914, -0.873975, -0.19815, 0.452025],
-    [0.8769, 1.2008, 1.014, 2.43915],
-    [1.508825, 2.086375, 1.6876, 3.023575]
-])
-
-# Charge sum pedestal (charge_sum_reference)
-charge_sum_distance = 30
-charge_sum_reference = np.array([
-    [89.4319, 98.19605, 95.99055, 91.83875],
-    [96.55775, 94.50385, 94.9254, 91.0775],
-    [92.12985, 92.23395, 90.60545, 95.5214],
-    [93.75635, 93.57425, 93.07055, 89.27305]
-])
-
-# Charge dif calibration (charge_dif_reference)
-charge_dif_distance = 30
-charge_dif_reference = np.array([
-    [4.512, 0.58715, 1.3204, -1.3918],
-    [-4.50885, 0.918, -3.39445, -0.12325],
-    [-3.8931, -3.28515, 3.27295, 1.0554],
-    [-2.29505, 0.012, 2.49045, -2.14565]
-])
-
-# Time sum calibration (time_sum_reference)
-time_sum_distance = 30
-time_sum_reference = np.array([
-    [0.0, -0.3886308, -0.53020947, 0.33711737],
-    [-0.80494094, -0.68836069, -2.01289387, -1.13481931],
-    [-0.23899338, -0.51373738, 0.50845317, 0.11685095],
-    [0.33586385, 1.08329847, 0.91410244, 0.58815813]
-])
-
-if False:
-    print('Working in fast mode.')
-
-if False:
-    print('Working in debug mode.')
-
-if False:
-    T_F_left_pre_cal = T_side_left_pre_cal_debug
-    T_F_right_pre_cal = T_side_right_pre_cal_debug
-
-    T_B_left_pre_cal = T_side_left_pre_cal_debug
-    T_B_right_pre_cal = T_side_right_pre_cal_debug
-
-else:
-    T_F_left_pre_cal = T_side_left_pre_cal_default  #-130
-    T_F_right_pre_cal = T_side_right_pre_cal_default
-
-    T_B_left_pre_cal = T_side_left_pre_cal_default
-    T_B_right_pre_cal = T_side_right_pre_cal_default
-
-T_F_left_pre_cal_ST = T_side_left_pre_cal_ST  #-115
-T_F_right_pre_cal_ST = T_side_right_pre_cal_ST
-T_B_left_pre_cal_ST = T_side_left_pre_cal_ST
-T_B_right_pre_cal_ST = T_side_right_pre_cal_ST
-
-# Y ---------------------------------------------------------------------------
-y_widths = [np.array([wide_strip, wide_strip, wide_strip, narrow_strip]), 
-            np.array([narrow_strip, wide_strip, wide_strip, wide_strip])]
-
-y_pos_T = [y_pos(y_widths[0]), y_pos(y_widths[1])]
-y_width_P1_and_P3 = y_widths[0]
-y_width_P2_and_P4 = y_widths[1]
-y_pos_P1_and_P3 = y_pos(y_width_P1_and_P3)
-y_pos_P2_and_P4 = y_pos(y_width_P2_and_P4)
-total_width = np.sum(y_width_P1_and_P3)
-
-c_mm_ns = c/1000000
-print(c_mm_ns)
-
-# Miscelanous ----------------------------
-muon_speed = beta * c_mm_ns
-strip_speed = strip_speed_factor_of_c * c_mm_ns # 200 mm/ns
-tdiff_to_x = strip_speed # Factor to transform t_diff to X
-
-# Not-Hardcoded
-vc    = beta * c_mm_ns # mm/ns
-sc    = 1/vc
-ss    = 1/strip_speed # slowness of the signal in the strip
-nplan = n_planes_timtrack
-lenx  = strip_length
-anc_sx = tdiff_to_x * anc_std # 2 cm
-
-if False:
-    T_clip_min = T_clip_min_debug
-    T_clip_max = T_clip_max_debug
-    Q_clip_min = Q_clip_min_debug
-    Q_clip_max = Q_clip_max_debug
-    num_bins = num_bins_debug
-else:
-    T_clip_min = T_clip_min_default
-    T_clip_max = T_clip_max_default
-    Q_clip_min = Q_clip_min_default
-    Q_clip_max = Q_clip_max_default
-    num_bins = num_bins_default
-
-T_clip_min_ST = T_clip_min_ST
-T_clip_max_ST = T_clip_max_ST
-Q_clip_min_ST = Q_clip_min_ST
-Q_clip_max_ST = Q_clip_max_ST
 
 # Note that the middle between start and end time could also be taken. This is for calibration storage.
 datetime_value = working_df['datetime'].iloc[0]
@@ -3025,279 +2772,19 @@ global_variables['z_P2'] =  z_positions[1]
 global_variables['z_P3'] =  z_positions[2]
 global_variables['z_P4'] =  z_positions[3]
 
-fast_mode = False
-debug_mode = False
-last_file_test = config["last_file_test"]
-
-# Accessing all the variables from the configuration
-crontab_execution = config["crontab_execution"]
-
-(
-    number_of_det_executions,
-    fixed_speed,
-    res_ana_removing_planes,
-    number_of_tt_executions,
-    complete_reanalysis,
-    limit_number,
-) = load_iteration_settings(config)
-limit = limit_number is not None
-
-# Charge calibration to fC
-
-# Charge front-back
-
-# Slewing correction
-
-# Time filtering
-
-# Time calibration
-
-# Y position
-
-# RPC variables
-
-# Pre-cal Front & Back
-T_side_left_pre_cal_debug = config.get("T_side_left_pre_cal_debug", -500)
-T_side_right_pre_cal_debug = config.get("T_side_right_pre_cal_debug", 500)
-
-T_side_left_pre_cal_default = config.get("T_side_left_pre_cal_default", -200)
-T_side_right_pre_cal_default = config.get("T_side_right_pre_cal_default", -100)
-
-T_side_left_pre_cal_ST = config.get("T_side_left_pre_cal_ST", -200)
-T_side_right_pre_cal_ST = config.get("T_side_right_pre_cal_ST", -50)
-
-# Pre-cal Sum & Diff
-
-# Post-calibration
-
-# Once calculated the RPC variables
-T_sum_RPC_left = _task4_config_float(
-    config,
-    "T_sum_RPC_left",
-    "plane_combination_plane_t_sum_sum_left",
-    "plane_combination_same_plane_t_sum_sum_left",
-    "plane_combination_self_t_sum_sum_left",
-    default=-25.0,
-)
-T_sum_RPC_right = _task4_config_float(
-    config,
-    "T_sum_RPC_right",
-    "plane_combination_plane_t_sum_sum_right",
-    "plane_combination_same_plane_t_sum_sum_right",
-    "plane_combination_self_t_sum_sum_right",
-    default=25.0,
+globals().update(
+    initialize_task4_runtime_context(
+        config,
+        global_variables,
+        globals(),
+    )
 )
 
-# Alternative fitter filter
-det_pos_filter = config["det_pos_filter"]
-det_theta_left_filter = config["det_theta_left_filter"]
-det_theta_right_filter = config["det_theta_right_filter"]
-det_phi_filter_abs = abs(float(config.get("det_phi_filter_abs", config.get("det_phi_right_filter", 3.141592))))
-det_phi_right_filter = det_phi_filter_abs
-det_phi_left_filter = -det_phi_filter_abs
-det_slowness_filter_left = config["det_slowness_filter_left"]
-det_slowness_filter_right = config["det_slowness_filter_right"]
 
-det_res_ystr_filter = config["det_res_ystr_filter"]
-det_res_tsum_filter = config["det_res_tsum_filter"]
-det_res_tdif_filter = config["det_res_tdif_filter"]
-
-# TimTrack filter
-proj_filter = config["proj_filter"]
-res_ystr_filter = config["res_ystr_filter"]
-res_tsum_filter = config["res_tsum_filter"]
-res_tdif_filter = config["res_tdif_filter"]
-ext_res_ystr_filter = config["ext_res_ystr_filter"]
-ext_res_tsum_filter = config["ext_res_tsum_filter"]
-ext_res_tdif_filter = config["ext_res_tdif_filter"]
-
-# Fitting comparison
-delta_s_left = config.get("delta_s_left", -0.0003)
-delta_s_right = config.get("delta_s_right", 0.0003)
-
-# Calibrations
-coincidence_window_cal_ns = config["coincidence_window_cal_ns"]
-coincidence_window_cal_number_of_points = config["coincidence_window_cal_number_of_points"]
-
-# Pedestal charge calibration
-
-# Front-back charge
-
-# Variables to modify
-beta = config["beta"]
-strip_speed_factor_of_c = config["strip_speed_factor_of_c"]
-
-# X
-strip_length = config["strip_length"]
-narrow_strip = config["narrow_strip"]
-wide_strip = config["wide_strip"]
-
-# Timtrack parameters
-d0 = config["d0"]
-cocut = config["cocut"]
-iter_max = config["iter_max"]
-anc_sy = config["anc_sy"]
-anc_sts = config["anc_sts"]
-anc_std = config["anc_std"]
-anc_sz = config["anc_sz"]
-
-n_planes_timtrack = config["n_planes_timtrack"]
-
-# Plotting options
-T_clip_min_debug = config.get("T_clip_min_debug", -500)
-T_clip_max_debug = config.get("T_clip_max_debug", 500)
-Q_clip_min_debug = config.get("Q_clip_min_debug", -500)
-Q_clip_max_debug = config.get("Q_clip_max_debug", 500)
-num_bins_debug = config.get("num_bins_debug", 100)
-
-T_clip_min_default = config.get("T_clip_min_default", -300)
-T_clip_max_default = config.get("T_clip_max_default", 100)
-Q_clip_min_default = config.get("Q_clip_min_default", 0)
-Q_clip_max_default = config.get("Q_clip_max_default", 500)
-num_bins_default = config.get("num_bins_default", 100)
-
-T_clip_min_ST = config.get("T_clip_min_ST", -300)
-T_clip_max_ST = config.get("T_clip_max_ST", 100)
-Q_clip_min_ST = config.get("Q_clip_min_ST", 0)
-Q_clip_max_ST = config.get("Q_clip_max_ST", 500)
-
-time_window_fitting = config["time_window_fitting"]
-
-charge_plot_limit_left = config["charge_plot_limit_left"]
-charge_plot_limit_right = config["charge_plot_limit_right"]
-charge_plot_event_limit_right = config.get("charge_plot_event_limit_right", 400)
 
 # -----------------------------------------------------------------------------
 # Some variables that define the analysis, define a dictionary with the variables:
 # 'purity_of_data', etc.
-# -----------------------------------------------------------------------------
-
-# -----------------------------------------------------------------------------
-# Variables to not touch unless necessary -------------------------------------
-# -----------------------------------------------------------------------------
-Q_sum_color = 'orange'
-Q_dif_color = 'red'
-T_sum_color = 'blue'
-T_dif_color = 'green'
-
-pos_filter = det_pos_filter
-t0_left_filter = T_sum_RPC_left
-t0_right_filter = T_sum_RPC_right
-slowness_filter_left = det_slowness_filter_left
-slowness_filter_right = det_slowness_filter_right
-
-theta_left_filter = det_theta_left_filter
-theta_right_filter = det_theta_right_filter
-phi_left_filter = det_phi_left_filter
-phi_right_filter = det_phi_right_filter
-
-fig_idx, plot_list = ensure_plot_state(globals())
-
-# Time dif calibration (time_dif_reference)
-time_dif_distance = 30
-time_dif_reference = np.array([
-    [-0.0573, 0.031275, 1.033875, 0.761475],
-    [-0.914, -0.873975, -0.19815, 0.452025],
-    [0.8769, 1.2008, 1.014, 2.43915],
-    [1.508825, 2.086375, 1.6876, 3.023575]
-])
-
-# Charge sum pedestal (charge_sum_reference)
-charge_sum_distance = 30
-charge_sum_reference = np.array([
-    [89.4319, 98.19605, 95.99055, 91.83875],
-    [96.55775, 94.50385, 94.9254, 91.0775],
-    [92.12985, 92.23395, 90.60545, 95.5214],
-    [93.75635, 93.57425, 93.07055, 89.27305]
-])
-
-# Charge dif calibration (charge_dif_reference)
-charge_dif_distance = 30
-charge_dif_reference = np.array([
-    [4.512, 0.58715, 1.3204, -1.3918],
-    [-4.50885, 0.918, -3.39445, -0.12325],
-    [-3.8931, -3.28515, 3.27295, 1.0554],
-    [-2.29505, 0.012, 2.49045, -2.14565]
-])
-
-# Time sum calibration (time_sum_reference)
-time_sum_distance = 30
-time_sum_reference = np.array([
-    [0.0, -0.3886308, -0.53020947, 0.33711737],
-    [-0.80494094, -0.68836069, -2.01289387, -1.13481931],
-    [-0.23899338, -0.51373738, 0.50845317, 0.11685095],
-    [0.33586385, 1.08329847, 0.91410244, 0.58815813]
-])
-
-if False:
-    print('Working in fast mode.')
-
-if False:
-    print('Working in debug mode.')
-
-if False:
-    T_F_left_pre_cal = T_side_left_pre_cal_debug
-    T_F_right_pre_cal = T_side_right_pre_cal_debug
-
-    T_B_left_pre_cal = T_side_left_pre_cal_debug
-    T_B_right_pre_cal = T_side_right_pre_cal_debug
-
-else:
-    T_F_left_pre_cal = T_side_left_pre_cal_default  #-130
-    T_F_right_pre_cal = T_side_right_pre_cal_default
-
-    T_B_left_pre_cal = T_side_left_pre_cal_default
-    T_B_right_pre_cal = T_side_right_pre_cal_default
-
-T_F_left_pre_cal_ST = T_side_left_pre_cal_ST  #-115
-T_F_right_pre_cal_ST = T_side_right_pre_cal_ST
-T_B_left_pre_cal_ST = T_side_left_pre_cal_ST
-T_B_right_pre_cal_ST = T_side_right_pre_cal_ST
-
-# Y ---------------------------------------------------------------------------
-y_widths = [np.array([wide_strip, wide_strip, wide_strip, narrow_strip]), 
-            np.array([narrow_strip, wide_strip, wide_strip, wide_strip])]
-
-y_pos_T = [y_pos(y_widths[0]), y_pos(y_widths[1])]
-y_width_P1_and_P3 = y_widths[0]
-y_width_P2_and_P4 = y_widths[1]
-y_pos_P1_and_P3 = y_pos(y_width_P1_and_P3)
-y_pos_P2_and_P4 = y_pos(y_width_P2_and_P4)
-total_width = np.sum(y_width_P1_and_P3)
-
-c_mm_ns = c/1000000
-print(c_mm_ns)
-
-# Miscelanous ----------------------------
-muon_speed = beta * c_mm_ns
-strip_speed = strip_speed_factor_of_c * c_mm_ns # 200 mm/ns
-tdiff_to_x = strip_speed # Factor to transform t_diff to X
-
-# Not-Hardcoded
-vc    = beta * c_mm_ns # mm/ns
-sc    = 1/vc
-ss    = 1/strip_speed # slowness of the signal in the strip
-nplan = n_planes_timtrack
-lenx  = strip_length
-anc_sx = tdiff_to_x * anc_std # 2 cm
-
-if False:
-    T_clip_min = T_clip_min_debug
-    T_clip_max = T_clip_max_debug
-    Q_clip_min = Q_clip_min_debug
-    Q_clip_max = Q_clip_max_debug
-    num_bins = num_bins_debug
-else:
-    T_clip_min = T_clip_min_default
-    T_clip_max = T_clip_max_default
-    Q_clip_min = Q_clip_min_default
-    Q_clip_max = Q_clip_max_default
-    num_bins = num_bins_default
-
-T_clip_min_ST = T_clip_min_ST
-T_clip_max_ST = T_clip_max_ST
-Q_clip_min_ST = Q_clip_min_ST
-Q_clip_max_ST = Q_clip_max_ST
 
 raw_data_len = len(working_df)
 if raw_data_len == 0 and not self_trigger:
@@ -3306,721 +2793,6 @@ if raw_data_len == 0 and not self_trigger:
 
 #%%
 
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -------- TASK_4: fitting ----------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-# # Print the name of the columns
-# print("Columns in working_df:", working_df.columns.tolist())
-
-# # Create a 4x4 plot histogram of: Q{plane}_Q_sum_{strip}_with_crstlk between 0 and 80, per each combination in cal_tt
-
-# log_scale = False
-
-# if create_plots:
-#     # Detached method plots (per combination)
-#     if "list_tt" in working_df.columns and "datetime" in working_df.columns:
-#         for combo in TRACK_COMBINATIONS:
-
-#             try:
-#                 combo_int = int(combo)
-#             except ValueError:
-#                 continue
-#             subset = working_df[working_df["list_tt"] == combo_int]
-#             if subset.empty:
-#                 continue
-
-#             fig, axes = plt.subplots(4, 4, figsize=(16, 16))
-#             planes = [1, 2, 3, 4]
-#             for i, plane_i in enumerate(planes):
-#                 for j, plane_j in enumerate(planes):
-#                     ax = axes[i, j]
-#                     col_name = f'Q{plane_i}_Q_sum_{plane_j}_with_crstlk'
-#                     if col_name in working_df.columns:
-#                         q_sum_data = subset[col_name].dropna()
-
-#                         # Remove 0s
-#                         q_sum_data = q_sum_data[q_sum_data != 0]
-
-#                         if not q_sum_data.empty:
-#                             ax.hist(q_sum_data, bins=50, range=(0, 80), color='blue', alpha=0.5)
-#                             ax.set_title(f'Plane {plane_i} strip {plane_j} Q_sum')
-#                             ax.set_xlabel('Q_sum_final (fC)')
-#                             ax.set_ylabel('Counts')
-
-#                             # Log scale if needed
-#                             if log_scale:
-#                                 ax.set_yscale('log')
-#                         else:
-#                             ax.set_axis_off()
-#                     else:
-#                         ax.set_axis_off()
-#             plt.suptitle(f'Charge Distributions for Combination {combo_int}')
-#             plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-#             plt.show()
-
-# #%%
-
-# # Detached processed_tt label for plotting (fallback only if not set by alt loop)
-# if "det_processed_tt" not in working_df.columns:
-#     working_df["det_processed_tt"] = working_df.get("processed_tt", 0)
-
-# # Select events to plot based on the charge of the planes
-
-# if create_plots:
-#     # Detached method plots (per combination)
-#     if "list_tt" in working_df.columns and "datetime" in working_df.columns:
-#         for combo in TRACK_COMBINATIONS:
-#             try:
-#                 combo_int = int(combo)
-#             except ValueError:
-#                 continue
-#             subset = working_df[working_df["list_tt"] == combo_int]
-#             if subset.empty:
-#                 continue
-
-#             print(f"Plotting charge distributions for combination {combo_int} with {len(subset)} events.")
-
-#             # 1x4 grid of histograms (0–80 fC) for each plane's Q_sum_final; leave missing planes blank
-#             fig, axes = plt.subplots(1, 4, figsize=(16, 4))
-#             planes_in_combo = [int(p) for p in combo]
-#             max_height = 0
-
-#             for plane_id, ax in enumerate(axes, start=1):
-#                 col_name = f'P{plane_id}_Q_sum_final'
-#                 if plane_id in planes_in_combo and col_name in subset.columns:
-#                     q_sum_data = subset[col_name].dropna()
-#                     if not q_sum_data.empty:
-#                         counts, bin_edges = np.histogram(q_sum_data, bins=50, range=(0, 80))
-#                         max_height = max(max_height, counts.max(initial=0))
-#                         ax.hist(q_sum_data, bins=50, range=(0, 80), color=plane_colors.get(plane_id, "blue"), alpha=0.5, label=f"P{plane_id}")
-#                         ax.set_title(f'Plane {plane_id} Q_sum_final')
-#                         ax.set_xlabel('Q_sum_final (fC)')
-#                         ax.set_ylabel('Counts')
-#                         ax.legend()
-#                         continue
-#                 ax.set_axis_off()
-#             if max_height > 0:
-#                 for ax in axes:
-#                     if ax.has_data():
-#                         ax.set_ylim(0, max_height * 1.05)
-            
-
-#             # Same y axis for all histograms
-#             max_y = 0
-#             for plane_id in planes_in_combo:
-#                 col_name = f'P{plane_id}_Q_sum_final'
-#                 if col_name in subset.columns:
-#                     q_sum_data = subset[col_name].dropna()
-#                     if not q_sum_data.empty:
-#                         counts, _ = np.histogram(q_sum_data, bins=50, range=(0, 80))
-#                         max_y = max(max_y, counts.max())
-#             for ax in axes:
-#                 ax.set_ylim(0, max_y * 1.1)
-
-#             plt.suptitle(f'Charge Distributions for Combination {combo_int}')
-#             plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-#             plt.show()
-
-# #%%
-
-# # Differences between histograms of Q_sum_final for each pair of planes in the combination
-
-# bin_number = 50
-# max_bin = 60
-# hist_diff_stats = {}  # {combo_int: { "p1-p2": {"pos": sum_positive, "neg": sum_negative} }}
-
-# if create_plots:
-#     # Detached method plots (per combination)
-#     if "list_tt" in working_df.columns and "datetime" in working_df.columns:
-#         for combo in TRACK_COMBINATIONS:
-
-#             try:
-#                 combo_int = int(combo)
-#             except ValueError:
-#                 continue
-#             subset = working_df[working_df["list_tt"] == combo_int]
-#             if subset.empty:
-#                 continue
-
-#             print(f"Plotting charge distributions for combination {combo} with {len(subset)} events.")
-
-#             planes_in_combo = [int(p) for p in combo]
-#             hist_diff_stats.setdefault(combo_int, {})
-
-#             # Now i want a len(planes_in_combo)x len(planes_in_combo) grid
-#             if len(planes_in_combo) >= 2:
-#                 n_planes = len(planes_in_combo)
-#                 fig, axes = plt.subplots(n_planes, n_planes, figsize=(4*n_planes, 4*n_planes))
-
-#                 for i, p1 in enumerate(planes_in_combo):
-#                     for j, p2 in enumerate(planes_in_combo):
-
-#                         ax = axes[i, j]
-
-#                         # Plot only the plots below the diagonal
-#                         if j > i:
-#                             ax.set_axis_off()
-#                             continue
-
-#                         if j == i:
-#                             # Diagonal: histogram of that plane
-#                             col_name = f'P{p1}_Q_sum_final'
-#                             if col_name in subset.columns:
-#                                 q_sum_data = subset[col_name].dropna()
-#                                 if not q_sum_data.empty:
-#                                     ax.hist(q_sum_data, bins=bin_number, range=(0, max_bin), color='blue', alpha=0.5)
-#                                     ax.set_title(f'Plane {p1} Q_sum_final')
-#                                     ax.set_xlabel('Q_sum_final (fC)')
-#                                     ax.set_ylabel('Counts')
-#                             else:
-#                                 ax.set_axis_off()
-#                             continue
-
-#                         col_name1 = f'P{p1}_Q_sum_final'
-#                         col_name2 = f'P{p2}_Q_sum_final'
-#                         if col_name1 in subset.columns and col_name2 in subset.columns:
-#                             q_sum_data1 = subset[col_name1].dropna()
-#                             q_sum_data2 = subset[col_name2].dropna()
-#                             common_indices = q_sum_data1.index.intersection(q_sum_data2.index)
-#                             if not common_indices.empty:
-#                                 # Calculate the histogram 1d for each case with 50 bins between 0 and 80 and make the difference
-#                                 # I want you to plot in x the 0-80 and in y the difference of the histograms. Not scatter.
-#                                 hist1, bin_edges = np.histogram(q_sum_data1.loc[common_indices], bins=bin_number, range=(0, max_bin))
-#                                 hist2, _ = np.histogram(q_sum_data2.loc[common_indices], bins=bin_number, range=(0, max_bin))
-#                                 hist_diff = hist1 - hist2
-#                                 pos_bins = int((hist_diff > 0).sum())
-#                                 neg_bins = int((hist_diff < 0).sum())
-#                                 hist_diff_stats[combo_int][f"{p1}-{p2}"] = {"pos_bins": pos_bins, "neg_bins": neg_bins}
-#                                 bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-#                                 ax.bar(bin_centers, hist_diff, width=bin_edges[1]-bin_edges[0], alpha=0.5)
-#                                 ax.set_xlabel(f'Q_sum_final (fC)')
-#                                 ax.set_ylabel(f'Histogram Difference (Plane {p1} - Plane {p2})')
-#                                 max_abs = np.abs(hist_diff).max(initial=0)
-#                                 if max_abs > 0:
-#                                     ax.set_ylim(-max_abs, max_abs)
-#                                 # ax.set_xlim(0, 80)
-#                                 ax.grid(True)
-#                         else:
-#                             ax.set_axis_off()
-#                 plt.suptitle(f'Differences in histograms of Q_sum_final for Combination {combo}')
-#                 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-#                 plt.show()
-
-# #%%
-
-# # Plane color palette for consistent plotting
-# plane_colors = {1: "red", 2: "green", 3: "blue", 4: "purple"}
-
-# bin_number = 100
-# max_bin = 100
-# hist_diff_stats = {}  # {combo_int: { "p1-p2": {"pos": sum_positive, "neg": sum_negative} }}
-
-# # Overlayed histograms and differences on the same axes (one histogram positive, the other negative, plus the difference)
-# if create_plots:
-#     if "list_tt" in working_df.columns and "datetime" in working_df.columns:
-#         for combo in TRACK_COMBINATIONS:
-
-#             try:
-#                 combo_int = int(combo)
-#             except ValueError:
-#                 continue
-#             subset = working_df[working_df["cal_tt"] == combo_int]
-#             if subset.empty:
-#                 continue
-
-#             planes_in_combo = [int(p) for p in combo]
-
-#             if len(planes_in_combo) >= 2:
-#                 n_planes = len(planes_in_combo)
-#                 grid_size = n_planes - 1  # omit diagonal: rows/cols shifted to skip self-pairs
-#                 fig, axes = plt.subplots(grid_size, grid_size, figsize=(4 * grid_size, 4 * grid_size))
-#                 axes_array = np.array(axes, ndmin=2, dtype=object)
-
-#                 for i in range(grid_size):
-#                     p1 = planes_in_combo[i]
-#                     for j in range(grid_size):
-#                         p2 = planes_in_combo[j + 1]
-#                         ax = axes_array[i, j]
-
-#                         # Only plot when p2 comes after p1 (no diagonal/self)
-#                         if p2 <= p1:
-#                             ax.set_axis_off()
-#                             continue
-
-#                         col_name1 = f'P{p1}_Q_sum_final'
-#                         col_name2 = f'P{p2}_Q_sum_final'
-#                         if col_name1 in subset.columns and col_name2 in subset.columns:
-#                             q_sum_data1 = subset[col_name1].dropna()
-#                             q_sum_data2 = subset[col_name2].dropna()
-#                             common_indices = q_sum_data1.index.intersection(q_sum_data2.index)
-#                             if common_indices.empty:
-#                                 ax.set_axis_off()
-#                                 continue
-
-#                             hist1, bin_edges = np.histogram(q_sum_data1.loc[common_indices], bins=bin_number, range=(0, max_bin))
-#                             hist2, _ = np.histogram(q_sum_data2.loc[common_indices], bins=bin_number, range=(0, max_bin))
-#                             hist_diff = hist1 - hist2
-#                             bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-
-#                             max_abs = max(
-#                                 hist1.max(initial=0),
-#                                 hist2.max(initial=0),
-#                                 np.abs(hist_diff).max(initial=0),
-#                             )
-
-#                             # Plot p1 as positive bars, p2 as negative bars, and overlay the difference
-#                             color1 = plane_colors.get(p1, "gray")
-#                             color2 = plane_colors.get(p2, "orange")
-#                             ax.bar(bin_centers, hist1, width=bin_edges[1] - bin_edges[0], color=color1, alpha=0.4, label=f'P{p1}')
-#                             ax.bar(bin_centers, -hist2, width=bin_edges[1] - bin_edges[0], color=color2, alpha=0.4, label=f'P{p2}')
-#                             ax.plot(bin_centers, hist_diff, color='black', linewidth=1.0, label='diff')
-#                             ax.set_xlabel('Q_sum_final (fC)')
-#                             ax.set_ylabel(f'Hist +/- and diff (P{p1}-P{p2})')
-#                             ax.legend()
-#                             if max_abs > 0:
-#                                 ax.set_ylim(-max_abs * 1.1, max_abs * 1.1)
-#                             ax.grid(True)
-#                             # if i == 0 and j == 0:
-#                             #     ax.legend()
-#                         else:
-#                             ax.set_axis_off()
-
-#                 plt.suptitle(f'Overlayed histograms and differences for Combination {combo}')
-#                 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-#                 plt.show()
-
-# #%%
-
-# # Plane color palette for consistent plotting
-# plane_colors = {1: "red", 2: "green", 3: "blue", 4: "purple"}
-# hist_store = {}  # {combo_int: {plane_id: (hist, bin_edges)}}
-# hist_comparison_stats = []  # records for later dataframe summary
-
-# bin_number = 70
-# max_bin = 40
-
-# # Store per-combo, per-plane charge histograms and compare to reference combo
-# hist_range = (0, max_bin)
-# reference_combo = 1234
-# reference_scale_fallback = 1.0  # fallback scalar if scaling cannot be computed
-# scale_threshold = 10  # minimum charge (fC) to consider when computing scaling
-# ref_scales = {}  # {plane_id: {combo_int: scale}}
-
-# # Collect histograms
-# if "list_tt" in working_df.columns and "datetime" in working_df.columns:
-#     for combo in TRACK_COMBINATIONS:
-#         try:
-#             combo_int = int(combo)
-#         except ValueError:
-#             continue
-#         subset = working_df[working_df["list_tt"] == combo_int]
-#         if subset.empty:
-#             continue
-
-#         planes_in_combo = [int(p) for p in combo]
-#         for plane_id in planes_in_combo:
-#             col_name = f'P{plane_id}_Q_sum_final'
-#             if col_name not in subset.columns:
-#                 continue
-#             q_sum_data = subset[col_name].dropna()
-#             if q_sum_data.empty:
-#                 continue
-#             hist, bin_edges = np.histogram(q_sum_data, bins=bin_number, range=hist_range)
-#             hist_store.setdefault(combo_int, {})[plane_id] = (hist, bin_edges)
-
-# # Compute optimal per-combo scaling against the reference (per plane) using bins above the threshold
-# if reference_combo in hist_store:
-#     for plane_id in range(1, 5):
-#         ref_entry = hist_store.get(reference_combo, {}).get(plane_id)
-#         if ref_entry is None:
-#             continue
-#         ref_hist, ref_edges = ref_entry
-#         ref_centers = (ref_edges[:-1] + ref_edges[1:]) / 2
-#         mask = ref_centers >= scale_threshold
-#         ref_slice = ref_hist[mask]
-#         denom = np.dot(ref_slice, ref_slice)
-
-#         for combo_int, plane_dict in hist_store.items():
-#             if combo_int == reference_combo:
-#                 continue
-#             if plane_id not in plane_dict:
-#                 continue
-#             combo_hist, combo_edges = plane_dict[plane_id]
-#             combo_centers = (combo_edges[:-1] + combo_edges[1:]) / 2
-#             combo_slice = combo_hist[(combo_centers >= scale_threshold) & (combo_centers <= hist_range[1])]
-#             if len(combo_slice) != len(ref_slice):
-#                 ref_scales.setdefault(plane_id, {})[combo_int] = reference_scale_fallback
-#                 continue
-#             if denom == 0:
-#                 ref_scales.setdefault(plane_id, {})[combo_int] = reference_scale_fallback
-#                 continue
-#             scale = float(np.dot(combo_slice, ref_slice) / denom)
-#             ref_scales.setdefault(plane_id, {})[combo_int] = scale
-
-# # Plot comparisons to reference per plane, one subplot per comparison combo (in a row).
-# # Reference histogram is shown as negative bars (scaled) to mimic earlier overlay style; difference is also shown.
-# if create_plots and reference_combo in hist_store:
-#     for plane_id in range(1, 5):
-#         ref_entry = hist_store.get(reference_combo, {}).get(plane_id)
-#         if ref_entry is None:
-#             continue
-#         ref_hist, ref_edges = ref_entry
-#         ref_centers = (ref_edges[:-1] + ref_edges[1:]) / 2
-#         # ref_scaled will be combo-dependent below
-
-#         # Gather other combos that include this plane
-#         comparison_entries = []
-#         for combo_int, plane_dict in hist_store.items():
-#             if combo_int == reference_combo:
-#                 continue
-#             if plane_id in plane_dict:
-#                 comparison_entries.append((combo_int, plane_dict[plane_id]))
-
-#         if not comparison_entries:
-#             continue
-
-#         comparison_entries = sorted(comparison_entries, key=lambda x: x[0])
-#         fig, axes = plt.subplots(1, len(comparison_entries), figsize=(6 * len(comparison_entries), 4))
-#         axes_array = np.array(axes, ndmin=1, dtype=object)
-
-#         for idx, (combo_int, (hist_vals, edges_vals)) in enumerate(comparison_entries):
-#             ax = axes_array[idx]
-#             centers = (edges_vals[:-1] + edges_vals[1:]) / 2
-#             scale = ref_scales.get(plane_id, {}).get(combo_int, reference_scale_fallback)
-#             ref_scaled = ref_hist * scale
-#             diff_vals = hist_vals - ref_scaled
-
-#             color = plane_colors.get(plane_id, "gray")
-#             width = edges_vals[1] - edges_vals[0]
-
-#             ax.bar(centers, hist_vals, width=width, color=color, alpha=0.5, label=f'P{plane_id} combo {combo_int}')
-#             ax.bar(ref_centers, -ref_scaled, width=width, color=color, alpha=0.2,
-#                    label=f'P{plane_id} combo {reference_combo} (scaled {scale:.3f})')
-#             ax.plot(centers, diff_vals, color='black', linewidth=1.0, label='diff (combo - ref)')
-
-#             max_abs = max(hist_vals.max(initial=0), ref_scaled.max(initial=0), np.abs(diff_vals).max(initial=0))
-#             if max_abs > 0:
-#                 ax.set_ylim(-max_abs * 1.1, max_abs * 1.1)
-#             ax.set_xlabel('Q_sum_final (fC)')
-#             ax.set_ylabel('Counts / Diff')
-#             ax.set_title(f'Plane {plane_id}: combo {combo_int} vs {reference_combo}')
-#             ax.grid(True)
-#             ax.legend()
-
-#             # Stats for dataframe summary
-#             total_counts = int(hist_vals.sum())
-#             mask_low = centers < scale_threshold
-#             diff_low_counts = float( np.abs( diff_vals[mask_low].sum() ) ) if mask_low.any() else 0.0
-#             diff_low_counts = round(diff_low_counts, 0)
-#             noise_pct = (diff_low_counts / total_counts * 100.0) if total_counts > 0 else 0.0
-#             hist_comparison_stats.append(
-#                 {
-#                     "plane": plane_id,
-#                     "combo": combo_int,
-#                     "reference_combo": reference_combo,
-#                     "scale_used": scale,
-#                     "scale_threshold": scale_threshold,
-#                     "total_counts": total_counts,
-#                     "diff_counts_below_threshold": diff_low_counts,
-#                     "noise_pct": noise_pct,
-#                 }
-#             )
-
-#         plt.suptitle(f'Plane {plane_id} histogram comparison vs reference {reference_combo}')
-#         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-#         plt.show()
-
-# #%%
-
-# # Print nicely in the terminal the hist_comparison_stats noise_pct per plane and combo
-# if hist_comparison_stats:
-#     print("Histogram Comparison Noise Summary (vs reference combo {}):".format(reference_combo))
-#     print("{:<10} {:<10} {:<15} {:<12} {:<18} {:<12}".format(
-#         "Plane", "Combo", "Scale Used", "Total Cts", "Diff Cts < Thr", "Noise (%)"
-#     ))
-#     for stat in hist_comparison_stats:
-#         print("{:<10} {:<10} {:<15.4f} {:<12} {:<18.2f} {:<12.2f}".format(
-#             stat["plane"],
-#             stat["combo"],
-#             stat["scale_used"],
-#             stat["total_counts"],
-#             stat["diff_counts_below_threshold"],
-#             stat["noise_pct"]
-#         ))
-
-    
-
-# #%%
-
-# # Make a nice 4 row x combo length column python table in the spirit of plot_tt_correlation,
-# # where the value shown is noise_pct and the background color is using that value in turbo colormap
-# if hist_comparison_stats:
-    
-#     # Heatmap-like table of noise_pct (planes as rows, combos as columns) with turbo colormap
-#     combos_all = sorted({stat["combo"] for stat in hist_comparison_stats})
-#     planes_all = [1, 2, 3, 4]
-#     data = np.full((len(planes_all), len(combos_all)), np.nan)
-#     for stat in hist_comparison_stats:
-#         plane_id = stat["plane"]
-#         combo_id = stat["combo"]
-#         if plane_id in planes_all and combo_id in combos_all:
-#             i = planes_all.index(plane_id)
-#             j = combos_all.index(combo_id)
-#             data[i, j] = stat["noise_pct"]
-
-#     fig, ax = plt.subplots(figsize=(1.1 * len(combos_all), 4))
-#     ax.set_xticks(np.arange(len(combos_all)))
-#     ax.set_yticks(np.arange(len(planes_all)))
-#     ax.set_xticklabels([str(c) for c in combos_all])
-#     ax.set_yticklabels([str(p) for p in planes_all])
-#     ax.set_xlabel("Track Combination")
-#     ax.set_ylabel("Plane")
-#     ax.set_title("Histogram Comparison Noise (%) Summary")
-#     cmap = plt.get_cmap('viridis')
-#     norm = plt.Normalize(0, 100)
-#     im = ax.imshow(data, cmap=cmap, norm=norm, aspect='auto')
-#     plt.colorbar(im, ax=ax, label="Noise (%)")
-#     for i in range(len(planes_all)):
-#         for j in range(len(combos_all)):
-#             if not np.isnan(data[i, j]):
-#                 # If the colour of background is too bright, put the text to black, else white
-#                 ax.text(j, i, f"{data[i, j]:.1f}", ha="center", va="center",
-#                         color="white" if data[i, j] < 50 else "black")
-#     plt.tight_layout()
-#     plt.show()
-    
-
-# #%%
-
-# # Make a nice 4 row x combo length column python table in the spirit of plot_tt_correlation,
-# # where the value shown is noise_pct and the background color is using that value in turbo colormap
-# if hist_comparison_stats:
-    
-#     # Heatmap-like table of noise_pct (planes as rows, combos as columns) with turbo colormap
-#     combos_all = sorted({stat["combo"] for stat in hist_comparison_stats})
-#     planes_all = [1, 2, 3, 4]
-#     data = np.full((len(planes_all), len(combos_all)), np.nan)
-#     for stat in hist_comparison_stats:
-#         plane_id = stat["plane"]
-#         combo_id = stat["combo"]
-#         if plane_id in planes_all and combo_id in combos_all:
-#             i = planes_all.index(plane_id)
-#             j = combos_all.index(combo_id)
-#             data[i, j] = stat["diff_counts_below_threshold"]
-
-#     fig, ax = plt.subplots(figsize=(1.1 * len(combos_all), 4))
-#     ax.set_xticks(np.arange(len(combos_all)))
-#     ax.set_yticks(np.arange(len(planes_all)))
-#     ax.set_xticklabels([str(c) for c in combos_all])
-#     ax.set_yticklabels([str(p) for p in planes_all])
-#     ax.set_xlabel("Track Combination")
-#     ax.set_ylabel("Plane")
-#     ax.set_title("Histogram Comparison Noise COUNTS Summary")
-#     cmap = plt.get_cmap('viridis')
-#     # norm = plt.Normalize(0, 100)
-#     # im = ax.imshow(data, cmap=cmap, norm=norm, aspect='auto')
-#     im = ax.imshow(data, cmap=cmap, aspect='auto')
-#     plt.colorbar(im, ax=ax, label="Noise COUNTS")
-#     for i in range(len(planes_all)):
-#         for j in range(len(combos_all)):
-#             if not np.isnan(data[i, j]):
-#                 # If the colour of background is too bright, put the text to black, else white
-#                 ax.text(j, i, f"{data[i, j]:.1f}", ha="center", va="center",
-#                         color="white" if data[i, j] < np.nanmedian(data) * 2 else "black")
-#     plt.tight_layout()
-#     plt.show()
-
-# #%%
-
-# if create_plots:
-#     # Detached method plots (per combination)
-#     if "list_tt" in working_df.columns and "datetime" in working_df.columns:
-#         for combo in TRACK_COMBINATIONS:
-
-#             try:
-#                 combo_int = int(combo)
-#             except ValueError:
-#                 continue
-#             subset = working_df[working_df["list_tt"] == combo_int]
-#             if subset.empty:
-#                 continue
-
-#             print(f"Plotting charge distributions for combination {combo} with {len(subset)} events.")
-
-#             planes_in_combo = [int(p) for p in combo]
-
-#             # Now i want a len(planes_in_combo)x len(planes_in_combo) grid of scatter plots
-#             if len(planes_in_combo) >= 2:
-#                 n_planes = len(planes_in_combo)
-#                 fig, axes = plt.subplots(n_planes, n_planes, figsize=(4*n_planes, 4*n_planes))
-
-#                 for i, p1 in enumerate(planes_in_combo):
-#                     for j, p2 in enumerate(planes_in_combo):
-
-#                         ax = axes[i, j]
-
-#                         # Plot only the plots below the diagonal
-#                         if j > i:
-#                             ax.set_axis_off()
-#                             continue
-
-#                         if j == i:
-#                             # Diagonal: histogram of that plane
-#                             col_name = f'P{p1}_Q_sum_final'
-#                             if col_name in subset.columns:
-#                                 q_sum_data = subset[col_name].dropna()
-#                                 if not q_sum_data.empty:
-#                                     ax.hist(q_sum_data, bins=50, range=(0, 80), color='blue', alpha=0.5)
-#                                     ax.set_title(f'Plane {p1} Q_sum_final')
-#                                     ax.set_xlabel('Q_sum_final (fC)')
-#                                     ax.set_ylabel('Counts')
-#                             else:
-#                                 ax.set_axis_off()
-#                             continue
-
-#                         col_name1 = f'P{p1}_Q_sum_final'
-#                         col_name2 = f'P{p2}_Q_sum_final'
-#                         if col_name1 in subset.columns and col_name2 in subset.columns:
-#                             q_sum_data1 = subset[col_name1].dropna()
-#                             q_sum_data2 = subset[col_name2].dropna()
-#                             common_indices = q_sum_data1.index.intersection(q_sum_data2.index)
-#                             if not common_indices.empty:
-#                                 ax.scatter(q_sum_data1.loc[common_indices], q_sum_data2.loc[common_indices], alpha=0.5, s=1)
-#                                 ax.set_xlabel(f'Plane {p1} Q_sum_final (fC)')
-#                                 ax.set_ylabel(f'Plane {p2} Q_sum_final (fC)')
-#                                 ax.set_xlim(0, 80)
-#                                 ax.set_ylim(0, 80)
-#                                 ax.grid(True)
-#                         else:
-#                             ax.set_axis_off()
-#                 plt.suptitle(f'Scatter Plots of Q_sum_final for Combination {combo}')
-#                 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-#                 plt.show()
-
-# #%%
-
-# # I want a calculation of efficiency which is simply counting how many list_tt 1234 are compared to list_tt 234 for eff 1,
-# # 1234 vs 134 for eff 2, 1234 vs 124 for eff 3, 1234 vs 123 for eff 4. But I want to do a loop in charge threshold from 0 to 80
-# # for all the planes in steps of 5 fC, and plot the efficiency curves for each plane.
-
-# # HERE
-# if create_plots and "list_tt" in working_df.columns:
-#     eff_pairs = {1: 234, 2: 134, 3: 124, 4: 123}
-#     thresholds = np.arange(1, 40, 0.5)  # 0 to 80 inclusive in 5 fC steps
-#     plane_efficiency = {plane: [] for plane in eff_pairs}
-#     plane_errors = {plane: [] for plane in eff_pairs}
-#     charge_cols = {plane: f"P{plane}_Q_sum_final" for plane in eff_pairs}
-#     available_planes = [p for p, col in charge_cols.items() if col in working_df.columns]
-
-#     if available_planes:
-#         # Preload charges as array (NaN -> 0 so threshold comparison is False)
-#         charges = np.stack([working_df[charge_cols[p]].fillna(0).to_numpy() for p in [1, 2, 3, 4]], axis=1)
-#         weights = np.array([1, 2, 4, 8])
-#         mask_map = {1: 14, 2: 13, 3: 11, 4: 7}  # combo masks missing each plane
-
-#         for thr in thresholds:
-#             presence = charges >= thr  # (n,4)
-#             combo_mask = (presence * weights).sum(axis=1)  # bitmask for planes passing thr
-#             count_1234 = np.count_nonzero(combo_mask == 15)
-#             for plane, missing_mask in mask_map.items():
-#                 if plane not in available_planes:
-#                     plane_efficiency[plane].append(np.nan)
-#                     continue
-#                 count_missing = np.count_nonzero(combo_mask == missing_mask)
-#                 denom = count_1234 + count_missing
-#                 eff = (count_1234 / denom) if denom > 0 else np.nan
-#                 plane_efficiency[plane].append(eff)
-
-#         # Error bars: binomial sqrt(p*(1-p)/N) per threshold
-#         for plane, missing_mask in mask_map.items():
-#             errs = []
-#             if plane not in available_planes:
-#                 plane_errors[plane] = [np.nan] * len(thresholds)
-#                 continue
-#             for idx_thr, thr in enumerate(thresholds):
-#                 presence = charges >= thr
-#                 combo_mask = (presence * weights).sum(axis=1)
-#                 count_1234 = np.count_nonzero(combo_mask == 15)
-#                 count_missing = np.count_nonzero(combo_mask == missing_mask)
-#                 N = count_1234 + count_missing
-#                 p = plane_efficiency[plane][idx_thr] if idx_thr < len(plane_efficiency[plane]) else np.nan
-#                 if N > 0 and not np.isnan(p):
-#                     errs.append(np.sqrt(p * (1 - p) / N))
-#                 else:
-#                     errs.append(np.nan)
-#             plane_errors[plane] = errs
-
-#     plt.figure(figsize=(8, 6))
-#     for plane, effs in plane_efficiency.items():
-#         color = plane_colors.get(plane, None)
-#         errs = plane_errors.get(plane, [np.nan] * len(thresholds))
-#         plt.plot(thresholds, effs, marker='o', label=f"Plane {plane}", color=color)
-#         effs_arr = np.array(effs, dtype=float)
-#         errs_arr = np.array(errs, dtype=float)
-#         if np.any(np.isfinite(errs_arr)):
-#             upper = effs_arr + errs_arr
-#             lower = effs_arr - errs_arr
-#             plt.fill_between(thresholds, lower, upper, color=color, alpha=0.15)
-#     plt.xlabel("Charge threshold (fC)")
-#     plt.ylabel("Efficiency (1234 vs missing-plane combo)")
-#     plt.title("Efficiency vs threshold")
-#     plt.ylim(0, 1.05)
-#     plt.grid(True)
-#     plt.legend()
-#     plt.tight_layout()
-#     plt.show()
-
-# #%%
-
-# # Contour plots scanning separate thresholds for 1234 and missing combo (per plane)
-# if create_plots and "list_tt" in working_df.columns:
-#     charge_cols = {plane: f"P{plane}_Q_sum_final" for plane in [1, 2, 3, 4]}
-#     if all(col in working_df.columns for col in charge_cols.values()):
-#         thr_vals = thresholds  # reuse same threshold grid
-#         charge_arr = {p: working_df[charge_cols[p]].fillna(0).to_numpy() for p in [1, 2, 3, 4]}
-#         fig, axes = plt.subplots(2, 2, figsize=(12, 10), sharex=True, sharey=True)
-#         axes = np.array(axes).reshape(-1)
-#         im = None
-#         for idx, plane in enumerate([1, 2, 3, 4]):
-#             ax = axes[idx]
-#             others = [p for p in [1, 2, 3, 4] if p != plane]
-#             grid = np.full((len(thr_vals), len(thr_vals)), np.nan)
-#             for i, thr_ref in enumerate(thr_vals):
-#                 ref_mask = np.ones(len(working_df), dtype=bool)
-#                 for p in [1, 2, 3, 4]:
-#                     ref_mask &= charge_arr[p] >= thr_ref
-#                 for j, thr_cmp in enumerate(thr_vals):
-#                     cmp_mask = charge_arr[plane] < thr_cmp
-#                     for p in others:
-#                         cmp_mask &= charge_arr[p] >= thr_cmp
-#                     total_1234 = ref_mask.sum()
-#                     total_missing = cmp_mask.sum()
-#                     denom = total_1234 + total_missing
-#                     grid[i, j] = (total_1234 / denom) if denom > 0 else np.nan
-#             im = ax.contourf(thr_vals, thr_vals, grid, levels=np.linspace(0, 1, 21), cmap="viridis", vmin=0, vmax=1)
-#             ax.set_title(f"Plane {plane}")
-#             ax.set_xlabel("Thr 1234 (fC)")
-#             if idx in [0, 2]:
-#                 ax.set_ylabel("Thr missing (fC)")
-#             ax.grid(True, alpha=0.2)
-#         if im is not None:
-#             # The bar is over the plot, but it should not be
-#             cbar = fig.colorbar(im, ax=axes.tolist(), label="Efficiency", shrink=0.95, pad=0.02)
-#         fig.suptitle("Efficiency contour: threshold(1234) vs threshold(missing combo)", y=1.01)
-#         # fig.tight_layout(rect=[0, 0, 1, 0.98])
-#         plt.show()
-
-#%%
 
 _prof["s_data_read_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
@@ -4336,7 +3108,9 @@ apply_legacy_final_filters = _coerce_config_bool(
     config.get("final_filter_apply_legacy_final_filters", False),
     default=False,
 )
-if not apply_legacy_final_filters:
+if apply_legacy_final_filters:
+    print("Warning: final_filter_apply_legacy_final_filters is deprecated and ignored; using consolidated final filtering block.")
+else:
     print("Info: Legacy Task 4 in-place filtering disabled; using consolidated final filtering block.")
 eps = final_filter_remove_small_eps_default  # Threshold
 def is_small_nonzero(x):
@@ -4461,42 +3235,8 @@ def plot_ts_err_with_hist(df, base_cols, time_col, title):
         plt.show()
     plt.close()
 
-if final_filter_remove_small_default and apply_legacy_final_filters:
-    # Filter the small values ----------------------------------------------------
-    if create_debug_plots:
-        numeric_cols = working_df.select_dtypes(include=[np.number]).columns.tolist()
-        if numeric_cols:
-            debug_thresholds = {col: [-eps, eps] for col in numeric_cols}
-            debug_fig_idx = plot_debug_histograms(
-                working_df,
-                numeric_cols,
-                debug_thresholds,
-                title=(
-                    f"Task 4 pre-filter (intermediate): remove_small_eps={eps:g} "
-                    f"[tunable] (station {station})"
-                ),
-                out_dir=debug_plot_directory,
-                fig_idx=debug_fig_idx,
-            )
-    mask = working_df.map(is_small_nonzero)  # Create mask of small, non-zero numeric values
-    nonzero_numeric_mask = working_df.map(lambda x: isinstance(x, (int, float)) and x != 0)  # Count total non-zero numeric entries
-    n_events = len(working_df)
-    rows_with_small = int(mask.any(axis=1).sum())
-    n_total = nonzero_numeric_mask.sum().sum()
-    n_small = mask.sum().sum()
-    working_df = working_df.mask(mask, 0)  # Apply the replacement
-    pct = 100 * n_small / n_total if n_total > 0 else 0
-    print(f"{n_small} out of {n_total} non-zero numeric values are below {eps} ({pct:.4f}%)")  # Report
-    record_filter_metric(
-        "small_values_zeroed_event_pct",
-        rows_with_small,
-        n_events if n_events else 0,
-    )
-    record_filter_metric(
-        "small_values_zeroed_value_pct",
-        n_small,
-        n_total if n_total else 0,
-    )
+# Deprecated legacy path intentionally does nothing now; all Task 4 row/value
+# filtering is centralized in apply_task4_final_filter().
 
 # det_bounds_changed = np.zeros(len(working_df), dtype=bool)
 # for col in working_df.columns:
@@ -5458,65 +4198,6 @@ for iteration in range(repeat + 1):
         working_df[f'th_chi_{ndf}'] = th_chi_ndf_arrays.get(ndf, np.full(n_rows, np.nan, dtype=float))
     _tt_writeback_s += time.perf_counter() - _tt_t
     
-    # # Filter according to residual ------------------------------------------------
-    # plane_cols = range(1, 5)
-    # res_tsum_abs = np.abs(working_df[[f'res_tsum_{i}' for i in plane_cols]].to_numpy())
-    # res_tdif_abs = np.abs(working_df[[f'res_tdif_{i}' for i in plane_cols]].to_numpy())
-    # res_ystr_abs = np.abs(working_df[[f'res_ystr_{i}' for i in plane_cols]].to_numpy())
-    # ext_res_tsum_abs = np.abs(working_df[[f'ext_res_tsum_{i}' for i in plane_cols]].to_numpy())
-    # ext_res_tdif_abs = np.abs(working_df[[f'ext_res_tdif_{i}' for i in plane_cols]].to_numpy())
-    # ext_res_ystr_abs = np.abs(working_df[[f'ext_res_ystr_{i}' for i in plane_cols]].to_numpy())
-    #
-    # plane_rejected = (
-    #     (res_tsum_abs > res_tsum_filter) |
-    #     (res_tdif_abs > res_tdif_filter) |
-    #     (res_ystr_abs > res_ystr_filter) |
-    #     (ext_res_tsum_abs > ext_res_tsum_filter) |
-    #     (ext_res_tdif_abs > ext_res_tdif_filter) |
-    #     (ext_res_ystr_abs > ext_res_ystr_filter)
-    # )
-    # plane_rejected_df = pd.DataFrame(plane_rejected, index=working_df.index, columns=list(plane_cols))
-    #
-    # changed_event_mask = plane_rejected_df.any(axis=1)
-    # changed_event_count = int(changed_event_mask.sum())
-    #
-    # for plane_idx in plane_cols:
-    #     mask = plane_rejected_df[plane_idx]
-    #     if mask.any():
-    #         cols_to_zero = [
-    #             f'P{plane_idx}_Y_final',
-    #             f'P{plane_idx}_T_sum_final',
-    #             f'P{plane_idx}_T_dif_final',
-    #             f'P{plane_idx}_Q_sum_final',
-    #             f'P{plane_idx}_Q_dif_final',
-    #             f'res_ystr_{plane_idx}',
-    #             f'res_tsum_{plane_idx}',
-    #             f'res_tdif_{plane_idx}',
-    #             f'ext_res_ystr_{plane_idx}',
-    #             f'ext_res_tsum_{plane_idx}',
-    #             f'ext_res_tdif_{plane_idx}',
-    #             f'det_res_ystr_{plane_idx}',
-    #             f'det_res_tsum_{plane_idx}',
-    #             f'det_res_tdif_{plane_idx}',
-    #         ]
-    #         existing = [c for c in cols_to_zero if c in working_df.columns]
-    #         working_df.loc[mask, existing] = 0
-    #
-    # print(f"--> {changed_event_count} events were residual filtered.")
-    # record_filter_metric(
-    #     "residual_zeroed_event_pct",
-    #     changed_event_count,
-    #     len(working_df),
-    # )
-    # 
-    # print(f\"{len(working_df[working_df.iterations == iter_max])} reached the maximum number of iterations ({iter_max}).\")
-    # print(f\"Percentage of events that did not converge: {len(working_df[working_df.iterations == iter_max]) / len(working_df) * 100:.2f}%\")
-    # 
-    # # --------------------------------------------------------------------------------
-    # iteration += 1
-
-#%%
-
 #%%
 
 # ------------------------------------------------------------------------------------
@@ -5828,29 +4509,8 @@ if create_debug_plots:
 # print("-------------------------- New definitions ---------------------------")
 # print("----------------------------------------------------------------------")
 
-# Derive definitive_tt before any plotting/filters that rely on it.
-def compute_definitive_tt(df_input: pd.DataFrame) -> pd.Series:
-    """Build definitive_tt from planes with all final reconstructed components."""
-    tt_str = pd.Series("", index=df_input.index, dtype="object")
-    for plane in range(1, 5):
-        plane_columns = [
-            f"P{plane}_Y_final",
-            f"P{plane}_T_sum_final",
-            f"P{plane}_T_dif_final",
-            f"P{plane}_Q_sum_final",
-            f"P{plane}_Q_dif_final",
-        ]
-        if not all(col in df_input.columns for col in plane_columns):
-            continue
-        valid_plane = df_input.loc[:, plane_columns].ne(0).all(axis=1)
-        tt_str = tt_str.where(~valid_plane, tt_str + str(plane))
-    return tt_str.replace("", "0").astype(int)
-
-working_df["definitive_tt"] = compute_definitive_tt(working_df)
-# fit_tt must exist before track-based efficiency payload/plots are computed.
-working_df["fit_tt"] = compute_fit_tt_from_charge(working_df)
-# Keep downstream definitive_tt consumers aligned with the new fit_tt baseline.
-working_df["definitive_tt"] = working_df["fit_tt"]
+# Derive the runtime trigger labels once the fit observables exist.
+working_df = refresh_task4_trigger_columns(working_df)
 
 _task4_make_combined_timeseries = (
     (create_essential_plots or create_plots)
@@ -6101,211 +4761,7 @@ if timeseries_and_fits or _task4_make_hist_core_errs_combined or _task4_make_his
                     if show_plots:
                         plt.show()
                     plt.close()
-#print("DEBUG EXITING")
-#sys.exit()
-# print("----------------------------------------------------------------------")
-# print("----------------------- Timtrack results filter ----------------------")
-# print("----------------------------------------------------------------------")
 
-# for col in working_df.columns:
-#     # TimTrack results
-#     if 't0' == col:
-#         working_df.loc[:, col] = np.where((working_df[col] > t0_right_filter) | (working_df[col] < t0_left_filter), 0, working_df[col])
-#     if 'x' == col or 'y' == col:
-#         cond_bound = (working_df[col] > pos_filter) | (working_df[col] < -1*pos_filter)
-#         cond_zero = (working_df[col] == 0)
-#         working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
-#     if 'xp' == col or 'yp' == col:
-#         cond_bound = (working_df[col] > proj_filter) | (working_df[col] < -1*proj_filter)
-#         cond_zero = (working_df[col] == 0)
-#         working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
-#     if 's' == col:
-#         cond_bound = (working_df[col] > slowness_filter_right) | (working_df[col] < slowness_filter_left)
-#         cond_zero = (working_df[col] == 0)
-#         working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
-#     if 'theta' == col:
-#         cond_bound = (working_df[col] > theta_right_filter) | (working_df[col] < theta_left_filter)
-#         cond_zero = (working_df[col] == 0)
-#         working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
-#     if 'phi' == col:
-#         cond_bound = (working_df[col] > phi_right_filter) | (working_df[col] < phi_left_filter)
-#         cond_zero = (working_df[col] == 0)
-#         working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
-
-# print("----------------------------------------------------------------------")
-# print("------------------ TimTrack convergence comprobation -----------------")
-# print("----------------------------------------------------------------------")
-
-# if create_plots:
-#     df_filtered = working_df.copy()
-#     colors = plt.cm.tab10.colors
-#     tt_values = [12, 23, 34, 13, 124, 134, 123, 234, 1234]
-#     n_plots = len(tt_values)
-#     ncols = 3
-#     nrows = 3
-
-#     fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 3 * nrows), sharex=True, sharey=True)
-#     axes = axes.flatten()  # Flatten for easier indexing
-    
-#     for i, tt_val in enumerate(tt_values):
-#         ax = axes[i]
-        
-#         df_tt = df_filtered[df_filtered['processed_tt'] == tt_val]
-#         x = df_tt['iterations']
-#         y = df_tt['conv_distance']
-#         # ax.scatter(df_tt['s'], residuals, s=1, color='C0', alpha=0.5)
-#         ax.scatter(x, y, s=2, color='C0', alpha=0.5)
-#         ax.axvline(x=iter_max, color='r', linestyle='--', linewidth=1.5, label = "Iteration limit set")
-#         ax.axhline(y=cocut, color='g', linestyle='--', linewidth=1.5, label = "Convergence cut set")
-#         ax.set_title(f'TT {tt_val}', fontsize=10)
-#         # ax.set_xlim(slowness_filter_left, slowness_filter_right)
-#         ax.set_ylim(0, cocut * 1.05)
-#         # ax.set_xlim(-1, 5)
-#         # ax.set_ylim(-0.15, 0.15)
-#         # ax.set_ylim(slowness_filter_left / 10, slowness_filter_right / 20)
-#         ax.grid(True)
-#         ax.legend()
-
-#         if i % ncols == 0:
-#             ax.set_ylabel(r'Iterations vs cocut')
-#         if i // ncols == nrows - 1:
-#             ax.set_xlabel(r'$Iterations$')
-#     for j in range(i + 1, len(axes)):
-#         axes[j].set_visible(False)
-#     plt.suptitle(r'Iteration vs distance cut in convergence per processed_tt case', fontsize=14)
-#     plt.tight_layout(rect=[0, 0, 1, 0.96])
-#     plt.tight_layout()
-#     if save_plots:
-#         filename = f'{fig_idx}_iterations_vs_cocut.png'
-#         fig_idx += 1
-#         save_fig_path = os.path.join(base_directories["figure_directory"], filename)
-#         plot_list.append(save_fig_path)
-#         save_plot_figure(save_fig_path, format='png')
-#     if show_plots:
-#         plt.show()
-#     plt.close()
-
-# print("----------------------------------------------------------------------")
-# print("------------------ Slowness residual comprobation ---------------------")
-# print("----------------------------------------------------------------------")
-
-# working_df['delta_s'] = working_df['det_s'] - working_df['s']  # Calculate the difference from the speed of light
-
-# if create_plots:
-#     print("Plotting residuals of det_s - s for each original_tt to processed_tt case...")
-    
-#     df_filtered = working_df.copy()
-#     bins = np.linspace(delta_s_left, delta_s_right, 100)  # Adjust range and bin size as needed
-#     colors = plt.cm.tab10.colors
-
-#     tt_values = [12, 23, 34, 13, 124, 134, 123, 234, 1234]
-    
-#     # Layout configuration
-#     n_plots = len(tt_values)
-#     ncols = 3
-#     nrows = 3
-
-#     fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 3 * nrows), sharex=True, sharey=True)
-#     axes = axes.flatten()  # Flatten for easier indexing
-    
-#     for i, tt_val in enumerate(tt_values):
-#         ax = axes[i]
-
-#         df_tt = df_filtered[df_filtered['processed_tt'] == tt_val]
-#         residuals = df_tt['delta_s']  # Calculate the residuals
-#         # residuals = 2 * ( df_tt['det_s'] - df_tt['s'] ) / ( df_tt['det_s'] + df_tt['s'] )  # Calculate the residuals
-#         # rel_sum = ( df_tt['det_s'] + df_tt['s'] ) / 2
-#         rel_sum = df_tt['s']
-        
-#         if len(residuals) < 10:
-#             ax.set_visible(False)
-#             continue
-
-#         # ax.scatter(df_tt['s'], residuals, s=1, color='C0', alpha=0.5)
-#         ax.scatter(rel_sum, residuals, s=0.8, color='C0', alpha=0.1)
-#         ax.axvline(x=sc, color='r', linestyle='--', linewidth=1.5, label = "$\\beta = 1$")  # Vertical line at x=0
-#         ax.axvline(x=0, color='g', linestyle='--', linewidth=1.5, label = "Zero")  # Vertical line at x=0
-#         ax.set_title(f'TT {tt_val}', fontsize=10)
-#         ax.set_xlim(slowness_filter_left, slowness_filter_right)
-#         # ax.set_ylim(-0.001, 0.001)
-#         # ax.set_xlim(-1, 5)
-#         # ax.set_ylim(-0.15, 0.15)
-#         ax.set_ylim(delta_s_left, delta_s_right)
-#         ax.grid(True)
-#         ax.legend()
-
-#         if i % ncols == 0:
-#             ax.set_ylabel(r'$det_s - s$')
-#         if i // ncols == nrows - 1:
-#             ax.set_xlabel(r'$s$')
-
-#     # Hide any unused subplots
-#     for j in range(i + 1, len(axes)):
-#         axes[j].set_visible(False)
-
-#     plt.suptitle(r'Residuals: $det_s - s$ per processed_tt case', fontsize=14)
-#     plt.tight_layout(rect=[0, 0, 1, 0.96])
-
-#     # Save or show the plot
-#     plt.tight_layout()
-#     if save_plots:
-#         filename = f'{fig_idx}_residuals_det_s_minus_s_processed_tt.png'
-#         fig_idx += 1
-#         save_fig_path = os.path.join(base_directories["figure_directory"], filename)
-#         plot_list.append(save_fig_path)
-#         save_plot_figure(save_fig_path, format='png')
-#     if show_plots:
-#         plt.show()
-#     plt.close()
-
-# print("----------------------------------------------------------------------")
-# print("--------------------- Comparison results filter ----------------------")
-# print("----------------------------------------------------------------------")
-
-# for col in working_df.columns:
-#     # TimTrack results
-#     if 'delta_s' == col:
-#         working_df.loc[:, col] = np.where((working_df[col] > delta_s_right) | (working_df[col] < delta_s_left), 0, working_df[col])
-
-# working_df['x'] = ( working_df['x'] + working_df['det_x'] ) / 2
-# working_df['y'] = ( working_df['y'] + working_df['det_y'] ) / 2
-# working_df['theta'] = ( working_df['theta'] + working_df['det_theta'] ) / 2
-# working_df['phi'] = ( working_df['phi'] + working_df['det_phi'] ) / 2
-# working_df['s'] = ( working_df['s'] + working_df['det_s'] ) / 2
-
-# working_df['x_err'] = ( working_df['x'] - working_df['det_x'] ) / 2
-# working_df['y_err'] = ( working_df['y'] - working_df['det_y'] ) / 2
-# working_df['theta_err'] = ( working_df['theta'] - working_df['det_theta'] ) / 2
-# phi_diff = working_df['phi'] - working_df['det_phi']
-# # Keep the smallest angular separation considering 2π periodicity
-# phi_err_abs = np.minimum.reduce([
-#     np.abs(phi_diff),
-#     np.abs(phi_diff + 2*np.pi),
-#     np.abs(phi_diff - 2*np.pi)
-# ])
-# working_df['phi_err'] = phi_err_abs / 2
-# working_df['s_err'] = ( working_df['s'] - working_df['det_s'] ) / 2
-
-# Mean/error residuals between TimTrack and alternative methods ---------------
-# for i in range(1, 5):
-#     working_df[f'res_ystr_mean_{i}'] = (working_df.get(f'res_ystr_{i}', 0) + working_df.get(f'det_res_ystr_{i}', 0)) / 2
-#     working_df[f'res_tsum_mean_{i}'] = (working_df.get(f'res_tsum_{i}', 0) + working_df.get(f'det_res_tsum_{i}', 0)) / 2
-#     working_df[f'res_tdif_mean_{i}'] = (working_df.get(f'res_tdif_{i}', 0) + working_df.get(f'det_res_tdif_{i}', 0)) / 2
-
-#     working_df[f'res_ystr_err_{i}'] = (working_df.get(f'res_ystr_{i}', 0) - working_df.get(f'det_res_ystr_{i}', 0)) / 2
-#     working_df[f'res_tsum_err_{i}'] = (working_df.get(f'res_tsum_{i}', 0) - working_df.get(f'det_res_tsum_{i}', 0)) / 2
-#     working_df[f'res_tdif_err_{i}'] = (working_df.get(f'res_tdif_{i}', 0) - working_df.get(f'det_res_tdif_{i}', 0)) / 2
-
-#     working_df[f'ext_res_ystr_mean_{i}'] = (working_df.get(f'ext_res_ystr_{i}', 0) + working_df.get(f'det_ext_res_ystr_{i}', 0)) / 2
-#     working_df[f'ext_res_tsum_mean_{i}'] = (working_df.get(f'ext_res_tsum_{i}', 0) + working_df.get(f'det_ext_res_tsum_{i}', 0)) / 2
-#     working_df[f'ext_res_tdif_mean_{i}'] = (working_df.get(f'ext_res_tdif_{i}', 0) + working_df.get(f'det_ext_res_tdif_{i}', 0)) / 2
-
-#     working_df[f'ext_res_ystr_err_{i}'] = (working_df.get(f'ext_res_ystr_{i}', 0) - working_df.get(f'det_ext_res_ystr_{i}', 0)) / 2
-#     working_df[f'ext_res_tsum_err_{i}'] = (working_df.get(f'ext_res_tsum_{i}', 0) - working_df.get(f'det_ext_res_tsum_{i}', 0)) / 2
-#     working_df[f'ext_res_tdif_err_{i}'] = (working_df.get(f'ext_res_tdif_{i}', 0) - working_df.get(f'det_ext_res_tdif_{i}', 0)) / 2
-
-# working_df['chi_timtrack'] = working_df['th_chi']
-# working_df['chi_alternative'] = working_df['det_th_chi']
 
 _prof["s_timtrack_fitting_s"] = round(time.perf_counter() - _t_sec, 2)
 _prof["s_tt_intro_s"] = round(_tt_intro_s, 2)
@@ -6365,7 +4821,7 @@ valid_track = (
     & np.isfinite(vx)
     & np.isfinite(vy)
     & np.isfinite(vz)
-    & (vz > 0.0)                                          # upward track => no planes
+    & (vz > 0.0) # upward track => no planes
     & (x0_avg != 0.0)
     & (y0_avg != 0.0)
     & (theta_av != 0.0)
@@ -6421,10 +4877,10 @@ working_df = working_df.copy()
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-definitive_tt_values = [234, 123, 34, 1234, 23, 12, 124, 134, 24, 13, 14]
+fit_tt_values = [234, 123, 34, 1234, 23, 12, 124, 134, 24, 13, 14]
 # Pre-seed metadata keys so CSVs always include all fit outputs, even if a
 # specific combination has no data in this run.
-for _tt in definitive_tt_values:
+for _tt in fit_tt_values:
     global_variables.setdefault(f"sigmoid_width_{_tt}", np.nan)
     global_variables.setdefault(f"background_slope_{_tt}", np.nan)
     global_variables.setdefault(f"sigmoid_amplitude_{_tt}", np.nan)
@@ -6445,10 +4901,10 @@ if time_window_fitting:
     )
     half_widths = 0.5 * widths
     width_chunk_size = 32
-    definitive_tt_arr = pd.to_numeric(
-        working_df["definitive_tt"],
-        errors="coerce",
-    ).fillna(0).to_numpy(dtype=np.int32)
+    fit_tt_arr = get_task4_tt_series(
+        working_df,
+        preferred=TASK4_PRIMARY_TT_COLUMN,
+    ).to_numpy(dtype=np.int32, copy=False)
     t_sum_cols = [col for col in working_df.columns if "_T_sum_" in col]
     t_sum_all = (
         working_df[t_sum_cols].to_numpy(dtype=float, copy=False)
@@ -6456,22 +4912,20 @@ if time_window_fitting:
         else np.empty((len(working_df), 0), dtype=float)
     )
 
-    for definitive_tt in definitive_tt_values:
-        # Create a mask for the current definitive_tt
-        mask = definitive_tt_arr == definitive_tt
+    for fit_tt_value in fit_tt_values:
+        mask = fit_tt_arr == fit_tt_value
         n_selected = int(np.count_nonzero(mask))
 
-        # Check if there are any rows in the filtered DataFrame
         if n_selected > 0:
-            print(f"\nProcessing definitive_tt: {definitive_tt} with {n_selected} events.")
+            print(f"\nProcessing fit_tt: {fit_tt_value} with {n_selected} events.")
         t_sum_data = t_sum_all[mask]
         if t_sum_data.size == 0:
-            print(f"\n[Warning] Skipping definitive_tt {definitive_tt}: no _T_sum_ columns.")
+            print(f"\n[Warning] Skipping fit_tt {fit_tt_value}: no _T_sum_ columns.")
             continue
         
         nonzero_rows = np.any(t_sum_data != 0, axis=1)
         if not np.any(nonzero_rows):
-            print(f"\n[Warning] Skipping definitive_tt {definitive_tt}: no non-zero T_sum data.")
+            print(f"\n[Warning] Skipping fit_tt {fit_tt_value}: no non-zero T_sum data.")
             continue
 
         nonzero_mask = t_sum_data != 0
@@ -6503,7 +4957,7 @@ if time_window_fitting:
             denom = float(np.max(counts_per_width))
             if not np.isfinite(denom) or denom <= 0:
                 denom = 1.0
-        global_variables[f'fit_normalization_{definitive_tt}'] = denom
+        global_variables[f'fit_normalization_{fit_tt_value}'] = denom
         counts_per_width_norm = counts_per_width / denom
 
         # # Define model function: signal (logistic) + linear background
@@ -6527,7 +4981,7 @@ if time_window_fitting:
         counts_clean = counts_per_width_norm[valid_mask]
         
         if len(counts_clean) == 0 or len(widths_clean) == 0:
-            print(f"[Warning] Skipping definitive_tt {definitive_tt}: no valid data.")
+            print(f"[Warning] Skipping fit_tt {fit_tt_value}: no valid data.")
             continue
         
         # Then fit
@@ -6540,20 +4994,20 @@ if time_window_fitting:
                 maxfev=10000,
             )
         except RuntimeError as exc:
-            print(f"[Warning] Fit failed for definitive_tt {definitive_tt}: {exc}")
-            global_variables[f'sigmoid_width_{definitive_tt}'] = np.nan
-            global_variables[f'background_slope_{definitive_tt}'] = np.nan
-            global_variables[f'sigmoid_amplitude_{definitive_tt}'] = np.nan
-            global_variables[f'sigmoid_center_{definitive_tt}'] = np.nan
+            print(f"[Warning] Fit failed for fit_tt {fit_tt_value}: {exc}")
+            global_variables[f'sigmoid_width_{fit_tt_value}'] = np.nan
+            global_variables[f'background_slope_{fit_tt_value}'] = np.nan
+            global_variables[f'sigmoid_amplitude_{fit_tt_value}'] = np.nan
+            global_variables[f'sigmoid_center_{fit_tt_value}'] = np.nan
             continue
                 
         S_fit, w0_fit, tau_fit, B_fit = popt
-        print(f"definitive_tt {definitive_tt} - Fit parameters:\n  Signal amplitude S = {S_fit:.4f}\n  Transition center w0 = {w0_fit:.4f} ns\n  Transition width τ = {tau_fit:.4f} ns\n  Background slope B = {B_fit:.6f} per ns")
+        print(f"fit_tt {fit_tt_value} - Fit parameters:\n  Signal amplitude S = {S_fit:.4f}\n  Transition center w0 = {w0_fit:.4f} ns\n  Transition width τ = {tau_fit:.4f} ns\n  Background slope B = {B_fit:.6f} per ns")
 
-        global_variables[f'sigmoid_width_{definitive_tt}'] = tau_fit
-        global_variables[f'background_slope_{definitive_tt}'] = B_fit
-        global_variables[f'sigmoid_amplitude_{definitive_tt}'] = S_fit
-        global_variables[f'sigmoid_center_{definitive_tt}'] = w0_fit
+        global_variables[f'sigmoid_width_{fit_tt_value}'] = tau_fit
+        global_variables[f'background_slope_{fit_tt_value}'] = B_fit
+        global_variables[f'sigmoid_amplitude_{fit_tt_value}'] = S_fit
+        global_variables[f'sigmoid_center_{fit_tt_value}'] = w0_fit
 
        
         if create_plots:
@@ -6588,7 +5042,7 @@ if time_window_fitting:
             ax_fill.set_ylim(y_min, 1)
             # ax_fill.set_yticks([0.25, 0.5, 0.75, 1.0])
             ax_fill.legend(loc="upper right")
-            ax_fill.set_title(f"Estimated Signal and Background Fractions per Window Width, definitive_tt = {definitive_tt}")
+            ax_fill.set_title(f"Estimated Signal and Background Fractions per Window Width, fit_tt = {fit_tt_value}")
             plt.setp(ax_fill.get_xticklabels(), visible=False)
             ax_main.scatter(widths, counts_per_width_norm, label='Normalized average count in window')
             ax_main.plot(w_fit, f_fit, 'k--', label='Signal + background fit')
@@ -6601,7 +5055,7 @@ if time_window_fitting:
             ax_main.legend()
             
             if save_plots:
-                name_of_file = f'stat_window_accumulation_{definitive_tt}'
+                name_of_file = f'stat_window_accumulation_{fit_tt_value}'
                 final_filename = f'{fig_idx}_{name_of_file}.png'
                 fig_idx += 1
                 save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
@@ -6616,56 +5070,316 @@ if time_window_fitting:
         force=True,
     )
 
+
+def apply_task4_final_filter(
+    df_input: pd.DataFrame,
+    *,
+    apply_changes: bool,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, int | float]]:
+    input_rows = int(len(df_input))
+    if input_rows == 0:
+        return df_input.copy(), pd.DataFrame(), {
+            "input_rows": 0,
+            "rows_affected": 0,
+            "values_zeroed": 0,
+            "rows_failed_fit_tt_min": 0,
+            "rows_failed_nonzero_required": 0,
+        }
+
+    working = df_input.copy() if apply_changes else df_input
+    summary: dict[str, int | float] = {
+        "input_rows": input_rows,
+        "rows_affected": 0,
+        "values_zeroed": 0,
+        "rows_failed_fit_tt_min": 0,
+        "rows_failed_nonzero_required": 0,
+    }
+    final_mask = np.ones(input_rows, dtype=bool)
+    fail_reason_parts = np.empty(input_rows, dtype=object)
+    fail_reason_parts.fill("")
+
+    final_filter_remove_small = _coerce_config_bool(
+        config.get("final_filter_remove_small", False),
+        default=False,
+    )
+    final_filter_remove_small_eps = _task4_config_float(
+        config,
+        "final_filter_remove_small_eps",
+        default=1e-7,
+    )
+    if final_filter_remove_small:
+        small_mask = working.map(
+            lambda x: isinstance(x, (int, float)) and x != 0 and abs(x) < final_filter_remove_small_eps
+        )
+        nonzero_numeric_mask = working.map(lambda x: isinstance(x, (int, float)) and x != 0)
+        total_nonzero = int(nonzero_numeric_mask.sum().sum())
+        total_small = int(small_mask.sum().sum())
+        rows_with_small = int(small_mask.any(axis=1).sum())
+        summary["values_zeroed"] = total_small
+        summary["rows_with_small_values"] = rows_with_small
+        if apply_changes and total_small > 0:
+            working = working.mask(small_mask, 0)
+        record_filter_metric(
+            "small_values_zeroed_event_pct",
+            rows_with_small,
+            input_rows if input_rows else 0,
+        )
+        record_filter_metric(
+            "small_values_zeroed_value_pct",
+            total_small,
+            total_nonzero if total_nonzero else 0,
+        )
+    else:
+        record_filter_metric("small_values_zeroed_event_pct", 0, input_rows if input_rows else 0)
+        record_filter_metric("small_values_zeroed_value_pct", 0, input_rows if input_rows else 0)
+
+    fit_tt_min = int(config.get("final_filter_fit_tt_min", 10))
+    fit_tt_series = get_task4_tt_series(working, preferred=TASK4_PRIMARY_TT_COLUMN)
+    fit_tt_pass = fit_tt_series >= fit_tt_min
+    fit_tt_fail = ~fit_tt_pass.to_numpy(dtype=bool, copy=False)
+    summary["rows_failed_fit_tt_min"] = int(fit_tt_fail.sum())
+    final_mask &= ~fit_tt_fail
+    fail_reason_parts[fit_tt_fail] = np.where(
+        fail_reason_parts[fit_tt_fail] == "",
+        f"fit_tt<{fit_tt_min}",
+        fail_reason_parts[fit_tt_fail] + f";fit_tt<{fit_tt_min}",
+    )
+
+    required_nonzero_cols = _task4_parse_filter_columns(
+        config.get("final_filter_nonzero_cols", ["x", "y", "s", "t0", "theta", "phi"]),
+        default=("x", "y", "s", "t0", "theta", "phi"),
+    )
+    required_nonzero_cols = [col for col in required_nonzero_cols if col in working.columns]
+    if required_nonzero_cols:
+        nonzero_mask = np.ones(input_rows, dtype=bool)
+        zero_count_per_row = np.zeros(input_rows, dtype=int)
+        primary_zero_col = np.full(input_rows, "", dtype=object)
+        for col in required_nonzero_cols:
+            col_values = pd.to_numeric(working[col], errors="coerce").to_numpy(dtype=float, copy=False)
+            finite_mask = np.isfinite(col_values)
+            nonzero_col_mask = finite_mask & (col_values != 0.0)
+            nonzero_mask &= nonzero_col_mask
+            zero_or_invalid = ~nonzero_col_mask
+            zero_count_per_row += zero_or_invalid.astype(int)
+            primary_assign_mask = (primary_zero_col == "") & zero_or_invalid
+            primary_zero_col[primary_assign_mask] = col
+        nonzero_fail = ~nonzero_mask
+        summary["rows_failed_nonzero_required"] = int(nonzero_fail.sum())
+        summary["rows_failed_nonzero_single"] = int(np.count_nonzero(nonzero_fail & (zero_count_per_row == 1)))
+        summary["rows_failed_nonzero_multi"] = int(np.count_nonzero(nonzero_fail & (zero_count_per_row >= 2)))
+        final_mask &= ~nonzero_fail
+        fail_reason_parts[nonzero_fail] = np.where(
+            fail_reason_parts[nonzero_fail] == "",
+            "required_nonzero_violation",
+            fail_reason_parts[nonzero_fail] + ";required_nonzero_violation",
+        )
+        for col in required_nonzero_cols:
+            summary[f"rows_failed_primary_zero_{col}"] = int(
+                np.count_nonzero(nonzero_fail & (primary_zero_col == col))
+            )
+    else:
+        zero_count_per_row = np.zeros(input_rows, dtype=int)
+        primary_zero_col = np.full(input_rows, "", dtype=object)
+
+    variable_specs = (
+        ("x", "final_filter_x_min", "final_filter_x_max"),
+        ("y", "final_filter_y_min", "final_filter_y_max"),
+        ("s", "final_filter_s_min", "final_filter_s_max"),
+        ("t0", "final_filter_t0_min", "final_filter_t0_max"),
+        ("theta", "final_filter_theta_min", "final_filter_theta_max"),
+        ("phi", "final_filter_phi_min", "final_filter_phi_max"),
+    )
+    for variable_name, left_key, right_key in variable_specs:
+        if variable_name not in working.columns:
+            continue
+        left_limit = _task4_parse_optional_float(config.get(left_key))
+        right_limit = _task4_parse_optional_float(config.get(right_key))
+        if left_limit is None and right_limit is None:
+            continue
+        values = pd.to_numeric(working[variable_name], errors="coerce").to_numpy(dtype=float, copy=False)
+        pass_mask = np.isfinite(values)
+        if left_limit is not None:
+            pass_mask &= values >= left_limit
+        if right_limit is not None:
+            pass_mask &= values <= right_limit
+        fail_mask = ~pass_mask
+        summary[f"rows_failed_{variable_name}_range"] = int(fail_mask.sum())
+        final_mask &= ~fail_mask
+        fail_reason_parts[fail_mask] = np.where(
+            fail_reason_parts[fail_mask] == "",
+            f"{variable_name}_out_of_range",
+            fail_reason_parts[fail_mask] + f";{variable_name}_out_of_range",
+        )
+
+    rows_affected = int((~final_mask).sum())
+    summary["rows_affected"] = rows_affected
+    summary["flagged_rows"] = rows_affected
+    summary["failed_pair_any"] = rows_affected
+    if not apply_changes:
+        return df_input, pd.DataFrame(), summary
+
+    filtered_df = working.loc[final_mask].copy()
+    rejected_df = working.loc[~final_mask].copy()
+    if not rejected_df.empty:
+        rejected_df["reject_stage"] = "final_filtering"
+        rejected_df["reject_reason"] = fail_reason_parts[~final_mask]
+        rejected_df["zero_count"] = zero_count_per_row[~final_mask]
+        rejected_df["primary_zero_col"] = primary_zero_col[~final_mask]
+    return filtered_df, rejected_df, summary
+
+
 # -----------------------------------------------------------------------------
 # Last filterings -------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-# Put to zero the rows with tracking in only one plane, that is, put 0 if tracking_tt < 10
-low_tt_zeroed_df = pd.DataFrame()
-low_tt_mask = np.zeros(len(working_df), dtype=bool)
-low_tt_zeroed_count = 0
-low_tt_min = int(config.get("final_filter_fit_tt_min", 10))
-low_tt_zero_cols = config.get(
-    "final_filter_legacy_low_tt_zero_cols",
-    ["x", "xp", "y", "yp", "t0", "s"],
-)
-if not isinstance(low_tt_zero_cols, (list, tuple)):
-    low_tt_zero_cols = [c for c in re.split(r"[\\s,;]+", str(low_tt_zero_cols).strip()) if c]
-raw_tt_series = working_df["raw_tt"] if "raw_tt" in working_df.columns else pd.Series(0, index=working_df.index)
-if create_debug_plots:
-    debug_cols = [c for c in ("tracking_tt", "list_tt", "raw_tt", "definitive_tt") if c in working_df.columns]
-    if debug_cols:
-        debug_thresholds = {col: [low_tt_min] for col in debug_cols}
-        debug_fig_idx = plot_debug_histograms(
-            working_df,
-            debug_cols,
-            debug_thresholds,
-            title=(
-                f"Task 4 pre-filter: low_tt_min={low_tt_min} "
-                f"[tunable] (station {station})"
-            ),
-            out_dir=debug_plot_directory,
-            fig_idx=debug_fig_idx,
-        )
-if apply_legacy_final_filters:
-    low_tt_mask = (
-        (working_df["tracking_tt"] < low_tt_min)
-        | (working_df["list_tt"] < low_tt_min)
-        | (raw_tt_series < low_tt_min)
-        | (working_df["definitive_tt"] < low_tt_min)
+task4_final_filter_dry_run_summary = apply_task4_final_filter(
+    working_df,
+    apply_changes=False,
+)[2]
+task4_final_filter_dry_run_has_effect = int(
+    (
+        int(task4_final_filter_dry_run_summary.get("rows_affected", 0)) > 0
+        or int(task4_final_filter_dry_run_summary.get("values_zeroed", 0)) > 0
+        or int(task4_final_filter_dry_run_summary.get("failed_pair_any", 0)) > 0
     )
-else:
-    low_tt_mask = np.zeros(len(working_df), dtype=bool)
-low_tt_zeroed_count = int(low_tt_mask.sum())
-if low_tt_zeroed_count > 0:
-    cols_to_zero = [c for c in low_tt_zero_cols if c in working_df.columns]
-    if save_rejected_rows or create_reject_plots:
-        low_tt_zeroed_df = working_df.loc[low_tt_mask].copy()
-        low_tt_zeroed_df["reject_stage"] = "low_tt_zeroed"
-        low_tt_zeroed_df["reject_reason"] = f"tracking/list/raw/definitive tt < {low_tt_min}"
-        low_tt_zeroed_df["zeroed_cols"] = ",".join(cols_to_zero)
-    if cols_to_zero:
-        working_df.loc[low_tt_mask, cols_to_zero] = 0
+)
+global_variables["task4_final_filter_dry_run_has_effect"] = task4_final_filter_dry_run_has_effect
+global_variables["task4_final_filter_dry_run_input_rows"] = int(
+    task4_final_filter_dry_run_summary.get("input_rows", len(working_df))
+)
+global_variables["task4_final_filter_dry_run_rows_affected"] = int(
+    task4_final_filter_dry_run_summary.get("rows_affected", 0)
+)
+global_variables["task4_final_filter_dry_run_flagged_rows"] = int(
+    task4_final_filter_dry_run_summary.get("flagged_rows", 0)
+)
+global_variables["task4_final_filter_dry_run_values_zeroed"] = int(
+    task4_final_filter_dry_run_summary.get("values_zeroed", 0)
+)
+global_variables["task4_final_filter_dry_run_failed_pair_any"] = int(
+    task4_final_filter_dry_run_summary.get("failed_pair_any", 0)
+)
+print(
+    "[TASK4_FINAL_FILTER_DRY_RUN] "
+    f"has_effect={'yes' if task4_final_filter_dry_run_has_effect else 'no'} "
+    f"input_rows={global_variables['task4_final_filter_dry_run_input_rows']} "
+    f"flagged_rows={global_variables['task4_final_filter_dry_run_flagged_rows']} "
+    f"rows_affected={global_variables['task4_final_filter_dry_run_rows_affected']} "
+    f"values_zeroed={global_variables['task4_final_filter_dry_run_values_zeroed']} "
+    f"failed_pair_any={global_variables['task4_final_filter_dry_run_failed_pair_any']}",
+    force=True,
+)
+
+working_df, task4_final_filter_rejected_df, task4_final_filter_summary = apply_task4_final_filter(
+    working_df,
+    apply_changes=True,
+)
+task4_final_filter_applied = True
+
+fit_tt_total = int(task4_final_filter_summary.get("input_rows", len(working_df)))
+fit_tt_removed = int(task4_final_filter_summary.get("rows_failed_fit_tt_min", 0))
+baseline_events = original_number_of_events if original_number_of_events else fit_tt_total
+record_filter_metric(
+    "fit_tt_lt_10_rows_removed_pct",
+    fit_tt_removed,
+    fit_tt_total if fit_tt_total else 0,
+)
+record_filter_metric(
+    "final_filter_rows_removed_pct",
+    int(task4_final_filter_summary.get("rows_affected", 0)),
+    fit_tt_total if fit_tt_total else 0,
+)
+record_filter_metric(
+    "low_tt_zeroed_event_pct",
+    fit_tt_removed,
+    baseline_events if baseline_events else 0,
+)
+record_filter_metric(
+    "definitive_rows_removed_pct",
+    int(task4_final_filter_summary.get("rows_affected", 0)),
+    baseline_events if baseline_events else 0,
+)
+record_filter_metric(
+    "definitive_removed_single_zero_rows_pct",
+    int(task4_final_filter_summary.get("rows_failed_nonzero_single", 0)),
+    baseline_events if baseline_events else 0,
+)
+record_filter_metric(
+    "definitive_removed_multi_zero_rows_pct",
+    int(task4_final_filter_summary.get("rows_failed_nonzero_multi", 0)),
+    baseline_events if baseline_events else 0,
+)
+required_nonzero_cols = _task4_parse_filter_columns(
+    config.get("final_filter_nonzero_cols", ["x", "y", "s", "t0", "theta", "phi"]),
+    default=("x", "y", "s", "t0", "theta", "phi"),
+)
+for col in required_nonzero_cols:
+    rows_removed = int(task4_final_filter_summary.get(f"rows_failed_primary_zero_{col}", 0))
+    record_filter_metric(
+        f"definitive_removed_primary_{col}_zero_rows_pct",
+        rows_removed,
+        baseline_events if baseline_events else 0,
+    )
+
+if "fit_tt" in working_df.columns:
+    working_df.loc[:, "definitive_tt"] = pd.to_numeric(
+        working_df["fit_tt"],
+        errors="coerce",
+    ).fillna(0).astype(int)
+task4_plot_tt_column = get_task4_tt_column(working_df) or TASK4_PRIMARY_TT_COLUMN
+
+if save_rejected_rows and not task4_final_filter_rejected_df.empty:
+    os.makedirs(rejected_files_directory, exist_ok=True)
+    final_rejected_path = os.path.join(
+        rejected_files_directory,
+        f"rejected_final_filtering_{basename_no_ext}.parquet",
+    )
+    task4_final_filter_rejected_df.to_parquet(
+        final_rejected_path,
+        engine="pyarrow",
+        compression="zstd",
+        index=False,
+    )
+    print(f"Rejected rows (final filtering) saved to: {final_rejected_path}")
+
+if create_reject_plots and not task4_final_filter_rejected_df.empty:
+    save_plots = True
+    reject_plot_directory = os.path.join(
+        base_directories["ancillary_directory"],
+        "REJECTED_FILES",
+        "REJECTED_PLOTS",
+        f"FIGURES_EXEC_ON_{date_execution}",
+    )
+    os.makedirs(reject_plot_directory, exist_ok=True)
+    original_figure_dir = base_directories["figure_directory"]
+    original_plot_list = plot_list if "plot_list" in globals() else []
+    base_directories["figure_directory"] = reject_plot_directory
+    plot_list = []
+    fig_idx_backup = globals().get("fig_idx")
+
+    if "datetime" in task4_final_filter_rejected_df.columns:
+        cols = [c for c in ("x", "y", "theta", "phi", "s", "t0") if c in task4_final_filter_rejected_df.columns]
+        if cols:
+            plot_ts_with_side_hist(
+                task4_final_filter_rejected_df,
+                cols,
+                "datetime",
+                f"rejected_final_filtering_{basename_no_ext}",
+            )
+
+    plot_reject_diagnostics(
+        task4_final_filter_rejected_df,
+        "rejected_final_filtering",
+        basename_no_ext,
+        hist_bins=reject_plot_hist_bins,
+        cols_per_fig=reject_plot_hist_cols_per_fig,
+        scatter_max=reject_plot_scatter_max_points,
+    )
+
+    base_directories["figure_directory"] = original_figure_dir
+    plot_list = original_plot_list
+    if fig_idx_backup is not None:
+        fig_idx = fig_idx_backup
 
 # -----------------------------------------------------------------------------
 # -------------- Correlate trigger types in different stages ------------------
@@ -6761,275 +5475,15 @@ if create_plots or create_essential_plots:
     fig_idx = plot_tt_correlation(
         df=working_df,
         row_label='raw_tt',
-        col_label='definitive_tt',
-        title='Event counts per (raw_tt, definitive_tt) combination',
-        filename_suffix='trigger_types_definitive_tt_and_raw',
+        col_label=task4_plot_tt_column,
+        title=f'Event counts per (raw_tt, {task4_plot_tt_column}) combination',
+        filename_suffix='trigger_types_fit_tt_and_raw',
         fig_idx=fig_idx,
         base_dir=base_directories["figure_directory"],
         show_plots=show_plots,
         save_plots=save_plots,
         plot_list=plot_list
     )
-
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# Define the last dataframe, the definitive one -------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-working_df = working_df.copy()
-
-# Remove rows with zeros in key places ----------------------------------------
-definitive_nonzero_cols = config.get("final_filter_nonzero_cols", ["x", "y", "s", "t0", "theta", "phi"])
-if not isinstance(definitive_nonzero_cols, (list, tuple)):
-    definitive_nonzero_cols = [
-        c for c in re.split(r"[\\s,;]+", str(definitive_nonzero_cols).strip()) if c
-    ]
-cols_to_check = [c for c in definitive_nonzero_cols if c in working_df.columns] if apply_legacy_final_filters else []
-
-if final_filter_remove_small_default and apply_legacy_final_filters:
-    # Remove small, non-zero values -----------------------------------------------
-    if create_debug_plots and cols_to_check:
-        debug_thresholds = {col: [-eps, eps] for col in cols_to_check}
-        debug_fig_idx = plot_debug_histograms(
-            working_df,
-            cols_to_check,
-            debug_thresholds,
-            title=(
-                f"Task 4 pre-filter (definitive): remove_small_eps={eps:g} "
-                f"[tunable] (station {station})"
-            ),
-            out_dir=debug_plot_directory,
-            fig_idx=debug_fig_idx,
-        )
-    mask = working_df.map(is_small_nonzero)
-    nonzero_numeric_mask = working_df.map(lambda x: isinstance(x, (int, float)) and x != 0)
-    n_events = len(working_df)
-    rows_with_small = int(mask.any(axis=1).sum())
-    n_total = nonzero_numeric_mask.sum().sum()
-    n_small = mask.sum().sum()
-    working_df = working_df.mask(mask, 0)
-    pct = 100 * n_small / n_total if n_total > 0 else 0
-    print(f"\nIn working_df {n_small} out of {n_total} non-zero numeric values are below {eps} ({pct:.4f}%)")
-    record_filter_metric(
-        "definitive_small_values_zeroed_event_pct",
-        rows_with_small,
-        n_events if n_events else 0,
-    )
-    record_filter_metric(
-        "definitive_small_values_zeroed_value_pct",
-        n_small,
-        n_total if n_total else 0,
-    )
-
-baseline_events = original_number_of_events if original_number_of_events else len(working_df)
-if create_debug_plots and cols_to_check:
-    debug_thresholds = {col: [0] for col in cols_to_check}
-    debug_fig_idx = plot_debug_histograms(
-        working_df,
-        cols_to_check,
-        debug_thresholds,
-        title=(
-            f"Task 4 pre-filter: definitive_nonzero_cols "
-            f"[tunable] (station {station})"
-        ),
-        out_dir=debug_plot_directory,
-        fig_idx=debug_fig_idx,
-    )
-record_filter_metric(
-    "low_tt_zeroed_event_pct",
-    int(low_tt_zeroed_count),
-    baseline_events if baseline_events else 0,
-)
-for col in cols_to_check:
-    zero_rows = int((working_df[col] == 0).sum())
-    record_filter_metric(
-        f"definitive_{col}_zero_rows_pct",
-        zero_rows,
-        baseline_events if baseline_events else 0,
-    )
-
-if cols_to_check:
-    cond = (working_df[cols_to_check[0]] != 0)
-    for col in cols_to_check[1:]:
-        cond &= (working_df[col] != 0)
-else:
-    print("Warning: definitive_nonzero_cols resolved to empty; skipping zero-row removal.")
-    cond = np.ones(len(working_df), dtype=bool)
-
-removed_mask = ~cond
-removed_total = int(removed_mask.sum())
-zero_counts = np.zeros(len(working_df), dtype=int)
-for col in cols_to_check:
-    if col in working_df.columns:
-        zero_counts += (working_df[col].to_numpy(copy=False) == 0)
-
-zero_cols_present = [col for col in cols_to_check if col in working_df.columns]
-primary_zero_col = np.full(len(working_df), "", dtype=object)
-for col in cols_to_check:
-    if col in working_df.columns:
-        mask = (primary_zero_col == "") & (working_df[col] == 0)
-        primary_zero_col[mask] = col
-
-rejected_definitive_df = pd.DataFrame()
-if (save_rejected_rows or create_reject_plots) and removed_total > 0:
-    rejected_definitive_df = working_df.loc[removed_mask].copy()
-    rejected_definitive_df["reject_stage"] = "definitive_zero_rows"
-    rejected_definitive_df["reject_reason"] = "zero in x/y/s/t0/theta/phi"
-    rejected_definitive_df["zero_count"] = zero_counts[removed_mask]
-    rejected_definitive_df["primary_zero_col"] = primary_zero_col[removed_mask]
-    if zero_cols_present:
-        zero_mat_removed = np.column_stack(
-            [(working_df[col].to_numpy(copy=False) == 0)[removed_mask] for col in zero_cols_present]
-        )
-        zero_cols_str = [
-            ",".join([col for col, is_zero in zip(zero_cols_present, row) if is_zero])
-            for row in zero_mat_removed
-        ]
-        rejected_definitive_df["zero_cols"] = zero_cols_str
-    if len(low_tt_mask) == len(working_df):
-        rejected_definitive_df["low_tt_zeroed"] = low_tt_mask[removed_mask]
-
-single_zero = removed_mask & (zero_counts == 1)
-multi_zero = removed_mask & (zero_counts >= 2)
-record_filter_metric(
-    "definitive_removed_single_zero_rows_pct",
-    int(single_zero.sum()),
-    baseline_events if baseline_events else 0,
-)
-record_filter_metric(
-    "definitive_removed_multi_zero_rows_pct",
-    int(multi_zero.sum()),
-    baseline_events if baseline_events else 0,
-)
-
-remaining = removed_mask.copy()
-for col in cols_to_check:
-    if col not in working_df.columns:
-        continue
-    primary_mask = remaining & (working_df[col] == 0)
-    record_filter_metric(
-        f"definitive_removed_primary_{col}_zero_rows_pct",
-        int(primary_mask.sum()),
-        baseline_events if baseline_events else 0,
-    )
-    remaining &= ~primary_mask
-
-n_before = len(working_df)
-working_df = working_df.loc[cond].copy()
-n_after = len(working_df)
-
-# Calculate and print percentage ----------------------------------------------
-percentage_retained = 100 * n_after / n_before if n_before > 0 else 0
-print(f"Rows before: {n_before}")
-print(f"Rows after: {n_after}")
-print(f"Retained: {percentage_retained:.2f}%")
-record_filter_metric(
-    "definitive_rows_removed_pct",
-    removed_total,
-    baseline_events if baseline_events else 0,
-)
-
-if save_rejected_rows:
-    os.makedirs(rejected_files_directory, exist_ok=True)
-    if not low_tt_zeroed_df.empty:
-        low_tt_path = os.path.join(rejected_files_directory, f"zeroed_low_tt_{basename_no_ext}.parquet")
-        low_tt_zeroed_df.to_parquet(low_tt_path, engine="pyarrow", compression="zstd", index=False)
-        print(f"Rejected rows (low_tt zeroed) saved to: {low_tt_path}")
-    if not rejected_definitive_df.empty:
-        rejected_path = os.path.join(rejected_files_directory, f"rejected_definitive_{basename_no_ext}.parquet")
-        rejected_definitive_df.to_parquet(rejected_path, engine="pyarrow", compression="zstd", index=False)
-        print(f"Rejected rows (definitive zero) saved to: {rejected_path}")
-    if not low_tt_zeroed_df.empty or not rejected_definitive_df.empty:
-        combined = pd.concat([df for df in (low_tt_zeroed_df, rejected_definitive_df) if not df.empty], ignore_index=True)
-        combined_path = os.path.join(rejected_files_directory, f"rejected_combined_{basename_no_ext}.parquet")
-        combined.to_parquet(combined_path, engine="pyarrow", compression="zstd", index=False)
-        print(f"Rejected rows (combined) saved to: {combined_path}")
-
-if create_reject_plots:
-    # Ensure saving is enabled even if global plot flags are off.
-    save_plots = True
-    reject_plot_directory = os.path.join(
-        base_directories["ancillary_directory"],
-        "REJECTED_FILES",
-        "REJECTED_PLOTS",
-        f"FIGURES_EXEC_ON_{date_execution}",
-    )
-    os.makedirs(reject_plot_directory, exist_ok=True)
-
-    # Save reject-only plots outside PLOTS so they won't be deleted by cleanup.
-    original_figure_dir = base_directories["figure_directory"]
-    original_plot_list = plot_list if "plot_list" in globals() else []
-    base_directories["figure_directory"] = reject_plot_directory
-    plot_list = []
-    fig_idx_reject = 1
-    fig_idx_backup = globals().get("fig_idx")
-    fig_idx = fig_idx_reject
-
-    print(
-        f"Warning: reject-plots saving to {reject_plot_directory} | "
-        f"low_tt_rows={len(low_tt_zeroed_df)} | definitive_rows={len(rejected_definitive_df)}"
-    )
-
-    if not low_tt_zeroed_df.empty and "datetime" in low_tt_zeroed_df.columns:
-        cols = [c for c in ("x", "y", "theta", "phi", "s", "t0") if c in low_tt_zeroed_df.columns]
-        if cols:
-            plot_ts_with_side_hist(
-                low_tt_zeroed_df,
-                cols,
-                "datetime",
-                f"rejected_low_tt_{basename_no_ext}",
-            )
-    if not rejected_definitive_df.empty and "datetime" in rejected_definitive_df.columns:
-        cols = [c for c in ("x", "y", "theta", "phi", "s", "t0") if c in rejected_definitive_df.columns]
-        if cols:
-            plot_ts_with_side_hist(
-                rejected_definitive_df,
-                cols,
-                "datetime",
-                f"rejected_definitive_{basename_no_ext}",
-            )
-
-    combined_rejected_df = None
-    if not low_tt_zeroed_df.empty or not rejected_definitive_df.empty:
-        combined_rejected_df = pd.concat(
-            [df for df in (low_tt_zeroed_df, rejected_definitive_df) if not df.empty],
-            ignore_index=True,
-        )
-
-    if not low_tt_zeroed_df.empty:
-        plot_reject_diagnostics(
-            low_tt_zeroed_df,
-            "rejected_low_tt",
-            basename_no_ext,
-            hist_bins=reject_plot_hist_bins,
-            cols_per_fig=reject_plot_hist_cols_per_fig,
-            scatter_max=reject_plot_scatter_max_points,
-        )
-    if not rejected_definitive_df.empty:
-        plot_reject_diagnostics(
-            rejected_definitive_df,
-            "rejected_definitive",
-            basename_no_ext,
-            hist_bins=reject_plot_hist_bins,
-            cols_per_fig=reject_plot_hist_cols_per_fig,
-            scatter_max=reject_plot_scatter_max_points,
-        )
-    if combined_rejected_df is not None and not combined_rejected_df.empty:
-        plot_reject_diagnostics(
-            combined_rejected_df,
-            "rejected_all",
-            basename_no_ext,
-            hist_bins=reject_plot_hist_bins,
-            cols_per_fig=reject_plot_hist_cols_per_fig,
-            scatter_max=reject_plot_scatter_max_points,
-        )
-
-    # Restore plot destinations for the rest of the pipeline.
-    base_directories["figure_directory"] = original_figure_dir
-    plot_list = original_plot_list
-    if fig_idx_backup is not None:
-        fig_idx = fig_idx_backup
 
 print("----------------------------------------------------------------------")
 for tt_col in ("raw_tt", "clean_tt", "cal_tt", "list_tt", "tracking_tt", "definitive_tt"):
@@ -7062,7 +5516,7 @@ compute_timtrack_gaussian_sigma_chi2(
 )
 if (create_essential_plots or create_plots) and task4_plot_enabled("tim_th_chi_sigmafit_1234_histogram"):
     sigmafit_df = working_df.loc[base_cond].copy()
-    sigmafit_tt = pd.to_numeric(sigmafit_df["definitive_tt"], errors="coerce")
+    sigmafit_tt = pd.to_numeric(sigmafit_df[task4_plot_tt_column], errors="coerce")
     sigmafit_vals = pd.to_numeric(
         sigmafit_df.loc[sigmafit_tt == 1234.0, "tim_th_chi_sigmafit_1234"],
         errors="coerce",
@@ -7189,11 +5643,11 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("timtrack_res
         'tim_res_tdif_1', 'tim_res_tdif_2', 'tim_res_tdif_3', 'tim_res_tdif_4'
     ]
     
-    unique_types = df_plot_ancillary['definitive_tt'].unique()
+    unique_types = df_plot_ancillary[task4_plot_tt_column].unique()
     for t in unique_types:
         if t < 1000:
             continue
-        subset_data = df_plot_ancillary[df_plot_ancillary['definitive_tt'] == t]
+        subset_data = df_plot_ancillary[df_plot_ancillary[task4_plot_tt_column] == t]
         plot_histograms_and_gaussian(subset_data, residual_columns, f"TimTrack Residuals with Gaussian for Processed Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
     
 if (create_essential_plots or create_plots) and task4_plot_enabled("external_residuals_gaussian"):
@@ -7204,11 +5658,11 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("external_res
         'tim_ext_res_tdif_1', 'tim_ext_res_tdif_2', 'tim_ext_res_tdif_3', 'tim_ext_res_tdif_4'
     ]
 
-    unique_types = df_plot_ancillary['definitive_tt'].unique()
+    unique_types = df_plot_ancillary[task4_plot_tt_column].unique()
     for t in unique_types:
         if t < 1000:
             continue
-        subset_data = df_plot_ancillary[df_plot_ancillary['definitive_tt'] == t]
+        subset_data = df_plot_ancillary[df_plot_ancillary[task4_plot_tt_column] == t]
         plot_histograms_and_gaussian(subset_data, residual_columns, f"External Residuals with Gaussian for Processed Type {t}", figure_number=2, fit_gaussian=True, quantile=0.99)
 
 # -----------------------------------------------------------------------------------------------------------------------------
@@ -7236,7 +5690,7 @@ if create_plots or create_essential_plots:
     phi_min, phi_max     = phi_left_filter, phi_right_filter        # adjust as needed
     
     vmax_global = (
-        df_filtered.groupby('definitive_tt')[['theta', 'phi']]
+        df_filtered.groupby(task4_plot_tt_column)[['theta', 'phi']]
         .apply(
             lambda df: np.histogram2d(
                 df['theta'],
@@ -7251,7 +5705,7 @@ if create_plots or create_essential_plots:
         row_idx, col_idx = divmod(idx, ncols)
         ax = axes[row_idx][col_idx]
 
-        df_tt = df_filtered[df_filtered['definitive_tt'] == tt_val]
+        df_tt = df_filtered[df_filtered[task4_plot_tt_column] == tt_val]
         theta_vals = df_tt['theta'].dropna()
         phi_vals = df_tt['phi'].dropna()
 
@@ -7281,10 +5735,12 @@ if create_plots or create_essential_plots:
         local_max = h.max()
         cb = fig.colorbar(c, ax=ax, pad=0.1)
         cb.ax.hlines(local_max, *cb.ax.get_xlim(), colors='white', linewidth=2, linestyles='dashed')
-        # Put as title of the subplot the definitive_tt value
-        ax.set_title(f'Plane combination (definitive) {tt_val}', fontsize=10)
+        ax.set_title(f'Plane combination ({task4_plot_tt_column}) {tt_val}', fontsize=10)
 
-    plt.suptitle(r'2D Histogram of $\theta$ vs. $\phi$ for each definitive_tt Type', fontsize=16)
+    plt.suptitle(
+        rf'2D Histogram of $\theta$ vs. $\phi$ for each {task4_plot_tt_column} Type',
+        fontsize=16,
+    )
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     if save_plots:
         final_filename = f'{fig_idx}_polar_theta_phi_definitive_tt_2D.png'
@@ -7307,7 +5763,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("event_displa
     _evd_have = all(c in df_plot_ancillary.columns for c in _evd_y_cols + _evd_td_cols + _evd_q_cols)
     _evd_have_track = all(c in df_plot_ancillary.columns for c in ("x", "y", "xp", "yp"))
     if _evd_have and _evd_have_track:
-        _evd_pool = df_plot_ancillary[df_plot_ancillary["definitive_tt"] == 1234]
+        _evd_pool = df_plot_ancillary[df_plot_ancillary[task4_plot_tt_column] == 1234]
         n_evd = min(16, len(_evd_pool))
         if n_evd > 0:
             rng_evd = np.random.default_rng(42)
@@ -7442,7 +5898,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("event_displa
 if (create_essential_plots or create_plots) and task4_plot_enabled("track_consistency_loo_residuals"):
     _loo_y_cols = [f"tim_ext_res_ystr_{p}" for p in range(1, 5)]
     _loo_td_cols = [f"tim_ext_res_tdif_{p}" for p in range(1, 5)]
-    _loo_have = all(c in df_plot_ancillary.columns for c in _loo_y_cols + _loo_td_cols + ["definitive_tt"])
+    _loo_have = all(c in df_plot_ancillary.columns for c in _loo_y_cols + _loo_td_cols + [task4_plot_tt_column])
     if _loo_have:
         # 3-fold combos containing each plane — removing that plane leaves a 2-plane telescope,
         # which is nearly degenerate (5 params, 6 equations → residuals ≈ 0).
@@ -7469,7 +5925,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("track_consis
                 p = _pi + 1
                 ax = axes_loo[_ri][_pi]
                 _tt_filter = tt_fn(p)
-                _mask_tt = _loo_df_all["definitive_tt"].isin(_tt_filter)
+                _mask_tt = _loo_df_all[task4_plot_tt_column].isin(_tt_filter)
                 _sub = _loo_df_all[_mask_tt]
 
                 ry = pd.to_numeric(_sub[f"tim_ext_res_ystr_{p}"], errors="coerce")
@@ -8605,11 +7061,11 @@ def _build_projection_ellipse_diagnostic_payload(
     df_input: pd.DataFrame,
     cfg: dict[str, object],
 ) -> dict[str, object]:
-    required_columns = ("definitive_tt",)
-    if not all(column_name in df_input.columns for column_name in required_columns):
+    tt_col = get_task4_tt_column(df_input, preferred=TASK4_PRIMARY_TT_COLUMN)
+    if tt_col is None:
         return {
             "available": False,
-            "reason": "missing_definitive_tt",
+            "reason": "missing_fit_tt",
             "config": cfg,
             "projection_source": "missing",
             "tt_results": {},
@@ -8625,7 +7081,7 @@ def _build_projection_ellipse_diagnostic_payload(
             "tt_results": {},
         }
 
-    definitive_tt_all = pd.to_numeric(df_input["definitive_tt"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
+    tt_all = pd.to_numeric(df_input[tt_col], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
     x_min = float(cfg["x_min"])
     x_max = float(cfg["x_max"])
     y_min = float(cfg["y_min"])
@@ -8642,7 +7098,7 @@ def _build_projection_ellipse_diagnostic_payload(
     available_any = False
     for tt_label in tuple(cfg.get("focus_definitive_tt", ())):
         tt_int = int(normalize_tt_label(tt_label, default="0") or 0)
-        tt_mask = definitive_tt_all == tt_int
+        tt_mask = tt_all == tt_int
         x_tt = np.asarray(xproj_all[tt_mask], dtype=float)
         y_tt = np.asarray(yproj_all[tt_mask], dtype=float)
         valid = (
@@ -9302,10 +7758,10 @@ if (
     if (
         _xproj_all is not None
         and _yproj_all is not None
-        and "definitive_tt" in df_plot_ancillary.columns
+        and task4_plot_tt_column in df_plot_ancillary.columns
     ):
         _def_tt_all_scaled = pd.to_numeric(
-            df_plot_ancillary["definitive_tt"],
+            df_plot_ancillary[task4_plot_tt_column],
             errors="coerce",
         ).fillna(0).to_numpy(dtype=np.int32)
         def _combined_quantile_limits(*arrays, q_lo=0.01, q_hi=0.99, fallback=(-1.0, 1.0)):
@@ -13635,14 +12091,21 @@ if (
             'y': [-pos_filter, pos_filter],
             'det_x': [-pos_filter, pos_filter],
             'det_y': [-pos_filter, pos_filter],
+            'tim_x': [-pos_filter, pos_filter],
+            'tim_y': [-pos_filter, pos_filter],
             'theta': [theta_left_filter, theta_right_filter],
             'phi': [phi_left_filter, phi_right_filter],
             'det_theta': [det_theta_left_filter, det_theta_right_filter],
             'det_phi': [det_phi_left_filter, det_phi_right_filter],
+            'tim_theta': [theta_left_filter, theta_right_filter],
+            'tim_phi': [phi_left_filter, phi_right_filter],
             'xp': [-1 * proj_filter, proj_filter],
             'yp': [-1 * proj_filter, proj_filter],
+            'tim_xp': [-1 * proj_filter, proj_filter],
+            'tim_yp': [-1 * proj_filter, proj_filter],
             's': [slowness_filter_left, slowness_filter_right],
             'det_s': [det_slowness_filter_left, det_slowness_filter_right],
+            'tim_s': [slowness_filter_left, slowness_filter_right],
             'delta_s': [delta_s_left, delta_s_right],
             # 'th_chi': [0, 0.03],
             # 'det_th_chi': [0, 12],
@@ -13670,6 +12133,9 @@ if (
         columns_of_interest = [col for col in columns_of_interest if col in df.columns]
         if not columns_of_interest:
             return fig_idx
+
+        x_like_cols = {"x", "det_x", "tim_x"}
+        y_like_cols = {"y", "det_y", "tim_y"}
 
         # Apply filters
         for col, min_val, max_val in filter_conditions:
@@ -13733,15 +12199,23 @@ if (
                         ax.hexbin(x_data, y_data, gridsize=num_bins, cmap='turbo')
                         ax.set_facecolor(plt.cm.turbo(0))
                     
-                    if "det_s" in x_col and "s" in x_col or "s" in y_col and "det_s" in y_col:
+                    if (
+                        (x_col in {"s", "det_s", "tim_s"} and y_col in {"s", "det_s", "tim_s"})
+                        and x_col != y_col
+                    ):
                         # Draw a line in the diagonal y = x
                         line_x = np.linspace(-0.01, 0.015, 100)
                         line_y = line_x
                         ax.plot(line_x, line_y, color='white', linewidth=1)  # Thin white line
-                    
-                    square_x = [-150, 150, 150, -150, -150]  # Closing the loop
-                    square_y = [-150, -150, 150, 150, -150]
-                    ax.plot(square_x, square_y, color='white', linewidth=1)  # Thin white line
+
+                    if x_col in x_like_cols and y_col in y_like_cols:
+                        rect_x = [-strip_half, strip_half, strip_half, -strip_half, -strip_half]
+                        rect_y = [-width_half, -width_half, width_half, width_half, -width_half]
+                        ax.plot(rect_x, rect_y, color='white', linewidth=1)
+                    elif x_col in y_like_cols and y_col in x_like_cols:
+                        rect_x = [-width_half, width_half, width_half, -width_half, -width_half]
+                        rect_y = [-strip_half, -strip_half, strip_half, strip_half, -strip_half]
+                        ax.plot(rect_x, rect_y, color='white', linewidth=1)
                     
                     # Apply determined limits
                     ax.set_xlim(auto_limits[x_col])
@@ -13808,7 +12282,7 @@ if (
     
 
     df_cases_1234 = [
-        ([("definitive_tt", 1234, 1234)], "1-2-3-4 cases"),
+        ([("fit_tt", 1234, 1234)], "1-2-3-4 fit_tt cases"),
     ]
 
     df_cases_2 = [
@@ -14086,8 +12560,32 @@ if (
     #         plot_list
     #     )
     
+    _fit1234_all = pd.to_numeric(df_plot_ancillary.get("fit_tt"), errors="coerce")
+    _fit1234_mask = _fit1234_all.eq(1234.0)
+    global_variables["fit_tt_1234_scatter_source_n"] = int(_fit1234_mask.sum())
+    for _prefix, _xcol, _ycol in (
+        ("tim", "tim_x", "tim_y"),
+        ("det", "det_x", "det_y"),
+        ("legacy", "x", "y"),
+    ):
+        if _xcol in df_plot_ancillary.columns and _ycol in df_plot_ancillary.columns:
+            _xvals = pd.to_numeric(df_plot_ancillary[_xcol], errors="coerce").to_numpy(dtype=float)
+            _yvals = pd.to_numeric(df_plot_ancillary[_ycol], errors="coerce").to_numpy(dtype=float)
+            _finite = np.isfinite(_xvals) & np.isfinite(_yvals)
+            _outside = _fit1234_mask.to_numpy(dtype=bool, copy=False) & _finite & (
+                (np.abs(_xvals) > float(strip_half)) | (np.abs(_yvals) > float(width_half))
+            )
+            _outside_count = int(np.count_nonzero(_outside))
+            global_variables[f"fit_tt_1234_{_prefix}_outside_plane1_n"] = _outside_count
+            print(
+                "[FIT_TT_1234_PLANE1_ACCEPTANCE] "
+                f"source={_prefix} total={int(_fit1234_mask.sum())} outside={_outside_count} "
+                f"x_half={float(strip_half):.1f} y_half={float(width_half):.1f}",
+                force=True,
+            )
+
     # A pure theta vs phi map
-    plot_col = ['x', 'y', 'xp', 'yp', 's', 'tim_th_chi_sigmafit_1234']
+    plot_col = ['tim_x', 'tim_y', 'tim_xp', 'tim_yp', 'tim_s', 'tim_th_chi_sigmafit_1234']
     for filters, title in df_cases_1234:
         fig_idx = plot_hexbin_matrix(
             df_plot_ancillary,
@@ -14107,7 +12605,7 @@ if (
         relevant_charges = [f"charge_{n}" for n in map(int, title.split()[0].split('-'))]
 
         # Define the columns - interest dynamically
-        columns_of_interest = ['x', 'y', 'theta', 'phi', 's', 'tim_th_chi_sigmafit_1234'] + relevant_charges
+        columns_of_interest = ['tim_x', 'tim_y', 'tim_theta', 'tim_phi', 'tim_s', 'tim_th_chi_sigmafit_1234'] + relevant_charges
 
         # Keep the original filters (if needed) and apply them
         fig_idx = plot_hexbin_matrix(
@@ -14142,7 +12640,7 @@ if (
         
         
         # Define the columns - interest dynamically
-        columns_of_interest = ['x', 'y', 'theta', 'phi', 's', 'tim_th_chi_sigmafit_1234'] + relevant_charges
+        columns_of_interest = ['tim_x', 'tim_y', 'tim_theta', 'tim_phi', 'tim_s', 'tim_th_chi_sigmafit_1234'] + relevant_charges
         
         if (create_essential_plots or create_plots) and task4_plot_enabled("timtrack_results_scatter_combination_projections"):
             fig_idx = plot_hexbin_matrix(
@@ -14271,83 +12769,13 @@ if create_plots:
 del df_plot_ancillary
 gc.collect()
 
-# if create_plots:
-
-#     column_chosen = "definitive_tt"
-#     plot_ancillary_df = working_df.copy()
-    
-#     # Ensure datetime is proper and indexed
-#     plot_ancillary_df['datetime'] = pd.to_datetime(plot_ancillary_df['datetime'], errors='coerce')
-#     plot_ancillary_df = plot_ancillary_df.set_index('datetime')
-
-#     # Prepare a container for each group: 2-plane, 3-plane, 4-plane cases
-#     grouped_data = {
-#         "Two planes": defaultdict(list),
-#         "Three planes": defaultdict(list),
-#         "Four planes": defaultdict(list)
-#     }
-
-#     # Classify events by number of planes in original_tt
-#     for tt_code in plot_ancillary_df[column_chosen].unique():
-#         planes = str(tt_code)
-#         count = len(planes)
-#         label = f'Case {tt_code}'
-#         if count == 1:
-#             grouped_data["One plane"][label] = plot_ancillary_df[plot_ancillary_df[column_chosen] == tt_code]
-#         if count == 2:
-#             grouped_data["Two planes"][label] = plot_ancillary_df[plot_ancillary_df[column_chosen] == tt_code]
-#         elif count == 3:
-#             grouped_data["Three planes"][label] = plot_ancillary_df[plot_ancillary_df[column_chosen] == tt_code]
-#         elif count == 4:
-#             grouped_data["Four planes"][label] = plot_ancillary_df[plot_ancillary_df[column_chosen] == tt_code]
-
-#     # Plotting
-#     fig, axes = plt.subplots(1, 3, figsize=(24, 6))
-#     colors = plt.colormaps['tab10']
-
-#     for ax, (title, group_dict) in zip(axes, grouped_data.items()):
-#         for i, (label, df) in enumerate(group_dict.items()):
-#             df.index = pd.to_datetime(df.index, errors='coerce')
-#             event_times = df.index.floor('s')
-#             full_range = pd.date_range(start=event_times.min(), end=event_times.max(), freq='s')
-#             events_per_second = event_times.value_counts().reindex(full_range, fill_value=0).sort_index()
-            
-#             hist_data = events_per_second.value_counts().sort_index()
-#             lambda_estimate = events_per_second.mean()
-#             x_values = np.arange(0, hist_data.index.max() + 1)
-#             poisson_pmf = poisson.pmf(x_values, lambda_estimate)
-#             poisson_pmf_scaled = poisson_pmf * len(events_per_second)
-
-#             ax.plot(hist_data.index, hist_data.values, label=label, alpha=0.9, color=colors(i % 10), linewidth = 3)
-#             ax.plot(x_values, poisson_pmf_scaled, '--', lw=1.5, color=colors(i % 10), alpha=0.6)
-#             ax.set_xlim(0, 8)
-
-#         ax.set_title(f'{title}')
-#         ax.set_xlabel('Number of Events per Second')
-#         ax.set_ylabel('Frequency')
-#         ax.legend(fontsize='small', loc='upper right')
-#         ax.grid(True)
-
-#     plt.tight_layout()
-#     plt.subplots_adjust(top=0.88)
-#     plt.suptitle('Event Rate Histograms by Original_tt Cardinality with Poisson Fits', fontsize=16)
-
-#     if save_plots:
-#         final_filename = f'{fig_idx}_events_per_second_by_plane_cardinality_definitive_tt.png'
-#         fig_idx += 1
-#         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-#         plot_list.append(save_fig_path)
-#         save_plot_figure(save_fig_path, format='png')
-#     if show_plots:
-#         plt.show()
-#     plt.close()
 
 if create_plots:
 
     fig, axes = plt.subplots(2, 3, figsize=(24, 12), sharey=True)
     colors = plt.colormaps['tab10']
-    tt_types = ['raw_tt', 'definitive_tt']
-    row_titles = ['Raw TT', 'Processed TT']
+    tt_types = ['raw_tt', task4_plot_tt_column]
+    row_titles = ['Raw TT', task4_plot_tt_column]
 
     for row_idx, column_chosen in enumerate(tt_types):
         plot_ancillary_df = working_df.copy()
@@ -14548,7 +12976,7 @@ if self_trigger:
    
         fig, axs = plt.subplots(4, 4, figsize=(18, 12))
         # Filter once outside the loop; read-only inside so no copy needed.
-        plot_def_df = working_df.loc[working_df["definitive_tt"] == "1234"]
+        plot_def_df = working_df.loc[pd.to_numeric(working_df[task4_plot_tt_column], errors="coerce") == 1234]
         for i in range(1, 5):
             for j in range(1, 5):
                 # Get the column name
@@ -14625,94 +13053,6 @@ def _pipeline_compute_start_timestamp(base: str) -> str:
             return ''
     return ''
 
-# def _update_pipeline_csv_for_list_event() -> None:
-#     csv_headers = [
-#         'basename',
-#         'start_date',
-#         'hld_remote_add_date',
-#         'hld_local_add_date',
-#         'dat_add_date',
-#         'list_ev_name',
-#         'list_ev_add_date',
-#         'acc_name',
-#         'acc_add_date',
-#         'merge_add_date',
-#     ]
-
-#     station_dir = Path(home_path) / 'DATAFLOW_v3' / 'STATIONS' / f'MINGO0{station}'
-#     csv_path = station_dir / f'database_status_{station}.csv'
-#     csv_path.parent.mkdir(parents=True, exist_ok=True)
-#     if not csv_path.exists():
-#         with csv_path.open('w', newline='') as handle:
-#             writer = csv.writer(handle)
-#             writer.writerow(csv_headers)
-
-#     base_name = _pipeline_strip_suffix(os.path.basename(the_filename))
-#     list_event_name = save_filename
-#     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-#     start_value = _pipeline_compute_start_timestamp(base_name)
-
-#     rows: List[dict[str, str]] = []
-#     with csv_path.open('r', newline='') as handle:
-#         reader = csv.DictReader(handle)
-#         rows.extend(reader)
-
-#     found = False
-#     for row in rows:
-#         if row.get('basename', '') == base_name:
-#             found = True
-#             if not row.get('start_date') and start_value:
-#                 row['start_date'] = start_value
-#             row['list_ev_name'] = list_event_name
-#             row['list_ev_add_date'] = timestamp
-#             break
-
-#     if not found:
-#         new_row = {header: '' for header in csv_headers}
-#         new_row['basename'] = base_name
-#         if start_value:
-#             new_row['start_date'] = start_value
-#         new_row['list_ev_name'] = list_event_name
-#         new_row['list_ev_add_date'] = timestamp
-#         rows.append(new_row)
-
-#     # Ensure existing list events on disk are reflected in the CSV
-#     list_dir = Path(home_path) / 'DATAFLOW_v3' / 'STATIONS' / f'MINGO0{station}' / 'STAGE_1' / 'EVENT_DATA' / 'LIST_EVENTS_DIRECTORY'
-#     existing_names = {row.get('list_ev_name', '') for row in rows}
-
-#     if list_dir.exists():
-#         for list_path in sorted(list_dir.glob('list_events_*.txt')):
-#             list_name = list_path.name
-#             if list_name in existing_names:
-#                 continue
-
-#             derived_base = _pipeline_strip_suffix(list_name)
-#             derived_start = ''
-#             stem = Path(list_name).stem
-#             if stem.startswith('list_events_'):
-#                 stamp = stem[len('list_events_'):]
-#                 try:
-#                     dt = datetime.strptime(stamp, '%Y.%m.%d_%H.%M.%S')
-#                     derived_start = dt.strftime('%Y-%m-%d_%H.%M.%S')
-#                 except ValueError:
-#                     derived_start = ''
-
-#             add_timestamp = datetime.fromtimestamp(list_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
-#             filler = {header: '' for header in csv_headers}
-#             filler['basename'] = derived_base
-#             if derived_start:
-#                 filler['start_date'] = derived_start
-#             filler['list_ev_name'] = list_name
-#             filler['list_ev_add_date'] = add_timestamp
-#             rows.append(filler)
-#             existing_names.add(list_name)
-
-#     with csv_path.open('w', newline='') as handle:
-#         writer = csv.DictWriter(handle, fieldnames=csv_headers)
-#         writer.writeheader()
-#         writer.writerows(rows)
-
-# _update_pipeline_csv_for_list_event()
 
 # -----------------------------------------------------------------------------
 # Create and save the PDF -----------------------------------------------------
@@ -14741,7 +13081,7 @@ if (
     _task4_charge_plot_values = _task4_charge_plot_values[_task4_charge_plot_values >= 0.0]
 
     _task4_definitive_tt_series = pd.to_numeric(
-        working_df.get("definitive_tt", pd.Series(np.nan, index=working_df.index)),
+        working_df.get(task4_plot_tt_column, pd.Series(np.nan, index=working_df.index)),
         errors="coerce",
     )
     _task4_hist_panels = [
@@ -14934,20 +13274,8 @@ if component_cols:
         len(working_df) + removed_all_zero if (len(working_df) + removed_all_zero) else 0,
     )
 
-# Compute extension_tt from reconstructed plane-final fields.
-# Keep fit_tt as charge-based occupancy to avoid extension-only plane counting.
-fit_tt_columns = {
-    i_plane: [
-        f"P{i_plane}_T_sum_final",
-        f"P{i_plane}_T_dif_final",
-        f"P{i_plane}_Q_sum_final",
-        f"P{i_plane}_Q_dif_final",
-        f"P{i_plane}_Y_final",
-    ]
-    for i_plane in range(1, 5)
-}
-working_df = compute_tt(working_df, "extension_tt", fit_tt_columns)
-working_df["fit_tt"] = compute_fit_tt_from_charge(working_df)
+# Refresh the trigger columns after any late plane-component changes.
+working_df = refresh_task4_trigger_columns(working_df)
 
 # Store TimTrack convergence controls in specific metadata for later studies.
 global_variables["timtrack_d0"] = float(d0)
@@ -15154,217 +13482,8 @@ if VERBOSE:
 # working_df = working_df[(working_df[Q_cols] != 0).any(axis=1)]
 
 print(f"Original number of events in the dataframe: {original_number_of_events}")
-def apply_task4_final_filter(
-    df_input: pd.DataFrame,
-    *,
-    apply_changes: bool,
-) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, int | float]]:
-    input_rows = int(len(df_input))
-    if input_rows == 0:
-        return df_input.copy(), pd.DataFrame(), {
-            "input_rows": 0,
-            "rows_affected": 0,
-            "values_zeroed": 0,
-            "rows_failed_fit_tt_min": 0,
-            "rows_failed_nonzero_required": 0,
-        }
-
-    working = df_input.copy() if apply_changes else df_input
-    summary: dict[str, int | float] = {
-        "input_rows": input_rows,
-        "rows_affected": 0,
-        "values_zeroed": 0,
-        "rows_failed_fit_tt_min": 0,
-        "rows_failed_nonzero_required": 0,
-    }
-    final_mask = np.ones(input_rows, dtype=bool)
-    fail_reason_parts = np.empty(input_rows, dtype=object)
-    fail_reason_parts.fill("")
-
-    final_filter_remove_small = _coerce_config_bool(
-        config.get("final_filter_remove_small", False),
-        default=False,
-    )
-    final_filter_remove_small_eps = _task4_config_float(
-        config,
-        "final_filter_remove_small_eps",
-        default=1e-7,
-    )
-    if final_filter_remove_small:
-        small_mask = working.map(
-            lambda x: isinstance(x, (int, float)) and x != 0 and abs(x) < final_filter_remove_small_eps
-        )
-        nonzero_numeric_mask = working.map(lambda x: isinstance(x, (int, float)) and x != 0)
-        total_nonzero = int(nonzero_numeric_mask.sum().sum())
-        total_small = int(small_mask.sum().sum())
-        rows_with_small = int(small_mask.any(axis=1).sum())
-        summary["values_zeroed"] = total_small
-        summary["rows_with_small_values"] = rows_with_small
-        if apply_changes and total_small > 0:
-            working = working.mask(small_mask, 0)
-        record_filter_metric(
-            "small_values_zeroed_event_pct",
-            rows_with_small,
-            input_rows if input_rows else 0,
-        )
-        record_filter_metric(
-            "small_values_zeroed_value_pct",
-            total_small,
-            total_nonzero if total_nonzero else 0,
-        )
-    else:
-        record_filter_metric("small_values_zeroed_event_pct", 0, input_rows if input_rows else 0)
-        record_filter_metric("small_values_zeroed_value_pct", 0, input_rows if input_rows else 0)
-
-    fit_tt_min = int(config.get("final_filter_fit_tt_min", 10))
-    fit_tt_series = pd.to_numeric(working.get("fit_tt", 0), errors="coerce").fillna(0)
-    fit_tt_pass = fit_tt_series >= fit_tt_min
-    fit_tt_fail = ~fit_tt_pass.to_numpy(dtype=bool, copy=False)
-    summary["rows_failed_fit_tt_min"] = int(fit_tt_fail.sum())
-    final_mask &= ~fit_tt_fail
-    fail_reason_parts[fit_tt_fail] = np.where(
-        fail_reason_parts[fit_tt_fail] == "",
-        f"fit_tt<{fit_tt_min}",
-        fail_reason_parts[fit_tt_fail] + f";fit_tt<{fit_tt_min}",
-    )
-
-    required_nonzero_cols = _task4_parse_filter_columns(
-        config.get("final_filter_nonzero_cols", ["x", "y", "s", "t0", "theta", "phi"]),
-        default=("x", "y", "s", "t0", "theta", "phi"),
-    )
-    required_nonzero_cols = [col for col in required_nonzero_cols if col in working.columns]
-    if required_nonzero_cols:
-        nonzero_mask = np.ones(input_rows, dtype=bool)
-        for col in required_nonzero_cols:
-            col_values = pd.to_numeric(working[col], errors="coerce")
-            nonzero_mask &= np.isfinite(col_values.to_numpy(dtype=float, copy=False))
-            nonzero_mask &= col_values.to_numpy(dtype=float, copy=False) != 0
-        nonzero_fail = ~nonzero_mask
-        summary["rows_failed_nonzero_required"] = int(nonzero_fail.sum())
-        final_mask &= ~nonzero_fail
-        fail_reason_parts[nonzero_fail] = np.where(
-            fail_reason_parts[nonzero_fail] == "",
-            "required_nonzero_violation",
-            fail_reason_parts[nonzero_fail] + ";required_nonzero_violation",
-        )
-
-    variable_specs = (
-        ("x", "final_filter_x_min", "final_filter_x_max"),
-        ("y", "final_filter_y_min", "final_filter_y_max"),
-        ("s", "final_filter_s_min", "final_filter_s_max"),
-        ("t0", "final_filter_t0_min", "final_filter_t0_max"),
-        ("theta", "final_filter_theta_min", "final_filter_theta_max"),
-        ("phi", "final_filter_phi_min", "final_filter_phi_max"),
-    )
-    for variable_name, left_key, right_key in variable_specs:
-        if variable_name not in working.columns:
-            continue
-        left_limit = _task4_parse_optional_float(config.get(left_key))
-        right_limit = _task4_parse_optional_float(config.get(right_key))
-        if left_limit is None and right_limit is None:
-            continue
-        values = pd.to_numeric(working[variable_name], errors="coerce").to_numpy(dtype=float, copy=False)
-        pass_mask = np.isfinite(values)
-        if left_limit is not None:
-            pass_mask &= values >= left_limit
-        if right_limit is not None:
-            pass_mask &= values <= right_limit
-        fail_mask = ~pass_mask
-        summary[f"rows_failed_{variable_name}_range"] = int(fail_mask.sum())
-        final_mask &= ~fail_mask
-        fail_reason_parts[fail_mask] = np.where(
-            fail_reason_parts[fail_mask] == "",
-            f"{variable_name}_out_of_range",
-            fail_reason_parts[fail_mask] + f";{variable_name}_out_of_range",
-        )
-
-    rows_affected = int((~final_mask).sum())
-    summary["rows_affected"] = rows_affected
-    summary["flagged_rows"] = rows_affected
-    summary["failed_pair_any"] = rows_affected
-    if not apply_changes:
-        return df_input, pd.DataFrame(), summary
-
-    filtered_df = working.loc[final_mask].copy()
-    rejected_df = working.loc[~final_mask].copy()
-    if not rejected_df.empty:
-        rejected_df["reject_stage"] = "final_filtering"
-        rejected_df["reject_reason"] = fail_reason_parts[~final_mask]
-    return filtered_df, rejected_df, summary
-
-
-task4_final_filter_dry_run_summary = apply_task4_final_filter(
-    working_df,
-    apply_changes=False,
-)[2]
-task4_final_filter_dry_run_has_effect = int(
-    (
-        int(task4_final_filter_dry_run_summary.get("rows_affected", 0)) > 0
-        or int(task4_final_filter_dry_run_summary.get("values_zeroed", 0)) > 0
-        or int(task4_final_filter_dry_run_summary.get("failed_pair_any", 0)) > 0
-    )
-)
-global_variables["task4_final_filter_dry_run_has_effect"] = task4_final_filter_dry_run_has_effect
-global_variables["task4_final_filter_dry_run_input_rows"] = int(
-    task4_final_filter_dry_run_summary.get("input_rows", len(working_df))
-)
-global_variables["task4_final_filter_dry_run_rows_affected"] = int(
-    task4_final_filter_dry_run_summary.get("rows_affected", 0)
-)
-global_variables["task4_final_filter_dry_run_flagged_rows"] = int(
-    task4_final_filter_dry_run_summary.get("flagged_rows", 0)
-)
-global_variables["task4_final_filter_dry_run_values_zeroed"] = int(
-    task4_final_filter_dry_run_summary.get("values_zeroed", 0)
-)
-global_variables["task4_final_filter_dry_run_failed_pair_any"] = int(
-    task4_final_filter_dry_run_summary.get("failed_pair_any", 0)
-)
-print(
-    "[TASK4_FINAL_FILTER_DRY_RUN] "
-    f"has_effect={'yes' if task4_final_filter_dry_run_has_effect else 'no'} "
-    f"input_rows={global_variables['task4_final_filter_dry_run_input_rows']} "
-    f"flagged_rows={global_variables['task4_final_filter_dry_run_flagged_rows']} "
-    f"rows_affected={global_variables['task4_final_filter_dry_run_rows_affected']} "
-    f"values_zeroed={global_variables['task4_final_filter_dry_run_values_zeroed']} "
-    f"failed_pair_any={global_variables['task4_final_filter_dry_run_failed_pair_any']}",
-    force=True,
-)
-
-working_df, task4_final_filter_rejected_df, task4_final_filter_summary = apply_task4_final_filter(
-    working_df,
-    apply_changes=True,
-)
-
-fit_tt_total = int(task4_final_filter_summary.get("input_rows", len(working_df)))
-fit_tt_removed = int(task4_final_filter_summary.get("rows_failed_fit_tt_min", 0))
-record_filter_metric(
-    "fit_tt_lt_10_rows_removed_pct",
-    fit_tt_removed,
-    fit_tt_total if fit_tt_total else 0,
-)
-record_filter_metric(
-    "final_filter_rows_removed_pct",
-    int(task4_final_filter_summary.get("rows_affected", 0)),
-    fit_tt_total if fit_tt_total else 0,
-)
-
-if "fit_tt" in working_df.columns:
-    working_df["definitive_tt"] = pd.to_numeric(working_df["fit_tt"], errors="coerce").fillna(0).astype(int)
-
-if save_rejected_rows and not task4_final_filter_rejected_df.empty:
-    os.makedirs(rejected_files_directory, exist_ok=True)
-    final_rejected_path = os.path.join(
-        rejected_files_directory,
-        f"rejected_final_filtering_{basename_no_ext}.parquet",
-    )
-    task4_final_filter_rejected_df.to_parquet(
-        final_rejected_path,
-        engine="pyarrow",
-        compression="zstd",
-        index=False,
-    )
-    print(f"Rejected rows (final filtering) saved to: {final_rejected_path}")
+if not globals().get("task4_final_filter_applied", False):
+    raise RuntimeError("Task 4 final filtering was not applied before the plotting/output stage.")
 
 list_tt_int = pd.to_numeric(working_df["list_tt"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
 fit_tt_int = pd.to_numeric(working_df["fit_tt"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
@@ -15743,5 +13862,3 @@ _prof["execution_timestamp"] = execution_timestamp
 _prof["param_hash"] = param_hash_value
 _prof["total_s"] = round(time.perf_counter() - _prof_t0, 2)
 save_metadata(csv_path_profiling, _prof)
-
-# %%

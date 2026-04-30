@@ -54,6 +54,72 @@ DEFAULT_MINGO00_METADATA_ROOT = (
 )
 
 
+def _resolve_observed_efficiency_upper_limits(config: dict) -> dict[int, float]:
+    step1_config = config.get("step1", {})
+    if not isinstance(step1_config, dict):
+        step1_config = {}
+
+    raw = step1_config.get("observed_efficiency_upper_limits", {})
+    if raw in (None, "", "null", "None"):
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError("step1.observed_efficiency_upper_limits must be a JSON object keyed by plane index.")
+
+    limits: dict[int, float] = {}
+    for key, value in raw.items():
+        text = str(key).strip().lower()
+        if text.startswith("plane_"):
+            text = text[6:]
+        plane_idx = int(text)
+        if plane_idx < 1 or plane_idx > 4:
+            raise ValueError(f"Invalid plane index in observed-efficiency upper limits: {key!r}")
+        if value in (None, "", "null", "None"):
+            continue
+        limits[plane_idx] = float(value)
+    return limits
+
+
+def _drop_rows_above_observed_efficiency_upper_limits(
+    dataframe: pd.DataFrame,
+    limits: dict[int, float],
+) -> tuple[pd.DataFrame, dict[str, object]]:
+    row_count_before = int(len(dataframe))
+    if not limits:
+        return dataframe.copy(), {
+            "mode": "drop",
+            "limits_by_plane": {},
+            "affected_rows_by_plane": {},
+            "affected_rows_total": 0,
+            "row_count_before": row_count_before,
+            "row_count_after": row_count_before,
+        }
+
+    work = dataframe.copy()
+    counts_by_plane: dict[str, int] = {}
+    over_union_mask = pd.Series(False, index=work.index, dtype=bool)
+    for plane_idx, limit in sorted(limits.items()):
+        column = f"eff_empirical_{plane_idx}"
+        if column not in work.columns:
+            continue
+        numeric = pd.to_numeric(work[column], errors="coerce")
+        over_mask = numeric.notna() & (numeric > float(limit))
+        counts_by_plane[str(plane_idx)] = int(over_mask.sum())
+        over_union_mask = over_union_mask | over_mask
+        work[column] = numeric
+
+    if bool(over_union_mask.any()):
+        work = work.loc[~over_union_mask].copy()
+
+    return work, {
+        "mode": "drop",
+        "limits_by_plane": {str(key): float(value) for key, value in sorted(limits.items())},
+        "affected_rows_by_plane": counts_by_plane,
+        "affected_rows_total": int(over_union_mask.sum()),
+        "row_count_before": row_count_before,
+        "row_count_after": int(len(work)),
+    }
+
+
 def _configure_logging() -> None:
     logging.basicConfig(format="[%(levelname)s] STEP_1 - %(message)s", level=logging.INFO, force=True)
 
@@ -376,6 +442,17 @@ def run(config_path: str | Path | None = None) -> Path:
             "four-plane support with finite empirical and simulated efficiencies."
         )
 
+    observed_efficiency_limits = _resolve_observed_efficiency_upper_limits(config)
+    dataframe, observed_efficiency_upper_limit_filter = _drop_rows_above_observed_efficiency_upper_limits(
+        dataframe,
+        observed_efficiency_limits,
+    )
+    rows_after_observed_efficiency_upper_limit_filter = int(len(dataframe))
+    if dataframe.empty:
+        raise ValueError(
+            "No Step 1 rows remain after applying observed_efficiency_upper_limits."
+        )
+
     selected_z_vector = choose_z_vector(dataframe, z_columns, configured_z_vector)
     dataframe = filter_by_z_vector(dataframe, z_columns, selected_z_vector)
     rows_after_z_filter = int(len(dataframe))
@@ -442,9 +519,11 @@ def run(config_path: str | Path | None = None) -> Path:
         "row_counts": {
             "initial": initial_rows,
             "after_trigger_validity_filter": rows_after_trigger_validity_filter,
+            "after_observed_efficiency_upper_limit_filter": rows_after_observed_efficiency_upper_limit_filter,
             "after_z_filter": rows_after_z_filter,
             "after_min_events_filter": rows_after_event_filter,
         },
+        "observed_efficiency_upper_limit_filter": observed_efficiency_upper_limit_filter,
         "min_events": min_events,
         "input_columns": {
             "z_positions": z_columns,
@@ -461,6 +540,12 @@ def run(config_path: str | Path | None = None) -> Path:
 
     log.info("Wrote %d filtered rows to %s", len(dataframe), output_path)
     log.info("Selected z-position vector: %s", selected_z_vector)
+    if observed_efficiency_upper_limit_filter["affected_rows_total"] > 0:
+        log.info(
+            "Dropped rows above observed-efficiency upper limits %s. Affected rows by plane: %s",
+            observed_efficiency_upper_limit_filter["limits_by_plane"],
+            observed_efficiency_upper_limit_filter["affected_rows_by_plane"],
+        )
     if plot_path is not None:
         log.info("Wrote plot: %s", plot_path)
     if selected_trigger is not None:

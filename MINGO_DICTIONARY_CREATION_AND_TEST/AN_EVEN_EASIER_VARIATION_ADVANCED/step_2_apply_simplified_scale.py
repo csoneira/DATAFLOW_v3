@@ -476,6 +476,54 @@ def _plot_reference_efficiency_series(
     plt.close(fig)
 
 
+def _plot_inverse_eff_reference_series(
+    dataframe: pd.DataFrame,
+    output_path: Path,
+    *,
+    apply_moving_average: bool,
+    moving_average_kernel: int,
+    event_markers: list[dict[str, object]],
+) -> None:
+    plot_frame = _sort_by_time_axis_for_plotting(dataframe)
+    plot_frame["inv_eff_reference"] = 1.0 / pd.to_numeric(
+        plot_frame["eff_reference"],
+        errors="coerce",
+    )
+    if apply_moving_average and moving_average_kernel > 1:
+        plot_frame["inv_eff_reference"] = plot_frame["inv_eff_reference"].rolling(
+            window=moving_average_kernel,
+            min_periods=1,
+            center=True,
+        ).mean()
+
+    x_values, x_label = _resolve_time_axis(plot_frame)
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.plot(
+        x_values,
+        plot_frame["inv_eff_reference"].astype(float),
+        marker="o",
+        markersize=3,
+        linewidth=1.6,
+        color="#6a3d9a",
+        label="1 / eff_reference",
+    )
+    title = "Inverse reference efficiency over time"
+    if apply_moving_average and moving_average_kernel > 1:
+        title += f" | moving average = {moving_average_kernel}"
+    ax.set_title(title)
+    ax.set_xlabel(x_label.replace("_", " "))
+    ax.set_ylabel("1 / eff_reference")
+    _add_event_markers(ax, x_values, event_markers)
+    ax.grid(alpha=0.25)
+    ax.legend()
+    if pd.api.types.is_datetime64_any_dtype(x_values):
+        fig.autofmt_xdate()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+
+
 def _plot_eff_reference_vs_rates_scatter(
     dataframe: pd.DataFrame,
     output_path: Path,
@@ -588,6 +636,14 @@ def run(config_path: str | Path | None = None) -> Path:
         moving_average_kernel=plot_moving_average_kernel,
         event_markers=event_markers,
     )
+    inv_eff_plot_path = output_path.parent.parent / "PLOTS" / "step2_04_inverse_eff_reference_series.png"
+    _plot_inverse_eff_reference_series(
+        scaled,
+        inv_eff_plot_path,
+        apply_moving_average=apply_plot_moving_average,
+        moving_average_kernel=plot_moving_average_kernel,
+        event_markers=event_markers,
+    )
     scatter_plot_path = output_path.parent.parent / "PLOTS" / "step2_03_eff_reference_vs_rate_scatter.png"
     _plot_eff_reference_vs_rates_scatter(
         scaled,
@@ -618,6 +674,7 @@ def run(config_path: str | Path | None = None) -> Path:
             plot_moving_average_kernel,
         )
     logging.info("Wrote reference-efficiency time series plot to %s", eff_plot_path)
+    logging.info("Wrote inverse-eff_reference time series plot to %s", inv_eff_plot_path)
     logging.info("Wrote original vs corrected time series plot to %s", plot_path)
     logging.info("Wrote eff_reference vs rates scatter plot to %s", scatter_plot_path)
     return output_path

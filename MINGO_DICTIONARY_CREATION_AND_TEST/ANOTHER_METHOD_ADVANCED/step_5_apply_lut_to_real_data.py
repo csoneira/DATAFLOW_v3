@@ -162,6 +162,72 @@ def _resolve_plot_moving_average(config: dict[str, Any]) -> tuple[bool, int]:
     return enabled, kernel
 
 
+def _resolve_observed_efficiency_upper_limits(config: dict[str, Any]) -> dict[int, float]:
+    step1_config = config.get("step1", {})
+    if not isinstance(step1_config, dict):
+        step1_config = {}
+
+    raw = step1_config.get("observed_efficiency_upper_limits", {})
+    if raw in (None, "", "null", "None"):
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError("step1.observed_efficiency_upper_limits must be a JSON object keyed by plane index.")
+
+    limits: dict[int, float] = {}
+    for key, value in raw.items():
+        text = str(key).strip().lower()
+        if text.startswith("plane_"):
+            text = text[6:]
+        plane_idx = int(text)
+        if plane_idx < 1 or plane_idx > 4:
+            raise ValueError(f"Invalid plane index in observed-efficiency upper limits: {key!r}")
+        if value in (None, "", "null", "None"):
+            continue
+        limits[plane_idx] = float(value)
+    return limits
+
+
+def _drop_rows_above_observed_efficiency_upper_limits(
+    dataframe: pd.DataFrame,
+    limits: dict[int, float],
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    row_count_before = int(len(dataframe))
+    if not limits:
+        return dataframe.copy(), {
+            "mode": "drop",
+            "limits_by_plane": {},
+            "affected_rows_by_plane": {},
+            "affected_rows_total": 0,
+            "row_count_before": row_count_before,
+            "row_count_after": row_count_before,
+        }
+
+    work = dataframe.copy()
+    counts_by_plane: dict[str, int] = {}
+    over_union_mask = pd.Series(False, index=work.index, dtype=bool)
+    for plane_idx, limit in sorted(limits.items()):
+        column = f"eff_empirical_{plane_idx}"
+        if column not in work.columns:
+            continue
+        numeric = pd.to_numeric(work[column], errors="coerce")
+        over_mask = numeric.notna() & (numeric > float(limit))
+        counts_by_plane[str(plane_idx)] = int(over_mask.sum())
+        over_union_mask = over_union_mask | over_mask
+        work[column] = numeric
+
+    if bool(over_union_mask.any()):
+        work = work.loc[~over_union_mask].copy()
+
+    return work, {
+        "mode": "drop",
+        "limits_by_plane": {str(key): float(value) for key, value in sorted(limits.items())},
+        "affected_rows_by_plane": counts_by_plane,
+        "affected_rows_total": int(over_union_mask.sum()),
+        "row_count_before": row_count_before,
+        "row_count_after": int(len(work)),
+    }
+
+
 def _resolve_step5_feature_vector_config(config: dict[str, Any]) -> dict[str, Any]:
     step5_config = config.get("step5", {})
     if not isinstance(step5_config, dict):
@@ -1574,6 +1640,13 @@ def run(config_path: str | Path | None = None) -> Path:
         metadata_agg=metadata_agg,
         timestamp_column=timestamp_column,
     )
+    observed_efficiency_limits = _resolve_observed_efficiency_upper_limits(config)
+    real_dataframe, observed_efficiency_upper_limit_filter = _drop_rows_above_observed_efficiency_upper_limits(
+        real_dataframe,
+        observed_efficiency_limits,
+    )
+    if real_dataframe.empty:
+        raise ValueError("No Step 5 real-data rows remain after applying observed_efficiency_upper_limits.")
 
     if "rate_hz" not in real_dataframe.columns and rate_column_name not in real_dataframe.columns:
         raise ValueError(
@@ -1807,10 +1880,17 @@ def run(config_path: str | Path | None = None) -> Path:
         )
         .tolist(),
         "collection": collection_meta,
+        "observed_efficiency_upper_limit_filter": observed_efficiency_upper_limit_filter,
     }
     write_json(meta_path, metadata)
 
     log.info("Wrote Step 5 real-data LUT application to %s", output_path)
+    if observed_efficiency_upper_limit_filter["affected_rows_total"] > 0:
+        log.info(
+            "Dropped Step 5 rows above observed-efficiency upper limits %s. Affected rows by plane: %s",
+            observed_efficiency_upper_limit_filter["limits_by_plane"],
+            observed_efficiency_upper_limit_filter["affected_rows_by_plane"],
+        )
     return output_path
 
 

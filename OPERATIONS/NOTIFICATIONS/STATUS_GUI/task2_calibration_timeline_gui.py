@@ -398,6 +398,10 @@ class Task2CalibrationTimelineApp:
         self.basename_end_var = self.tk.StringVar(value=args.plot_end or "")
         self.refresh_var = self.tk.StringVar(value=str(args.refresh_seconds))
         self.station_var = self.tk.StringVar(value=args.stations)
+        self.station_checkbuttons = [
+            self.tk.BooleanVar(value=(i != 0))  # 0 unchecked, 1-4 checked
+            for i in range(5)
+        ]
         self.basename_lookback_var = self.tk.BooleanVar(value=args.basename_lookback)
         self.auto_refresh_var = self.tk.BooleanVar(value=True)
         self.show_legend_var = self.tk.BooleanVar(value=args.show_legend)
@@ -440,9 +444,15 @@ class Task2CalibrationTimelineApp:
         )
 
         self.ttk.Label(controls_top, text="Stations").pack(side="left")
-        self.ttk.Entry(controls_top, width=12, textvariable=self.station_var).pack(
-            side="left", padx=(4, 12)
-        )
+        stations_frame = self.ttk.Frame(controls_top)
+        stations_frame.pack(side="left", padx=(4, 12))
+        for i in range(5):
+            self.ttk.Checkbutton(
+                stations_frame,
+                text=f"MINGO0{i}",
+                variable=self.station_checkbuttons[i],
+                command=self._refresh_now,
+            ).pack(side="left", padx=2)
 
         self.ttk.Checkbutton(
             controls_top,
@@ -551,6 +561,11 @@ class Task2CalibrationTimelineApp:
         )
         status_bar.pack(fill="x")
 
+    def _get_selected_stations_str(self) -> str:
+        """Get selected stations as comma-separated string for _parse_id_filter."""
+        selected = [str(i) for i in range(5) if self.station_checkbuttons[i].get()]
+        return ",".join(selected) if selected else "0,1,2,3,4"
+
     def _read_filters(self) -> tuple[Optional[dict[str, object]], Optional[str]]:
         try:
             refresh_seconds = int(self.refresh_var.get())
@@ -588,7 +603,7 @@ class Task2CalibrationTimelineApp:
                     return None, f"Invalid plot end: {end_text}"
 
         stations, station_error = _parse_id_filter(
-            self.station_var.get(),
+            self._get_selected_stations_str(),
             min_value=0,
             max_value=4,
             label="station",
@@ -793,7 +808,7 @@ class Task2CalibrationTimelineApp:
         panel_height = (height - margin_top - margin_bottom - gap_y) / 2.0
 
         selected_stations, _ = _parse_id_filter(
-            self.station_var.get(),
+            self._get_selected_stations_str(),
             min_value=0,
             max_value=4,
             label="station",

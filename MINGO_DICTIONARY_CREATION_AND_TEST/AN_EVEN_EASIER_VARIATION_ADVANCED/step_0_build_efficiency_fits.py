@@ -13,7 +13,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from advanced_support import CANONICAL_Z_COLUMNS, build_efficiency_fit_table, load_mingo00_training_dataframe
+from advanced_support import (
+    CANONICAL_Z_COLUMNS,
+    build_efficiency_fit_table,
+    load_mingo00_training_dataframe,
+    load_online_schedule,
+    parse_station_id,
+    parse_time_bound,
+    select_schedule_rows_for_window,
+    z_vector_to_id,
+)
 from common import DEFAULT_CONFIG_PATH, PLOTS_DIR, cfg_path, ensure_output_dirs, load_config, write_json
 
 log = logging.getLogger("even_easier_advanced.step0")
@@ -116,6 +125,40 @@ def _write_fit_overview_plot(
     return output_path
 
 
+def _resolve_step5_window_geometry_ids(config: dict) -> tuple[set[str], dict[str, object]]:
+    step5_config = config.get("step5", {})
+    if not isinstance(step5_config, dict):
+        step5_config = {}
+
+    station_id = parse_station_id(step5_config.get("station", "MINGO01"))
+    date_from = parse_time_bound(step5_config.get("date_from"), end_of_day=False)
+    date_to = parse_time_bound(step5_config.get("date_to"), end_of_day=True)
+
+    schedule_all, schedule_path = load_online_schedule(station_id)
+    schedule_window = select_schedule_rows_for_window(
+        schedule_all,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    z_tuples = (
+        sorted(set(schedule_window["z_tuple"].dropna().tolist()))
+        if not schedule_window.empty
+        else []
+    )
+    geometry_ids = {z_vector_to_id(z_tuple) for z_tuple in z_tuples}
+    metadata = {
+        "station_id": int(station_id),
+        "date_from": None if date_from is None else str(date_from),
+        "date_to": None if date_to is None else str(date_to),
+        "online_run_dictionary_csv": str(schedule_path),
+        "online_schedule_rows_total": int(len(schedule_all)),
+        "online_schedule_rows_in_requested_window": int(len(schedule_window)),
+        "online_schedule_z_tuples_in_requested_window": [list(z_tuple) for z_tuple in z_tuples],
+        "z_config_ids_in_requested_window": sorted(geometry_ids),
+    }
+    return geometry_ids, metadata
+
+
 def run(config_path: str | Path | None = None) -> Path:
     _configure_logging()
     ensure_output_dirs()
@@ -127,6 +170,19 @@ def run(config_path: str | Path | None = None) -> Path:
 
     degree_requested = _resolve_polynomial_degree(config)
     training_df, source_meta = load_mingo00_training_dataframe(config)
+    geometry_ids, geometry_window_meta = _resolve_step5_window_geometry_ids(config)
+    if not geometry_ids:
+        raise ValueError(
+            "Step 0 found no z positions in ONLINE_RUN_DICTIONARY for the requested step5 station/date window."
+        )
+
+    rows_before_geometry_filter = int(len(training_df))
+    training_df = training_df.loc[training_df["z_config_id"].isin(geometry_ids)].copy()
+    if training_df.empty:
+        raise ValueError(
+            "Step 0 has no MINGO00 training rows matching the step5 station/date-window geometries."
+        )
+
     fit_table = build_efficiency_fit_table(training_df, degree_requested=degree_requested)
     if fit_table.empty:
         raise ValueError("Step 0 could not build any geometry fit.")
@@ -146,6 +202,12 @@ def run(config_path: str | Path | None = None) -> Path:
         "fit_polynomial_degree_requested": degree_requested,
         "fit_table_csv": str(fit_table_path),
         "training_csv": str(training_output_path),
+        "geometry_window_filter": {
+            **geometry_window_meta,
+            "rows_before_geometry_filter": rows_before_geometry_filter,
+            "rows_after_geometry_filter": int(len(training_df)),
+            "rows_removed_by_geometry_filter": rows_before_geometry_filter - int(len(training_df)),
+        },
         "geometry_count": int(len(fit_table)),
         "geometries": fit_table[["z_config_id", *CANONICAL_Z_COLUMNS]].to_dict(orient="records"),
         "plot_path": None if plot_path is None else str(plot_path),
