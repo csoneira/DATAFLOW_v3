@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from common import CANONICAL_EFF_COLUMNS, CANONICAL_Z_COLUMNS, DEFAULT_CONFIG_PATH, PLOTS_DIR, cfg_path, ensure_output_dirs, load_config, read_ascii_lut, write_json
+from common import CANONICAL_EFF_COLUMNS, CANONICAL_Z_COLUMNS, DEFAULT_CONFIG_PATH, PLOTS_DIR, cfg_path, ensure_output_dirs, load_config, ordered_plot_filename, read_ascii_lut, write_json
 from multi_z_support import build_rate_to_flux_lines, json_clone, write_ascii_table_with_comments, z_vector_to_id
 from step_2_build_lut_single_z import run as run_single_z
 
@@ -190,16 +190,20 @@ def run(config_path: str | Path | None = None) -> Path:
                 "lut_ascii": str(sub_lut_ascii_path),
                 "step2_meta_json": str(sub_meta_path),
                 "plot_rate_vs_flux": _move_plot_if_exists(
-                    PLOTS_DIR / "step2_rate_vs_flux.png",
-                    PLOTS_DIR / f"step2_rate_vs_flux__{z_config_id}.png",
+                    PLOTS_DIR / ordered_plot_filename(2, 2, "rate_vs_flux"),
+                    PLOTS_DIR / f"{Path(ordered_plot_filename(2, 2, 'rate_vs_flux')).stem}__{z_config_id}.png",
                 ),
                 "plot_scale_factor_vs_diagonal_eff": _move_plot_if_exists(
-                    PLOTS_DIR / "step2_scale_factor_vs_diagonal_eff.png",
-                    PLOTS_DIR / f"step2_scale_factor_vs_diagonal_eff__{z_config_id}.png",
+                    PLOTS_DIR / ordered_plot_filename(2, 3, "scale_factor_vs_diagonal_eff"),
+                    PLOTS_DIR / f"{Path(ordered_plot_filename(2, 3, 'scale_factor_vs_diagonal_eff')).stem}__{z_config_id}.png",
                 ),
                 "plot_scale_factor_vs_flux": _move_plot_if_exists(
-                    PLOTS_DIR / "step2_scale_factor_vs_flux.png",
-                    PLOTS_DIR / f"step2_scale_factor_vs_flux__{z_config_id}.png",
+                    PLOTS_DIR / ordered_plot_filename(2, 4, "scale_factor_vs_flux"),
+                    PLOTS_DIR / f"{Path(ordered_plot_filename(2, 4, 'scale_factor_vs_flux')).stem}__{z_config_id}.png",
+                ),
+                "plot_reference_asymptote": _move_plot_if_exists(
+                    PLOTS_DIR / ordered_plot_filename(2, 1, "reference_asymptote"),
+                    PLOTS_DIR / f"{Path(ordered_plot_filename(2, 1, 'reference_asymptote')).stem}__{z_config_id}.png",
                 ),
                 "single_z_metadata": submeta,
             }

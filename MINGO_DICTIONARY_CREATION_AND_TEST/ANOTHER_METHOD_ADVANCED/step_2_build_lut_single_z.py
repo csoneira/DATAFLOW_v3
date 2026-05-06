@@ -26,6 +26,7 @@ from common import (
     get_rate_column_name,
     get_trigger_type_selection,
     load_config,
+    ordered_plot_filename,
     q25,
     q75,
     write_ascii_lut,
@@ -77,6 +78,26 @@ def _validate_step1_selection(
             f"metadata_source={configured_metadata_source!r}. Rerun Step 1 with the current config."
         )
 
+    configured_primary_source = _normalize_optional_text(configured_selection.get("source_name"))
+    recorded_primary_source = _normalize_optional_text(recorded_selection.get("source_name"))
+    if recorded_primary_source and configured_primary_source and recorded_primary_source != configured_primary_source:
+        raise ValueError(
+            "Step 2 selection mismatch: Step 1 filtered data was built from primary metadata source "
+            f"{recorded_primary_source!r}, but the current config requests {configured_primary_source!r}. "
+            "Rerun Step 1 with the current config."
+        )
+
+    configured_primary_task_id = _normalize_optional_text(configured_selection.get("metadata_task_id"))
+    recorded_primary_task_id = _normalize_optional_text(
+        recorded_selection.get("metadata_task_id", recorded_selection.get("task_id"))
+    )
+    if recorded_primary_task_id and configured_primary_task_id and recorded_primary_task_id != configured_primary_task_id:
+        raise ValueError(
+            "Step 2 selection mismatch: Step 1 filtered data was built from primary metadata task "
+            f"{recorded_primary_task_id!r}, but the current config requests {configured_primary_task_id!r}. "
+            "Rerun Step 1 with the current config."
+        )
+
     configured_rate_family = _normalize_optional_text(configured_selection.get("rate_family"))
     recorded_rate_family = _normalize_optional_text(recorded_selection.get("rate_family"))
     if recorded_rate_family and configured_rate_family and recorded_rate_family != configured_rate_family:
@@ -93,6 +114,30 @@ def _validate_step1_selection(
             "Step 2 selection mismatch: Step 1 filtered data was built from "
             f"rate source {recorded_rate_source!r}, but the current config requests "
             f"{configured_rate_source!r}. Rerun Step 1 with the current config."
+        )
+
+    configured_rate_source_name = _normalize_optional_text(configured_selection.get("rate_source_name"))
+    recorded_rate_source_name = _normalize_optional_text(
+        recorded_selection.get("rate_source_name", recorded_selection.get("source_name"))
+    )
+    if recorded_rate_source_name and configured_rate_source_name and recorded_rate_source_name != configured_rate_source_name:
+        raise ValueError(
+            "Step 2 selection mismatch: Step 1 filtered data was built from rate metadata source "
+            f"{recorded_rate_source_name!r}, but the current config requests {configured_rate_source_name!r}. "
+            "Rerun Step 1 with the current config."
+        )
+
+    configured_rate_task_id = _normalize_optional_text(
+        configured_selection.get("rate_metadata_task_id", configured_selection.get("rate_task_id"))
+    )
+    recorded_rate_task_id = _normalize_optional_text(
+        recorded_selection.get("rate_metadata_task_id", recorded_selection.get("task_id"))
+    )
+    if recorded_rate_task_id and configured_rate_task_id and recorded_rate_task_id != configured_rate_task_id:
+        raise ValueError(
+            "Step 2 selection mismatch: Step 1 filtered data was built from rate metadata task "
+            f"{recorded_rate_task_id!r}, but the current config requests {configured_rate_task_id!r}. "
+            "Rerun Step 1 with the current config."
         )
 
     configured_count_source = _normalize_optional_text(configured_selection.get("selected_count_column"))
@@ -338,8 +383,16 @@ def _build_supported_diagonal_summary(
 def _build_reference_curve(
     aggregated_cells: pd.DataFrame,
     *,
+    reference_curve_mode: str,
     top_k_closest_bins: int,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    normalized_mode = str(reference_curve_mode).strip().lower()
+    if normalized_mode not in {"median_top_k_closest", "distance_asymptote"}:
+        raise ValueError(
+            f"Unsupported step2.reference_curve_mode: {reference_curve_mode!r}. "
+            "Supported values are: median_top_k_closest, distance_asymptote"
+        )
+
     reference_cells = (
         aggregated_cells.sort_values(
             ["flux_bin_index", "distance_to_perfect", "eff_span", "eff_mean"],
@@ -349,20 +402,85 @@ def _build_reference_curve(
         .head(int(top_k_closest_bins))
         .copy()
     )
-    reference_curve = (
-        reference_cells.groupby("flux_bin_index", dropna=False)
-        .agg(
-            flux_bin_center=("flux_bin_center", "median"),
-            reference_rate_median=("rate_median", "median"),
-            reference_rate_q25=("rate_median", q25),
-            reference_rate_q75=("rate_median", q75),
-            reference_cell_count=("rate_median", "size"),
-            reference_eff_mean=("eff_mean", "median"),
-            reference_distance_to_perfect=("distance_to_perfect", "median"),
+    if normalized_mode == "median_top_k_closest":
+        reference_curve = (
+            reference_cells.groupby("flux_bin_index", dropna=False)
+            .agg(
+                flux_bin_center=("flux_bin_center", "median"),
+                reference_rate_median=("rate_median", "median"),
+                reference_rate_q25=("rate_median", q25),
+                reference_rate_q75=("rate_median", q75),
+                reference_cell_count=("rate_median", "size"),
+                reference_eff_mean=("eff_mean", "median"),
+                reference_distance_to_perfect=("distance_to_perfect", "median"),
+            )
+            .reset_index()
+            .sort_values("flux_bin_index")
+            .reset_index(drop=True)
         )
-        .reset_index()
-        .sort_values("flux_bin_index")
-        .reset_index(drop=True)
+        return reference_cells, reference_curve
+
+    reference_curve_rows: list[dict[str, float]] = []
+    for flux_bin_index, subset in reference_cells.groupby("flux_bin_index", dropna=False):
+        subset = subset.copy().sort_values("distance_to_perfect")
+        x = pd.to_numeric(subset["distance_to_perfect"], errors="coerce").to_numpy(dtype=float)
+        y = pd.to_numeric(subset["rate_median"], errors="coerce").to_numpy(dtype=float)
+        valid = np.isfinite(x) & np.isfinite(y)
+        x = x[valid]
+        y = y[valid]
+        if len(x) == 0:
+            continue
+
+        if len(x) == 1:
+            reference_rate = float(y[0])
+            reference_fit_slope = np.nan
+            reference_fit_intercept = float(y[0])
+        else:
+            reference_fit_slope, reference_fit_intercept = np.polyfit(x, y, 1)
+            reference_rate = float(reference_fit_intercept)
+            if not np.isfinite(reference_rate):
+                reference_rate = float(np.nanmax(y))
+            reference_rate = max(reference_rate, float(np.nanmax(y)))
+
+        reference_curve_rows.append(
+            {
+                "flux_bin_index": int(flux_bin_index),
+                "flux_bin_center": float(pd.to_numeric(subset["flux_bin_center"], errors="coerce").median()),
+                "reference_rate_median": float(reference_rate),
+                "reference_rate_q25": float(pd.to_numeric(subset["rate_median"], errors="coerce").quantile(0.25)),
+                "reference_rate_q75": float(pd.to_numeric(subset["rate_median"], errors="coerce").quantile(0.75)),
+                "reference_cell_count": int(len(subset)),
+                "reference_eff_mean": float(pd.to_numeric(subset["eff_mean"], errors="coerce").median()),
+                "reference_distance_to_perfect": float(
+                    pd.to_numeric(subset["distance_to_perfect"], errors="coerce").median()
+                ),
+                "reference_fit_slope": (
+                    float(reference_fit_slope) if np.isfinite(reference_fit_slope) else np.nan
+                ),
+                "reference_fit_intercept": (
+                    float(reference_fit_intercept) if np.isfinite(reference_fit_intercept) else np.nan
+                ),
+            }
+        )
+
+    reference_curve = pd.DataFrame(reference_curve_rows).sort_values("flux_bin_index").reset_index(drop=True)
+    reference_curve = (
+        reference_curve
+        if not reference_curve.empty
+        else pd.DataFrame(
+            columns=[
+                "flux_bin_index",
+                "flux_bin_center",
+                "reference_rate_median",
+                "reference_rate_q25",
+                "reference_rate_q75",
+                "reference_cell_count",
+                "reference_eff_mean",
+                "reference_distance_to_perfect",
+                "reference_fit_slope",
+                "reference_fit_intercept",
+            ]
+        )
     )
     return reference_cells, reference_curve
 
@@ -460,6 +578,142 @@ def _plot_rate_vs_flux(
     cbar.set_label("Mean efficiency of 4D bin")
     fig.tight_layout()
     fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+
+
+def _plot_reference_asymptote_diagnostics(
+    reference_cells: pd.DataFrame,
+    reference_curve: pd.DataFrame,
+    output_path: Path,
+    *,
+    rate_column_name: str,
+    reference_curve_mode: str,
+) -> None:
+    if reference_cells.empty or reference_curve.empty:
+        return
+
+    mode = str(reference_curve_mode).strip().lower()
+    mode_is_asymptote = mode == "distance_asymptote"
+    mode_label = "asymptote" if mode_is_asymptote else "median_top_k_closest"
+
+    grouped = list(reference_cells.groupby("flux_bin_index", dropna=False, sort=True))
+    if not grouped:
+        return
+
+    column_count = min(3, len(grouped))
+    row_count = int(np.ceil(len(grouped) / column_count))
+    fig, axes = plt.subplots(
+        row_count,
+        column_count,
+        figsize=(5.1 * column_count, 4.1 * row_count),
+        constrained_layout=True,
+    )
+    axes_array = np.atleast_1d(axes).reshape(row_count, column_count)
+
+    for ax, (flux_bin_index, subset) in zip(axes_array.flat, grouped):
+        subset = subset.copy().sort_values("distance_to_perfect")
+        ref_match = reference_curve.loc[reference_curve["flux_bin_index"] == flux_bin_index]
+        if ref_match.empty:
+            ax.set_visible(False)
+            continue
+        ref_row = ref_match.iloc[0]
+
+        x = pd.to_numeric(subset["distance_to_perfect"], errors="coerce").to_numpy(dtype=float)
+        y = pd.to_numeric(subset["rate_median"], errors="coerce").to_numpy(dtype=float)
+        valid = np.isfinite(x) & np.isfinite(y)
+        x = x[valid]
+        y = y[valid]
+        if len(x) == 0:
+            ax.set_visible(False)
+            continue
+
+        order = np.argsort(x)
+        x = x[order]
+        y = y[order]
+        x_max = max(float(np.nanmax(x)) * 1.08, 0.02)
+
+        ax.scatter(
+            x,
+            y,
+            s=38,
+            color="#4C78A8",
+            alpha=0.85,
+            label="selected cells",
+        )
+        ax.plot(x, y, color="#4C78A8", linewidth=1.1, alpha=0.7)
+        ax.axvline(0.0, color="0.5", linewidth=0.8, linestyle=":", alpha=0.7)
+
+        selected_reference = float(ref_row["reference_rate_median"])
+        if mode_is_asymptote:
+            slope = float(ref_row["reference_fit_slope"]) if "reference_fit_slope" in ref_row.index else np.nan
+            intercept = (
+                float(ref_row["reference_fit_intercept"])
+                if "reference_fit_intercept" in ref_row.index
+                else selected_reference
+            )
+            if np.isfinite(slope) and np.isfinite(intercept):
+                x_fit = np.linspace(0.0, x_max, 200)
+                y_fit = slope * x_fit + intercept
+                ax.plot(
+                    x_fit,
+                    y_fit,
+                    color="#D62728",
+                    linestyle="--",
+                    linewidth=1.6,
+                    label="asymptote fit to x=0",
+                )
+            else:
+                ax.axhline(
+                    selected_reference,
+                    color="#D62728",
+                    linestyle="--",
+                    linewidth=1.6,
+                    label="selected asymptote",
+                )
+        else:
+            ax.axhline(
+                selected_reference,
+                color="#D62728",
+                linestyle="--",
+                linewidth=1.6,
+                label="selected reference",
+            )
+
+        ax.scatter(
+            [0.0],
+            [selected_reference],
+            s=135,
+            color="#F2B701",
+            edgecolors="black",
+            linewidths=0.5,
+            marker="*",
+            zorder=4,
+            label=(
+                f"chosen asymptote R(0) = {selected_reference:.4f} Hz"
+                if mode_is_asymptote
+                else f"chosen reference R(0) = {selected_reference:.4f} Hz"
+            ),
+        )
+
+        ax.set_title(
+            f"Flux bin {int(flux_bin_index)}\n"
+            f"center ~ {float(ref_row['flux_bin_center']):.3f}, cells = {int(ref_row['reference_cell_count'])}"
+        )
+        ax.set_xlabel("Distance to perfect")
+        ax.set_ylabel("Rate [Hz]")
+        ax.set_xlim(-0.01, x_max)
+        ax.grid(alpha=0.25)
+        ax.legend(fontsize=8, loc="best")
+
+    for ax in axes_array.flat[len(grouped):]:
+        ax.set_visible(False)
+
+    fig.suptitle(
+        f"Reference-curve diagnostics (mode: {mode_label})\n"
+        f"rate column: {rate_column_name}",
+        y=1.02,
+    )
+    fig.savefig(output_path, dpi=180, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -575,6 +829,9 @@ def run(config_path: str | Path | None = None) -> Path:
     efficiency_bin_width = float(config.get("step2", {}).get("efficiency_bin_width", 0.02))
     flux_bin_count = int(config.get("step2", {}).get("flux_bin_count", 10))
     diagonal_tolerance = float(config.get("step2", {}).get("diagonal_tolerance", efficiency_bin_width))
+    reference_curve_mode = str(
+        config.get("step2", {}).get("reference_curve_mode", "distance_asymptote")
+    ).strip().lower()
     diagnostic_efficiency_summary_bin_width = float(
         config.get("step2", {}).get("diagnostic_efficiency_summary_bin_width", 0.05)
     )
@@ -611,6 +868,7 @@ def run(config_path: str | Path | None = None) -> Path:
 
     reference_cells, reference_curve = _build_reference_curve(
         aggregated_cells,
+        reference_curve_mode=reference_curve_mode,
         top_k_closest_bins=reference_top_k_per_flux_bin,
     )
     if reference_curve.empty:
@@ -686,6 +944,14 @@ def run(config_path: str | Path | None = None) -> Path:
         min_flux_bins=diagnostic_min_flux_bins,
     )
     selected_curve_bins = _select_curve_bins(diagonal_summary, diagonal_plot_max_curves)
+    _plot_reference_asymptote_diagnostics(
+        reference_cells,
+        reference_curve,
+        PLOTS_DIR / ordered_plot_filename(2, 1, "reference_asymptote"),
+        rate_column_name=rate_column_name,
+        reference_curve_mode=reference_curve_mode,
+    )
+
     if selected_curve_bins:
         _plot_rate_vs_flux(
             aggregated_cells,
@@ -693,14 +959,18 @@ def run(config_path: str | Path | None = None) -> Path:
             reference_cells,
             diagonal_curves,
             selected_curve_bins,
-            PLOTS_DIR / "step2_rate_vs_flux.png",
-            reference_label=f"reference median of top-{reference_top_k_per_flux_bin} closest bins / flux",
+            PLOTS_DIR / ordered_plot_filename(2, 2, "rate_vs_flux"),
+            reference_label=(
+                f"reference asymptote of top-{reference_top_k_per_flux_bin} closest bins / flux"
+                if reference_curve_mode == "distance_asymptote"
+                else f"reference median of top-{reference_top_k_per_flux_bin} closest bins / flux"
+            ),
             diagonal_mode=diagonal_mode,
             rate_column_name=rate_column_name,
         )
         _plot_scale_factor_vs_eff(
             diagonal_summary,
-            PLOTS_DIR / "step2_scale_factor_vs_diagonal_eff.png",
+            PLOTS_DIR / ordered_plot_filename(2, 3, "scale_factor_vs_diagonal_eff"),
             diagonal_mode=diagonal_mode,
             rate_column_name=rate_column_name,
         )
@@ -708,7 +978,7 @@ def run(config_path: str | Path | None = None) -> Path:
             aggregated_cells,
             diagonal_curves,
             selected_curve_bins,
-            PLOTS_DIR / "step2_scale_factor_vs_flux.png",
+            PLOTS_DIR / ordered_plot_filename(2, 4, "scale_factor_vs_flux"),
             diagonal_mode=diagonal_mode,
             rate_column_name=rate_column_name,
         )
@@ -737,7 +1007,12 @@ def run(config_path: str | Path | None = None) -> Path:
         "closest_single_distance_to_perfect": float(closest_single_row["distance_to_perfect"]),
         "closest_single_is_exact_perfect_bin": exact_perfect_reference_available,
         "closest_single_efficiency_bin_comment": closest_single_comment,
-        "reference_method": "median_of_top_closest_bins_per_flux_bin",
+        "reference_method": (
+            "distance_asymptote_of_top_closest_bins_per_flux_bin"
+            if reference_curve_mode == "distance_asymptote"
+            else "median_of_top_closest_bins_per_flux_bin"
+        ),
+        "reference_curve_mode": reference_curve_mode,
         "reference_top_k_per_flux_bin": reference_top_k_per_flux_bin,
         "reference_flux_bins": int(len(reference_curve)),
         "reference_median_distance_to_perfect": float(reference_curve["reference_distance_to_perfect"].median()),

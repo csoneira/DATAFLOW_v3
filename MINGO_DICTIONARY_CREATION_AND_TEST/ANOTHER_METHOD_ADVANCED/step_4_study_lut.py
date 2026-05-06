@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from common import DEFAULT_CONFIG_PATH, PLOTS_DIR, cfg_path, ensure_output_dirs, load_config, write_json
+from common import DEFAULT_CONFIG_PATH, PLOTS_DIR, cfg_path, ensure_output_dirs, load_config, ordered_plot_filename, write_json
 from multi_z_support import json_clone
 from step_4_study_lut_single_z import run as run_single_z
 
@@ -126,6 +126,10 @@ def run(config_path: str | Path | None = None) -> Path:
         combined_axis.append(axis_df)
         combined_pair.append(pair_df)
 
+        legacy_quality_plot = PLOTS_DIR / f"step4_pair_slice_quality__{z_config_id}.png"
+        if legacy_quality_plot.exists():
+            legacy_quality_plot.unlink()
+
         used_configs.append(
             {
                 "z_config_id": z_config_id,
@@ -134,20 +138,16 @@ def run(config_path: str | Path | None = None) -> Path:
                 "pair_slice_csv": str(sub_pair_path),
                 "step4_meta_json": str(sub_meta_path),
                 "plot_axis_slice_scale_factor": _move_plot_if_exists(
-                    PLOTS_DIR / "step4_axis_slice_scale_factor.png",
-                    PLOTS_DIR / f"step4_axis_slice_scale_factor__{z_config_id}.png",
+                    PLOTS_DIR / ordered_plot_filename(4, 1, "axis_slice_scale_factor"),
+                    PLOTS_DIR / f"{Path(ordered_plot_filename(4, 1, 'axis_slice_scale_factor')).stem}__{z_config_id}.png",
                 ),
                 "plot_axis_slice_relative_rate": _move_plot_if_exists(
-                    PLOTS_DIR / "step4_axis_slice_relative_rate.png",
-                    PLOTS_DIR / f"step4_axis_slice_relative_rate__{z_config_id}.png",
+                    PLOTS_DIR / ordered_plot_filename(4, 2, "axis_slice_relative_rate"),
+                    PLOTS_DIR / f"{Path(ordered_plot_filename(4, 2, 'axis_slice_relative_rate')).stem}__{z_config_id}.png",
                 ),
                 "plot_pair_slice_surface": _move_plot_if_exists(
-                    PLOTS_DIR / "step4_pair_slice_surface.png",
-                    PLOTS_DIR / f"step4_pair_slice_surface__{z_config_id}.png",
-                ),
-                "plot_pair_slice_quality": _move_plot_if_exists(
-                    PLOTS_DIR / "step4_pair_slice_quality.png",
-                    PLOTS_DIR / f"step4_pair_slice_quality__{z_config_id}.png",
+                    PLOTS_DIR / ordered_plot_filename(4, 3, "pair_slice_surface"),
+                    PLOTS_DIR / f"{Path(ordered_plot_filename(4, 3, 'pair_slice_surface')).stem}__{z_config_id}.png",
                 ),
             }
         )

@@ -10,10 +10,11 @@ from step_2_build_lut import run as run_step_2
 from step_3_apply_lut import run as run_step_3
 from step_4_study_lut import run as run_step_4
 from step_5_apply_lut_to_real_data import run as run_step_5
+from step_6_convert_rate_to_flux import run as run_step_6
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the five-step LUT workflow.")
+    parser = argparse.ArgumentParser(description="Run the six-step LUT workflow.")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Path to config JSON file.")
     args = parser.parse_args()
 
@@ -26,6 +27,8 @@ def main() -> None:
         run_step_4(config_path)
     if bool(config.get("step5", {}).get("enabled", True)):
         run_step_5(config_path)
+    if bool(config.get("step6", {}).get("enabled", True)):
+        run_step_6(config_path)
 
 
 if __name__ == "__main__":

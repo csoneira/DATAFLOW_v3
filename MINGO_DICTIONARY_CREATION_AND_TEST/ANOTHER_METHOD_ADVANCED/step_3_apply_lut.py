@@ -32,6 +32,7 @@ from common import (
     get_rate_column_name,
     get_trigger_type_selection,
     load_config,
+    ordered_plot_filename,
     quantize_efficiency_series,
     read_ascii_lut,
     write_json,
@@ -213,11 +214,12 @@ def _derive_robust_synthetic_features(
             "four_plane_rate_hz": "four_plane_count",
             "four_plane_robust_hz": "four_plane_robust_count",
             "total_rate_hz": "total_count",
-        }.get(selected_rate_column, selected_rate_column.replace("_rate_hz", "_count"))
+        }.get(selected_rate_column, selected_source_rate_column.replace("_rate_hz", "_count"))
         )
     else:
         selected_count_column = selected_rate_column.replace("_rate_hz", "_count")
-    out["selected_rate_hz"] = pd.to_numeric(out[selected_rate_column], errors="coerce")
+    source_rate_column_used = selected_source_rate_column if selected_source_rate_column in out.columns else selected_rate_column
+    out["selected_rate_hz"] = pd.to_numeric(out[source_rate_column_used], errors="coerce")
     if selected_count_column in out.columns:
         out["selected_rate_count"] = pd.to_numeric(out[selected_count_column], errors="coerce")
     elif "selected_rate_count" not in out.columns:
@@ -228,6 +230,9 @@ def _derive_robust_synthetic_features(
         "metadata_source": selection["metadata_source"],
         "source_name": selection["source_name"],
         "task_id": int(selection["task_id"]),
+        "metadata_task_id": int(selection.get("metadata_task_id", selection["task_id"])),
+        "rate_source_name": str(selection.get("rate_source_name", selection["source_name"])),
+        "rate_metadata_task_id": int(selection.get("rate_metadata_task_id", selection["task_id"])),
         "stage_prefix": used_stage_prefix,
         "requested_stage_prefix": None,
         "used_stage_prefix": used_stage_prefix,
@@ -236,11 +241,14 @@ def _derive_robust_synthetic_features(
         "used_offender_threshold": None,
         "rate_family": selection["rate_family"],
         "rate_family_column": selected_rate_column,
-        "selected_source_rate_column": selection["selected_source_rate_column"],
+        "selected_source_rate_column": selected_source_rate_column,
+        "selected_source_count_column": selected_count_column,
+        "selected_display_label": selection.get("selected_display_label"),
         "robust_efficiency_variant": efficiency_variant,
         "plain_column_fallback_used": bool(source_mode != "robust_efficiency_columns"),
-        "source_rate_columns": source_rate_columns,
+        "source_rate_columns": {**source_rate_columns, "selected": source_rate_column_used},
         "source_count_columns": {
+            "selected": selected_count_column if selected_count_column in out.columns else None,
             "four_plane": None,
             "four_plane_robust_hz": None,
             "total": None,
@@ -793,17 +801,17 @@ def run(config_path: str | Path | None = None) -> Path:
     output_dataframe.to_csv(output_path, index=False)
     _plot_time_series_with_flux(
         merged,
-        PLOTS_DIR / "step3_rate_correction.png",
+        PLOTS_DIR / ordered_plot_filename(3, 1, "rate_correction"),
         rate_column_name=rate_column_name,
     )
     _plot_flux_rate_comparison(
         merged,
-        PLOTS_DIR / "step3_flux_rate_comparison.png",
+        PLOTS_DIR / ordered_plot_filename(3, 2, "flux_rate_comparison"),
         rate_column_name=rate_column_name,
     )
     corrected_vs_reference_metrics = _plot_corrected_vs_almost_perfect_reference(
         merged,
-        PLOTS_DIR / "step3_corrected_vs_almost_perfect_reference.png",
+        PLOTS_DIR / ordered_plot_filename(3, 3, "corrected_vs_almost_perfect_reference"),
         rate_column_name=rate_column_name,
     )
 

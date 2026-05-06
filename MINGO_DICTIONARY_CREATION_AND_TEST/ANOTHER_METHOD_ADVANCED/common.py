@@ -223,6 +223,10 @@ def get_trigger_type_selection(config: dict[str, Any]) -> dict[str, Any]:
     metadata_source_raw = str(raw.get("metadata_source", "trigger_type")).strip().lower()
     metadata_source = TRIGGER_METADATA_SOURCE_ALIASES.get(metadata_source_raw, metadata_source_raw)
     if metadata_source == "robust_efficiency":
+        source_name = _normalize_optional_str(raw.get("source_name")) or "robust_efficiency"
+        metadata_task_id = int(raw.get("metadata_task_id", raw.get("task_id", DEFAULT_ROBUST_EFFICIENCY_TASK_ID)))
+        rate_source_name = _normalize_optional_str(raw.get("rate_source_name")) or source_name
+        rate_metadata_task_id = int(raw.get("rate_metadata_task_id", raw.get("rate_task_id", metadata_task_id)))
         efficiency_variant_raw = str(raw.get("robust_efficiency_variant", "default")).strip().lower()
         efficiency_variant = ROBUST_EFFICIENCY_VARIANT_ALIASES.get(efficiency_variant_raw, efficiency_variant_raw)
         if efficiency_variant not in ROBUST_EFFICIENCY_VARIANT_TO_SUFFIX:
@@ -242,7 +246,10 @@ def get_trigger_type_selection(config: dict[str, Any]) -> dict[str, Any]:
 
         if selected_source_override is not None:
             rate_family = rate_family_alias or selected_source_override
-            rate_family_column = selected_source_override
+            if rate_family_alias is not None:
+                rate_family_column = ROBUST_RATE_FAMILY_TO_COLUMN[rate_family]
+            else:
+                rate_family_column = selected_source_override
             selected_source_rate_column = selected_source_override
         elif rate_family_alias is not None:
             rate_family = rate_family_alias
@@ -254,9 +261,11 @@ def get_trigger_type_selection(config: dict[str, Any]) -> dict[str, Any]:
             selected_source_rate_column = rate_family_text
         return {
             "metadata_source": metadata_source,
-            "source_name": "robust_efficiency",
-            "task_id": DEFAULT_ROBUST_EFFICIENCY_TASK_ID,
-            "metadata_task_id": DEFAULT_ROBUST_EFFICIENCY_TASK_ID,
+            "source_name": source_name,
+            "task_id": metadata_task_id,
+            "metadata_task_id": metadata_task_id,
+            "rate_source_name": rate_source_name,
+            "rate_metadata_task_id": rate_metadata_task_id,
             "stage_prefix": None,
             "offender_threshold": None,
             "rate_family": rate_family,
@@ -272,7 +281,10 @@ def get_trigger_type_selection(config: dict[str, Any]) -> dict[str, Any]:
             f"{raw.get('metadata_source')!r}. Supported values are: trigger_type, robust_efficiency"
         )
 
-    task_id = int(raw.get("task_id", 5))
+    source_name = _normalize_optional_str(raw.get("source_name")) or "trigger_type"
+    task_id = int(raw.get("metadata_task_id", raw.get("task_id", 5)))
+    rate_source_name = _normalize_optional_str(raw.get("rate_source_name")) or source_name
+    rate_metadata_task_id = int(raw.get("rate_metadata_task_id", raw.get("rate_task_id", task_id)))
     stage_prefix_raw = raw.get("stage_prefix")
     if stage_prefix_raw in (None, "", "null", "None"):
         stage_prefix = TASK_FINAL_STAGE_PREFIX.get(task_id)
@@ -291,21 +303,30 @@ def get_trigger_type_selection(config: dict[str, Any]) -> dict[str, Any]:
             + ", ".join(sorted(TRIGGER_RATE_FAMILY_TO_COLUMN))
         )
 
-    selected_source_rate_column = format_selected_rate_name(
+    selected_rate_override = _normalize_optional_str(raw.get("selected_source_rate_column"))
+    selected_count_override = _normalize_optional_str(raw.get("selected_count_column"))
+    selected_display_label = _normalize_optional_str(raw.get("selected_display_label"))
+    rate_family_column = TRIGGER_RATE_FAMILY_TO_COLUMN[rate_family]
+    default_selected_source_rate_column = format_selected_rate_name(
         stage_prefix=stage_prefix,
-        rate_family_column=TRIGGER_RATE_FAMILY_TO_COLUMN[rate_family],
+        rate_family_column=rate_family_column,
         offender_threshold=offender_threshold,
     )
+    selected_source_rate_column = selected_rate_override or default_selected_source_rate_column
     return {
         "metadata_source": metadata_source,
-        "source_name": "trigger_type",
+        "source_name": source_name,
         "task_id": task_id,
         "metadata_task_id": task_id,
+        "rate_source_name": rate_source_name,
+        "rate_metadata_task_id": rate_metadata_task_id,
         "stage_prefix": stage_prefix,
         "offender_threshold": offender_threshold,
         "rate_family": rate_family,
-        "rate_family_column": TRIGGER_RATE_FAMILY_TO_COLUMN[rate_family],
+        "rate_family_column": rate_family_column,
         "selected_source_rate_column": selected_source_rate_column,
+        "selected_count_column": selected_count_override,
+        "selected_display_label": selected_display_label or selected_source_rate_column,
     }
 
 
@@ -440,6 +461,24 @@ def _resolve_robust_selected_count_column(
     return _first_present_column(dataframe, _unique_preserve(candidates))
 
 
+def _resolve_selected_count_column(
+    dataframe: pd.DataFrame,
+    *,
+    selected_source_rate_column: str,
+    selected_count_column: str | None,
+    canonical_count_column: str | None,
+) -> str | None:
+    candidates: list[str | None] = [selected_count_column]
+    if selected_source_rate_column.endswith("_count"):
+        candidates.append(selected_source_rate_column)
+    if selected_source_rate_column.endswith("_hz"):
+        candidates.append(selected_source_rate_column[:-3] + "_count")
+    if selected_source_rate_column.endswith("_rate_hz"):
+        candidates.append(selected_source_rate_column.replace("_rate_hz", "_count"))
+    candidates.append(canonical_count_column)
+    return _first_present_column(dataframe, _unique_preserve(candidates))
+
+
 def _derive_robust_efficiency_features(
     dataframe: pd.DataFrame,
     selection: dict[str, Any],
@@ -524,14 +563,24 @@ def _derive_robust_efficiency_features(
         efficiency_source_columns[f"plane_{plane_idx}"] = source_column
 
     selected_rate_column = str(selection["rate_family_column"])
+    selected_source_rate_column = str(selection["selected_source_rate_column"])
     out["selected_rate_hz"] = pd.to_numeric(out[selected_rate_column], errors="coerce")
-    out["selected_rate_count"] = _optional_numeric_series(out, selected_count_source)
+    if selected_source_rate_column != selected_rate_column:
+        out["selected_rate_hz"] = pd.to_numeric(out[selected_source_rate_column], errors="coerce")
+    out["selected_rate_count"] = _resolved_count_series(
+        out,
+        rate_column=selected_source_rate_column,
+        count_column=selected_count_source,
+    )
     out["rate_hz"] = out["selected_rate_hz"]
 
     metadata = {
         "metadata_source": selection["metadata_source"],
         "source_name": selection["source_name"],
         "task_id": int(selection["task_id"]),
+        "metadata_task_id": int(selection.get("metadata_task_id", selection["task_id"])),
+        "rate_source_name": str(selection.get("rate_source_name", selection["source_name"])),
+        "rate_metadata_task_id": int(selection.get("rate_metadata_task_id", selection["task_id"])),
         "stage_prefix": None,
         "requested_stage_prefix": None,
         "used_stage_prefix": None,
@@ -540,14 +589,14 @@ def _derive_robust_efficiency_features(
         "used_offender_threshold": None,
         "rate_family": selection["rate_family"],
         "rate_family_column": selected_rate_column,
-        "selected_source_rate_column": selection["selected_source_rate_column"],
+        "selected_source_rate_column": selected_source_rate_column,
         "selected_source_count_column": selected_count_source,
         "selected_display_label": selection.get("selected_display_label"),
         "robust_efficiency_variant": efficiency_variant,
         "robust_efficiency_source_columns": efficiency_source_columns,
         "plain_column_fallback_used": False,
         "source_rate_columns": {
-            "selected": selected_rate_column,
+            "selected": selected_source_rate_column,
             "four_plane": ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["four_plane"],
             "four_plane_robust_hz": ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["four_plane_robust_hz"],
             "total": ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["total"],
@@ -683,16 +732,35 @@ def derive_trigger_rate_features(
         numerator_label = TT_THREE_TO_FOUR_MISSING_BY_PLANE[plane_idx]
         out[f"eff_empirical_{plane_idx}"] = 1 - component_rates[numerator_label] / valid_denominator
 
-    selected_rate_column = selection["rate_family_column"]
-    selected_count_column = selected_rate_column.replace("_rate_hz", "_count")
-    out["selected_rate_hz"] = out[selected_rate_column]
-    out["selected_rate_count"] = out[selected_count_column]
+    selected_rate_column = str(selection["rate_family_column"])
+    selected_source_rate_column = str(selection["selected_source_rate_column"])
+    if selected_source_rate_column not in out.columns and selected_source_rate_column != selected_rate_column:
+        raise KeyError(
+            "Selected rate-source column requested by trigger_type_selection is missing from the dataframe: "
+            f"{selected_source_rate_column!r}"
+        )
+    selected_rate_count_column = _resolve_selected_count_column(
+        out,
+        selected_source_rate_column=selected_source_rate_column,
+        selected_count_column=_normalize_optional_str(selection.get("selected_count_column")),
+        canonical_count_column=selected_rate_column.replace("_rate_hz", "_count"),
+    )
+    source_rate_column_used = selected_source_rate_column if selected_source_rate_column in out.columns else selected_rate_column
+    out["selected_rate_hz"] = pd.to_numeric(out[source_rate_column_used], errors="coerce")
+    out["selected_rate_count"] = _resolved_count_series(
+        out,
+        rate_column=source_rate_column_used,
+        count_column=selected_rate_count_column,
+    )
     out["rate_hz"] = out["selected_rate_hz"]
 
     metadata = {
         "metadata_source": selection["metadata_source"],
         "source_name": selection["source_name"],
         "task_id": int(selection["task_id"]),
+        "metadata_task_id": int(selection.get("metadata_task_id", selection["task_id"])),
+        "rate_source_name": str(selection.get("rate_source_name", selection["source_name"])),
+        "rate_metadata_task_id": int(selection.get("rate_metadata_task_id", selection["task_id"])),
         "stage_prefix": used_stage_prefix,
         "requested_stage_prefix": requested_stage_prefix,
         "used_stage_prefix": used_stage_prefix,
@@ -701,9 +769,11 @@ def derive_trigger_rate_features(
         "used_offender_threshold": used_threshold,
         "rate_family": selection["rate_family"],
         "rate_family_column": selected_rate_column,
-        "selected_source_rate_column": selection["selected_source_rate_column"],
+        "selected_source_rate_column": selected_source_rate_column,
+        "selected_source_count_column": selected_rate_count_column,
+        "selected_display_label": selection.get("selected_display_label"),
         "plain_column_fallback_used": bool(requested_threshold is not None and used_threshold is None),
-        "source_rate_columns": source_columns,
+        "source_rate_columns": {**source_columns, "selected": source_rate_column_used},
         "source_count_columns": count_columns,
     }
     return out, metadata
@@ -809,15 +879,39 @@ def assign_efficiency_bins(
 
 
 def assign_flux_bins(series: pd.Series, bin_count: int) -> tuple[pd.Series, np.ndarray]:
-    codes, edges = pd.cut(
-        series.astype(float),
-        bins=int(bin_count),
-        labels=False,
-        retbins=True,
-        include_lowest=True,
-        duplicates="drop",
-    )
-    return pd.Series(codes, index=series.index, dtype="Int64"), np.asarray(edges, dtype=float)
+    numeric = pd.to_numeric(series, errors="coerce")
+    valid = numeric.dropna()
+    if valid.empty:
+        return pd.Series(pd.NA, index=series.index, dtype="Int64"), np.asarray([], dtype=float)
+
+    requested_bins = max(1, int(bin_count))
+    effective_bins = min(requested_bins, int(valid.nunique()))
+    try:
+        codes, edges = pd.qcut(
+            valid,
+            q=effective_bins,
+            labels=False,
+            retbins=True,
+            duplicates="drop",
+        )
+    except ValueError:
+        codes, edges = pd.cut(
+            valid,
+            bins=effective_bins,
+            labels=False,
+            retbins=True,
+            include_lowest=True,
+            duplicates="drop",
+        )
+
+    out = pd.Series(pd.NA, index=series.index, dtype="Int64")
+    out.loc[valid.index] = pd.Series(codes, index=valid.index, dtype="Int64")
+    return out, np.asarray(edges, dtype=float)
+
+
+def ordered_plot_filename(step_number: int, order: int, label: str, *, extension: str = "png") -> str:
+    clean_label = str(label).strip().strip("_")
+    return f"step{int(step_number)}_{int(order):02d}_{clean_label}.{extension}"
 
 
 def choose_reference_row(

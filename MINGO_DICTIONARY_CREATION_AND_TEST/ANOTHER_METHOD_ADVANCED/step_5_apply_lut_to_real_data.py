@@ -36,6 +36,7 @@ from common import (
     get_rate_column_name,
     get_trigger_type_selection,
     load_config,
+    ordered_plot_filename,
     quantize_efficiency_series,
     read_ascii_lut,
     write_json,
@@ -1501,6 +1502,10 @@ def _collect_real_data_slice(
     trigger_selection = get_trigger_type_selection(config)
     task_id = int(trigger_selection.get("metadata_task_id", trigger_selection["task_id"]))
     source_name = str(trigger_selection.get("source_name", "trigger_type"))
+    rate_task_id = int(trigger_selection.get("rate_metadata_task_id", task_id))
+    rate_source_name = str(trigger_selection.get("rate_source_name", source_name))
+    selected_source_rate_column = str(trigger_selection.get("selected_source_rate_column", "rate_hz"))
+    selected_count_column = trigger_selection.get("selected_count_column")
     task_stats: dict[str, dict[str, int]] = {
         str(task_id): {
             "rows_after_metadata_merge": 0,
@@ -1508,6 +1513,7 @@ def _collect_real_data_slice(
             "rows_with_online_z_mapped": 0,
         }
     }
+    metadata_files_used = [str(_task_metadata_path(station_id, task_id, source_name))]
 
     trigger_df = _load_task_metadata_source_csv(
         station_id=station_id,
@@ -1516,6 +1522,49 @@ def _collect_real_data_slice(
         metadata_agg=metadata_agg,
         timestamp_column=timestamp_column,
     )
+    if rate_task_id != task_id or rate_source_name != source_name:
+        task_stats.setdefault(
+            str(rate_task_id),
+            {
+                "rows_after_metadata_merge": 0,
+                "rows_after_date_filter": 0,
+                "rows_with_online_z_mapped": 0,
+            },
+        )
+        rate_df = _load_task_metadata_source_csv(
+            station_id=station_id,
+            task_id=rate_task_id,
+            source_name=rate_source_name,
+            metadata_agg=metadata_agg,
+            timestamp_column=timestamp_column,
+        )
+        metadata_files_used.append(str(_task_metadata_path(station_id, rate_task_id, rate_source_name)))
+        task_stats[str(rate_task_id)]["rows_after_metadata_merge"] = int(len(rate_df))
+        rate_keep_columns = ["filename_base", selected_source_rate_column]
+        if selected_count_column not in (None, "", "null", "None"):
+            rate_keep_columns.append(str(selected_count_column))
+        if "count_rate_denominator_seconds" not in trigger_df.columns:
+            rate_keep_columns.append("count_rate_denominator_seconds")
+        missing_rate_columns = [column for column in ["filename_base", selected_source_rate_column] if column not in rate_df.columns]
+        if missing_rate_columns:
+            raise KeyError(
+                "Selected real-data rate-source metadata is missing required columns: "
+                + ", ".join(missing_rate_columns)
+            )
+        rate_keep_columns = [column for column in dict.fromkeys(rate_keep_columns) if column in rate_df.columns]
+        rename_map = {
+            column: f"__rate_source__{column}"
+            for column in rate_keep_columns
+            if column != "filename_base"
+        }
+        trigger_df = trigger_df.merge(
+            rate_df[rate_keep_columns].rename(columns=rename_map),
+            on="filename_base",
+            how="inner",
+        )
+        for column, temp_column in rename_map.items():
+            trigger_df[column] = trigger_df[temp_column]
+        trigger_df = trigger_df.drop(columns=list(rename_map.values()), errors="ignore")
     merged, trigger_info = derive_trigger_rate_features(
         trigger_df,
         config,
@@ -1600,7 +1649,8 @@ def _collect_real_data_slice(
         "rows_before_event_cut": rows_before_event_cut,
         "rows_after_event_cut": rows_after_event_cut,
         "event_count_source_for_filter": event_source,
-        "task_ids_used": [task_id],
+        "task_ids_used": sorted({int(task_id), int(rate_task_id)}),
+        "metadata_files_used": metadata_files_used,
         "task_stats": task_stats,
         "trigger_rate_selection": trigger_info,
         "trigger_type_selection": trigger_info,
@@ -1662,8 +1712,6 @@ def run(config_path: str | Path | None = None) -> Path:
 
     lut_path = cfg_path(config, "paths", "step2_lut_ascii")
     lut_meta_path = cfg_path(config, "paths", "step2_meta_json")
-    flux_cells_path = cfg_path(config, "paths", "step2_flux_cells_csv")
-    rate_to_flux_lines_path = cfg_path(config, "paths", "step2_rate_to_flux_lines_csv")
     lut_diag_path = cfg_path(config, "paths", "step2_lut_diagnostics_csv")
     output_path = cfg_path(config, "paths", "step5_output_csv")
     meta_path = cfg_path(config, "paths", "step5_meta_json")
@@ -1754,19 +1802,6 @@ def run(config_path: str | Path | None = None) -> Path:
     )
 
     merged["corrected_rate_to_perfect_hz"] = merged["rate_hz"] * merged["lut_scale_factor"]
-    try:
-        rate_to_flux_lines = load_rate_to_flux_lines(rate_to_flux_lines_path)
-    except FileNotFoundError:
-        reference_table = load_reference_curve_table(flux_cells_path)
-        rate_to_flux_lines = build_rate_to_flux_lines(reference_table)
-    (
-        merged["corrected_flux_cm2_min"],
-        merged["corrected_flux_assignment_method"],
-    ) = apply_rate_to_flux_lines(
-        merged["corrected_rate_to_perfect_hz"],
-        row_z_frame=(merged[CANONICAL_Z_COLUMNS] if all(column in rate_to_flux_lines.columns for column in CANONICAL_Z_COLUMNS) else None),
-        line_table=rate_to_flux_lines,
-    )
 
     unique_real_z = unique_z_vectors(merged, z_columns=CANONICAL_Z_COLUMNS)
     available_lut_z = unique_z_vectors(lut_dataframe, z_columns=CANONICAL_Z_COLUMNS) if lut_has_z else []
@@ -1803,8 +1838,6 @@ def run(config_path: str | Path | None = None) -> Path:
     output_dataframe["lut_neighbor_min_distance"] = merged["lut_neighbor_min_distance"]
     output_dataframe["lut_neighbor_max_distance"] = merged["lut_neighbor_max_distance"]
     output_dataframe["corrected_rate_to_perfect_hz"] = merged["corrected_rate_to_perfect_hz"]
-    output_dataframe["corrected_flux_cm2_min"] = merged["corrected_flux_cm2_min"]
-    output_dataframe["corrected_flux_assignment_method"] = merged["corrected_flux_assignment_method"]
     output_dataframe["selected_z_vector_match"] = merged["selected_z_vector_match"]
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1821,7 +1854,7 @@ def run(config_path: str | Path | None = None) -> Path:
 
     time_axis_column_used = _plot_real_rate_correction(
         merged,
-        PLOTS_DIR / "step5_real_rate_correction.png",
+        PLOTS_DIR / ordered_plot_filename(5, 1, "real_rate_correction"),
         rate_column_name=rate_column_name,
         event_markers=event_markers,
         efficiency_plot_ylim=efficiency_plot_ylim,
@@ -1830,7 +1863,7 @@ def run(config_path: str | Path | None = None) -> Path:
     )
     _plot_real_correction_diagnostics(
         merged,
-        PLOTS_DIR / "step5_real_correction_diagnostics.png",
+        PLOTS_DIR / ordered_plot_filename(5, 2, "real_correction_diagnostics"),
         rate_column_name=rate_column_name,
         event_markers=event_markers,
         apply_moving_average=apply_plot_moving_average,
@@ -1839,23 +1872,14 @@ def run(config_path: str | Path | None = None) -> Path:
     _plot_lut_vs_real_efficiency_coverage(
         merged,
         lut_diagnostics,
-        PLOTS_DIR / "step5_lut_real_efficiency_coverage.png",
+        PLOTS_DIR / ordered_plot_filename(5, 3, "lut_real_efficiency_coverage"),
         rate_column_name=rate_column_name,
     )
     _plot_real_rate_vs_efficiencies_2x2(
         merged,
-        PLOTS_DIR / "step5_real_rate_vs_efficiencies_2x2.png",
+        PLOTS_DIR / ordered_plot_filename(5, 4, "real_rate_vs_efficiencies_2x2"),
         rate_column_name=rate_column_name,
         efficiency_plot_ylim=efficiency_plot_ylim,
-    )
-    _plot_corrected_flux_from_rate(
-        merged,
-        rate_to_flux_lines,
-        PLOTS_DIR / "step5_corrected_flux_from_rate.png",
-        rate_column_name=rate_column_name,
-        event_markers=event_markers,
-        apply_moving_average=apply_plot_moving_average,
-        moving_average_kernel=plot_moving_average_kernel,
     )
 
     metadata = {
@@ -1872,7 +1896,6 @@ def run(config_path: str | Path | None = None) -> Path:
         "trigger_rate_selection": trigger_selection,
         "trigger_type_selection": trigger_selection,
         "lut_file": str(lut_path),
-        "rate_to_flux_lines_file": str(rate_to_flux_lines_path),
         "lut_comments": lut_comments,
         "efficiency_bin_width": efficiency_bin_width,
         "plot_apply_moving_average": apply_plot_moving_average,
@@ -1896,11 +1919,6 @@ def run(config_path: str | Path | None = None) -> Path:
         "real_z_positions_source": z_source,
         "real_z_positions_in_window": unique_real_z,
         "rows_matching_selected_z_vector": int(pd.to_numeric(output_dataframe["selected_z_vector_match"], errors="coerce").fillna(0).sum()),
-        "corrected_flux_assignment_method_counts": {
-            str(key): int(value)
-            for key, value in output_dataframe["corrected_flux_assignment_method"].value_counts(dropna=False).to_dict().items()
-        },
-        "rate_to_flux_lines": rate_to_flux_lines.to_dict(orient="records"),
         "z_warning_message": z_warning_message,
         "time_axis_column_used_for_plots": time_axis_column_used,
         "query_coverage_csv": str(coverage_path),

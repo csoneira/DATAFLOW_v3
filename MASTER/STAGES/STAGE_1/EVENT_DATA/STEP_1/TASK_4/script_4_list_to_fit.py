@@ -2997,11 +2997,6 @@ globals().update(
 )
 
 
-
-# -----------------------------------------------------------------------------
-# Some variables that define the analysis, define a dictionary with the variables:
-# 'purity_of_data', etc.
-
 raw_data_len = len(working_df)
 if raw_data_len == 0 and not self_trigger:
     print("No coincidence nor self-trigger events.")

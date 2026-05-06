@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from common import DEFAULT_CONFIG_PATH, PLOTS_DIR, cfg_path, ensure_output_dirs, load_config, write_json
+from common import DEFAULT_CONFIG_PATH, PLOTS_DIR, cfg_path, ensure_output_dirs, load_config, ordered_plot_filename, write_json
 from multi_z_support import (
     add_z_config_columns,
     format_z_vector,
@@ -69,6 +69,33 @@ def run(config_path: str | Path | None = None) -> Path:
             "No active z configurations were found for the requested station/date window. "
             "Set step5.station/date_from/date_to or force step1.z_selection_mode='configured_vector'."
         )
+    selection_mode = str(selection_meta.get("selection_mode", "unknown"))
+    if selection_mode == "step5_window":
+        selected_z_text = ", ".join(format_z_vector(z_vector) for z_vector in requested_z_vectors)
+        ignored_count = int(selection_meta.get("window_ignored_geometry_count", 0) or 0)
+        log.info(
+            "Resolved Step 1 z geometry from schedule window: station=%s, date_from=%s, date_to=%s, "
+            "selected=%s, reason=%s, ignored_geometries=%d",
+            selection_meta.get("station_id"),
+            selection_meta.get("date_from"),
+            selection_meta.get("date_to"),
+            selected_z_text,
+            selection_meta.get("window_selected_reason"),
+            ignored_count,
+        )
+        if ignored_count > 0:
+            log.warning(
+                "Multiple schedule geometries overlapped the requested window; selected the latest active one "
+                "starting at %s and ending at %s.",
+                selection_meta.get("window_selected_schedule_start_utc"),
+                selection_meta.get("window_selected_schedule_end_utc"),
+            )
+    else:
+        selected_z_text = ", ".join(format_z_vector(z_vector) for z_vector in requested_z_vectors)
+        log.info(
+            "Resolved Step 1 z geometry from configured vector: selected=%s",
+            selected_z_text,
+        )
 
     combined_frames: list[pd.DataFrame] = []
     used_configs: list[dict[str, object]] = []
@@ -112,8 +139,8 @@ def run(config_path: str | Path | None = None) -> Path:
         row_counts_by_z[z_config_id] = int(len(dataframe))
 
         plot_path = _move_plot_if_exists(
-            PLOTS_DIR / "step1_parameter_space_overview.png",
-            PLOTS_DIR / f"step1_parameter_space_overview__{z_config_id}.png",
+            PLOTS_DIR / ordered_plot_filename(1, 1, "parameter_space_overview"),
+            PLOTS_DIR / f"{Path(ordered_plot_filename(1, 1, 'parameter_space_overview')).stem}__{z_config_id}.png",
         )
         submeta = {}
         if submeta_path.exists():

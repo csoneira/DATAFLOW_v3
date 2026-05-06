@@ -21,6 +21,7 @@ from common import (
     ensure_output_dirs,
     get_rate_column_name,
     load_config,
+    ordered_plot_filename,
     write_json,
 )
 
@@ -280,13 +281,13 @@ def _plot_relative_rate_slices(
     plt.close(fig)
 
 
-def _plot_pair_surface(
+def _plot_pair_quality(
     pair_slice: pd.DataFrame,
     output_path: Path,
     *,
     rate_column_name: str,
 ) -> None:
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5), constrained_layout=True)
+    fig, axes = plt.subplots(1, 3, figsize=(18.5, 5.5), constrained_layout=True)
     _contour_panel(
         axes[0],
         pair_slice,
@@ -303,42 +304,16 @@ def _plot_pair_surface(
         cmap="magma_r",
         colorbar_label="R(slice) / R(reference)",
     )
-    fig.suptitle(
-        "Two-plane LUT slice: "
-        f"vary eff_{int(pair_slice['pair_plane_a'].iloc[0])} "
-        f"and eff_{int(pair_slice['pair_plane_b'].iloc[0])}\n"
-        f"rate column: {rate_column_name}",
-        y=1.02,
-    )
-    fig.savefig(output_path, dpi=180, bbox_inches="tight")
-    plt.close(fig)
-
-
-def _plot_pair_quality(
-    pair_slice: pd.DataFrame,
-    output_path: Path,
-    *,
-    rate_column_name: str,
-) -> None:
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5), constrained_layout=True)
     _contour_panel(
-        axes[0],
+        axes[2],
         pair_slice,
         "fixed_distance_to_one",
         title="Distance of fixed planes to 1",
         cmap="cividis_r",
         colorbar_label="Distance to 1 of fixed planes",
     )
-    _contour_panel(
-        axes[1],
-        pair_slice,
-        "support_rows",
-        title="Support rows used by selected slice",
-        cmap="plasma",
-        colorbar_label="Support rows",
-    )
     fig.suptitle(
-        "Two-plane slice quality: "
+        "Two-plane slice diagnostic (3 panels): "
         f"vary eff_{int(pair_slice['pair_plane_a'].iloc[0])} "
         f"and eff_{int(pair_slice['pair_plane_b'].iloc[0])}\n"
         f"LUT built from rate column: {rate_column_name}",
@@ -379,22 +354,20 @@ def run(config_path: str | Path | None = None) -> Path:
 
     _plot_scale_factor_slices(
         slices,
-        PLOTS_DIR / "step4_axis_slice_scale_factor.png",
+        PLOTS_DIR / ordered_plot_filename(4, 1, "axis_slice_scale_factor"),
         rate_column_name=rate_column_name,
     )
     _plot_relative_rate_slices(
         slices,
-        PLOTS_DIR / "step4_axis_slice_relative_rate.png",
+        PLOTS_DIR / ordered_plot_filename(4, 2, "axis_slice_relative_rate"),
         rate_column_name=rate_column_name,
     )
-    _plot_pair_surface(
-        pair_slice,
-        PLOTS_DIR / "step4_pair_slice_surface.png",
-        rate_column_name=rate_column_name,
-    )
+    legacy_quality_plot = PLOTS_DIR / "step4_pair_slice_quality.png"
+    if legacy_quality_plot.exists():
+        legacy_quality_plot.unlink()
     _plot_pair_quality(
         pair_slice,
-        PLOTS_DIR / "step4_pair_slice_quality.png",
+        PLOTS_DIR / ordered_plot_filename(4, 3, "pair_slice_surface"),
         rate_column_name=rate_column_name,
     )
 

@@ -23,7 +23,10 @@ source can be either the existing `trigger_type` CSVs or the newer
    - Drops rows whose empirical efficiencies exceed the configured
      `step1.observed_efficiency_upper_limits`.
    - Filters on the configured z-position vector and minimum number of events.
-   - If `step1.z_position_vector` is `null`, the most frequent z-vector is used.
+   - `step1.z_selection_mode = "configured_vector"` uses only `step1.z_position_vector`.
+   - `step1.z_selection_mode = "step5_window"` selects exactly one z geometry:
+     the latest active ONLINE_RUN_DICTIONARY schedule row overlapping the
+     requested Step 5 station/date window.
    - Writes a compact parameter-space overview plot for `flux + the four efficiencies`.
 
 2. `step_2_build_lut.py`
@@ -67,9 +70,9 @@ source can be either the existing `trigger_type` CSVs or the newer
      efficiency for the four planes on the same figure.
    - Extracts a configurable two-plane slice, by default `eff_2` vs `eff_3`,
      while keeping the other two planes as close to `1` as the LUT allows.
-   - Plots a 2-D surface of the scale factor and the reference-normalized rate.
-   - Plots a 2-D quality view showing the distance of the fixed planes to `1`
-     and the support of the selected slice.
+   - Plots one 3-panel two-plane diagnostic figure combining:
+     scale-factor surface, reference-normalized-rate surface, and fixed-plane
+     distance-to-`1` quality surface.
 
 5. `step_5_apply_lut_to_real_data.py`
    - Reads the real station metadata directly from the station pipeline outputs.
@@ -173,13 +176,13 @@ Step 3 synthetic-input selection is controlled with:
 - `OUTPUTS/FILES/step5_real_data_with_lut.csv`
 - `OUTPUTS/FILES/step5_lut_query_coverage.csv`
 - `OUTPUTS/PLOTS/step2_rate_vs_flux.png`
+- `OUTPUTS/PLOTS/step2_reference_asymptote.png`
 - `OUTPUTS/PLOTS/step2_scale_factor_vs_diagonal_eff.png`
 - `OUTPUTS/PLOTS/step2_scale_factor_vs_flux.png`
 - `OUTPUTS/PLOTS/step3_rate_correction.png`
 - `OUTPUTS/PLOTS/step3_flux_rate_comparison.png`
 - `OUTPUTS/PLOTS/step4_axis_slice_scale_factor.png`
 - `OUTPUTS/PLOTS/step4_axis_slice_relative_rate.png`
-- `OUTPUTS/PLOTS/step4_pair_slice_surface.png`
 - `OUTPUTS/PLOTS/step4_pair_slice_quality.png`
 - `OUTPUTS/PLOTS/step5_real_rate_correction.png`
 - `OUTPUTS/PLOTS/step5_real_correction_diagnostics.png`

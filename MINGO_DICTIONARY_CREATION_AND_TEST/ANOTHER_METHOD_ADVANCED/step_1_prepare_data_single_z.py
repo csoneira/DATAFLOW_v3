@@ -27,6 +27,7 @@ from common import (
     filter_by_z_vector,
     get_trigger_type_selection,
     load_config,
+    ordered_plot_filename,
     required_trigger_rate_columns,
     trigger_count_source_column,
     write_json,
@@ -35,7 +36,7 @@ from common import (
 log = logging.getLogger("another_method.step1")
 
 TRIGGER_COLUMN = "trigger_combinations"
-STEP1_PLOT_PATH = PLOTS_DIR / "step1_parameter_space_overview.png"
+STEP1_PLOT_PATH = PLOTS_DIR / ordered_plot_filename(1, 1, "parameter_space_overview")
 SIMULATED_EFF_SOURCE_COLUMNS = ["eff_p1", "eff_p2", "eff_p3", "eff_p4"]
 EMPIRICAL_EFF_SOURCE_COLUMNS = [f"eff_empirical_{idx}" for idx in range(1, 5)]
 DEFAULT_SIM_PARAMS_CSV = (
@@ -276,6 +277,35 @@ def _write_parameter_space_plot(dataframe: pd.DataFrame, selected_z_vector: tupl
     return STEP1_PLOT_PATH
 
 
+def _metadata_csv_path(metadata_root: Path, task_id: int, source_name: str) -> Path:
+    return metadata_root / f"TASK_{int(task_id)}" / "METADATA" / f"task_{int(task_id)}_metadata_{source_name}.csv"
+
+
+def _load_param_hash_metadata(path: Path, needed_columns: list[str]) -> pd.DataFrame:
+    header = set(pd.read_csv(path, nrows=0).columns)
+    usecols = [column for column in dict.fromkeys(needed_columns) if column in header]
+    dataframe = pd.read_csv(path, usecols=usecols, low_memory=False)
+    if "execution_timestamp" in dataframe.columns:
+        dataframe["_exec_ts"] = pd.to_datetime(
+            dataframe["execution_timestamp"],
+            errors="coerce",
+            format="%Y-%m-%d_%H.%M.%S",
+        )
+        missing_ts = dataframe["_exec_ts"].isna()
+        if missing_ts.any():
+            dataframe.loc[missing_ts, "_exec_ts"] = pd.to_datetime(
+                dataframe.loc[missing_ts, "execution_timestamp"],
+                errors="coerce",
+            )
+        dataframe = (
+            dataframe.sort_values(["param_hash", "_exec_ts"], na_position="last")
+            .groupby("param_hash")
+            .tail(1)
+            .drop(columns=["_exec_ts"], errors="ignore")
+        )
+    return dataframe
+
+
 def _resolve_step1_input_dataframe(config: dict) -> tuple[pd.DataFrame, dict[str, object]]:
     step1_config = config.get("step1", {})
     if not isinstance(step1_config, dict):
@@ -331,9 +361,13 @@ def _resolve_step1_input_dataframe(config: dict) -> tuple[pd.DataFrame, dict[str
     metadata_source = str(trigger_selection.get("metadata_source", "trigger_type"))
     source_name = str(trigger_selection.get("source_name", "trigger_type"))
     task_id = int(trigger_selection.get("metadata_task_id", trigger_selection["task_id"]))
-    trigger_path = metadata_root / f"TASK_{task_id}" / "METADATA" / f"task_{task_id}_metadata_{source_name}.csv"
+    rate_source_name = str(trigger_selection.get("rate_source_name", source_name))
+    rate_task_id = int(trigger_selection.get("rate_metadata_task_id", task_id))
+    trigger_path = _metadata_csv_path(metadata_root, task_id, source_name)
     if not trigger_path.exists():
         raise FileNotFoundError(f"Missing required {source_name} metadata file: {trigger_path}")
+    rate_path = _metadata_csv_path(metadata_root, rate_task_id, rate_source_name)
+    rate_source_is_primary = trigger_path == rate_path
 
     header = set(pd.read_csv(trigger_path, nrows=0).columns)
     stage_prefix = trigger_selection.get("stage_prefix")
@@ -341,7 +375,7 @@ def _resolve_step1_input_dataframe(config: dict) -> tuple[pd.DataFrame, dict[str
     if metadata_source == "robust_efficiency":
         required_rate_columns = ["rate_1234_hz", "rate_total_hz"]
         selected_source_rate_column = str(trigger_selection.get("selected_source_rate_column", "rate_1234_hz"))
-        if selected_source_rate_column not in required_rate_columns:
+        if rate_source_is_primary and selected_source_rate_column not in required_rate_columns:
             required_rate_columns.append(selected_source_rate_column)
         selected_count_column = trigger_selection.get("selected_count_column")
         required_count_columns = [
@@ -371,6 +405,9 @@ def _resolve_step1_input_dataframe(config: dict) -> tuple[pd.DataFrame, dict[str
     else:
         stage_prefix = str(stage_prefix)
         required_rate_columns = required_trigger_rate_columns(stage_prefix, offender_threshold)
+        selected_source_rate_column = str(trigger_selection.get("selected_source_rate_column", ""))
+        if rate_source_is_primary and selected_source_rate_column and selected_source_rate_column not in required_rate_columns:
+            required_rate_columns.append(selected_source_rate_column)
         required_count_columns = [
             column
             for column in (
@@ -392,25 +429,31 @@ def _resolve_step1_input_dataframe(config: dict) -> tuple[pd.DataFrame, dict[str
             + ", ".join(missing_required_columns)
         )
 
-    trigger_df = pd.read_csv(trigger_path, usecols=needed, low_memory=False)
-    if "execution_timestamp" in trigger_df.columns:
-        trigger_df["_exec_ts"] = pd.to_datetime(
-            trigger_df["execution_timestamp"],
-            errors="coerce",
-            format="%Y-%m-%d_%H.%M.%S",
-        )
-        missing_ts = trigger_df["_exec_ts"].isna()
-        if missing_ts.any():
-            trigger_df.loc[missing_ts, "_exec_ts"] = pd.to_datetime(
-                trigger_df.loc[missing_ts, "execution_timestamp"],
-                errors="coerce",
+    trigger_df = _load_param_hash_metadata(trigger_path, needed)
+    metadata_files_used = [str(trigger_path)]
+    if not rate_source_is_primary:
+        if not rate_path.exists():
+            raise FileNotFoundError(f"Missing required rate-source metadata file: {rate_path}")
+        rate_header = set(pd.read_csv(rate_path, nrows=0).columns)
+        selected_count_column = trigger_selection.get("selected_count_column")
+        rate_needed = ["param_hash", selected_source_rate_column]
+        if selected_count_column not in (None, "", "null", "None"):
+            rate_needed.append(str(selected_count_column))
+        if "count_rate_denominator_seconds" not in trigger_df.columns:
+            rate_needed.append("count_rate_denominator_seconds")
+        missing_rate_columns = [column for column in ["param_hash", selected_source_rate_column] if column not in rate_header]
+        if missing_rate_columns:
+            raise ValueError(
+                f"Selected rate-source metadata is missing required columns: "
+                + ", ".join(missing_rate_columns)
             )
-        trigger_df = (
-            trigger_df.sort_values(["param_hash", "_exec_ts"], na_position="last")
-            .groupby("param_hash")
-            .tail(1)
-            .drop(columns=["_exec_ts"], errors="ignore")
-        )
+        rate_df = _load_param_hash_metadata(rate_path, rate_needed)
+        rename_map = {column: f"__rate_source__{column}" for column in rate_df.columns if column != "param_hash"}
+        merged_rate = trigger_df.merge(rate_df.rename(columns=rename_map), on="param_hash", how="inner")
+        for column, temp_column in rename_map.items():
+            merged_rate[column] = merged_rate[temp_column]
+        trigger_df = merged_rate.drop(columns=list(rename_map.values()), errors="ignore")
+        metadata_files_used.append(str(rate_path))
 
     merged = params_df.merge(trigger_df, on="param_hash", how="inner")
     if merged.empty:
@@ -421,10 +464,13 @@ def _resolve_step1_input_dataframe(config: dict) -> tuple[pd.DataFrame, dict[str
         "metadata_source": metadata_source,
         "simulation_params_csv": str(sim_params_path),
         "simulation_efficiency_columns": SIMULATED_EFF_SOURCE_COLUMNS,
-        "metadata_files_used": [str(trigger_path)],
+        "metadata_files_used": metadata_files_used,
         "metadata_root": str(metadata_root),
         "trigger_type_metadata_root": str(metadata_root),
+        "source_name": source_name,
         "task_id": task_id,
+        "rate_task_id": rate_task_id,
+        "rate_source_name": rate_source_name,
         "stage_prefix": stage_prefix,
         "offender_threshold": offender_threshold,
         "required_rate_columns": required_rate_columns,

@@ -272,15 +272,41 @@ def resolve_active_z_vectors_from_config(config: dict[str, Any]) -> tuple[list[t
         date_from=date_from,
         date_to=date_to,
     )
-    z_vectors = [normalize_z_vector(value) for value in sorted(set(schedule_window["z_tuple"].tolist()))]
+    candidate_z_vectors = [normalize_z_vector(value) for value in sorted(set(schedule_window["z_tuple"].tolist()))]
+    z_vectors: list[tuple[float, float, float, float]] = []
+    selected_schedule_row = None
+    selected_reason: str | None = None
+    ignored_geometry_count = 0
+    if not schedule_window.empty:
+        selected_schedule_row = schedule_window.sort_values(["start_utc", "end_utc"], kind="mergesort").tail(1).iloc[0]
+        z_vectors = [normalize_z_vector(selected_schedule_row["z_tuple"])]
+        ignored_geometry_count = max(len(candidate_z_vectors) - 1, 0)
+        selected_reason = (
+            "latest active schedule row in the requested window, "
+            "ordered by start_utc then end_utc"
+        )
     if not z_vectors and configured_vector not in (None, "", "null", "None"):
         z_vector = normalize_z_vector(configured_vector)
         z_vectors = [z_vector]
+        selected_reason = (
+            "fallback to configured_vector because no ONLINE_RUN_DICTIONARY "
+            "rows overlapped the requested window"
+        )
 
     return z_vectors, {
         "selection_mode": selection_mode,
         "configured_z_position_vector": configured_vector,
         "selected_z_positions": [list(z_vector) for z_vector in z_vectors],
+        "window_candidate_z_positions": [list(z_vector) for z_vector in candidate_z_vectors],
+        "window_candidate_geometry_count": int(len(candidate_z_vectors)),
+        "window_ignored_geometry_count": int(ignored_geometry_count),
+        "window_selected_reason": selected_reason,
+        "window_selected_schedule_start_utc": (
+            str(selected_schedule_row["start_utc"]) if selected_schedule_row is not None else None
+        ),
+        "window_selected_schedule_end_utc": (
+            str(selected_schedule_row["end_utc"]) if selected_schedule_row is not None else None
+        ),
         "station_id": int(station_id),
         "online_run_dictionary_csv": str(schedule_path),
         "date_from": str(date_from) if date_from is not None else None,
