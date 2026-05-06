@@ -162,16 +162,16 @@ def _resolve_plot_moving_average(config: dict[str, Any]) -> tuple[bool, int]:
     return enabled, kernel
 
 
-def _resolve_observed_efficiency_upper_limits(config: dict[str, Any]) -> dict[int, float]:
+def _resolve_observed_efficiency_limits(config: dict[str, Any], *, config_key: str) -> dict[int, float]:
     step1_config = config.get("step1", {})
     if not isinstance(step1_config, dict):
         step1_config = {}
 
-    raw = step1_config.get("observed_efficiency_upper_limits", {})
+    raw = step1_config.get(config_key, {})
     if raw in (None, "", "null", "None"):
         return {}
     if not isinstance(raw, dict):
-        raise ValueError("step1.observed_efficiency_upper_limits must be a JSON object keyed by plane index.")
+        raise ValueError(f"step1.{config_key} must be a JSON object keyed by plane index.")
 
     limits: dict[int, float] = {}
     for key, value in raw.items():
@@ -180,23 +180,36 @@ def _resolve_observed_efficiency_upper_limits(config: dict[str, Any]) -> dict[in
             text = text[6:]
         plane_idx = int(text)
         if plane_idx < 1 or plane_idx > 4:
-            raise ValueError(f"Invalid plane index in observed-efficiency upper limits: {key!r}")
+            raise ValueError(f"Invalid plane index in step1.{config_key}: {key!r}")
         if value in (None, "", "null", "None"):
             continue
         limits[plane_idx] = float(value)
     return limits
 
 
-def _drop_rows_above_observed_efficiency_upper_limits(
+def _resolve_observed_efficiency_upper_limits(config: dict[str, Any]) -> dict[int, float]:
+    return _resolve_observed_efficiency_limits(config, config_key="observed_efficiency_upper_limits")
+
+
+def _resolve_observed_efficiency_lower_limits(config: dict[str, Any]) -> dict[int, float]:
+    return _resolve_observed_efficiency_limits(config, config_key="observed_efficiency_lower_limits")
+
+
+def _drop_rows_outside_observed_efficiency_limits(
     dataframe: pd.DataFrame,
-    limits: dict[int, float],
+    upper_limits: dict[int, float],
+    lower_limits: dict[int, float],
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     row_count_before = int(len(dataframe))
-    if not limits:
+    if not upper_limits and not lower_limits:
         return dataframe.copy(), {
             "mode": "drop",
             "limits_by_plane": {},
+            "upper_limits_by_plane": {},
+            "lower_limits_by_plane": {},
             "affected_rows_by_plane": {},
+            "affected_rows_above_upper_by_plane": {},
+            "affected_rows_below_lower_by_plane": {},
             "affected_rows_total": 0,
             "row_count_before": row_count_before,
             "row_count_after": row_count_before,
@@ -204,25 +217,47 @@ def _drop_rows_above_observed_efficiency_upper_limits(
 
     work = dataframe.copy()
     counts_by_plane: dict[str, int] = {}
-    over_union_mask = pd.Series(False, index=work.index, dtype=bool)
-    for plane_idx, limit in sorted(limits.items()):
+    counts_above_by_plane: dict[str, int] = {}
+    counts_below_by_plane: dict[str, int] = {}
+    outside_union_mask = pd.Series(False, index=work.index, dtype=bool)
+    for plane_idx in sorted(set(upper_limits).union(lower_limits)):
         column = f"eff_empirical_{plane_idx}"
         if column not in work.columns:
             continue
         numeric = pd.to_numeric(work[column], errors="coerce")
-        over_mask = numeric.notna() & (numeric > float(limit))
-        counts_by_plane[str(plane_idx)] = int(over_mask.sum())
-        over_union_mask = over_union_mask | over_mask
+        lower_limit = lower_limits.get(plane_idx, None)
+        upper_limit = upper_limits.get(plane_idx, None)
+        below_mask = pd.Series(False, index=work.index, dtype=bool)
+        above_mask = pd.Series(False, index=work.index, dtype=bool)
+        if lower_limit is not None:
+            below_mask = numeric.notna() & (numeric < float(lower_limit))
+            counts_below_by_plane[str(plane_idx)] = int(below_mask.sum())
+        if upper_limit is not None:
+            above_mask = numeric.notna() & (numeric > float(upper_limit))
+            counts_above_by_plane[str(plane_idx)] = int(above_mask.sum())
+        outside_mask = below_mask | above_mask
+        counts_by_plane[str(plane_idx)] = int(outside_mask.sum())
+        outside_union_mask = outside_union_mask | outside_mask
         work[column] = numeric
 
-    if bool(over_union_mask.any()):
-        work = work.loc[~over_union_mask].copy()
+    if bool(outside_union_mask.any()):
+        work = work.loc[~outside_union_mask].copy()
 
     return work, {
         "mode": "drop",
-        "limits_by_plane": {str(key): float(value) for key, value in sorted(limits.items())},
+        "limits_by_plane": {
+            str(plane_idx): {
+                "lower": (float(lower_limits[plane_idx]) if plane_idx in lower_limits else None),
+                "upper": (float(upper_limits[plane_idx]) if plane_idx in upper_limits else None),
+            }
+            for plane_idx in sorted(set(upper_limits).union(lower_limits))
+        },
+        "upper_limits_by_plane": {str(key): float(value) for key, value in sorted(upper_limits.items())},
+        "lower_limits_by_plane": {str(key): float(value) for key, value in sorted(lower_limits.items())},
         "affected_rows_by_plane": counts_by_plane,
-        "affected_rows_total": int(over_union_mask.sum()),
+        "affected_rows_above_upper_by_plane": counts_above_by_plane,
+        "affected_rows_below_lower_by_plane": counts_below_by_plane,
+        "affected_rows_total": int(outside_union_mask.sum()),
         "row_count_before": row_count_before,
         "row_count_after": int(len(work)),
     }
@@ -1265,12 +1300,14 @@ def _plot_real_rate_vs_efficiencies_2x2(
     output_path: Path,
     *,
     rate_column_name: str,
+    efficiency_plot_ylim: tuple[float | None, float | None],
 ) -> None:
     fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharex=True, sharey=True, constrained_layout=True)
     eff_columns = CANONICAL_EFF_COLUMNS
     rate_original = pd.to_numeric(merged["rate_hz"], errors="coerce")
     rate_corrected = pd.to_numeric(merged["corrected_rate_to_perfect_hz"], errors="coerce")
-    x_line_end = 1.01
+    eff_x_min_cfg, eff_x_max_cfg = efficiency_plot_ylim
+    x_line_end = float(eff_x_max_cfg) if eff_x_max_cfg is not None else 1.01
 
     def _add_linear_trend_line(ax: plt.Axes, x_values: pd.Series, y_values: pd.Series, color: str, label: str) -> None:
         valid = x_values.notna() & y_values.notna()
@@ -1324,7 +1361,7 @@ def _plot_real_rate_vs_efficiencies_2x2(
         ax.set_xlabel(eff_col)
         ax.set_ylabel("Rate [Hz]")
         ax.grid(alpha=0.25)
-        ax.set_xlim(0.0, x_line_end)
+        ax.set_xlim(left=eff_x_min_cfg, right=eff_x_max_cfg if eff_x_max_cfg is not None else x_line_end)
         ax.set_ylim(y_min - y_pad, y_max + y_pad)
 
         if idx == 0:
@@ -1640,13 +1677,15 @@ def run(config_path: str | Path | None = None) -> Path:
         metadata_agg=metadata_agg,
         timestamp_column=timestamp_column,
     )
-    observed_efficiency_limits = _resolve_observed_efficiency_upper_limits(config)
-    real_dataframe, observed_efficiency_upper_limit_filter = _drop_rows_above_observed_efficiency_upper_limits(
+    observed_efficiency_upper_limits = _resolve_observed_efficiency_upper_limits(config)
+    observed_efficiency_lower_limits = _resolve_observed_efficiency_lower_limits(config)
+    real_dataframe, observed_efficiency_limit_filter = _drop_rows_outside_observed_efficiency_limits(
         real_dataframe,
-        observed_efficiency_limits,
+        upper_limits=observed_efficiency_upper_limits,
+        lower_limits=observed_efficiency_lower_limits,
     )
     if real_dataframe.empty:
-        raise ValueError("No Step 5 real-data rows remain after applying observed_efficiency_upper_limits.")
+        raise ValueError("No Step 5 real-data rows remain after applying observed_efficiency bounds.")
 
     if "rate_hz" not in real_dataframe.columns and rate_column_name not in real_dataframe.columns:
         raise ValueError(
@@ -1807,6 +1846,7 @@ def run(config_path: str | Path | None = None) -> Path:
         merged,
         PLOTS_DIR / "step5_real_rate_vs_efficiencies_2x2.png",
         rate_column_name=rate_column_name,
+        efficiency_plot_ylim=efficiency_plot_ylim,
     )
     _plot_corrected_flux_from_rate(
         merged,
@@ -1880,16 +1920,17 @@ def run(config_path: str | Path | None = None) -> Path:
         )
         .tolist(),
         "collection": collection_meta,
-        "observed_efficiency_upper_limit_filter": observed_efficiency_upper_limit_filter,
+        "observed_efficiency_limit_filter": observed_efficiency_limit_filter,
+        "observed_efficiency_upper_limit_filter": observed_efficiency_limit_filter,
     }
     write_json(meta_path, metadata)
 
     log.info("Wrote Step 5 real-data LUT application to %s", output_path)
-    if observed_efficiency_upper_limit_filter["affected_rows_total"] > 0:
+    if observed_efficiency_limit_filter["affected_rows_total"] > 0:
         log.info(
-            "Dropped Step 5 rows above observed-efficiency upper limits %s. Affected rows by plane: %s",
-            observed_efficiency_upper_limit_filter["limits_by_plane"],
-            observed_efficiency_upper_limit_filter["affected_rows_by_plane"],
+            "Dropped Step 5 rows outside observed-efficiency bounds %s. Affected rows by plane: %s",
+            observed_efficiency_limit_filter["limits_by_plane"],
+            observed_efficiency_limit_filter["affected_rows_by_plane"],
         )
     return output_path
 

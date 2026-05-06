@@ -21,12 +21,14 @@ from advanced_support import (
     apply_observed_efficiency_upper_limits,
     apply_fit_table,
     load_fit_table,
+    load_metadata_csv_with_repair,
     load_online_schedule,
     online_z_tuple_for_timestamp,
     parse_execution_timestamp,
     parse_filename_base_ts,
     parse_station_id,
     parse_time_bound,
+    resolve_observed_efficiency_lower_limits,
     resolve_observed_efficiency_upper_limits,
     select_schedule_rows_for_window,
 )
@@ -73,7 +75,7 @@ def _load_task_metadata_source_csv(
     source_path = _task_metadata_path(station_id, task_id, source_name)
     if not source_path.exists():
         raise FileNotFoundError(f"Missing required {source_name} metadata for task {task_id}: {source_path}")
-    dataframe = pd.read_csv(source_path, low_memory=False)
+    dataframe = load_metadata_csv_with_repair(source_path, low_memory=False)
     if "filename_base" not in dataframe.columns:
         raise KeyError(f"Task {task_id} {source_name} metadata has no 'filename_base' column: {source_path}")
     if str(metadata_agg).strip().lower() == "latest":
@@ -400,6 +402,11 @@ def _selected_output_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
                 for plane_idx in range(1, 5)
                 for candidate in (
                     f"eff{plane_idx}",
+                    f"eff{plane_idx}_robust",
+                    f"eff{plane_idx}_robust_method",
+                    f"eff{plane_idx}_robust_xyphi",
+                    f"eff{plane_idx}_robust_xyphi_n_num",
+                    f"eff{plane_idx}_robust_xyphi_n_denom",
                     f"eff{plane_idx}_plateau",
                     f"eff{plane_idx}_overall",
                     f"eff{plane_idx}_median_x",
@@ -486,10 +493,12 @@ def run(config_path: str | Path | None = None) -> Path:
     if missing_expected:
         raise ValueError("Collected real data is missing required columns: " + ", ".join(missing_expected))
 
-    observed_efficiency_limits = resolve_observed_efficiency_upper_limits(config)
+    observed_efficiency_upper_limits = resolve_observed_efficiency_upper_limits(config)
+    observed_efficiency_lower_limits = resolve_observed_efficiency_lower_limits(config)
     prepared, observed_efficiency_limit_meta = apply_observed_efficiency_upper_limits(
         collected,
-        observed_efficiency_limits,
+        observed_efficiency_upper_limits,
+        lower_limits=observed_efficiency_lower_limits,
         mode="drop",
     )
     for plane_idx in range(1, 5):
@@ -534,6 +543,7 @@ def run(config_path: str | Path | None = None) -> Path:
         "timestamp_column": timestamp_column,
         "trigger_selection": trigger_selection,
         "collection": collection_meta,
+        "observed_efficiency_limit_filter": observed_efficiency_limit_meta,
         "observed_efficiency_upper_limit_filter": observed_efficiency_limit_meta,
         "fit_application": fit_application_meta,
         "plots": {
@@ -555,7 +565,7 @@ def run(config_path: str | Path | None = None) -> Path:
         log.info("corrected_eff is disabled; raw empirical efficiencies were passed through unchanged.")
     if observed_efficiency_limit_meta["affected_rows_total"] > 0:
         log.info(
-            "Dropped rows above observed-efficiency upper limits %s. Affected rows by plane: %s",
+            "Dropped rows outside observed-efficiency bounds %s. Affected rows by plane: %s",
             observed_efficiency_limit_meta["limits_by_plane"],
             observed_efficiency_limit_meta["affected_rows_by_plane"],
         )

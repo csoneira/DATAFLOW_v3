@@ -47,7 +47,7 @@ import warnings
 from collections import defaultdict
 from functools import reduce
 from itertools import combinations
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Mapping, Tuple
 
 # Scientific Computing
 import numpy as np
@@ -56,9 +56,9 @@ import scipy.linalg as linalg
 from scipy.constants import c
 from scipy.interpolate import CubicSpline
 from scipy.ndimage import gaussian_filter, gaussian_filter1d
-from scipy.optimize import brentq, curve_fit, minimize_scalar
+from scipy.optimize import OptimizeWarning, brentq, curve_fit, minimize_scalar
 from scipy.special import erf
-from scipy.stats import chi2 as chi2_dist, norm, poisson, linregress, median_abs_deviation, skew
+from scipy.stats import norm, poisson, linregress, median_abs_deviation, skew
 
 # Machine Learning
 from sklearn.linear_model import LinearRegression
@@ -68,6 +68,7 @@ from sklearn.metrics import r2_score
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib as mpl
+import matplotlib.patheffects as path_effects
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
 from matplotlib.backends.backend_pdf import PdfPages
@@ -123,17 +124,26 @@ from MASTER.common.plot_utils import (
     pdf_save_rasterized_page,
 )
 from MASTER.common.selection_config import load_selection_for_paths, station_is_selected
-from MASTER.common.status_csv import initialize_status_row, update_status_progress
+from MASTER.common.status_csv import (
+    delete_status_row,
+    initialize_status_row,
+    rename_status_row,
+    update_status_progress,
+)
 from MASTER.common.reprocessing_utils import (
     QA_REPROCESSING_METADATA_KEYS,
     apply_qa_reprocessing_context,
     canonical_processing_basename,
     filter_filenames_by_qa_retry_basenames,
     get_reprocessing_value,
+    infer_station_number_from_processing_name,
     load_active_qa_retry_basenames,
     load_qa_reprocessing_context_for_file,
 )
-from MASTER.common.simulated_data_utils import resolve_simulated_z_positions
+from MASTER.common.simulated_data_utils import (
+    load_simulated_efficiencies,
+    resolve_simulated_z_positions,
+)
 from MASTER.common.step1_shared import (
     add_normalized_count_metadata,
     add_trigger_type_total_offender_threshold_metadata,
@@ -143,6 +153,7 @@ from MASTER.common.step1_shared import (
     build_step1_cli_parser,
     build_step1_filtered_print,
     collect_columns,
+    extract_chi2_four_plane_metadata,
     extract_rate_histogram_metadata,
     extract_trigger_type_metadata,
     is_trigger_type_file_column,
@@ -159,6 +170,9 @@ from MASTER.common.step1_shared import (
     step1_task_plot_enabled,
     validate_step1_input_file_args,
     y_pos,
+)
+from MASTER.ANCILLARY.PLOTTERS.TASK_4.task4_chi2_four_plane_plotter import (
+    render_task4_chi2_four_plane_histogram,
 )
 
 task_number = 4
@@ -219,6 +233,7 @@ TASK4_PLOT_ALIASES: tuple[str, ...] = (
     "total_event_charge_histogram",
     "track_based_efficiency_tt_stability",
     "track_based_efficiency_vs_theta",
+    "track_efficiency_large_plot",
     "timtrack_projection_ellipse_contours",
     "timtrack_projection_scaled_angle_comparison",
     "chi2_offender_populations",
@@ -234,6 +249,8 @@ TASK4_PLOT_ALIASES: tuple[str, ...] = (
     "adj_dis_comparison",
 )
 task4_plot_status_by_alias: dict[str, str] = {}
+_TRACK_EFF_REPRESENTATIVE_LINESTYLE = (0, (10, 3))
+_TRACK_EFF_SIMULATION_LINESTYLE = (0, (3, 2))
 
 
 def task4_plot_enabled(alias: str) -> bool:
@@ -647,6 +664,32 @@ if 0 not in OFFENDER_TOTAL_CUMULATIVE_THRESHOLDS:
         sorted((0, *OFFENDER_TOTAL_CUMULATIVE_THRESHOLDS))
     )
 
+_CURVE_FIT_WARNING_FILTERS: tuple[tuple[str, type[Warning]], ...] = (
+    (r"Covariance of the parameters could not be estimated", OptimizeWarning),
+    (r"overflow encountered in matmul", RuntimeWarning),
+)
+
+
+def _curve_fit_checked(*args, **kwargs):
+    """Run curve_fit while suppressing known covariance-only warnings."""
+    try:
+        with warnings.catch_warnings():
+            for message, category in _CURVE_FIT_WARNING_FILTERS:
+                warnings.filterwarnings(
+                    "ignore",
+                    message=message,
+                    category=category,
+                )
+            popt, pcov = curve_fit(*args, **kwargs)
+    except (RuntimeError, ValueError, OverflowError, FloatingPointError, linalg.LinAlgError) as exc:
+        raise RuntimeError(f"curve_fit failed: {exc}") from exc
+
+    popt = np.asarray(popt, dtype=float)
+    if popt.ndim != 1 or not np.all(np.isfinite(popt)):
+        raise RuntimeError("curve_fit returned non-finite parameters")
+    return popt, pcov
+
+
 def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.99, fit_gaussian=False):
     global fig_idx
     nrows, ncols = (2, 3) if figure_number == 1 else (3, 4)
@@ -756,7 +799,12 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
 
                 # Fit Gaussian to the histogram data
                 bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-                popt, _ = curve_fit(gaussian, bin_centers, hist_data, p0=[np.mean(filt_data), np.std(filt_data), max(hist_data)])
+                popt, _ = _curve_fit_checked(
+                    gaussian,
+                    bin_centers,
+                    hist_data,
+                    p0=[np.mean(filt_data), np.std(filt_data), max(hist_data)],
+                )
                 mu, sigma, amplitude = popt
 
                 # Plot Gaussian fit
@@ -1222,6 +1270,47 @@ config_file_directory = str(
     / "ONLINE_RUN_DICTIONARY"
     / f"STATION_{station}"
 )
+early_metadata_directory = (
+    repo_root
+    / "STATIONS"
+    / f"MINGO0{station}"
+    / "STAGE_1"
+    / "EVENT_DATA"
+    / "STEP_1"
+    / f"TASK_{task_number}"
+    / "METADATA"
+)
+early_metadata_directory.mkdir(parents=True, exist_ok=True)
+early_status_csv_path = early_metadata_directory / f"task_{task_number}_metadata_status.csv"
+if user_file_selection:
+    early_status_filename_base = (
+        Path(user_file_path).name.replace("listed_", "").replace(".parquet", "")
+    )
+else:
+    early_status_filename_base = f"__task{task_number}_startup_station_{station}__"
+status_filename_base = early_status_filename_base
+status_execution_date = initialize_status_row(
+    early_status_csv_path,
+    filename_base=status_filename_base,
+    completion_fraction=0.0,
+)
+
+
+def _exit_without_status_row(message: str) -> None:
+    print(message)
+    if status_execution_date is not None:
+        deleted = delete_status_row(
+            early_status_csv_path,
+            filename_base=status_filename_base,
+            execution_date=status_execution_date,
+        )
+        if not deleted:
+            print(
+                "Warning: unable to delete startup status row "
+                f"{status_filename_base} ({status_execution_date})."
+            )
+    sys.exit(0)
+
 base_directory = str(repo_root / "STATIONS" / f"MINGO0{station}" / "STAGE_1" / "EVENT_DATA")
 raw_to_list_working_directory = os.path.join(base_directory, f"STEP_1/TASK_{task_number}")
 
@@ -1336,6 +1425,10 @@ csv_path_rate_histogram = os.path.join(
     metadata_directory,
     f"task_{task_number}_metadata_rate_histogram.csv",
 )
+csv_path_chi2_four_plane = os.path.join(
+    metadata_directory,
+    f"task_{task_number}_metadata_chi2_four_plane.csv",
+)
 csv_path_efficiency = os.path.join(
     metadata_directory,
     f"task_{task_number}_metadata_efficiency.csv",
@@ -1355,8 +1448,6 @@ csv_path_deep_fiter = os.path.join(
 )
 csv_path_status = os.path.join(metadata_directory, f"task_{task_number}_metadata_status.csv")
 csv_path_profiling = os.path.join(metadata_directory, f"task_{task_number}_metadata_profiling.csv")
-status_filename_base = ""
-status_execution_date = None
 
 # Move files from STAGE_0_to_1 to STAGE_0_to_1_TO_LIST/STAGE_0_to_1_TO_LIST_FILES/UNPROCESSED,
 # ensuring that only files not already in UNPROCESSED, PROCESSING,
@@ -1704,11 +1795,11 @@ else:
                     safe_move(completed_file_path, processing_file_path)
                     print(f"File moved to PROCESSING: {processing_file_path}")
                 else:
-                    print("No files to process in COMPLETED after normalization.")
-                    sys.exit(0)
+                    _exit_without_status_row("No files to process in COMPLETED after normalization.")
             else:
-                print("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
-                sys.exit(0)
+                _exit_without_status_row(
+                    "No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED."
+                )
 
     else:
         if unprocessed_files:
@@ -1746,12 +1837,12 @@ else:
                 safe_move(completed_file_path, processing_file_path)
                 print(f"File moved to PROCESSING: {processing_file_path}")
             else:
-                print("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
-                sys.exit(0)
+                _exit_without_status_row(
+                    "No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED."
+                )
 
         else:
-            print("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
-            sys.exit(0)
+            _exit_without_status_row("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
 
 # This is for all cases
 file_path = processing_file_path
@@ -1766,12 +1857,36 @@ basename_no_ext, file_extension = os.path.splitext(the_filename)
 basename_no_ext = the_filename.replace("listed_", "").replace(".parquet", "")
 
 print(f"File basename (no extension): {basename_no_ext}")
-status_filename_base = basename_no_ext
-status_execution_date = initialize_status_row(
-    csv_path_status,
-    filename_base=status_filename_base,
-    completion_fraction=0.0,
-)
+resolved_status_filename_base = basename_no_ext
+if status_execution_date is None:
+    status_execution_date = initialize_status_row(
+        csv_path_status,
+        filename_base=resolved_status_filename_base,
+        completion_fraction=0.0,
+    )
+    status_filename_base = resolved_status_filename_base
+elif status_filename_base != resolved_status_filename_base:
+    renamed = rename_status_row(
+        csv_path_status,
+        filename_base=status_filename_base,
+        execution_date=status_execution_date,
+        new_filename_base=resolved_status_filename_base,
+    )
+    if renamed:
+        status_filename_base = resolved_status_filename_base
+    else:
+        print(
+            "Warning: unable to rename startup status row "
+            f"from {status_filename_base} to {resolved_status_filename_base}; creating a new row."
+        )
+        status_execution_date = initialize_status_row(
+            csv_path_status,
+            filename_base=resolved_status_filename_base,
+            completion_fraction=0.0,
+        )
+        status_filename_base = resolved_status_filename_base
+else:
+    status_filename_base = resolved_status_filename_base
 
 simulated_z_positions, simulated_param_hash = resolve_simulated_z_positions(
     basename_no_ext,
@@ -1805,17 +1920,16 @@ else:
     )
 
 # Check the station number in the datafile
-try:
-    file_station_number = int(basename_no_ext[3])  # 4th character (index 3)
-    if file_station_number != int(station):
-        print(f'File station number is: {file_station_number}, it does not match.')
-        # Move the file to the ERROR directory
-        error_file_path = os.path.join(base_directories["error_directory"], file_name)
-        print(f"Moving file '{file_name}' to ERROR directory: {error_file_path}")
-        process_file(file_path, error_file_path)
-        sys.exit(f"File '{file_name}' does not belong to station {station}. Exiting.")
-except ValueError:
+file_station_number = infer_station_number_from_processing_name(basename_no_ext)
+if file_station_number is None:
     sys.exit(f"Invalid station number in file '{file_name}'. Exiting.")
+if file_station_number != int(station):
+    print(f'File station number is: {file_station_number}, it does not match.')
+    # Move the file to the ERROR directory
+    error_file_path = os.path.join(base_directories["error_directory"], file_name)
+    print(f"Moving file '{file_name}' to ERROR directory: {error_file_path}")
+    process_file(file_path, error_file_path)
+    sys.exit(f"File '{file_name}' does not belong to station {station}. Exiting.")
 
 if status_execution_date is not None:
     update_status_progress(
@@ -2028,6 +2142,108 @@ def _task4_parse_optional_float(raw_value: object) -> float | None:
     if not np.isfinite(parsed):
         return None
     return float(parsed)
+
+
+def _task4_get_optional_config_float(config_obj: Mapping[str, object], *keys: str) -> float | None:
+    for key in keys:
+        if not key:
+            continue
+        if key in config_obj:
+            return _task4_parse_optional_float(config_obj.get(key))
+    return None
+
+
+def _resolve_task4_track_efficiency_fiducial_cfg(config_obj: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "charge_event_left": _task4_get_optional_config_float(config_obj, "fiducial_charge_event_left"),
+        "charge_event_right": _task4_get_optional_config_float(config_obj, "fiducial_charge_event_right"),
+        # "x_left": _task4_get_optional_config_float(
+        #     config_obj,
+        #     "fiducial_x_left",
+        #     "fiducial_x_plane_1_left",
+        # ),
+        # "x_right": _task4_get_optional_config_float(
+        #     config_obj,
+        #     "fiducial_x_right",
+        #     "fiducial_x_plane_1_right",
+        # ),
+        "theta_left_deg": _task4_get_optional_config_float(config_obj, "fiducial_theta_left"),
+        "theta_right_deg": _task4_get_optional_config_float(config_obj, "fiducial_theta_right"),
+        "x_by_plane": {
+            plane: {
+                "left": _task4_get_optional_config_float(config_obj, f"fiducial_x_plane_{plane}_left"),
+                "right": _task4_get_optional_config_float(config_obj, f"fiducial_x_plane_{plane}_right"),
+            }
+            for plane in range(1, 5)
+        },
+        "y_by_plane": {
+            plane: {
+                "left": _task4_get_optional_config_float(config_obj, f"fiducial_y_plane_{plane}_left"),
+                "right": _task4_get_optional_config_float(config_obj, f"fiducial_y_plane_{plane}_right"),
+            }
+            for plane in range(1, 5)
+        },
+    }
+
+
+def _task4_resolve_region_bounds(
+    left_limit: float | None,
+    right_limit: float | None,
+    physical_left: float,
+    physical_right: float,
+) -> tuple[float, float]:
+    left = float(left_limit) if left_limit is not None else float(physical_left)
+    right = float(right_limit) if right_limit is not None else float(physical_right)
+    left = max(float(physical_left), min(left, float(physical_right)))
+    right = max(float(physical_left), min(right, float(physical_right)))
+    if right <= left:
+        return float(physical_left), float(physical_right)
+    return left, right
+
+
+def _task4_track_efficiency_fiducial_is_active(cfg_fiducial: Mapping[str, object]) -> bool:
+    scalar_keys = (
+        "charge_event_left",
+        "charge_event_right",
+        # "x_left",
+        # "x_right",
+        "theta_left_deg",
+        "theta_right_deg",
+    )
+    for key in scalar_keys:
+        if cfg_fiducial.get(key, None) is not None:
+            return True
+    x_by_plane = cfg_fiducial.get("x_by_plane", {})
+    if isinstance(x_by_plane, Mapping):
+        for plane_cfg in x_by_plane.values():
+            if not isinstance(plane_cfg, Mapping):
+                continue
+            if plane_cfg.get("left", None) is not None or plane_cfg.get("right", None) is not None:
+                return True
+    y_by_plane = cfg_fiducial.get("y_by_plane", {})
+    if isinstance(y_by_plane, Mapping):
+        for plane_cfg in y_by_plane.values():
+            if not isinstance(plane_cfg, Mapping):
+                continue
+            if plane_cfg.get("left", None) is not None or plane_cfg.get("right", None) is not None:
+                return True
+    return False
+
+
+def _task4_resolve_efficiency_param_hash(
+    explicit_param_hash: object,
+    df_input: pd.DataFrame,
+) -> str:
+    if explicit_param_hash is not None:
+        text = str(explicit_param_hash).strip()
+        if text:
+            return text
+    if "param_hash" in df_input.columns:
+        param_series = df_input["param_hash"].astype(str).str.strip()
+        nonempty = param_series[(param_series != "") & (param_series.str.lower() != "nan")]
+        if not nonempty.empty:
+            return str(nonempty.iloc[0])
+    return ""
 
 
 def _task4_parse_filter_columns(raw_value: object, default: Iterable[str]) -> list[str]:
@@ -2448,7 +2664,7 @@ def _fit_gaussian_mu_sigma(series: pd.Series, quantile: float = 0.99) -> tuple[f
             sigma0 = float(np.nanstd(arr))
         if not np.isfinite(sigma0) or sigma0 <= 0:
             return np.nan, np.nan
-        popt, _ = curve_fit(
+        popt, _ = _curve_fit_checked(
             _gaussian_model,
             bin_centers,
             hist_data,
@@ -3054,42 +3270,6 @@ if run_detached_fit:
 else:
     print("Skipping detached fitting (fit_method excludes detached).")
 
-    # # Filter according to residual ------------------------------------------------
-    # det_changed_event_count = 0
-    # for index, row in working_df.iterrows():
-    #     det_changed = False
-    #     for i in range(1, 5):
-    #         if abs(row[f'det_res_tsum_{i}']) > det_res_tsum_filter or \
-    #             abs(row[f'det_res_tdif_{i}']) > det_res_tdif_filter or \
-    #             abs(row[f'det_res_ystr_{i}']) > det_res_ystr_filter or \
-    #             abs(row[f'det_ext_res_tsum_{i}']) > det_ext_res_tsum_filter or \
-    #             abs(row[f'det_ext_res_tdif_{i}']) > det_ext_res_tdif_filter or \
-    #             abs(row[f'det_ext_res_ystr_{i}']) > det_ext_res_ystr_filter:
-    #             
-    #             det_changed = True
-    #             working_df.at[index, f'P{i}_Y_final'] = 0
-    #             working_df.at[index, f'P{i}_T_sum_final'] = 0
-    #             working_df.at[index, f'P{i}_T_dif_final'] = 0
-    #             working_df.at[index, f'P{i}_Q_sum_final'] = 0
-    #             working_df.at[index, f'P{i}_Q_dif_final'] = 0
-    #             # Also clear residuals so they don't appear in other plane combinations
-    #             for col in (
-    #                 f'det_res_ystr_{i}', f'det_res_tsum_{i}', f'det_res_tdif_{i}',
-    #                 f'det_ext_res_ystr_{i}', f'det_ext_res_tsum_{i}', f'det_ext_res_tdif_{i}'
-    #             ):
-    #                 if col in working_df.columns:
-    #                     working_df.at[index, col] = 0
-    #     if det_changed:
-    #         det_changed_event_count += 1
-    # print(f"--> {det_changed_event_count} events were residual filtered.")
-    # record_filter_metric(
-    #     "det_residual_zeroed_event_pct",
-    #     det_changed_event_count,
-    #     len(working_df),
-    # )
-    # 
-    # det_iteration += 1
-
 # ---------------------------------------------------------------------------
 # Put every value close to 0 to effectively 0 -------------------------------
 # ---------------------------------------------------------------------------
@@ -3237,38 +3417,6 @@ def plot_ts_err_with_hist(df, base_cols, time_col, title):
 
 # Deprecated legacy path intentionally does nothing now; all Task 4 row/value
 # filtering is centralized in apply_task4_final_filter().
-
-# det_bounds_changed = np.zeros(len(working_df), dtype=bool)
-# for col in working_df.columns:
-#     # Alternative fitting results
-#     if 'det_x' == col or 'det_y' == col:
-#         cond_bound = (working_df[col] > det_pos_filter) | (working_df[col] < -1*det_pos_filter)
-#         cond_zero = (working_df[col] == 0)
-#         change_mask = cond_bound | cond_zero
-#         det_bounds_changed |= change_mask
-#         working_df.loc[:, col] = np.where(change_mask, 0, working_df[col])
-#     if 'det_theta' == col:
-#         cond_bound = (working_df[col] > det_theta_right_filter) | (working_df[col] < det_theta_left_filter)
-#         cond_zero = (working_df[col] == 0)
-#         change_mask = cond_bound | cond_zero
-#         det_bounds_changed |= change_mask
-#         working_df.loc[:, col] = np.where(change_mask, 0, working_df[col])
-#     if 'det_phi' == col:
-#         cond_bound = (working_df[col] > det_phi_right_filter) | (working_df[col] < det_phi_left_filter)
-#         cond_zero = (working_df[col] == 0)
-#         change_mask = cond_bound | cond_zero
-#         det_bounds_changed |= change_mask
-#         working_df.loc[:, col] = np.where(change_mask, 0, working_df[col])
-#     if 'det_s' == col:
-#         cond_bound = (working_df[col] > det_slowness_filter_right) | (working_df[col] < det_slowness_filter_left)
-#         cond_zero = (working_df[col] == 0)
-#         working_df.loc[:, col] = np.where((cond_bound | cond_zero), 0, working_df[col])
-
-# record_filter_metric(
-#     "det_bounds_zeroed_event_pct",
-#     float(det_bounds_changed.sum()),
-#     float(len(working_df)),
-# )
 
 print("Alternative fitting done.")
 
@@ -4654,7 +4802,7 @@ if timeseries_and_fits or _task4_make_hist_core_errs_combined or _task4_make_his
                     try:
                         p0 = [y_fit.max(), float(series.mean()), float(max(series.std(), 1e-6))]
                         weights = np.maximum(y_fit, 1)
-                        popt, _ = curve_fit(
+                        popt, _ = _curve_fit_checked(
                             _gauss,
                             x_fit,
                             y_fit,
@@ -4986,7 +5134,7 @@ if time_window_fitting:
         
         # Then fit
         try:
-            popt, pcov = curve_fit(
+            popt, _ = _curve_fit_checked(
                 signal_plus_background,
                 widths_clean,
                 counts_clean,
@@ -5181,6 +5329,36 @@ def apply_task4_final_filter(
         zero_count_per_row = np.zeros(input_rows, dtype=int)
         primary_zero_col = np.full(input_rows, "", dtype=object)
 
+    def _numeric_column_or_nan(column_name: str) -> np.ndarray:
+        if column_name not in working.columns:
+            return np.full(input_rows, np.nan, dtype=float)
+        return pd.to_numeric(working[column_name], errors="coerce").to_numpy(dtype=float, copy=False)
+
+    def _apply_numeric_range_filter(
+        values: np.ndarray,
+        *,
+        left_limit: float | None,
+        right_limit: float | None,
+        summary_key: str,
+        reason_key: str,
+    ) -> None:
+        nonlocal final_mask
+        if left_limit is None and right_limit is None:
+            return
+        pass_mask = np.isfinite(values)
+        if left_limit is not None:
+            pass_mask &= values >= left_limit
+        if right_limit is not None:
+            pass_mask &= values <= right_limit
+        fail_mask = ~pass_mask
+        summary[f"rows_failed_{summary_key}"] = int(fail_mask.sum())
+        final_mask &= ~fail_mask
+        fail_reason_parts[fail_mask] = np.where(
+            fail_reason_parts[fail_mask] == "",
+            f"{reason_key}_out_of_range",
+            fail_reason_parts[fail_mask] + f";{reason_key}_out_of_range",
+        )
+
     variable_specs = (
         ("x", "final_filter_x_min", "final_filter_x_max"),
         ("y", "final_filter_y_min", "final_filter_y_max"),
@@ -5190,25 +5368,12 @@ def apply_task4_final_filter(
         ("phi", "final_filter_phi_min", "final_filter_phi_max"),
     )
     for variable_name, left_key, right_key in variable_specs:
-        if variable_name not in working.columns:
-            continue
-        left_limit = _task4_parse_optional_float(config.get(left_key))
-        right_limit = _task4_parse_optional_float(config.get(right_key))
-        if left_limit is None and right_limit is None:
-            continue
-        values = pd.to_numeric(working[variable_name], errors="coerce").to_numpy(dtype=float, copy=False)
-        pass_mask = np.isfinite(values)
-        if left_limit is not None:
-            pass_mask &= values >= left_limit
-        if right_limit is not None:
-            pass_mask &= values <= right_limit
-        fail_mask = ~pass_mask
-        summary[f"rows_failed_{variable_name}_range"] = int(fail_mask.sum())
-        final_mask &= ~fail_mask
-        fail_reason_parts[fail_mask] = np.where(
-            fail_reason_parts[fail_mask] == "",
-            f"{variable_name}_out_of_range",
-            fail_reason_parts[fail_mask] + f";{variable_name}_out_of_range",
+        _apply_numeric_range_filter(
+            _numeric_column_or_nan(variable_name),
+            left_limit=_task4_parse_optional_float(config.get(left_key)),
+            right_limit=_task4_parse_optional_float(config.get(right_key)),
+            summary_key=f"{variable_name}_range",
+            reason_key=variable_name,
         )
 
     rows_affected = int((~final_mask).sum())
@@ -5514,122 +5679,15 @@ compute_timtrack_gaussian_sigma_chi2(
     quantile=0.99,
     output_col="tim_th_chi_sigmafit_1234",
 )
-if (create_essential_plots or create_plots) and task4_plot_enabled("tim_th_chi_sigmafit_1234_histogram"):
-    sigmafit_df = working_df.loc[base_cond].copy()
-    sigmafit_tt = pd.to_numeric(sigmafit_df[task4_plot_tt_column], errors="coerce")
-    sigmafit_vals = pd.to_numeric(
-        sigmafit_df.loc[sigmafit_tt == 1234.0, "tim_th_chi_sigmafit_1234"],
-        errors="coerce",
-    ).to_numpy(dtype=float, copy=False)
-    sigmafit_vals = sigmafit_vals[np.isfinite(sigmafit_vals) & (sigmafit_vals >= 0)]
-    sigmafit_ndf = 12
-    global_variables["tim_th_chi_sigmafit_1234_ndf"] = sigmafit_ndf
-    global_variables["tim_th_chi_sigmafit_1234_hist_n"] = int(sigmafit_vals.size)
-    sigmafit_plot_vals = sigmafit_vals[sigmafit_vals < 100]
-    global_variables["tim_th_chi_sigmafit_1234_hist_plot_lt_100_n"] = int(sigmafit_plot_vals.size)
-    if sigmafit_plot_vals.size >= 10:
-        x_hi = 100.0
-        x_fit_hi = 10.0
-        bins = np.linspace(0, x_hi, 100)
-        x_grid = np.linspace(0, x_hi, 1000)
-        hist_counts, hist_edges = np.histogram(sigmafit_plot_vals, bins=bins)
-        hist_centers = 0.5 * (hist_edges[:-1] + hist_edges[1:])
-        bin_width = float(hist_edges[1] - hist_edges[0])
-        theory_bin_counts = chi2_dist.pdf(hist_centers, df=sigmafit_ndf) * bin_width
-        fit_mask = (hist_centers <= x_fit_hi) & np.isfinite(theory_bin_counts)
-        fit_obs = hist_counts[fit_mask].astype(float, copy=False)
-        fit_ref = theory_bin_counts[fit_mask].astype(float, copy=False)
-        denom = float(np.dot(fit_ref, fit_ref))
-        sigmafit_fit_total = float(np.dot(fit_obs, fit_ref) / denom) if denom > 0 else float(sigmafit_plot_vals.size)
-        theory_bin_counts_scaled = sigmafit_fit_total * theory_bin_counts
-        theory_curve = sigmafit_fit_total * chi2_dist.pdf(x_grid, df=sigmafit_ndf) * bin_width
-        diff_counts = hist_counts.astype(float, copy=False) - theory_bin_counts_scaled
-        unexplained_fit_window = float(np.clip(diff_counts[fit_mask], 0.0, None).sum())
-        signed_fit_window = float(diff_counts[fit_mask].sum())
-        global_variables["tim_th_chi_sigmafit_1234_reference_fit_hi"] = x_fit_hi
-        global_variables["tim_th_chi_sigmafit_1234_reference_fit_total"] = sigmafit_fit_total
-        global_variables["tim_th_chi_sigmafit_1234_unexplained_events_0_12"] = unexplained_fit_window
-        global_variables["tim_th_chi_sigmafit_1234_signed_difference_0_12"] = signed_fit_window
-        fig, axes = plt.subplots(1, 3, figsize=(20, 5.5), sharex=True)
-        for ax, log_y in zip(axes[:2], (False, True)):
-            ax.hist(
-                sigmafit_plot_vals,
-                bins=bins,
-                density=False,
-                alpha=0.65,
-                color="tab:blue",
-                label=f"1234 data (n={sigmafit_plot_vals.size:,})",
-            )
-            ax.plot(
-                x_grid,
-                theory_curve,
-                color="crimson",
-                lw=2.0,
-                label=(
-                    rf"$\chi^2_{{\nu={sigmafit_ndf}}}$ reference "
-                    rf"(fit on 0..{x_fit_hi:g}, N={sigmafit_fit_total:.1f})"
-                ),
-            )
-            ax.axvline(x_fit_hi, color="gray", lw=1.0, ls="--", alpha=0.8)
-            ax.set_xlim(0, x_hi)
-            ax.set_xlabel("tim_th_chi_sigmafit_1234")
-            ax.set_ylabel("Count / bin")
-            ax.grid(True, alpha=0.25)
-            ax.legend(fontsize=8)
-            if log_y:
-                ax.set_yscale("log")
-                ax.set_title("Clipped to < 100, log Y")
-            else:
-                ax.set_title("Clipped to < 100, linear Y")
-        diff_ax = axes[2]
-        diff_colors = np.where(diff_counts >= 0.0, "darkorange", "steelblue")
-        diff_ax.bar(
-            hist_centers,
-            diff_counts,
-            width=bin_width * 0.92,
-            color=diff_colors,
-            alpha=0.8,
-            linewidth=0.0,
-        )
-        diff_ax.axhline(0.0, color="black", lw=1.0)
-        diff_ax.axvline(x_fit_hi, color="gray", lw=1.0, ls="--", alpha=0.8)
-        diff_ax.set_xlim(0, x_hi)
-        diff_ax.set_xlabel("tim_th_chi_sigmafit_1234")
-        diff_ax.set_ylabel("Data - reference")
-        diff_ax.set_title(
-            "Noise-like excess\n"
-            f"positive residual in 0..{x_fit_hi:g} = {unexplained_fit_window:.1f}"
-        )
-        diff_ax.grid(True, alpha=0.25)
-        plt.suptitle(
-            "tim_th_chi_sigmafit_1234 for 1234 events\n"
-            "Histogram with theoretical chi-square reference fit on 0..12"
-        )
-        plt.tight_layout(rect=[0, 0, 1, 0.94])
-        if save_plots:
-            final_filename = f"{fig_idx}_tim_th_chi_sigmafit_1234_histogram.png"
-            fig_idx += 1
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            save_plot_figure(
-                save_fig_path,
-                format="png",
-                alias="tim_th_chi_sigmafit_1234_histogram",
-            )
-        if show_plots:
-            plt.show()
-        plt.close()
-    else:
-        print(
-            f"[tim_th_chi_sigmafit_1234_histogram] not enough valid 1234 rows "
-            f"to plot after <100 cut (n={sigmafit_plot_vals.size})."
-        )
 cond = base_cond & pd.to_numeric(
     working_df["tim_th_chi_sigmafit_1234"], errors="coerce"
 ).lt(100)
 df_plot_ancillary = working_df.loc[cond].copy()
 # Efficiency diagnostics should use the full activity-based event table,
 # not the chi2/charge-clipped ancillary subset used for other plots.
+# Efficiency inputs come from the post-TimTrack, post-final-filter data frame.
+# The track-efficiency fiducial cuts are only applied inside the telescope
+# efficiency builder, not as additional event-level filters on working_df.
 df_efficiency_source = working_df.copy()
 
 # -----------------------------------------------------------------------------------------------------------------------------
@@ -6028,7 +6086,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("strip_hit_oc
             plt.show()
         plt.close()
 
-_EFFICIENCY_VECTOR_AXIS_ORDER = ("x", "y", "theta")
+_EFFICIENCY_VECTOR_AXIS_ORDER = ("x", "y", "theta", "phi")
 
 
 def _safe_cfg_int(value, default):
@@ -6064,12 +6122,15 @@ def _resolve_task4_efficiency_metadata_cfg(config_dict):
         "x_bin_count": max(1, _safe_cfg_int(raw.get("x_bin_count", 15), 15)),
         "y_bin_count": max(1, _safe_cfg_int(raw.get("y_bin_count", 20), 20)),
         "theta_bin_count": max(1, _safe_cfg_int(raw.get("theta_bin_count", 20), 20)),
+        "phi_bin_count": max(1, _safe_cfg_int(raw.get("phi_bin_count", 24), 24)),
         "x_min_mm": raw.get("x_min_mm", None),
         "x_max_mm": raw.get("x_max_mm", None),
         "y_min_mm": raw.get("y_min_mm", None),
         "y_max_mm": raw.get("y_max_mm", None),
         "theta_min_deg": raw.get("theta_min_deg", None),
         "theta_max_deg": raw.get("theta_max_deg", None),
+        "phi_min_deg": raw.get("phi_min_deg", None),
+        "phi_max_deg": raw.get("phi_max_deg", None),
         "min_pool_events": max(1, _safe_cfg_int(raw.get("min_pool_events", 20), 20)),
         "min_accepted_events": max(1, _safe_cfg_int(raw.get("min_accepted_events", 10), 10)),
         "summary_fiducial_x_abs_max_mm": _safe_cfg_optional_float(
@@ -6080,6 +6141,9 @@ def _resolve_task4_efficiency_metadata_cfg(config_dict):
         ),
         "summary_fiducial_theta_max_deg": _safe_cfg_optional_float(
             raw.get("summary_fiducial_theta_max_deg", None)
+        ),
+        "summary_fiducial_phi_abs_max_deg": _safe_cfg_optional_float(
+            raw.get("summary_fiducial_phi_abs_max_deg", None)
         ),
     }
 
@@ -6200,6 +6264,10 @@ def _compute_efficiency_summary_bin_mask(centers, eff_vals, den_vals, axis_name,
         limit = cfg_eff.get("summary_fiducial_theta_max_deg", None)
         if limit is not None:
             valid &= centers <= float(limit)
+    elif axis_name == "phi":
+        limit = cfg_eff.get("summary_fiducial_phi_abs_max_deg", None)
+        if limit is not None:
+            valid &= np.abs(centers) <= float(limit)
     return valid
 
 
@@ -6222,6 +6290,15 @@ def _compute_robust_x_center_eff(axis_payload, cfg_eff):
     summary = _compute_efficiency_scalar_summary(axis_payload, "x", cfg_eff)
     eff = summary.get("eff", np.nan)
     return float(eff) if np.isfinite(eff) else np.nan
+
+
+def _intersect_required_indices(*indices):
+    if not indices or any(index is None for index in indices):
+        return None
+    intersection = pd.Index(indices[0])
+    for index in indices[1:]:
+        intersection = intersection.intersection(pd.Index(index), sort=False)
+    return intersection
 
 
 def _required_track_efficiency_hit_columns():
@@ -6262,6 +6339,7 @@ def _fit_three_plane_telescope_projection(x_hits, y_hits, z_arr, test_plane_zero
         "x_pred": np.full(n_rows, np.nan, dtype=float),
         "y_pred": np.full(n_rows, np.nan, dtype=float),
         "theta_pred_deg": np.full(n_rows, np.nan, dtype=float),
+        "phi_pred_deg": np.full(n_rows, np.nan, dtype=float),
         "valid": np.zeros(n_rows, dtype=bool),
     }
     if n_rows == 0 or not np.isfinite(z_denom) or z_denom <= 0.0:
@@ -6285,6 +6363,7 @@ def _fit_three_plane_telescope_projection(x_hits, y_hits, z_arr, test_plane_zero
     out["x_pred"][valid] = intercept_x + slope_x * z_test
     out["y_pred"][valid] = intercept_y + slope_y * z_test
     out["theta_pred_deg"][valid] = np.degrees(np.arctan(np.hypot(slope_x, slope_y)))
+    out["phi_pred_deg"][valid] = np.degrees(np.arctan2(slope_y, slope_x))
     out["valid"] = valid
     return out
 
@@ -6296,6 +6375,7 @@ def _select_robust_plateau_event_indices(
     axis_values,
     bins,
     accepted_indices,
+    axis_name="x",
     tolerance,
     center_eff=np.nan,
     fired=None,
@@ -6308,7 +6388,7 @@ def _select_robust_plateau_event_indices(
         centers,
         eff_vals,
         den_vals,
-        "x",
+        axis_name,
         cfg_eff,
     )
     if not np.any(valid_bins):
@@ -6318,7 +6398,7 @@ def _select_robust_plateau_event_indices(
         return None
 
     if not np.isfinite(center_eff):
-        center_eff = _compute_robust_x_center_eff(axis_payload, cfg_eff)
+        center_eff = _compute_efficiency_scalar_summary(axis_payload, axis_name, cfg_eff).get("eff", np.nan)
     if not np.isfinite(center_eff):
         return None
 
@@ -6341,6 +6421,54 @@ def _select_robust_plateau_event_indices(
         in_plateau = np.zeros(selected.shape, dtype=bool)
         in_plateau[selected] = plateau_bins[bin_indices[selected]]
         selected &= in_plateau
+
+    return accepted_index[selected]
+
+
+def _select_efficiency_summary_event_indices(
+    axis_payload,
+    *,
+    cfg_eff,
+    axis_values,
+    bins,
+    accepted_indices,
+    axis_name="x",
+    fired=None,
+    fired_only=False,
+):
+    centers = np.asarray(axis_payload.get("centers", []), dtype=float)
+    eff_vals = np.asarray(axis_payload.get("eff", []), dtype=float)
+    den_vals = np.asarray(axis_payload.get("den", []), dtype=float)
+    valid_bins = _compute_efficiency_summary_bin_mask(
+        centers,
+        eff_vals,
+        den_vals,
+        axis_name,
+        cfg_eff,
+    )
+    if not np.any(valid_bins):
+        return None
+
+    if eff_vals.shape[0] != len(bins) - 1:
+        return None
+
+    accepted_index = pd.Index(accepted_indices)
+    bin_indices = _histogram_bin_indices(axis_values, bins)
+    if len(accepted_index) != len(bin_indices):
+        return None
+
+    selected = bin_indices >= 0
+    if fired_only:
+        if fired is None:
+            return None
+        fired_arr = np.asarray(fired, dtype=float)
+        if len(fired_arr) != len(bin_indices):
+            return None
+        selected &= fired_arr > 0.5
+    if np.any(selected):
+        in_summary = np.zeros(selected.shape, dtype=bool)
+        in_summary[selected] = valid_bins[bin_indices[selected]]
+        selected &= in_summary
 
     return accepted_index[selected]
 
@@ -6393,6 +6521,8 @@ def _resolve_efficiency_edges(
     width_half,
     theta_left_filter,
     theta_right_filter,
+    phi_left_filter,
+    phi_right_filter,
 ):
     x_min = _safe_cfg_float(cfg_eff.get("x_min_mm", None), -float(strip_half))
     x_max = _safe_cfg_float(cfg_eff.get("x_max_mm", None), float(strip_half))
@@ -6406,6 +6536,14 @@ def _resolve_efficiency_edges(
         cfg_eff.get("theta_max_deg", None),
         float(np.degrees(theta_right_filter)),
     )
+    phi_min_deg = _safe_cfg_float(
+        cfg_eff.get("phi_min_deg", None),
+        float(np.degrees(phi_left_filter)),
+    )
+    phi_max_deg = _safe_cfg_float(
+        cfg_eff.get("phi_max_deg", None),
+        float(np.degrees(phi_right_filter)),
+    )
 
     x_min = max(-float(strip_half), min(x_min, float(strip_half)))
     x_max = max(-float(strip_half), min(x_max, float(strip_half)))
@@ -6413,16 +6551,24 @@ def _resolve_efficiency_edges(
     y_max = max(-float(width_half), min(y_max, float(width_half)))
     theta_min_deg = max(0.0, theta_min_deg)
     theta_max_deg = max(theta_min_deg + 1e-6, min(theta_max_deg, 90.0))
+    phi_min_deg = max(-180.0, min(phi_min_deg, 180.0))
+    phi_max_deg = max(-180.0, min(phi_max_deg, 180.0))
 
     if x_max <= x_min:
         x_min, x_max = -float(strip_half), float(strip_half)
     if y_max <= y_min:
         y_min, y_max = -float(width_half), float(width_half)
+    if phi_max_deg <= phi_min_deg:
+        phi_min_deg = float(np.degrees(phi_left_filter))
+        phi_max_deg = float(np.degrees(phi_right_filter))
+        if phi_max_deg <= phi_min_deg:
+            phi_min_deg, phi_max_deg = -180.0, 180.0
 
     return {
         "x": np.linspace(x_min, x_max, int(cfg_eff["x_bin_count"]) + 1),
         "y": np.linspace(y_min, y_max, int(cfg_eff["y_bin_count"]) + 1),
         "theta": np.linspace(theta_min_deg, theta_max_deg, int(cfg_eff["theta_bin_count"]) + 1),
+        "phi": np.linspace(phi_min_deg, phi_max_deg, int(cfg_eff["phi_bin_count"]) + 1),
     }
 
 
@@ -6430,12 +6576,15 @@ def _compute_track_based_efficiency_payload(
     df_plot,
     *,
     cfg_eff,
+    cfg_fiducial,
     z_positions,
     tdiff_to_x,
     strip_half,
     width_half,
     theta_left_filter,
     theta_right_filter,
+    phi_left_filter,
+    phi_right_filter,
     y_pos_p13,
     y_pos_p24,
 ):
@@ -6445,6 +6594,8 @@ def _compute_track_based_efficiency_payload(
         width_half=width_half,
         theta_left_filter=theta_left_filter,
         theta_right_filter=theta_right_filter,
+        phi_left_filter=phi_left_filter,
+        phi_right_filter=phi_right_filter,
     )
     plane_pool_tt = {
         1: [234, 1234],
@@ -6488,6 +6639,11 @@ def _compute_track_based_efficiency_payload(
         .fillna(0)
         .to_numpy(dtype=np.int32)
     )
+    charge_series, _ = _resolve_task4_total_event_charge_series(df_plot)
+    if charge_series is not None:
+        charge_all = charge_series.to_numpy(dtype=float, copy=False)
+    else:
+        charge_all = np.full(len(df_plot), np.nan, dtype=float)
 
     any_plane_available = False
     for plane in range(1, 5):
@@ -6509,6 +6665,16 @@ def _compute_track_based_efficiency_payload(
                 np.asarray([], dtype=float),
                 np.asarray([], dtype=float),
                 edges["theta"],
+            ),
+            "phi": _make_efficiency_curve(
+                np.asarray([], dtype=float),
+                np.asarray([], dtype=float),
+                edges["phi"],
+            ),
+            "eff_theta_phi": np.full(
+                (len(edges["theta"]) - 1, len(edges["phi"]) - 1),
+                np.nan,
+                dtype=float,
             ),
             "scalar_summary": {
                 "x": {
@@ -6532,10 +6698,27 @@ def _compute_track_based_efficiency_payload(
                     "n_bins_used": 0,
                     "selected_center": np.nan,
                 },
+                "phi": {
+                    "eff": np.nan,
+                    "unc": np.nan,
+                    "n_denom": 0,
+                    "n_bins_used": 0,
+                    "selected_center": np.nan,
+                },
             },
+            "accepted_indices": None,
+            "robust_x_summary_accepted_indices": None,
+            "robust_x_summary_fired_indices": None,
             "robust_x_plateau_accepted_indices": None,
             "robust_x_plateau_fired_indices": None,
+            "robust_y_plateau_accepted_indices": None,
+            "robust_y_plateau_fired_indices": None,
+            "robust_phi_plateau_accepted_indices": None,
+            "robust_phi_plateau_fired_indices": None,
             "robust_x_center_eff": np.nan,
+            "robust_xyphi_accepted_indices": None,
+            "robust_xyphi_fired_indices": None,
+            "robust_xyphi_eff": np.nan,
         }
 
         projection = _fit_three_plane_telescope_projection(
@@ -6554,24 +6737,77 @@ def _compute_track_based_efficiency_payload(
         x_pred = projection["x_pred"][pool_mask]
         y_pred = projection["y_pred"][pool_mask]
         theta_pred_deg = projection["theta_pred_deg"][pool_mask]
+        phi_pred_deg = projection["phi_pred_deg"][pool_mask]
+        charge_pred = charge_all[pool_mask]
         fired = (dtt_all[pool_mask] == 1234).astype(float)
 
-        accepted_xy = (
+        # x_left, x_right = _task4_resolve_region_bounds(
+        #     cfg_fiducial.get("x_left", None),
+        #     cfg_fiducial.get("x_right", None),
+        #     -float(strip_half),
+        #     float(strip_half),
+        # )
+        plane_x_cfg = cfg_fiducial.get("x_by_plane", {}).get(plane, {})
+        x_left, x_right = _task4_resolve_region_bounds(
+            plane_x_cfg.get("left", None),
+            plane_x_cfg.get("right", None),
+            -float(width_half),
+            float(width_half),
+        )
+        plane_y_cfg = cfg_fiducial.get("y_by_plane", {}).get(plane, {})
+        y_left, y_right = _task4_resolve_region_bounds(
+            plane_y_cfg.get("left", None),
+            plane_y_cfg.get("right", None),
+            -float(width_half),
+            float(width_half),
+        )
+
+        accepted_region = (
             np.isfinite(x_pred)
             & np.isfinite(y_pred)
-            & (np.abs(x_pred) <= strip_half)
-            & (np.abs(y_pred) <= width_half)
+            & (x_pred >= x_left)
+            & (x_pred <= x_right)
+            & (y_pred >= y_left)
+            & (y_pred <= y_right)
         )
-        accepted_theta = accepted_xy & np.isfinite(theta_pred_deg)
+        charge_left = cfg_fiducial.get("charge_event_left", None)
+        charge_right = cfg_fiducial.get("charge_event_right", None)
+        if charge_left is not None or charge_right is not None:
+            charge_pass = np.isfinite(charge_pred)
+            if charge_left is not None:
+                charge_pass &= charge_pred >= float(charge_left)
+            if charge_right is not None:
+                charge_pass &= charge_pred <= float(charge_right)
+            accepted_region &= charge_pass
 
-        x_acc = x_pred[accepted_xy]
-        y_acc = y_pred[accepted_xy]
-        fired_acc = fired[accepted_xy]
-        accepted_index = df_plot.index[pool_mask][accepted_xy]
+        theta_left_deg = cfg_fiducial.get("theta_left_deg", None)
+        theta_right_deg = cfg_fiducial.get("theta_right_deg", None)
+        if theta_left_deg is not None or theta_right_deg is not None:
+            theta_pass = np.isfinite(theta_pred_deg)
+            if theta_left_deg is not None:
+                theta_pass &= theta_pred_deg >= float(theta_left_deg)
+            if theta_right_deg is not None:
+                theta_pass &= theta_pred_deg <= float(theta_right_deg)
+            accepted_region &= theta_pass
+
+        accepted_theta = accepted_region & np.isfinite(theta_pred_deg)
+        accepted_phi = accepted_region & np.isfinite(phi_pred_deg)
+        accepted_theta_phi = accepted_theta & np.isfinite(phi_pred_deg)
+
+        x_acc = x_pred[accepted_region]
+        y_acc = y_pred[accepted_region]
+        fired_acc = fired[accepted_region]
+        accepted_index = df_plot.index[pool_mask][accepted_region]
         theta_acc = theta_pred_deg[accepted_theta]
         fired_theta = fired[accepted_theta]
+        phi_acc = phi_pred_deg[accepted_phi]
+        fired_phi = fired[accepted_phi]
+        theta_map_acc = theta_pred_deg[accepted_theta_phi]
+        phi_map_acc = phi_pred_deg[accepted_theta_phi]
+        fired_theta_phi = fired[accepted_theta_phi]
 
         plane_result["n_denom"] = int(len(fired_acc))
+        plane_result["accepted_indices"] = pd.Index(accepted_index)
         if len(fired_acc) > 0:
             plane_result["overall_eff"] = float(np.mean(fired_acc) * 100.0)
 
@@ -6597,12 +6833,31 @@ def _compute_track_based_efficiency_payload(
                 cfg_eff,
             )
             plane_result["robust_x_center_eff"] = float(x_scalar_summary.get("eff", np.nan))
+            plane_result["robust_x_summary_accepted_indices"] = _select_efficiency_summary_event_indices(
+                plane_result["x"],
+                cfg_eff=cfg_eff,
+                axis_values=x_acc,
+                bins=edges["x"],
+                accepted_indices=accepted_index,
+                axis_name="x",
+            )
+            plane_result["robust_x_summary_fired_indices"] = _select_efficiency_summary_event_indices(
+                plane_result["x"],
+                cfg_eff=cfg_eff,
+                axis_values=x_acc,
+                bins=edges["x"],
+                accepted_indices=accepted_index,
+                axis_name="x",
+                fired=fired_acc,
+                fired_only=True,
+            )
             plane_result["robust_x_plateau_accepted_indices"] = _select_robust_plateau_event_indices(
                 plane_result["x"],
                 cfg_eff=cfg_eff,
                 axis_values=x_acc,
                 bins=edges["x"],
                 accepted_indices=accepted_index,
+                axis_name="x",
                 tolerance=_ROBUST_EFFICIENCY_PLATEAU_TOLERANCE,
                 center_eff=plane_result["robust_x_center_eff"],
             )
@@ -6612,6 +6867,7 @@ def _compute_track_based_efficiency_payload(
                 axis_values=x_acc,
                 bins=edges["x"],
                 accepted_indices=accepted_index,
+                axis_name="x",
                 tolerance=_ROBUST_EFFICIENCY_PLATEAU_TOLERANCE,
                 center_eff=plane_result["robust_x_center_eff"],
                 fired=fired_acc,
@@ -6627,22 +6883,117 @@ def _compute_track_based_efficiency_payload(
             )
             any_plane_available = True
 
+        if len(fired_phi) >= int(cfg_eff["min_accepted_events"]):
+            plane_result["phi"] = _make_efficiency_curve(
+                phi_acc,
+                fired_phi,
+                edges["phi"],
+            )
+            any_plane_available = True
+
+        if len(fired_theta_phi) >= int(cfg_eff["min_accepted_events"]):
+            num_theta_phi, _, _ = np.histogram2d(
+                theta_map_acc[fired_theta_phi > 0.5],
+                phi_map_acc[fired_theta_phi > 0.5],
+                bins=[edges["theta"], edges["phi"]],
+            )
+            den_theta_phi, _, _ = np.histogram2d(
+                theta_map_acc,
+                phi_map_acc,
+                bins=[edges["theta"], edges["phi"]],
+            )
+            with np.errstate(invalid="ignore", divide="ignore"):
+                plane_result["eff_theta_phi"] = np.where(
+                    den_theta_phi > 0,
+                    num_theta_phi / den_theta_phi,
+                    np.nan,
+                )
+            any_plane_available = True
+
+        y_scalar_summary = _compute_efficiency_scalar_summary(
+            plane_result.get("y", {}),
+            "y",
+            cfg_eff,
+        )
+        theta_scalar_summary = _compute_efficiency_scalar_summary(
+            plane_result.get("theta", {}),
+            "theta",
+            cfg_eff,
+        )
+        phi_scalar_summary = _compute_efficiency_scalar_summary(
+            plane_result.get("phi", {}),
+            "phi",
+            cfg_eff,
+        )
         plane_result["scalar_summary"] = {
             "x": x_scalar_summary,
-            "y": _compute_efficiency_scalar_summary(
-                plane_result.get("y", {}),
-                "y",
-                cfg_eff,
-            ),
-            "theta": _compute_efficiency_scalar_summary(
-                plane_result.get("theta", {}),
-                "theta",
-                cfg_eff,
-            ),
+            "y": y_scalar_summary,
+            "theta": theta_scalar_summary,
+            "phi": phi_scalar_summary,
         }
         plane_result["robust_x_center_eff"] = float(
             plane_result["scalar_summary"]["x"].get("eff", np.nan)
         )
+        plane_result["robust_y_plateau_accepted_indices"] = _select_robust_plateau_event_indices(
+            plane_result.get("y", {}),
+            cfg_eff=cfg_eff,
+            axis_values=y_acc,
+            bins=edges["y"],
+            accepted_indices=accepted_index,
+            axis_name="y",
+            tolerance=_ROBUST_EFFICIENCY_PLATEAU_TOLERANCE,
+            center_eff=y_scalar_summary.get("eff", np.nan),
+        )
+        plane_result["robust_y_plateau_fired_indices"] = _select_robust_plateau_event_indices(
+            plane_result.get("y", {}),
+            cfg_eff=cfg_eff,
+            axis_values=y_acc,
+            bins=edges["y"],
+            accepted_indices=accepted_index,
+            axis_name="y",
+            tolerance=_ROBUST_EFFICIENCY_PLATEAU_TOLERANCE,
+            center_eff=y_scalar_summary.get("eff", np.nan),
+            fired=fired_acc,
+            fired_only=True,
+        )
+        plane_result["robust_phi_plateau_accepted_indices"] = _select_robust_plateau_event_indices(
+            plane_result.get("phi", {}),
+            cfg_eff=cfg_eff,
+            axis_values=phi_acc,
+            bins=edges["phi"],
+            accepted_indices=pd.Index(df_plot.index[pool_mask][accepted_phi]),
+            axis_name="phi",
+            tolerance=_ROBUST_EFFICIENCY_PLATEAU_TOLERANCE,
+            center_eff=phi_scalar_summary.get("eff", np.nan),
+        )
+        plane_result["robust_phi_plateau_fired_indices"] = _select_robust_plateau_event_indices(
+            plane_result.get("phi", {}),
+            cfg_eff=cfg_eff,
+            axis_values=phi_acc,
+            bins=edges["phi"],
+            accepted_indices=pd.Index(df_plot.index[pool_mask][accepted_phi]),
+            axis_name="phi",
+            tolerance=_ROBUST_EFFICIENCY_PLATEAU_TOLERANCE,
+            center_eff=phi_scalar_summary.get("eff", np.nan),
+            fired=fired_phi,
+            fired_only=True,
+        )
+        plane_result["robust_xyphi_accepted_indices"] = _intersect_required_indices(
+            plane_result.get("robust_x_plateau_accepted_indices", None),
+            plane_result.get("robust_y_plateau_accepted_indices", None),
+            plane_result.get("robust_phi_plateau_accepted_indices", None),
+        )
+        plane_result["robust_xyphi_fired_indices"] = _intersect_required_indices(
+            plane_result.get("robust_x_plateau_fired_indices", None),
+            plane_result.get("robust_y_plateau_fired_indices", None),
+            plane_result.get("robust_phi_plateau_fired_indices", None),
+        )
+        if plane_result["robust_xyphi_accepted_indices"] is not None:
+            robust_xyphi_n_denom = int(len(plane_result["robust_xyphi_accepted_indices"]))
+            robust_xyphi_fired_index = plane_result.get("robust_xyphi_fired_indices", None)
+            robust_xyphi_n_num = int(len(robust_xyphi_fired_index)) if robust_xyphi_fired_index is not None else 0
+            if robust_xyphi_n_denom > 0:
+                plane_result["robust_xyphi_eff"] = float(robust_xyphi_n_num / robust_xyphi_n_denom)
 
         payload["plane_results"][plane] = plane_result
 
@@ -6677,11 +7028,15 @@ def _flatten_track_based_efficiency_metadata(
             "x_bin_count",
             "y_bin_count",
             "theta_bin_count",
+            "phi_bin_count",
             "min_pool_events",
             "min_accepted_events",
             "summary_fiducial_x_abs_max_mm",
             "summary_fiducial_y_abs_max_mm",
             "summary_fiducial_theta_max_deg",
+            "summary_fiducial_phi_abs_max_deg",
+            "phi_min_deg",
+            "phi_max_deg",
         ):
             row[f"efficiency_metadata_{key}"] = cfg_eff.get(key, "")
 
@@ -6742,6 +7097,199 @@ def _format_task4_efficiency_vector_title_line(payload) -> str:
     return "Track-based efficiency vector (3-plane -> 4-plane): " + ", ".join(fragments)
 
 
+def _format_task4_simulated_efficiency_title_line(sim_efficiencies_percent) -> str:
+    if not sim_efficiencies_percent:
+        return "Simulation reference: unavailable"
+    fragments: list[str] = []
+    for plane in range(1, 5):
+        if plane - 1 < len(sim_efficiencies_percent) and np.isfinite(sim_efficiencies_percent[plane - 1]):
+            fragments.append(f"P{plane}={float(sim_efficiencies_percent[plane - 1]):.1f}%")
+        else:
+            fragments.append(f"P{plane}=n/a")
+    return "Simulation reference: " + ", ".join(fragments)
+
+
+def _format_task4_percent_label(value: object) -> str:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        numeric = np.nan
+    if not np.isfinite(numeric):
+        return "n/a"
+    if abs(numeric) <= 1.0:
+        numeric *= 100.0
+    return f"{numeric:.1f}%"
+
+
+def _resolve_track_efficiency_four_plane_fiducial_index(
+    payload,
+    *,
+    fit_tt_1234_index: pd.Index | None = None,
+) -> pd.Index:
+    if not isinstance(payload, dict):
+        return pd.Index([])
+    plane_results = payload.get("plane_results", {})
+    if not isinstance(plane_results, dict):
+        return pd.Index([])
+
+    accepted_indices: list[pd.Index] = []
+    for plane in range(1, 5):
+        plane_result = plane_results.get(plane, {})
+        if not isinstance(plane_result, dict):
+            return pd.Index([])
+        accepted = plane_result.get("accepted_indices", None)
+        if accepted is None:
+            return pd.Index([])
+        accepted_indices.append(pd.Index(accepted))
+
+    if not accepted_indices:
+        return pd.Index([])
+
+    fiducial_index = accepted_indices[0]
+    for accepted_index in accepted_indices[1:]:
+        fiducial_index = fiducial_index.intersection(accepted_index, sort=False)
+
+    if fit_tt_1234_index is not None:
+        fiducial_index = fiducial_index.intersection(pd.Index(fit_tt_1234_index), sort=False)
+    return fiducial_index
+
+
+def _resolve_track_efficiency_representative(plane_result):
+    if not isinstance(plane_result, dict):
+        return (np.nan, "fid representative", "missing", None, None)
+
+    xyphi_eff = plane_result.get("robust_xyphi_eff", np.nan)
+    xyphi_accepted = plane_result.get("robust_xyphi_accepted_indices", None)
+    xyphi_fired = plane_result.get("robust_xyphi_fired_indices", None)
+    if np.isfinite(xyphi_eff):
+        return (
+            float(xyphi_eff),
+            "fid representative x/y/phi plateau",
+            "xyphi_plateau",
+            pd.Index(xyphi_accepted) if xyphi_accepted is not None else None,
+            pd.Index(xyphi_fired) if xyphi_fired is not None else None,
+        )
+
+    x_summary_eff = plane_result.get("robust_x_center_eff", np.nan)
+    x_summary_accepted = plane_result.get("robust_x_summary_accepted_indices", None)
+    x_summary_fired = plane_result.get("robust_x_summary_fired_indices", None)
+    if np.isfinite(x_summary_eff):
+        return (
+            float(x_summary_eff),
+            "fid representative x-summary",
+            "x_summary",
+            pd.Index(x_summary_accepted) if x_summary_accepted is not None else None,
+            pd.Index(x_summary_fired) if x_summary_fired is not None else None,
+        )
+
+    overall_eff_percent = plane_result.get("overall_eff", np.nan)
+    if np.isfinite(overall_eff_percent):
+        return (
+            float(overall_eff_percent) / 100.0,
+            "fid overall",
+            "overall",
+            None,
+            None,
+        )
+
+    return (np.nan, "fid representative", "missing", None, None)
+
+
+def _plot_track_efficiency_curve_panel(
+    axis,
+    *,
+    axis_payload,
+    axis_payload_full,
+    n_denom,
+    n_denom_full,
+    overall_eff,
+    overall_eff_full,
+    representative_eff,
+    representative_label,
+    sim_eff_percent,
+    plane_color,
+    xlabel,
+    xlim,
+    x_reference_values=(),
+    label_fontsize=8,
+    legend_fontsize=7,
+):
+    centers = np.asarray(axis_payload.get("centers", []), dtype=float)
+    eff_vals = np.asarray(axis_payload.get("eff", []), dtype=float)
+    unc_vals = np.asarray(axis_payload.get("unc", []), dtype=float)
+    den_vals = np.asarray(axis_payload.get("den", []), dtype=float)
+    valid = np.isfinite(eff_vals) & (den_vals > 0)
+
+    centers_full = np.asarray(axis_payload_full.get("centers", []), dtype=float)
+    eff_vals_full = np.asarray(axis_payload_full.get("eff", []), dtype=float)
+    unc_vals_full = np.asarray(axis_payload_full.get("unc", []), dtype=float)
+    den_vals_full = np.asarray(axis_payload_full.get("den", []), dtype=float)
+    valid_full = np.isfinite(eff_vals_full) & (den_vals_full > 0)
+
+    if np.any(valid_full):
+        axis.errorbar(
+            centers_full[valid_full],
+            eff_vals_full[valid_full],
+            yerr=unc_vals_full[valid_full],
+            fmt="o--",
+            ms=3.5,
+            color="0.45",
+            alpha=0.80,
+            label=(
+                f"no fid  (n={int(n_denom_full)}, "
+                f"{_format_task4_percent_label(overall_eff_full)})"
+            ),
+        )
+    if np.any(valid):
+        axis.errorbar(
+            centers[valid],
+            eff_vals[valid],
+            yerr=unc_vals[valid],
+            fmt="o-",
+            ms=4,
+            color=plane_color,
+            alpha=0.85,
+            label=f"fiducial  (n={int(n_denom)}, {_format_task4_percent_label(overall_eff)})",
+        )
+    if np.isfinite(representative_eff):
+        _representative_line = axis.axhline(
+            float(representative_eff),
+            color=plane_color,
+            lw=2.0,
+            ls=_TRACK_EFF_REPRESENTATIVE_LINESTYLE,
+            alpha=0.95,
+            zorder=4,
+            label=f"{representative_label}  {_format_task4_percent_label(representative_eff)}",
+        )
+        _representative_line.set_path_effects(
+            [
+                path_effects.Stroke(linewidth=4.2, foreground="white", alpha=0.95),
+                path_effects.Normal(),
+            ]
+        )
+    for x_reference in x_reference_values:
+        if np.isfinite(x_reference):
+            axis.axvline(float(x_reference), color="lightgray", lw=0.9, ls="--", alpha=0.8)
+    if np.isfinite(sim_eff_percent):
+        axis.axhline(
+            float(sim_eff_percent) / 100.0,
+            color="black",
+            lw=1.0,
+            ls=_TRACK_EFF_SIMULATION_LINESTYLE,
+            alpha=0.75,
+            zorder=3,
+            label=f"simulation  {_format_task4_percent_label(sim_eff_percent)}",
+        )
+    axis.set_ylim(0, 1.08)
+    axis.set_xlim(*xlim)
+    axis.set_xlabel(xlabel, fontsize=label_fontsize)
+    axis.set_ylabel("Efficiency", fontsize=label_fontsize)
+    axis.grid(True, alpha=0.3)
+    handles, labels = axis.get_legend_handles_labels()
+    if handles:
+        axis.legend(fontsize=legend_fontsize)
+
+
 def _format_robust_efficiency_trace_line(row) -> str:
     def _fmt(value):
         try:
@@ -6752,13 +7300,19 @@ def _format_robust_efficiency_trace_line(row) -> str:
 
     fragments: list[str] = []
     for plane in range(1, 5):
+        robust_eff = row.get(f"eff{plane}_robust", np.nan)
+        robust_xyphi_eff = row.get(f"eff{plane}_robust_xyphi", np.nan)
         center_eff = row.get(f"eff{plane}_median_x", np.nan)
+        robust_n_denom = row.get(f"eff{plane}_robust_n_denom", np.nan)
         plateau_eff = row.get(f"eff{plane}_plateau", np.nan)
         overall_eff = row.get(f"eff{plane}_overall", np.nan)
         n_bins = row.get(f"eff{plane}_n_valid_bins", 0)
         n_plateau_bins = row.get(f"eff{plane}_n_plateau_bins", 0)
         fragments.append(
-            f"P{plane}(center_x={_fmt(center_eff)}, "
+            f"P{plane}(robust={_fmt(robust_eff)}, "
+            f"xyphi={_fmt(robust_xyphi_eff)}, "
+            f"median_x={_fmt(center_eff)}, "
+            f"robust_n_denom={int(robust_n_denom) if np.isfinite(robust_n_denom) else 'nan'}, "
             f"plateau={_fmt(plateau_eff)}, "
             f"overall={_fmt(overall_eff)}, "
             f"bins={int(n_bins or 0)}, plateau_bins={int(n_plateau_bins or 0)})"
@@ -6789,11 +7343,19 @@ def _build_robust_efficiency_row(
 
     plane_results = payload.get("plane_results", {}) if isinstance(payload, dict) else {}
     cfg_eff = payload.get("config", {}) if isinstance(payload, dict) else {}
+    plane_fiducial_accepted_indices: dict[int, pd.Index] = {}
     plane_plateau_indices: dict[int, pd.Index] = {}
     plane_plateau_accepted_indices: dict[int, pd.Index] = {}
     for plane in range(1, 5):
         plane_result = plane_results.get(plane, {}) if isinstance(plane_results, dict) else {}
         axis_payload = plane_result.get("x", {}) if isinstance(plane_result, dict) else {}
+        accepted_indices = (
+            plane_result.get("accepted_indices", None)
+            if isinstance(plane_result, dict)
+            else None
+        )
+        if accepted_indices is not None:
+            plane_fiducial_accepted_indices[plane] = pd.Index(accepted_indices)
         _, eff_vals, _, _, valid = _extract_efficiency_summary_arrays(
             axis_payload,
             "x",
@@ -6804,6 +7366,13 @@ def _build_robust_efficiency_row(
             axis_payload,
             cfg_eff,
         )
+        (
+            representative_eff,
+            _representative_label,
+            representative_method,
+            representative_accepted_index,
+            representative_fired_index,
+        ) = _resolve_track_efficiency_representative(plane_result)
         overall_eff_percent = plane_result.get("overall_eff", np.nan) if isinstance(plane_result, dict) else np.nan
         overall_eff_fraction = (
             float(overall_eff_percent) / 100.0
@@ -6818,8 +7387,47 @@ def _build_robust_efficiency_row(
             row[f"eff{plane}_n_plateau_bins"] = int(np.sum(plateau_bins))
         else:
             row[f"eff{plane}_n_plateau_bins"] = 0
+        row[f"eff{plane}_robust_method"] = representative_method
+        row[f"eff{plane}_robust"] = representative_eff
+        row[f"eff{plane}_robust_xyphi"] = plane_result.get("robust_xyphi_eff", np.nan)
         row[f"eff{plane}_median_x"] = center_eff
         row[f"eff{plane}_overall"] = overall_eff_fraction
+        row[f"eff{plane}"] = representative_eff if np.isfinite(representative_eff) else overall_eff_fraction
+
+        robust_xyphi_accepted = (
+            plane_result.get("robust_xyphi_accepted_indices", None) if isinstance(plane_result, dict) else None
+        )
+        if robust_xyphi_accepted is not None:
+            row[f"eff{plane}_robust_xyphi_n_denom"] = int(len(pd.Index(robust_xyphi_accepted)))
+        else:
+            row[f"eff{plane}_robust_xyphi_n_denom"] = np.nan
+
+        robust_xyphi_fired = (
+            plane_result.get("robust_xyphi_fired_indices", None) if isinstance(plane_result, dict) else None
+        )
+        if robust_xyphi_fired is not None:
+            row[f"eff{plane}_robust_xyphi_n_num"] = int(len(pd.Index(robust_xyphi_fired)))
+        else:
+            row[f"eff{plane}_robust_xyphi_n_num"] = np.nan
+
+        if representative_accepted_index is not None:
+            row[f"eff{plane}_robust_n_denom"] = int(len(representative_accepted_index))
+        else:
+            robust_scalar_summary = plane_result.get("scalar_summary", {}).get("x", {})
+            robust_n_denom = robust_scalar_summary.get("n_denom", np.nan)
+            row[f"eff{plane}_robust_n_denom"] = (
+                int(robust_n_denom) if np.isfinite(robust_n_denom) else np.nan
+            )
+
+        if representative_fired_index is not None:
+            row[f"eff{plane}_robust_n_num"] = int(len(representative_fired_index))
+        else:
+            if np.isfinite(representative_eff) and np.isfinite(row[f"eff{plane}_robust_n_denom"]):
+                row[f"eff{plane}_robust_n_num"] = int(
+                    round(float(representative_eff) * float(row[f"eff{plane}_robust_n_denom"]))
+                )
+            else:
+                row[f"eff{plane}_robust_n_num"] = np.nan
 
         plateau_accepted = (
             plane_result.get("robust_x_plateau_accepted_indices", None)
@@ -6851,11 +7459,6 @@ def _build_robust_efficiency_row(
         if plane in plane_plateau_accepted_indices and len(plane_plateau_accepted_indices[plane]) > 0:
             plateau_eff = float(len(plateau_fired_index) / len(plane_plateau_accepted_indices[plane]))
         row[f"eff{plane}_plateau"] = plateau_eff
-        row[f"eff{plane}"] = (
-            plateau_eff
-            if np.isfinite(plateau_eff)
-            else overall_eff_fraction
-        )
 
     fit_tt_1234_index = None
     if "fit_tt" in df_events.columns:
@@ -6875,30 +7478,30 @@ def _build_robust_efficiency_row(
     else:
         row["rate_1234_hz"] = np.nan
 
-    union_available_index = None
-    intersection_available_index = None
-    if fit_tt_1234_index is not None and plane_plateau_indices:
-        plateau_fit_indices = [
-            plateau_index.intersection(fit_tt_1234_index, sort=False)
-            for plateau_index in plane_plateau_indices.values()
+    robust_union_index = None
+    robust_intersection_index = None
+    if fit_tt_1234_index is not None and plane_fiducial_accepted_indices:
+        robust_indices = [
+            accepted_index.intersection(fit_tt_1234_index, sort=False)
+            for accepted_index in plane_fiducial_accepted_indices.values()
         ]
-        union_available_index = plateau_fit_indices[0]
-        intersection_available_index = plateau_fit_indices[0]
-        for plateau_index in plateau_fit_indices[1:]:
-            union_available_index = union_available_index.union(plateau_index, sort=False)
-            intersection_available_index = intersection_available_index.intersection(plateau_index, sort=False)
+        robust_union_index = robust_indices[0]
+        robust_intersection_index = robust_indices[0]
+        for robust_index in robust_indices[1:]:
+            robust_union_index = robust_union_index.union(robust_index, sort=False)
+            robust_intersection_index = robust_intersection_index.intersection(robust_index, sort=False)
 
-    if union_available_index is not None:
-        row["four_plane_robust_count_union"] = int(len(union_available_index))
-        row["four_plane_robust_hz_union"] = float(len(union_available_index) / denom) if denom > 0.0 else np.nan
+    if robust_union_index is not None:
+        row["four_plane_robust_count_union"] = int(len(robust_union_index))
+        row["four_plane_robust_hz_union"] = float(len(robust_union_index) / denom) if denom > 0.0 else np.nan
     else:
         row["four_plane_robust_count_union"] = np.nan
         row["four_plane_robust_hz_union"] = np.nan
 
-    if intersection_available_index is not None:
-        row["four_plane_robust_count_intersection"] = int(len(intersection_available_index))
+    if robust_intersection_index is not None:
+        row["four_plane_robust_count_intersection"] = int(len(robust_intersection_index))
         row["four_plane_robust_hz_intersection"] = (
-            float(len(intersection_available_index) / denom)
+            float(len(robust_intersection_index) / denom)
             if denom > 0.0
             else np.nan
         )
@@ -6906,8 +7509,8 @@ def _build_robust_efficiency_row(
         row["four_plane_robust_count_intersection"] = np.nan
         row["four_plane_robust_hz_intersection"] = np.nan
 
-    if fit_tt_1234_index is not None and len(plane_plateau_indices) == 4 and union_available_index is not None:
-        n_events_four_plane_robust = int(len(union_available_index))
+    if fit_tt_1234_index is not None and len(plane_fiducial_accepted_indices) == 4 and robust_intersection_index is not None:
+        n_events_four_plane_robust = int(len(robust_intersection_index))
         row["four_plane_robust_count"] = n_events_four_plane_robust
         row["four_plane_robust_hz"] = float(n_events_four_plane_robust / denom) if denom > 0.0 else np.nan
     else:
@@ -7390,17 +7993,82 @@ def _summarize_projection_scaling(payload: dict[str, object]) -> dict[str, objec
 
 
 efficiency_metadata_cfg = _resolve_task4_efficiency_metadata_cfg(config)
+track_efficiency_fiducial_cfg = _resolve_task4_track_efficiency_fiducial_cfg(config)
+track_efficiency_fullplane_cfg = _resolve_task4_track_efficiency_fiducial_cfg({})
+track_efficiency_fiducial_active = _task4_track_efficiency_fiducial_is_active(
+    track_efficiency_fiducial_cfg
+)
 efficiency_metadata_payload = _compute_track_based_efficiency_payload(
     df_efficiency_source,
     cfg_eff=efficiency_metadata_cfg,
+    cfg_fiducial=track_efficiency_fiducial_cfg,
     z_positions=z_positions,
     tdiff_to_x=tdiff_to_x,
     strip_half=strip_half,
     width_half=width_half,
     theta_left_filter=theta_left_filter,
     theta_right_filter=theta_right_filter,
+    phi_left_filter=phi_left_filter,
+    phi_right_filter=phi_right_filter,
     y_pos_p13=np.asarray(y_pos_P1_and_P3, dtype=float),
     y_pos_p24=np.asarray(y_pos_P2_and_P4, dtype=float),
+)
+efficiency_metadata_payload_fullplane = _compute_track_based_efficiency_payload(
+    df_efficiency_source,
+    cfg_eff=efficiency_metadata_cfg,
+    cfg_fiducial=track_efficiency_fullplane_cfg,
+    z_positions=z_positions,
+    tdiff_to_x=tdiff_to_x,
+    strip_half=strip_half,
+    width_half=width_half,
+    theta_left_filter=theta_left_filter,
+    theta_right_filter=theta_right_filter,
+    phi_left_filter=phi_left_filter,
+    phi_right_filter=phi_right_filter,
+    y_pos_p13=np.asarray(y_pos_P1_and_P3, dtype=float),
+    y_pos_p24=np.asarray(y_pos_P2_and_P4, dtype=float),
+)
+track_efficiency_reference_param_hash = _task4_resolve_efficiency_param_hash(
+    simulated_param_hash,
+    df_efficiency_source,
+)
+track_efficiency_simulated_efficiencies_percent: list[float] = []
+if is_simulated_file and track_efficiency_reference_param_hash:
+    _sim_eff_values = load_simulated_efficiencies(track_efficiency_reference_param_hash)
+    if _sim_eff_values:
+        track_efficiency_simulated_efficiencies_percent = [
+            100.0 * float(value) for value in _sim_eff_values[:4]
+        ]
+track_efficiency_four_plane_fiducial_index: pd.Index | None = None
+if bool(efficiency_metadata_payload.get("available", False)) and task4_plot_tt_column in df_efficiency_source.columns:
+    _fit_tt_1234_index = pd.Index(
+        df_efficiency_source.index[
+            pd.to_numeric(df_efficiency_source[task4_plot_tt_column], errors="coerce")
+            .fillna(0)
+            .eq(1234.0)
+        ]
+    )
+    track_efficiency_four_plane_fiducial_index = _resolve_track_efficiency_four_plane_fiducial_index(
+        efficiency_metadata_payload,
+        fit_tt_1234_index=_fit_tt_1234_index,
+    )
+
+if (create_essential_plots or create_plots) and task4_plot_enabled("tim_th_chi_sigmafit_1234_histogram"):
+    fig_idx = render_task4_chi2_four_plane_histogram(
+        working_df=working_df,
+        base_cond=base_cond,
+        tt_column=task4_plot_tt_column,
+        global_variables=global_variables,
+        fiducial_pass_index=track_efficiency_four_plane_fiducial_index,
+        fig_idx=fig_idx,
+        figure_directory=base_directories["figure_directory"],
+        save_plot_figure=save_plot_figure,
+        save_plots=save_plots,
+        show_plots=show_plots,
+        plot_list=plot_list,
+    )
+track_efficiency_simulation_title_line = _format_task4_simulated_efficiency_title_line(
+    track_efficiency_simulated_efficiencies_percent
 )
 if {"fit_tt", "list_tt"}.issubset(df_efficiency_source.columns):
     _fit_tt_counts = pd.to_numeric(df_efficiency_source["fit_tt"], errors="coerce").fillna(0).astype(int).value_counts()
@@ -7416,6 +8084,11 @@ if not bool(efficiency_metadata_payload.get("available", False)):
     print(
         "[track_based_efficiency] metadata payload unavailable: "
         f"{efficiency_metadata_payload.get('reason', 'unknown')}"
+    )
+if not bool(efficiency_metadata_payload_fullplane.get("available", False)):
+    print(
+        "[track_based_efficiency] full-plane reference payload unavailable: "
+        f"{efficiency_metadata_payload_fullplane.get('reason', 'unknown')}"
     )
 task4_efficiency_vector_title_line = _format_task4_efficiency_vector_title_line(
     efficiency_metadata_payload
@@ -7464,27 +8137,52 @@ global_variables["timtrack_projection_scaling_global_total_weight"] = float(
 if (
     (create_essential_plots or create_plots)
     and task4_plot_enabled("track_based_efficiency")
-    and bool(efficiency_metadata_payload.get("available", False))
+    and (
+        bool(efficiency_metadata_payload.get("available", False))
+        or bool(efficiency_metadata_payload_fullplane.get("available", False))
+    )
 ):
-    edges_eff = efficiency_metadata_payload["edges"]
+    edges_eff = (
+        efficiency_metadata_payload["edges"]
+        if bool(efficiency_metadata_payload.get("available", False))
+        else efficiency_metadata_payload_fullplane["edges"]
+    )
     fig, axes = plt.subplots(3, 4, figsize=(18, 13), squeeze=False)
 
     for plane_idx, plane in enumerate(range(1, 5)):
         plane_result = efficiency_metadata_payload["plane_results"].get(plane, {})
+        plane_result_full = efficiency_metadata_payload_fullplane["plane_results"].get(plane, {})
         ax_2d = axes[0][plane_idx]
         ax_1dy = axes[1][plane_idx]
         ax_1dx = axes[2][plane_idx]
 
-        n_denom = int(plane_result.get("n_denom", 0))
-        if n_denom < int(efficiency_metadata_cfg["min_accepted_events"]):
+        n_denom = int(plane_result.get("n_denom", 0) or 0)
+        n_denom_full = int(plane_result_full.get("n_denom", 0) or 0)
+        if max(n_denom, n_denom_full) < int(efficiency_metadata_cfg["min_accepted_events"]):
             ax_2d.set_visible(False)
             ax_1dy.set_visible(False)
             ax_1dx.set_visible(False)
             continue
 
         overall_eff = plane_result.get("overall_eff", np.nan)
-        y_reference = np.asarray(plane_result.get("y_reference", []), dtype=float)
-        eff_2d = np.asarray(plane_result.get("eff_2d", np.empty((0, 0))), dtype=float)
+        overall_eff_full = plane_result_full.get("overall_eff", np.nan)
+        representative_eff, representative_label, _, _, _ = _resolve_track_efficiency_representative(
+            plane_result
+        )
+        sim_eff_percent = (
+            float(track_efficiency_simulated_efficiencies_percent[plane - 1])
+            if plane - 1 < len(track_efficiency_simulated_efficiencies_percent)
+            else np.nan
+        )
+        plane_color = f"C{plane - 1}"
+        y_reference = np.asarray(
+            plane_result_full.get("y_reference", plane_result.get("y_reference", [])),
+            dtype=float,
+        )
+        eff_2d = np.asarray(
+            plane_result_full.get("eff_2d", plane_result.get("eff_2d", np.empty((0, 0)))),
+            dtype=float,
+        )
 
         im = ax_2d.imshow(
             eff_2d.T,
@@ -7503,24 +8201,76 @@ if (
         plt.colorbar(im, ax=ax_2d, label="efficiency")
         for sy in y_reference:
             ax_2d.axhline(float(sy), color="cyan", lw=0.7, ls="--", alpha=0.7)
+        if track_efficiency_fiducial_active:
+            # x_left, x_right = _task4_resolve_region_bounds(
+            #     track_efficiency_fiducial_cfg.get("x_left", None),
+            #     track_efficiency_fiducial_cfg.get("x_right", None),
+            #     -float(strip_half),
+            #     float(strip_half),
+            # )
+            plane_x_cfg = track_efficiency_fiducial_cfg.get("x_by_plane", {}).get(plane, {})
+            x_left, x_right = _task4_resolve_region_bounds(
+                plane_x_cfg.get("left", None),
+                plane_x_cfg.get("right", None),
+                -float(width_half),
+                float(width_half),
+            )
+            plane_y_cfg = track_efficiency_fiducial_cfg.get("y_by_plane", {}).get(plane, {})
+            y_left, y_right = _task4_resolve_region_bounds(
+                plane_y_cfg.get("left", None),
+                plane_y_cfg.get("right", None),
+                -float(width_half),
+                float(width_half),
+            )
+            ax_2d.vlines((x_left, x_right), y_left, y_right, colors="black", linestyles="--", linewidth=1.1, alpha=0.85)
+            ax_2d.hlines((y_left, y_right), x_left, x_right, colors="black", linestyles="--", linewidth=1.1, alpha=0.85)
         ax_2d.set_xlabel("Projected X (mm)", fontsize=8)
         ax_2d.set_ylabel("Projected Y (mm)", fontsize=8)
         ax_2d.set_title(
-            f"Plane {plane}  eff={float(overall_eff):.1f}%  (n={n_denom})",
+            (
+                f"Plane {plane}\n"
+                f"fid={_format_task4_percent_label(overall_eff)}  "
+                f"full={_format_task4_percent_label(overall_eff_full)}"
+                + (
+                    f"  sim={_format_task4_percent_label(sim_eff_percent)}"
+                    if np.isfinite(sim_eff_percent)
+                    else ""
+                )
+                + f"\n(n_fid={n_denom}, n_full={n_denom_full})"
+            ),
             fontsize=9,
         )
 
-        for axis_payload, axis, xlabel, half_range in (
-            (plane_result.get("y", {}), ax_1dy, "Projected Y (mm)", float(width_half)),
-            (plane_result.get("x", {}), ax_1dx, "Projected X (mm)", float(strip_half)),
+        for axis_payload, axis_payload_full, axis, xlabel, half_range in (
+            (plane_result.get("y", {}), plane_result_full.get("y", {}), ax_1dy, "Projected Y (mm)", float(width_half)),
+            (plane_result.get("x", {}), plane_result_full.get("x", {}), ax_1dx, "Projected X (mm)", float(strip_half)),
         ):
             centers = np.asarray(axis_payload.get("centers", []), dtype=float)
             eff_vals = np.asarray(axis_payload.get("eff", []), dtype=float)
             unc_vals = np.asarray(axis_payload.get("unc", []), dtype=float)
             den_vals = np.asarray(axis_payload.get("den", []), dtype=float)
             valid = np.isfinite(eff_vals) & (den_vals > 0)
-            median_eff = float(np.nanmedian(eff_vals[valid])) if np.any(valid) else np.nan
 
+            centers_full = np.asarray(axis_payload_full.get("centers", []), dtype=float)
+            eff_vals_full = np.asarray(axis_payload_full.get("eff", []), dtype=float)
+            unc_vals_full = np.asarray(axis_payload_full.get("unc", []), dtype=float)
+            den_vals_full = np.asarray(axis_payload_full.get("den", []), dtype=float)
+            valid_full = np.isfinite(eff_vals_full) & (den_vals_full > 0)
+
+            if np.any(valid_full):
+                axis.errorbar(
+                    centers_full[valid_full],
+                    eff_vals_full[valid_full],
+                    yerr=unc_vals_full[valid_full],
+                    fmt="o--",
+                    ms=3.5,
+                    color="0.45",
+                    alpha=0.80,
+                    label=(
+                        f"no fid  (n={n_denom_full}, "
+                        f"{_format_task4_percent_label(overall_eff_full)})"
+                    ),
+                )
             if np.any(valid):
                 axis.errorbar(
                     centers[valid],
@@ -7528,31 +8278,55 @@ if (
                     yerr=unc_vals[valid],
                     fmt="o-",
                     ms=4,
-                    color=f"C{plane - 1}",
+                    color=plane_color,
                     alpha=0.85,
+                    label=f"fiducial  (n={n_denom}, {_format_task4_percent_label(overall_eff)})",
+                )
+            if np.isfinite(representative_eff):
+                _representative_line = axis.axhline(
+                    float(representative_eff),
+                    color=plane_color,
+                    lw=2.0,
+                    ls=_TRACK_EFF_REPRESENTATIVE_LINESTYLE,
+                    alpha=0.95,
+                    zorder=4,
+                    label=f"{representative_label}  {_format_task4_percent_label(representative_eff)}",
+                )
+                _representative_line.set_path_effects(
+                    [
+                        path_effects.Stroke(linewidth=4.2, foreground="white", alpha=0.95),
+                        path_effects.Normal(),
+                    ]
                 )
             if xlabel.startswith("Projected Y"):
                 for sy in y_reference:
                     axis.axvline(float(sy), color="lightgray", lw=0.9, ls="--", alpha=0.8)
-            if np.isfinite(median_eff):
+            if np.isfinite(sim_eff_percent):
                 axis.axhline(
-                    median_eff,
-                    color="red",
-                    lw=0.8,
-                    ls="--",
-                    alpha=0.6,
-                    label=f"median {median_eff * 100:.1f}%",
+                    float(sim_eff_percent) / 100.0,
+                    color="black",
+                    lw=1.0,
+                    ls=_TRACK_EFF_SIMULATION_LINESTYLE,
+                    alpha=0.75,
+                    zorder=3,
+                    label=f"simulation  {_format_task4_percent_label(sim_eff_percent)}",
                 )
             axis.set_ylim(0, 1.08)
             axis.set_xlim(-half_range, half_range)
             axis.set_xlabel(xlabel, fontsize=8)
             axis.set_ylabel("Efficiency", fontsize=8)
-            axis.legend(fontsize=7)
+            handles, labels = axis.get_legend_handles_labels()
+            if handles:
+                axis.legend(fontsize=7)
             axis.grid(True, alpha=0.3)
 
     plt.suptitle(
         "Track-based single-plane efficiency (telescope method)\n"
-        "3 planes build a track → project to test plane → did the test plane fire?",
+        "3 planes build a track → project to test plane → did the test plane fire?\n"
+        + ("Solid colour = active fiducial efficiency curve, dashed gray = no-fid/full-plane reference" if track_efficiency_fiducial_active else "No fiducial cut is active: solid and dashed-gray references should overlap")
+        + "; dashed plane-colour = fiducial representative efficiency"
+        + ("; dashed black = simulation overall reference" if track_efficiency_simulated_efficiencies_percent else "")
+        + ("\n" + track_efficiency_simulation_title_line if track_efficiency_simulated_efficiencies_percent else ""),
         fontsize=11,
     )
     plt.tight_layout(rect=[0, 0, 1, 0.94])
@@ -8098,51 +8872,126 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("track_based_
 if (
     (create_essential_plots or create_plots)
     and task4_plot_enabled("track_based_efficiency_vs_theta")
-    and bool(efficiency_metadata_payload.get("available", False))
+    and (
+        bool(efficiency_metadata_payload.get("available", False))
+        or bool(efficiency_metadata_payload_fullplane.get("available", False))
+    )
 ):
     fig, axes = plt.subplots(1, 4, figsize=(16, 4), squeeze=False)
 
     for plane_idx, plane in enumerate(range(1, 5)):
         ax = axes[0][plane_idx]
         plane_result = efficiency_metadata_payload["plane_results"].get(plane, {})
+        plane_result_full = efficiency_metadata_payload_fullplane["plane_results"].get(plane, {})
         theta_payload = plane_result.get("theta", {})
+        theta_payload_full = plane_result_full.get("theta", {})
         centers = np.asarray(theta_payload.get("centers", []), dtype=float)
         eff_vals = np.asarray(theta_payload.get("eff", []), dtype=float)
         unc_vals = np.asarray(theta_payload.get("unc", []), dtype=float)
         den_vals = np.asarray(theta_payload.get("den", []), dtype=float)
         valid = np.isfinite(eff_vals) & (den_vals > 0)
-        if not np.any(valid):
+        centers_full = np.asarray(theta_payload_full.get("centers", []), dtype=float)
+        eff_vals_full = np.asarray(theta_payload_full.get("eff", []), dtype=float)
+        unc_vals_full = np.asarray(theta_payload_full.get("unc", []), dtype=float)
+        den_vals_full = np.asarray(theta_payload_full.get("den", []), dtype=float)
+        valid_full = np.isfinite(eff_vals_full) & (den_vals_full > 0)
+        if not np.any(valid) and not np.any(valid_full):
             ax.set_visible(False)
             continue
 
-        median_eff_th = float(np.nanmedian(eff_vals[valid]))
-        ax.errorbar(
-            centers[valid],
-            eff_vals[valid],
-            yerr=unc_vals[valid],
-            fmt="o-",
-            ms=4,
-            color=f"C{plane - 1}",
-            alpha=0.85,
+        overall_eff = plane_result.get("overall_eff", np.nan)
+        overall_eff_full = plane_result_full.get("overall_eff", np.nan)
+        representative_eff, representative_label, _, _, _ = _resolve_track_efficiency_representative(
+            plane_result
         )
-        ax.axhline(
-            median_eff_th,
-            color="red",
-            lw=0.8,
-            ls="--",
-            alpha=0.6,
-            label=f"median {median_eff_th * 100:.1f}%",
+        sim_eff_percent = (
+            float(track_efficiency_simulated_efficiencies_percent[plane - 1])
+            if plane - 1 < len(track_efficiency_simulated_efficiencies_percent)
+            else np.nan
         )
+        plane_color = f"C{plane - 1}"
+        if np.any(valid_full):
+            ax.errorbar(
+                centers_full[valid_full],
+                eff_vals_full[valid_full],
+                yerr=unc_vals_full[valid_full],
+                fmt="o--",
+                ms=3.5,
+                color="0.45",
+                alpha=0.80,
+                label=(
+                    f"no fid  (n={int(plane_result_full.get('n_denom', 0) or 0)}, "
+                    f"{_format_task4_percent_label(overall_eff_full)})"
+                ),
+            )
+        if np.any(valid):
+            ax.errorbar(
+                centers[valid],
+                eff_vals[valid],
+                yerr=unc_vals[valid],
+                fmt="o-",
+                ms=4,
+                color=plane_color,
+                alpha=0.85,
+                label=(
+                    f"fiducial  (n={int(plane_result.get('n_denom', 0) or 0)}, "
+                    f"{_format_task4_percent_label(overall_eff)})"
+                ),
+            )
+        if np.isfinite(representative_eff):
+            _representative_line = ax.axhline(
+                float(representative_eff),
+                color=plane_color,
+                lw=2.0,
+                ls=_TRACK_EFF_REPRESENTATIVE_LINESTYLE,
+                alpha=0.95,
+                zorder=4,
+                label=f"{representative_label}  {_format_task4_percent_label(representative_eff)}",
+            )
+            _representative_line.set_path_effects(
+                [
+                    path_effects.Stroke(linewidth=4.2, foreground="white", alpha=0.95),
+                    path_effects.Normal(),
+                ]
+            )
+        if np.isfinite(sim_eff_percent):
+            ax.axhline(
+                float(sim_eff_percent) / 100.0,
+                color="black",
+                lw=1.0,
+                ls=_TRACK_EFF_SIMULATION_LINESTYLE,
+                alpha=0.75,
+                zorder=3,
+                label=f"simulation  {_format_task4_percent_label(sim_eff_percent)}",
+            )
         ax.set_ylim(0, 1.08)
         ax.set_xlabel("θ (deg)", fontsize=9)
         ax.set_ylabel("Efficiency", fontsize=9)
-        ax.set_title(f"Plane {plane}  (n={int(np.nansum(den_vals))})", fontsize=10)
-        ax.legend(fontsize=8)
+        ax.set_title(
+            (
+                f"Plane {plane}\n"
+                f"fid={_format_task4_percent_label(overall_eff)}  "
+                f"full={_format_task4_percent_label(overall_eff_full)}"
+                + (
+                    f"  sim={_format_task4_percent_label(sim_eff_percent)}"
+                    if np.isfinite(sim_eff_percent)
+                    else ""
+                )
+            ),
+            fontsize=10,
+        )
+        handles, labels = ax.get_legend_handles_labels()
+        if handles:
+            ax.legend(fontsize=8)
         ax.grid(True, alpha=0.3)
 
     plt.suptitle(
         "Track-based efficiency vs polar angle θ (telescope method)\n"
-        "Useful for sim/data comparison of angular efficiency dependence",
+        "Useful for sim/data comparison of angular efficiency dependence\n"
+        + ("Solid colour = active fiducial efficiency curve, dashed gray = no-fid/full-plane reference" if track_efficiency_fiducial_active else "No fiducial cut is active: solid and dashed-gray references should overlap")
+        + "; dashed plane-colour = fiducial representative efficiency"
+        + ("; dashed black = simulation overall reference" if track_efficiency_simulated_efficiencies_percent else "")
+        + ("\n" + track_efficiency_simulation_title_line if track_efficiency_simulated_efficiencies_percent else ""),
         fontsize=11,
     )
     plt.tight_layout(rect=[0, 0, 1, 0.91])
@@ -8152,6 +9001,227 @@ if (
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
         save_plot_figure(save_fig_path, format="png", alias="track_based_efficiency_vs_theta")
+    if show_plots:
+        plt.show()
+    plt.close()
+
+# ---------------------------------------------------------------------------
+# Large combined track-efficiency diagnostic
+# Rows: x/y map, eff(y), eff(x), eff(theta), eff(phi), theta/phi map.
+# ---------------------------------------------------------------------------
+if (
+    (create_essential_plots or create_plots)
+    and task4_plot_enabled("track_efficiency_large_plot")
+    and (
+        bool(efficiency_metadata_payload.get("available", False))
+        or bool(efficiency_metadata_payload_fullplane.get("available", False))
+    )
+):
+    edges_eff = (
+        efficiency_metadata_payload["edges"]
+        if bool(efficiency_metadata_payload.get("available", False))
+        else efficiency_metadata_payload_fullplane["edges"]
+    )
+    fig, axes = plt.subplots(6, 4, figsize=(20, 24), squeeze=False)
+
+    for plane_idx, plane in enumerate(range(1, 5)):
+        plane_result = efficiency_metadata_payload["plane_results"].get(plane, {})
+        plane_result_full = efficiency_metadata_payload_fullplane["plane_results"].get(plane, {})
+        ax_xy = axes[0][plane_idx]
+        ax_y = axes[1][plane_idx]
+        ax_x = axes[2][plane_idx]
+        ax_theta = axes[3][plane_idx]
+        ax_phi = axes[4][plane_idx]
+        ax_theta_phi = axes[5][plane_idx]
+
+        n_denom = int(plane_result.get("n_denom", 0) or 0)
+        n_denom_full = int(plane_result_full.get("n_denom", 0) or 0)
+        if max(n_denom, n_denom_full) < int(efficiency_metadata_cfg["min_accepted_events"]):
+            for axis in (ax_xy, ax_y, ax_x, ax_theta, ax_phi, ax_theta_phi):
+                axis.set_visible(False)
+            continue
+
+        overall_eff = plane_result.get("overall_eff", np.nan)
+        overall_eff_full = plane_result_full.get("overall_eff", np.nan)
+        representative_eff, representative_label, _, _, _ = _resolve_track_efficiency_representative(
+            plane_result
+        )
+        sim_eff_percent = (
+            float(track_efficiency_simulated_efficiencies_percent[plane - 1])
+            if plane - 1 < len(track_efficiency_simulated_efficiencies_percent)
+            else np.nan
+        )
+        plane_color = f"C{plane - 1}"
+        y_reference = np.asarray(
+            plane_result_full.get("y_reference", plane_result.get("y_reference", [])),
+            dtype=float,
+        )
+
+        eff_xy = np.asarray(
+            plane_result_full.get("eff_2d", plane_result.get("eff_2d", np.empty((0, 0)))),
+            dtype=float,
+        )
+        im_xy = ax_xy.imshow(
+            eff_xy.T,
+            origin="lower",
+            aspect="auto",
+            extent=[
+                float(edges_eff["x"][0]),
+                float(edges_eff["x"][-1]),
+                float(edges_eff["y"][0]),
+                float(edges_eff["y"][-1]),
+            ],
+            vmin=0.0,
+            vmax=1.0,
+            cmap="RdYlGn",
+        )
+        fig.colorbar(im_xy, ax=ax_xy, label="efficiency", fraction=0.045, pad=0.02)
+        for sy in y_reference:
+            ax_xy.axhline(float(sy), color="cyan", lw=0.7, ls="--", alpha=0.7)
+        if track_efficiency_fiducial_active:
+            plane_x_cfg = track_efficiency_fiducial_cfg.get("x_by_plane", {}).get(plane, {})
+            x_left, x_right = _task4_resolve_region_bounds(
+                plane_x_cfg.get("left", None),
+                plane_x_cfg.get("right", None),
+                -float(width_half),
+                float(width_half),
+            )
+            plane_y_cfg = track_efficiency_fiducial_cfg.get("y_by_plane", {}).get(plane, {})
+            y_left, y_right = _task4_resolve_region_bounds(
+                plane_y_cfg.get("left", None),
+                plane_y_cfg.get("right", None),
+                -float(width_half),
+                float(width_half),
+            )
+            ax_xy.vlines((x_left, x_right), y_left, y_right, colors="black", linestyles="--", linewidth=1.1, alpha=0.85)
+            ax_xy.hlines((y_left, y_right), x_left, x_right, colors="black", linestyles="--", linewidth=1.1, alpha=0.85)
+        ax_xy.set_xlabel("Projected X (mm)", fontsize=8)
+        ax_xy.set_ylabel("Projected Y (mm)", fontsize=8)
+        ax_xy.set_title(
+            (
+                f"Plane {plane}\n"
+                f"fid={_format_task4_percent_label(overall_eff)}  "
+                f"full={_format_task4_percent_label(overall_eff_full)}"
+                + (
+                    f"  sim={_format_task4_percent_label(sim_eff_percent)}"
+                    if np.isfinite(sim_eff_percent)
+                    else ""
+                )
+                + f"\n(n_fid={n_denom}, n_full={n_denom_full})"
+            ),
+            fontsize=9,
+        )
+
+        _plot_track_efficiency_curve_panel(
+            ax_y,
+            axis_payload=plane_result.get("y", {}),
+            axis_payload_full=plane_result_full.get("y", {}),
+            n_denom=n_denom,
+            n_denom_full=n_denom_full,
+            overall_eff=overall_eff,
+            overall_eff_full=overall_eff_full,
+            representative_eff=representative_eff,
+            representative_label=representative_label,
+            sim_eff_percent=sim_eff_percent,
+            plane_color=plane_color,
+            xlabel="Projected Y (mm)",
+            xlim=(-float(width_half), float(width_half)),
+            x_reference_values=y_reference,
+        )
+        _plot_track_efficiency_curve_panel(
+            ax_x,
+            axis_payload=plane_result.get("x", {}),
+            axis_payload_full=plane_result_full.get("x", {}),
+            n_denom=n_denom,
+            n_denom_full=n_denom_full,
+            overall_eff=overall_eff,
+            overall_eff_full=overall_eff_full,
+            representative_eff=representative_eff,
+            representative_label=representative_label,
+            sim_eff_percent=sim_eff_percent,
+            plane_color=plane_color,
+            xlabel="Projected X (mm)",
+            xlim=(-float(strip_half), float(strip_half)),
+        )
+        _plot_track_efficiency_curve_panel(
+            ax_theta,
+            axis_payload=plane_result.get("theta", {}),
+            axis_payload_full=plane_result_full.get("theta", {}),
+            n_denom=n_denom,
+            n_denom_full=n_denom_full,
+            overall_eff=overall_eff,
+            overall_eff_full=overall_eff_full,
+            representative_eff=representative_eff,
+            representative_label=representative_label,
+            sim_eff_percent=sim_eff_percent,
+            plane_color=plane_color,
+            xlabel="θ (deg)",
+            xlim=(float(edges_eff["theta"][0]), float(edges_eff["theta"][-1])),
+        )
+        _plot_track_efficiency_curve_panel(
+            ax_phi,
+            axis_payload=plane_result.get("phi", {}),
+            axis_payload_full=plane_result_full.get("phi", {}),
+            n_denom=n_denom,
+            n_denom_full=n_denom_full,
+            overall_eff=overall_eff,
+            overall_eff_full=overall_eff_full,
+            representative_eff=representative_eff,
+            representative_label=representative_label,
+            sim_eff_percent=sim_eff_percent,
+            plane_color=plane_color,
+            xlabel="φ (deg)",
+            xlim=(float(edges_eff["phi"][0]), float(edges_eff["phi"][-1])),
+        )
+
+        eff_theta_phi = np.asarray(
+            plane_result_full.get(
+                "eff_theta_phi",
+                plane_result.get("eff_theta_phi", np.empty((0, 0))),
+            ),
+            dtype=float,
+        )
+        im_theta_phi = ax_theta_phi.imshow(
+            eff_theta_phi.T,
+            origin="lower",
+            aspect="auto",
+            extent=[
+                float(edges_eff["theta"][0]),
+                float(edges_eff["theta"][-1]),
+                float(edges_eff["phi"][0]),
+                float(edges_eff["phi"][-1]),
+            ],
+            vmin=0.0,
+            vmax=1.0,
+            cmap="RdYlGn",
+        )
+        fig.colorbar(im_theta_phi, ax=ax_theta_phi, label="efficiency", fraction=0.045, pad=0.02)
+        if track_efficiency_fiducial_active:
+            theta_left_deg = track_efficiency_fiducial_cfg.get("theta_left_deg", None)
+            theta_right_deg = track_efficiency_fiducial_cfg.get("theta_right_deg", None)
+            if theta_left_deg is not None:
+                ax_theta_phi.axvline(float(theta_left_deg), color="black", lw=1.1, ls="--", alpha=0.85)
+            if theta_right_deg is not None:
+                ax_theta_phi.axvline(float(theta_right_deg), color="black", lw=1.1, ls="--", alpha=0.85)
+        ax_theta_phi.set_xlabel("θ (deg)", fontsize=8)
+        ax_theta_phi.set_ylabel("φ (deg)", fontsize=8)
+
+    plt.suptitle(
+        "Large track-based efficiency diagnostic (telescope method)\n"
+        "Rows: XY map, eff(Y), eff(X), eff(θ), eff(φ), θ–φ map\n"
+        + ("Solid colour = active fiducial efficiency curve, dashed gray = no-fid/full-plane reference" if track_efficiency_fiducial_active else "No fiducial cut is active: solid and dashed-gray references should overlap")
+        + "; dashed plane-colour = fiducial representative efficiency"
+        + ("; dashed black = simulation overall reference" if track_efficiency_simulated_efficiencies_percent else "")
+        + ("\n" + track_efficiency_simulation_title_line if track_efficiency_simulated_efficiencies_percent else ""),
+        fontsize=11,
+    )
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    if save_plots:
+        final_filename = f"{fig_idx}_track_efficiency_large_plot.png"
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        save_plot_figure(save_fig_path, format="png", alias="track_efficiency_large_plot")
     if show_plots:
         plt.show()
     plt.close()
@@ -12285,6 +13355,12 @@ if (
         ([("fit_tt", 1234, 1234)], "1-2-3-4 fit_tt cases"),
     ]
 
+    df_cases_1234_chi_study = [
+        ([("fit_tt", 1234, 1234), ("tim_th_chi_sigmafit_1234", 0, 20)], "1-2-3-4 fit_tt cases, chi2 < 20"),
+        ([("fit_tt", 1234, 1234), ("tim_th_chi_sigmafit_1234", 20, 40)], "1-2-3-4 fit_tt cases, 20 < chi2 < 40"),
+        ([("fit_tt", 1234, 1234), ("tim_th_chi_sigmafit_1234", 40, 1000)], "1-2-3-4 fit_tt cases, 40 < chi2"),
+    ]
+
     df_cases_2 = [
         ([("definitive_tt", 1234, 1234)], "1-2-3-4 cases"),
         ([("definitive_tt", 123, 123)], "1-2-3 cases"),
@@ -12639,6 +13715,28 @@ if (
             )
         
         
+        # Define the columns - interest dynamically
+        columns_of_interest = ['tim_x', 'tim_y', 'tim_theta', 'tim_phi', 'tim_s', 'tim_th_chi_sigmafit_1234'] + relevant_charges
+        
+        if (create_essential_plots or create_plots) and task4_plot_enabled("timtrack_results_scatter_combination_projections"):
+            fig_idx = plot_hexbin_matrix(
+                df_plot_ancillary,
+                columns_of_interest,
+                filters,
+                f"{title} [scatter]",
+                save_plots,
+                show_plots,
+                base_directories,
+                fig_idx,
+                plot_list,
+                plot_mode="scatter",
+                filename_stem="timtrack_results_scatter_combination_projections",
+                alias="timtrack_results_scatter_combination_projections",
+            )
+    
+    
+    for filters, title in df_cases_1234_chi_study:
+
         # Define the columns - interest dynamically
         columns_of_interest = ['tim_x', 'tim_y', 'tim_theta', 'tim_phi', 'tim_s', 'tim_th_chi_sigmafit_1234'] + relevant_charges
         
@@ -13637,6 +14735,48 @@ print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
 
 global_variables.update(build_events_per_second_metadata(working_df))
 ensure_global_count_keys(("list_tt", "fit_tt", "list_to_fit_tt"))
+chi2_four_plane_bins = np.linspace(0.0, 100.0, 100)
+chi2_four_plane_values = np.array([], dtype=float)
+if "tim_th_chi_sigmafit_1234" in working_df.columns:
+    chi2_series = pd.to_numeric(
+        working_df.loc[base_cond, "tim_th_chi_sigmafit_1234"],
+        errors="coerce",
+    ).to_numpy(dtype=float, copy=False)
+    chi2_tt_series = None
+    if task4_plot_tt_column in working_df.columns:
+        chi2_tt_series = pd.to_numeric(
+            working_df.loc[base_cond, task4_plot_tt_column],
+            errors="coerce",
+        ).to_numpy(dtype=float, copy=False)
+    elif "fit_tt" in working_df.columns:
+        chi2_tt_series = pd.to_numeric(
+            working_df.loc[base_cond, "fit_tt"],
+            errors="coerce",
+        ).to_numpy(dtype=float, copy=False)
+    if chi2_tt_series is not None:
+        chi2_series = chi2_series[chi2_tt_series == 1234.0]
+        chi2_four_plane_values = chi2_series[np.isfinite(chi2_series) & (chi2_series >= 0.0)]
+chi2_four_plane_plot_values = chi2_four_plane_values[chi2_four_plane_values < 100.0]
+chi2_four_plane_hist_counts, _ = np.histogram(chi2_four_plane_plot_values, bins=chi2_four_plane_bins)
+global_variables["chi2_four_plane_ndf"] = int(global_variables.get("tim_th_chi_sigmafit_1234_ndf", 12))
+global_variables["chi2_four_plane_hist_n"] = int(chi2_four_plane_values.size)
+global_variables["chi2_four_plane_hist_plot_lt_100_n"] = int(chi2_four_plane_plot_values.size)
+global_variables["chi2_four_plane_hist_min"] = float(chi2_four_plane_bins[0])
+global_variables["chi2_four_plane_hist_max"] = float(chi2_four_plane_bins[-1])
+global_variables["chi2_four_plane_hist_bin_count"] = int(chi2_four_plane_hist_counts.size)
+for idx, bin_count in enumerate(chi2_four_plane_hist_counts):
+    global_variables[f"chi2_four_plane_bin_{idx:03d}_count"] = int(bin_count)
+
+_chi2_fit_metric_map = (
+    ("tim_th_chi_sigmafit_1234_reference_fit_hi", "chi2_four_plane_reference_fit_hi"),
+    ("tim_th_chi_sigmafit_1234_reference_fit_total", "chi2_four_plane_reference_fit_total"),
+    ("tim_th_chi_sigmafit_1234_unexplained_events_0_12", "chi2_four_plane_unexplained_events_0_12"),
+    ("tim_th_chi_sigmafit_1234_signed_difference_0_12", "chi2_four_plane_signed_difference_0_12"),
+)
+for source_key, target_key in _chi2_fit_metric_map:
+    if source_key in global_variables:
+        global_variables[target_key] = global_variables[source_key]
+
 add_normalized_count_metadata(
     global_variables,
     global_variables.get("events_per_second_total_seconds", 0),
@@ -13674,6 +14814,20 @@ global_variables["count_rate_denominator_seconds"] = rate_histogram_variables.ge
     "count_rate_denominator_seconds",
     0,
 )
+
+chi2_four_plane_variables = extract_chi2_four_plane_metadata(
+    global_variables,
+    remove_from_source=True,
+)
+chi2_four_plane_variables["count_rate_denominator_seconds"] = rate_histogram_variables.get(
+    "count_rate_denominator_seconds",
+    0,
+)
+metadata_chi2_four_plane_csv_path = save_metadata(
+    csv_path_chi2_four_plane,
+    chi2_four_plane_variables,
+)
+print(f"Metadata (chi2_four_plane) CSV updated at: {metadata_chi2_four_plane_csv_path}")
 
 prune_redundant_count_metadata(global_variables, log_fn=print)
 trigger_type_prefixes = ("list_tt", "fit_tt", "list_to_fit_tt")
@@ -13754,33 +14908,61 @@ metadata_robust_efficiency_csv_path = save_metadata(
         "robust_efficiency_trigger_source",
         "count_rate_denominator_seconds",
         "eff1",
+        "eff1_robust",
+        "eff1_robust_method",
+        "eff1_robust_xyphi",
+        "eff1_robust_xyphi_n_num",
+        "eff1_robust_xyphi_n_denom",
         "eff1_plateau",
         "eff1_overall",
         "eff1_median_x",
+        "eff1_robust_n_num",
+        "eff1_robust_n_denom",
         "eff1_plateau_n_num",
         "eff1_plateau_n_denom",
         "eff1_n_valid_bins",
         "eff1_n_plateau_bins",
         "eff2",
+        "eff2_robust",
+        "eff2_robust_method",
+        "eff2_robust_xyphi",
+        "eff2_robust_xyphi_n_num",
+        "eff2_robust_xyphi_n_denom",
         "eff2_plateau",
         "eff2_overall",
         "eff2_median_x",
+        "eff2_robust_n_num",
+        "eff2_robust_n_denom",
         "eff2_plateau_n_num",
         "eff2_plateau_n_denom",
         "eff2_n_valid_bins",
         "eff2_n_plateau_bins",
         "eff3",
+        "eff3_robust",
+        "eff3_robust_method",
+        "eff3_robust_xyphi",
+        "eff3_robust_xyphi_n_num",
+        "eff3_robust_xyphi_n_denom",
         "eff3_plateau",
         "eff3_overall",
         "eff3_median_x",
+        "eff3_robust_n_num",
+        "eff3_robust_n_denom",
         "eff3_plateau_n_num",
         "eff3_plateau_n_denom",
         "eff3_n_valid_bins",
         "eff3_n_plateau_bins",
         "eff4",
+        "eff4_robust",
+        "eff4_robust_method",
+        "eff4_robust_xyphi",
+        "eff4_robust_xyphi_n_num",
+        "eff4_robust_xyphi_n_denom",
         "eff4_plateau",
         "eff4_overall",
         "eff4_median_x",
+        "eff4_robust_n_num",
+        "eff4_robust_n_denom",
         "eff4_plateau_n_num",
         "eff4_plateau_n_denom",
         "eff4_n_valid_bins",

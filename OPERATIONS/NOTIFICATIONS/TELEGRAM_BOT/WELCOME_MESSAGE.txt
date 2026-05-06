@@ -26,8 +26,9 @@ Other Analysis PDFs (short commands):
   /exec_map - Definitive execution map PDF.
   /filter_meta - Filter metadata PDF.
   /trig_rate - Trigger-rate metadata PDF.
-  /config_meta - Configuration z-position metadata PDF.
+  /config_meta - [📄 configurations_metadata_report.pdf] Configuration z-position metadata PDF.
   /rates_meta - Rates metadata PDF.
+  /chi2_4p - [📄 task4_chi2_four_plane_report.pdf] Task 4 chi2 four-plane histogram PDF.
   /exec_meta - Execution metadata PDF.
   /eff_meta - Efficiency metadata PDF.
   /eff_34 - Three-to-four efficiency metadata PDF.

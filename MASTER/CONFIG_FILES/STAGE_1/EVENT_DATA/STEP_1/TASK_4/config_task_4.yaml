@@ -25,19 +25,25 @@ efficiency_metadata:
   x_bin_count: 15
   y_bin_count: 20
   theta_bin_count: 20
+  phi_bin_count: 24
   x_min_mm: null
   x_max_mm: null
   y_min_mm: null
   y_max_mm: null
   theta_min_deg: null
   theta_max_deg: null
+  phi_min_deg: null
+  phi_max_deg: null
   min_pool_events: 20
   min_accepted_events: 10
+  # These summary_fiducial_* entries only limit the scalar efficiency summaries.
+  # The main track-based-efficiency fiducial cuts live in config_parameters_task_4.csv.
   summary_fiducial_x_abs_max_mm: null
   summary_fiducial_y_abs_max_mm: null
   # Limits the candidate theta bins for the scalar summary; the saved value is
   # taken from the bin center closest to 0 deg within this admissible region.
   summary_fiducial_theta_max_deg: null
+  summary_fiducial_phi_abs_max_deg: null
 # Optional TimTrack LOO (external residual) controls for runtime tuning:
 # - every_n=1 means compute LOO on every eligible event (current behavior).
 # - increase every_n to reduce CPU cost when LOO diagnostics are not critical.

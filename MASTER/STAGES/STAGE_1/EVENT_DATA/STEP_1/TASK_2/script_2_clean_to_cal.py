@@ -125,13 +125,19 @@ from MASTER.common.plot_utils import (
     pdf_save_rasterized_page,
 )
 from MASTER.common.selection_config import load_selection_for_paths, station_is_selected
-from MASTER.common.status_csv import initialize_status_row, update_status_progress
+from MASTER.common.status_csv import (
+    delete_status_row,
+    initialize_status_row,
+    rename_status_row,
+    update_status_progress,
+)
 from MASTER.common.reprocessing_utils import (
     QA_REPROCESSING_METADATA_KEYS,
     apply_qa_reprocessing_context,
     canonical_processing_basename,
     filter_filenames_by_qa_retry_basenames,
     get_reprocessing_value,
+    infer_station_number_from_processing_name,
     load_active_qa_retry_basenames,
     load_qa_reprocessing_context_for_file,
 )
@@ -703,6 +709,46 @@ config_file_directory = str(
     / "ONLINE_RUN_DICTIONARY"
     / f"STATION_{station}"
 )
+early_metadata_directory = (
+    repo_root
+    / "STATIONS"
+    / f"MINGO0{station}"
+    / "STAGE_1"
+    / "EVENT_DATA"
+    / "STEP_1"
+    / f"TASK_{task_number}"
+    / "METADATA"
+)
+early_metadata_directory.mkdir(parents=True, exist_ok=True)
+early_status_csv_path = early_metadata_directory / f"task_{task_number}_metadata_status.csv"
+if user_file_selection:
+    early_status_filename_base = (
+        Path(user_file_path).name.replace("cleaned_", "").replace(".parquet", "")
+    )
+else:
+    early_status_filename_base = f"__task{task_number}_startup_station_{station}__"
+status_filename_base = early_status_filename_base
+status_execution_date = initialize_status_row(
+    early_status_csv_path,
+    filename_base=status_filename_base,
+    completion_fraction=0.0,
+)
+
+
+def _exit_without_status_row(message: str) -> None:
+    print(message)
+    if status_execution_date is not None:
+        deleted = delete_status_row(
+            early_status_csv_path,
+            filename_base=status_filename_base,
+            execution_date=status_execution_date,
+        )
+        if not deleted:
+            print(
+                "Warning: unable to delete startup status row "
+                f"{status_filename_base} ({status_execution_date})."
+            )
+    sys.exit(0)
 
 # Define input file path ------------------------------------------------------------------
 input_file_config_path = os.path.join(config_file_directory, f"input_file_mingo0{station}.csv")
@@ -910,8 +956,6 @@ csv_path_naive_efficiency = os.path.join(
 )
 csv_path_status = os.path.join(metadata_directory, f"task_{task_number}_metadata_status.csv")
 csv_path_profiling = os.path.join(metadata_directory, f"task_{task_number}_metadata_profiling.csv")
-status_filename_base = ""
-status_execution_date = None
 
 # Move files from STAGE_0_to_1 to STAGE_0_to_1_TO_LIST/STAGE_0_to_1_TO_LIST_FILES/UNPROCESSED,
 # ensuring that only files not already in UNPROCESSED, PROCESSING,
@@ -5291,11 +5335,11 @@ else:
                     safe_move(completed_file_path, processing_file_path)
                     print(f"File moved to PROCESSING: {processing_file_path}")
                 else:
-                    print("No files to process in COMPLETED after normalization.")
-                    sys.exit(0)
+                    _exit_without_status_row("No files to process in COMPLETED after normalization.")
             else:
-                print("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
-                sys.exit(0)
+                _exit_without_status_row(
+                    "No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED."
+                )
 
     else:
         if unprocessed_files:
@@ -5333,12 +5377,12 @@ else:
                 safe_move(completed_file_path, processing_file_path)
                 print(f"File moved to PROCESSING: {processing_file_path}")
             else:
-                print("No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED.")
-                sys.exit(0)
+                _exit_without_status_row(
+                    "No files to process in UNPROCESSED, PROCESSING and decided to not reanalyze COMPLETED."
+                )
 
         else:
-            print("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
-            sys.exit(0)
+            _exit_without_status_row("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
 
 # This is for all cases
 file_path = processing_file_path
@@ -5353,12 +5397,36 @@ basename_no_ext, file_extension = os.path.splitext(the_filename)
 basename_no_ext = the_filename.replace("cleaned_", "").replace(".parquet", "")
 
 print(f"File basename (no extension): {basename_no_ext}")
-status_filename_base = basename_no_ext
-status_execution_date = initialize_status_row(
-    csv_path_status,
-    filename_base=status_filename_base,
-    completion_fraction=0.0,
-)
+resolved_status_filename_base = basename_no_ext
+if status_execution_date is None:
+    status_execution_date = initialize_status_row(
+        csv_path_status,
+        filename_base=resolved_status_filename_base,
+        completion_fraction=0.0,
+    )
+    status_filename_base = resolved_status_filename_base
+elif status_filename_base != resolved_status_filename_base:
+    renamed = rename_status_row(
+        csv_path_status,
+        filename_base=status_filename_base,
+        execution_date=status_execution_date,
+        new_filename_base=resolved_status_filename_base,
+    )
+    if renamed:
+        status_filename_base = resolved_status_filename_base
+    else:
+        print(
+            "Warning: unable to rename startup status row "
+            f"from {status_filename_base} to {resolved_status_filename_base}; creating a new row."
+        )
+        status_execution_date = initialize_status_row(
+            csv_path_status,
+            filename_base=resolved_status_filename_base,
+            completion_fraction=0.0,
+        )
+        status_filename_base = resolved_status_filename_base
+else:
+    status_filename_base = resolved_status_filename_base
 qa_reprocessing_context = load_qa_reprocessing_context_for_file(
     station,
     basename_no_ext,
@@ -5398,17 +5466,16 @@ else:
     )
 
 # Check the station number in the datafile
-try:
-    file_station_number = int(basename_no_ext[3])  # 4th character (index 3)
-    if file_station_number != int(station):
-        print(f'File station number is: {file_station_number}, it does not match.')
-        # Move the file to the ERROR directory
-        error_file_path = os.path.join(base_directories["error_directory"], file_name)
-        print(f"Moving file '{file_name}' to ERROR directory: {error_file_path}")
-        process_file(file_path, error_file_path)
-        sys.exit(f"File '{file_name}' does not belong to station {station}. Exiting.")
-except ValueError:
+file_station_number = infer_station_number_from_processing_name(basename_no_ext)
+if file_station_number is None:
     sys.exit(f"Invalid station number in file '{file_name}'. Exiting.")
+if file_station_number != int(station):
+    print(f'File station number is: {file_station_number}, it does not match.')
+    # Move the file to the ERROR directory
+    error_file_path = os.path.join(base_directories["error_directory"], file_name)
+    print(f"Moving file '{file_name}' to ERROR directory: {error_file_path}")
+    process_file(file_path, error_file_path)
+    sys.exit(f"File '{file_name}' does not belong to station {station}. Exiting.")
 
 if status_execution_date is not None:
     update_status_progress(

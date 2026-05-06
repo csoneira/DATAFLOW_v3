@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import datetime, timedelta
+from io import StringIO
 from pathlib import Path
 from typing import Any
 
@@ -21,18 +23,48 @@ ONLINE_RUN_DICTIONARY_ROOT = REPO_ROOT / "MASTER" / "CONFIG_FILES" / "STAGE_0" /
 
 _DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _FILE_TS_RE = re.compile(r"(\d{11})$")
+_EMBEDDED_METADATA_ROW_START_RE = re.compile(r"(?<![\r\n])(mi\d{13},)")
+
+log = logging.getLogger("even_easier_advanced.metadata")
 
 
-def resolve_observed_efficiency_upper_limits(config: dict[str, Any]) -> dict[int, float]:
+def load_metadata_csv_with_repair(csv_path: str | Path, *, low_memory: bool = False) -> pd.DataFrame:
+    path = Path(csv_path)
+    try:
+        return pd.read_csv(path, low_memory=low_memory)
+    except pd.errors.ParserError as exc:
+        repaired_text, repair_count = _EMBEDDED_METADATA_ROW_START_RE.subn(
+            r"\n\1",
+            path.read_text(encoding="utf-8", errors="replace"),
+        )
+        if repair_count == 0:
+            raise
+        try:
+            dataframe = pd.read_csv(StringIO(repaired_text), low_memory=low_memory)
+        except pd.errors.ParserError as repair_exc:
+            raise pd.errors.ParserError(f"Unable to repair malformed metadata CSV {path}: {repair_exc}") from exc
+        log.warning(
+            "Repaired %d embedded metadata row-start(s) while reading %s.",
+            repair_count,
+            path,
+        )
+        return dataframe
+
+
+def _resolve_observed_efficiency_limits(
+    config: dict[str, Any],
+    *,
+    config_key: str,
+) -> dict[int, float]:
     step0_config = config.get("step0", {})
     if not isinstance(step0_config, dict):
         step0_config = {}
 
-    raw = step0_config.get("observed_efficiency_upper_limits", {})
+    raw = step0_config.get(config_key, {})
     if raw in (None, "", "null", "None"):
         return {}
     if not isinstance(raw, dict):
-        raise ValueError("step0.observed_efficiency_upper_limits must be a JSON object keyed by plane index.")
+        raise ValueError(f"step0.{config_key} must be a JSON object keyed by plane index.")
 
     limits: dict[int, float] = {}
     for key, value in raw.items():
@@ -41,7 +73,7 @@ def resolve_observed_efficiency_upper_limits(config: dict[str, Any]) -> dict[int
             text = text[6:]
         plane_idx = int(text)
         if plane_idx < 1 or plane_idx > 4:
-            raise ValueError(f"Invalid plane index in observed-efficiency upper limits: {key!r}")
+            raise ValueError(f"Invalid plane index in step0.{config_key}: {key!r}")
         if value in (None, "", "null", "None"):
             continue
         limit = float(value)
@@ -49,38 +81,84 @@ def resolve_observed_efficiency_upper_limits(config: dict[str, Any]) -> dict[int
     return limits
 
 
+def resolve_observed_efficiency_upper_limits(config: dict[str, Any]) -> dict[int, float]:
+    return _resolve_observed_efficiency_limits(
+        config,
+        config_key="observed_efficiency_upper_limits",
+    )
+
+
+def resolve_observed_efficiency_lower_limits(config: dict[str, Any]) -> dict[int, float]:
+    return _resolve_observed_efficiency_limits(
+        config,
+        config_key="observed_efficiency_lower_limits",
+    )
+
+
 def apply_observed_efficiency_upper_limits(
     dataframe: pd.DataFrame,
     limits: dict[int, float],
     *,
+    lower_limits: dict[int, float] | None = None,
     mode: str,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     if mode not in {"clip", "drop"}:
-        raise ValueError("Observed-efficiency upper-limit mode must be 'clip' or 'drop'.")
+        raise ValueError("Observed-efficiency limit mode must be 'clip' or 'drop'.")
 
     work = dataframe.copy()
     row_count_before = int(len(work))
+    lower_limits = dict(lower_limits or {})
     counts_by_plane: dict[str, int] = {}
-    over_union_mask = pd.Series(False, index=work.index, dtype=bool)
-    for plane_idx, limit in sorted(limits.items()):
+    counts_above_by_plane: dict[str, int] = {}
+    counts_below_by_plane: dict[str, int] = {}
+    outside_union_mask = pd.Series(False, index=work.index, dtype=bool)
+    all_planes = sorted(set(limits).union(lower_limits))
+    for plane_idx in all_planes:
         column = f"eff_empirical_{plane_idx}"
         if column not in work.columns:
             continue
         numeric = pd.to_numeric(work[column], errors="coerce")
-        over_mask = numeric.notna() & (numeric > float(limit))
-        counts_by_plane[str(plane_idx)] = int(over_mask.sum())
-        over_union_mask = over_union_mask | over_mask
+        below_mask = pd.Series(False, index=work.index, dtype=bool)
+        above_mask = pd.Series(False, index=work.index, dtype=bool)
+        lower_limit = lower_limits.get(plane_idx, None)
+        upper_limit = limits.get(plane_idx, None)
+        if lower_limit is not None:
+            below_mask = numeric.notna() & (numeric < float(lower_limit))
+            counts_below_by_plane[str(plane_idx)] = int(below_mask.sum())
+        if upper_limit is not None:
+            above_mask = numeric.notna() & (numeric > float(upper_limit))
+            counts_above_by_plane[str(plane_idx)] = int(above_mask.sum())
+        outside_mask = below_mask | above_mask
+        counts_by_plane[str(plane_idx)] = int(outside_mask.sum())
+        outside_union_mask = outside_union_mask | outside_mask
         if mode == "clip":
-            numeric.loc[over_mask] = float(limit)
+            if lower_limit is not None:
+                numeric.loc[below_mask] = float(lower_limit)
+            if upper_limit is not None:
+                numeric.loc[above_mask] = float(upper_limit)
         work[column] = numeric
-    if mode == "drop" and bool(over_union_mask.any()):
-        work = work.loc[~over_union_mask].copy()
+    if mode == "drop" and bool(outside_union_mask.any()):
+        work = work.loc[~outside_union_mask].copy()
 
     metadata = {
         "mode": mode,
-        "limits_by_plane": {str(key): float(value) for key, value in sorted(limits.items())},
+        "limits_by_plane": {
+            str(plane_idx): {
+                "lower": (
+                    float(lower_limits[plane_idx]) if plane_idx in lower_limits else None
+                ),
+                "upper": (
+                    float(limits[plane_idx]) if plane_idx in limits else None
+                ),
+            }
+            for plane_idx in all_planes
+        },
+        "upper_limits_by_plane": {str(key): float(value) for key, value in sorted(limits.items())},
+        "lower_limits_by_plane": {str(key): float(value) for key, value in sorted(lower_limits.items())},
         "affected_rows_by_plane": counts_by_plane,
-        "affected_rows_total": int(over_union_mask.sum()) if mode == "drop" else int(sum(counts_by_plane.values())),
+        "affected_rows_above_upper_by_plane": counts_above_by_plane,
+        "affected_rows_below_lower_by_plane": counts_below_by_plane,
+        "affected_rows_total": int(outside_union_mask.sum()),
         "row_count_before": row_count_before,
         "row_count_after": int(len(work)),
     }
@@ -292,7 +370,7 @@ def load_mingo00_training_dataframe(config: dict[str, Any]) -> tuple[pd.DataFram
     if not metadata_path.exists():
         raise FileNotFoundError(f"Missing required MINGO00 metadata file: {metadata_path}")
 
-    metadata_df = pd.read_csv(metadata_path, low_memory=False)
+    metadata_df = load_metadata_csv_with_repair(metadata_path, low_memory=False)
     if "param_hash" not in metadata_df.columns:
         raise ValueError(f"MINGO00 metadata has no param_hash column: {metadata_path}")
     metadata_df = aggregate_latest_by_key(metadata_df, "param_hash", "execution_timestamp")
@@ -303,10 +381,12 @@ def load_mingo00_training_dataframe(config: dict[str, Any]) -> tuple[pd.DataFram
     rows_after_param_hash_merge = int(len(merged))
 
     merged, trigger_info = derive_trigger_rate_features(merged, config, allow_plain_fallback=False)
-    observed_efficiency_limits = resolve_observed_efficiency_upper_limits(config)
+    observed_efficiency_upper_limits = resolve_observed_efficiency_upper_limits(config)
+    observed_efficiency_lower_limits = resolve_observed_efficiency_lower_limits(config)
     merged, observed_efficiency_limit_meta = apply_observed_efficiency_upper_limits(
         merged,
-        observed_efficiency_limits,
+        observed_efficiency_upper_limits,
+        lower_limits=observed_efficiency_lower_limits,
         mode="drop",
     )
     merged = add_geometry_columns(merged, source_z_columns=SIM_Z_COLUMNS)
@@ -317,8 +397,10 @@ def load_mingo00_training_dataframe(config: dict[str, Any]) -> tuple[pd.DataFram
         "rows_simulation_params": int(len(sim_params_df)),
         "rows_mingo00_metadata": int(len(metadata_df)),
         "rows_after_param_hash_merge": rows_after_param_hash_merge,
+        "rows_after_observed_efficiency_limit_filter": int(len(merged)),
         "rows_after_observed_efficiency_upper_limit_filter": int(len(merged)),
         "trigger_selection": trigger_info,
+        "observed_efficiency_limit_filter": observed_efficiency_limit_meta,
         "observed_efficiency_upper_limit_filter": observed_efficiency_limit_meta,
     }
     return merged, metadata

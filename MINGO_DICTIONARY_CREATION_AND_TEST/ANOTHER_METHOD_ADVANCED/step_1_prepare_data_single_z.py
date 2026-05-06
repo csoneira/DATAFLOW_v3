@@ -54,16 +54,16 @@ DEFAULT_MINGO00_METADATA_ROOT = (
 )
 
 
-def _resolve_observed_efficiency_upper_limits(config: dict) -> dict[int, float]:
+def _resolve_observed_efficiency_limits(config: dict, *, config_key: str) -> dict[int, float]:
     step1_config = config.get("step1", {})
     if not isinstance(step1_config, dict):
         step1_config = {}
 
-    raw = step1_config.get("observed_efficiency_upper_limits", {})
+    raw = step1_config.get(config_key, {})
     if raw in (None, "", "null", "None"):
         return {}
     if not isinstance(raw, dict):
-        raise ValueError("step1.observed_efficiency_upper_limits must be a JSON object keyed by plane index.")
+        raise ValueError(f"step1.{config_key} must be a JSON object keyed by plane index.")
 
     limits: dict[int, float] = {}
     for key, value in raw.items():
@@ -72,23 +72,36 @@ def _resolve_observed_efficiency_upper_limits(config: dict) -> dict[int, float]:
             text = text[6:]
         plane_idx = int(text)
         if plane_idx < 1 or plane_idx > 4:
-            raise ValueError(f"Invalid plane index in observed-efficiency upper limits: {key!r}")
+            raise ValueError(f"Invalid plane index in step1.{config_key}: {key!r}")
         if value in (None, "", "null", "None"):
             continue
         limits[plane_idx] = float(value)
     return limits
 
 
-def _drop_rows_above_observed_efficiency_upper_limits(
+def _resolve_observed_efficiency_upper_limits(config: dict) -> dict[int, float]:
+    return _resolve_observed_efficiency_limits(config, config_key="observed_efficiency_upper_limits")
+
+
+def _resolve_observed_efficiency_lower_limits(config: dict) -> dict[int, float]:
+    return _resolve_observed_efficiency_limits(config, config_key="observed_efficiency_lower_limits")
+
+
+def _drop_rows_outside_observed_efficiency_limits(
     dataframe: pd.DataFrame,
-    limits: dict[int, float],
+    upper_limits: dict[int, float],
+    lower_limits: dict[int, float],
 ) -> tuple[pd.DataFrame, dict[str, object]]:
     row_count_before = int(len(dataframe))
-    if not limits:
+    if not upper_limits and not lower_limits:
         return dataframe.copy(), {
             "mode": "drop",
             "limits_by_plane": {},
+            "upper_limits_by_plane": {},
+            "lower_limits_by_plane": {},
             "affected_rows_by_plane": {},
+            "affected_rows_above_upper_by_plane": {},
+            "affected_rows_below_lower_by_plane": {},
             "affected_rows_total": 0,
             "row_count_before": row_count_before,
             "row_count_after": row_count_before,
@@ -96,25 +109,47 @@ def _drop_rows_above_observed_efficiency_upper_limits(
 
     work = dataframe.copy()
     counts_by_plane: dict[str, int] = {}
-    over_union_mask = pd.Series(False, index=work.index, dtype=bool)
-    for plane_idx, limit in sorted(limits.items()):
+    counts_above_by_plane: dict[str, int] = {}
+    counts_below_by_plane: dict[str, int] = {}
+    outside_union_mask = pd.Series(False, index=work.index, dtype=bool)
+    for plane_idx in sorted(set(upper_limits).union(lower_limits)):
         column = f"eff_empirical_{plane_idx}"
         if column not in work.columns:
             continue
         numeric = pd.to_numeric(work[column], errors="coerce")
-        over_mask = numeric.notna() & (numeric > float(limit))
-        counts_by_plane[str(plane_idx)] = int(over_mask.sum())
-        over_union_mask = over_union_mask | over_mask
+        lower_limit = lower_limits.get(plane_idx, None)
+        upper_limit = upper_limits.get(plane_idx, None)
+        below_mask = pd.Series(False, index=work.index, dtype=bool)
+        above_mask = pd.Series(False, index=work.index, dtype=bool)
+        if lower_limit is not None:
+            below_mask = numeric.notna() & (numeric < float(lower_limit))
+            counts_below_by_plane[str(plane_idx)] = int(below_mask.sum())
+        if upper_limit is not None:
+            above_mask = numeric.notna() & (numeric > float(upper_limit))
+            counts_above_by_plane[str(plane_idx)] = int(above_mask.sum())
+        outside_mask = below_mask | above_mask
+        counts_by_plane[str(plane_idx)] = int(outside_mask.sum())
+        outside_union_mask = outside_union_mask | outside_mask
         work[column] = numeric
 
-    if bool(over_union_mask.any()):
-        work = work.loc[~over_union_mask].copy()
+    if bool(outside_union_mask.any()):
+        work = work.loc[~outside_union_mask].copy()
 
     return work, {
         "mode": "drop",
-        "limits_by_plane": {str(key): float(value) for key, value in sorted(limits.items())},
+        "limits_by_plane": {
+            str(plane_idx): {
+                "lower": (float(lower_limits[plane_idx]) if plane_idx in lower_limits else None),
+                "upper": (float(upper_limits[plane_idx]) if plane_idx in upper_limits else None),
+            }
+            for plane_idx in sorted(set(upper_limits).union(lower_limits))
+        },
+        "upper_limits_by_plane": {str(key): float(value) for key, value in sorted(upper_limits.items())},
+        "lower_limits_by_plane": {str(key): float(value) for key, value in sorted(lower_limits.items())},
         "affected_rows_by_plane": counts_by_plane,
-        "affected_rows_total": int(over_union_mask.sum()),
+        "affected_rows_above_upper_by_plane": counts_above_by_plane,
+        "affected_rows_below_lower_by_plane": counts_below_by_plane,
+        "affected_rows_total": int(outside_union_mask.sum()),
         "row_count_before": row_count_before,
         "row_count_after": int(len(work)),
     }
@@ -308,13 +343,17 @@ def _resolve_step1_input_dataframe(config: dict) -> tuple[pd.DataFrame, dict[str
         selected_source_rate_column = str(trigger_selection.get("selected_source_rate_column", "rate_1234_hz"))
         if selected_source_rate_column not in required_rate_columns:
             required_rate_columns.append(selected_source_rate_column)
+        selected_count_column = trigger_selection.get("selected_count_column")
         required_count_columns = [
             column
             for column in (
+                selected_count_column,
                 "four_plane_count",
                 "count_1234",
                 "rate_1234_count",
                 "four_plane_robust_count",
+                "four_plane_robust_count_union",
+                "four_plane_robust_count_intersection",
                 "count_four_plane_robust",
                 "total_count",
                 "count_total",
@@ -442,15 +481,17 @@ def run(config_path: str | Path | None = None) -> Path:
             "four-plane support with finite empirical and simulated efficiencies."
         )
 
-    observed_efficiency_limits = _resolve_observed_efficiency_upper_limits(config)
-    dataframe, observed_efficiency_upper_limit_filter = _drop_rows_above_observed_efficiency_upper_limits(
+    observed_efficiency_upper_limits = _resolve_observed_efficiency_upper_limits(config)
+    observed_efficiency_lower_limits = _resolve_observed_efficiency_lower_limits(config)
+    dataframe, observed_efficiency_limit_filter = _drop_rows_outside_observed_efficiency_limits(
         dataframe,
-        observed_efficiency_limits,
+        upper_limits=observed_efficiency_upper_limits,
+        lower_limits=observed_efficiency_lower_limits,
     )
-    rows_after_observed_efficiency_upper_limit_filter = int(len(dataframe))
+    rows_after_observed_efficiency_limit_filter = int(len(dataframe))
     if dataframe.empty:
         raise ValueError(
-            "No Step 1 rows remain after applying observed_efficiency_upper_limits."
+            "No Step 1 rows remain after applying observed_efficiency bounds."
         )
 
     selected_z_vector = choose_z_vector(dataframe, z_columns, configured_z_vector)
@@ -498,9 +539,11 @@ def run(config_path: str | Path | None = None) -> Path:
         for column in (
             list(trigger_feature_info.get("source_rate_columns", {}).values())
             + [col for col in trigger_feature_info.get("source_count_columns", {}).values() if col]
+            + list(trigger_feature_info.get("robust_efficiency_source_columns", {}).values())
         )
         if column in dataframe.columns and column not in STEP1_OUTPUT_COLUMNS
     ]
+    trigger_passthrough = list(dict.fromkeys(trigger_passthrough))
     dataframe = dataframe[STEP1_OUTPUT_COLUMNS + trigger_passthrough]
     dataframe = dataframe.sort_values(CANONICAL_EFF_COLUMNS + ["sim_flux_cm2_min"]).reset_index(drop=True)
 
@@ -519,17 +562,32 @@ def run(config_path: str | Path | None = None) -> Path:
         "row_counts": {
             "initial": initial_rows,
             "after_trigger_validity_filter": rows_after_trigger_validity_filter,
-            "after_observed_efficiency_upper_limit_filter": rows_after_observed_efficiency_upper_limit_filter,
+            "after_observed_efficiency_limit_filter": rows_after_observed_efficiency_limit_filter,
+            "after_observed_efficiency_upper_limit_filter": rows_after_observed_efficiency_limit_filter,
             "after_z_filter": rows_after_z_filter,
             "after_min_events_filter": rows_after_event_filter,
         },
-        "observed_efficiency_upper_limit_filter": observed_efficiency_upper_limit_filter,
+        "observed_efficiency_limit_filter": observed_efficiency_limit_filter,
+        "observed_efficiency_upper_limit_filter": observed_efficiency_limit_filter,
         "min_events": min_events,
         "input_columns": {
             "z_positions": z_columns,
             "efficiencies": SIMULATED_EFF_SOURCE_COLUMNS,
             "empirical_efficiencies_for_trigger_validation": EMPIRICAL_EFF_SOURCE_COLUMNS,
-            "rate": str(trigger_feature_info.get("selected_source_rate_column", trigger_feature_info["rate_family_column"])),
+            "rate": str(
+                trigger_feature_info.get(
+                    "selected_display_label",
+                    trigger_feature_info.get("selected_source_rate_column", trigger_feature_info["rate_family_column"]),
+                )
+            ),
+            "rate_source_column": str(
+                trigger_feature_info.get("selected_source_rate_column", trigger_feature_info["rate_family_column"])
+            ),
+            "rate_canonical_column": str(trigger_feature_info["rate_family_column"]),
+            "selected_empirical_efficiency_source_columns": trigger_feature_info.get(
+                "robust_efficiency_source_columns",
+                {f"plane_{idx}": f"eff_empirical_{idx}" for idx in range(1, 5)},
+            ),
             "simulated_flux": flux_column,
             "num_events": num_events_column,
             "passthrough_trigger_columns": trigger_passthrough,
@@ -540,11 +598,11 @@ def run(config_path: str | Path | None = None) -> Path:
 
     log.info("Wrote %d filtered rows to %s", len(dataframe), output_path)
     log.info("Selected z-position vector: %s", selected_z_vector)
-    if observed_efficiency_upper_limit_filter["affected_rows_total"] > 0:
+    if observed_efficiency_limit_filter["affected_rows_total"] > 0:
         log.info(
-            "Dropped rows above observed-efficiency upper limits %s. Affected rows by plane: %s",
-            observed_efficiency_upper_limit_filter["limits_by_plane"],
-            observed_efficiency_upper_limit_filter["affected_rows_by_plane"],
+            "Dropped rows outside observed-efficiency bounds %s. Affected rows by plane: %s",
+            observed_efficiency_limit_filter["limits_by_plane"],
+            observed_efficiency_limit_filter["affected_rows_by_plane"],
         )
     if plot_path is not None:
         log.info("Wrote plot: %s", plot_path)

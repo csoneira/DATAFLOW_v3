@@ -219,7 +219,7 @@ def run(config_path: str | Path | None = None) -> Path:
     observed_limit_meta = source_meta.get("observed_efficiency_upper_limit_filter", {})
     if int(observed_limit_meta.get("affected_rows_total", 0)) > 0:
         log.info(
-            "Dropped training points above observed-efficiency limits %s. Affected rows by plane: %s",
+            "Dropped training points outside observed-efficiency bounds %s. Affected rows by plane: %s",
             observed_limit_meta.get("limits_by_plane"),
             observed_limit_meta.get("affected_rows_by_plane"),
         )

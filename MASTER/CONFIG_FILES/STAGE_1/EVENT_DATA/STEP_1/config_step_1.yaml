@@ -23,7 +23,7 @@ step_1_overrides:
   # Non-empty values override lower-level STEP_1 task configs.
   # Leave a value blank to defer to each TASK_*/config_task_*.yaml.
   # Use create_plots: null to force plots off for all tasks.
-  complete_reanalysis: true
+  complete_reanalysis: null
   create_plots: null
   keep_all_columns_output: false
   process_only_qa_retry_files: false
@@ -32,6 +32,7 @@ step_1_overrides:
 metadata_outputs:
   activation: false
   calibration: true
+  chi2_four_plane: true
   deep_filter: true
   efficiency: true
   execution: true

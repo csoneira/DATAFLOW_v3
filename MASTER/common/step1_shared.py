@@ -54,6 +54,7 @@ STEP1_TASK_OVERRIDE_KEYS: Tuple[str, ...] = (
 STEP1_METADATA_OUTPUT_TYPES: Tuple[str, ...] = (
     "activation",
     "calibration",
+    "chi2_four_plane",
     "deep_fiter",
     "efficiency",
     "execution",
@@ -539,6 +540,18 @@ def is_rate_histogram_file_column(column_name: str) -> bool:
     return is_rate_histogram_metadata_column(column_name)
 
 
+def is_chi2_four_plane_metadata_column(column_name: str) -> bool:
+    if column_name == "count_rate_denominator_seconds":
+        return True
+    return column_name.startswith("chi2_four_plane_")
+
+
+def is_chi2_four_plane_file_column(column_name: str) -> bool:
+    if column_name in TRACEABILITY_COLUMNS:
+        return True
+    return is_chi2_four_plane_metadata_column(column_name)
+
+
 def is_redundant_count_metadata_column(column_name: str) -> bool:
     if column_name == "count_rate_denominator_seconds":
         return False
@@ -574,8 +587,10 @@ def is_activation_metadata_column(column_name: str) -> bool:
 def is_specific_metadata_excluded_column(column_name: str) -> bool:
     if is_activation_metadata_column(column_name):
         return True
-    return is_redundant_count_metadata_column(column_name) or is_rate_histogram_metadata_column(
-        column_name
+    return (
+        is_redundant_count_metadata_column(column_name)
+        or is_rate_histogram_metadata_column(column_name)
+        or is_chi2_four_plane_metadata_column(column_name)
     )
 
 
@@ -595,6 +610,27 @@ def extract_rate_histogram_metadata(
             continue
         extracted[key] = metadata[key]
         if remove_from_source:
+            metadata.pop(key, None)
+
+    return extracted
+
+
+def extract_chi2_four_plane_metadata(
+    metadata: Dict[str, object],
+    remove_from_source: bool = True,
+) -> Dict[str, object]:
+    extracted: Dict[str, object] = {}
+    for key in TRACEABILITY_COLUMNS:
+        if key in metadata:
+            extracted[key] = metadata[key]
+
+    for key in list(metadata.keys()):
+        if not isinstance(key, str):
+            continue
+        if not is_chi2_four_plane_metadata_column(key):
+            continue
+        extracted[key] = metadata[key]
+        if remove_from_source and key != "count_rate_denominator_seconds":
             metadata.pop(key, None)
 
     return extracted
@@ -1395,6 +1431,11 @@ def _append_metadata_row(
     row: Dict[str, object],
     fieldnames: List[str],
 ) -> None:
+    if metadata_path.exists() and metadata_path.stat().st_size > 0:
+        with metadata_path.open("rb+") as handle:
+            handle.seek(-1, 2)
+            if handle.read(1) not in (b"\n", b"\r"):
+                handle.write(b"\n")
     with metadata_path.open("a", newline="") as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction="ignore")
         writer.writerow(_format_metadata_row(row, fieldnames))
@@ -1724,6 +1765,17 @@ def _compose_drop_field_predicate(
 
         return lambda column_name: (
             drop_field_predicate(column_name) or _rate_histogram_drop(column_name)
+        )
+
+    if metadata_path.name.endswith("_metadata_chi2_four_plane.csv"):
+        def _chi2_four_plane_drop(column_name: str) -> bool:
+            return not is_chi2_four_plane_file_column(column_name)
+
+        if drop_field_predicate is None:
+            return _chi2_four_plane_drop
+
+        return lambda column_name: (
+            drop_field_predicate(column_name) or _chi2_four_plane_drop(column_name)
         )
 
     return drop_field_predicate

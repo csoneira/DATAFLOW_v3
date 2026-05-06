@@ -88,6 +88,7 @@ def _derive_robust_synthetic_features(
     selected_source_rate_column = str(selection["selected_source_rate_column"])
     efficiency_variant = str(selection.get("robust_efficiency_variant", "default"))
     efficiency_suffix = ROBUST_EFFICIENCY_VARIANT_TO_SUFFIX[efficiency_variant]
+    configured_selected_count_column = selection.get("selected_count_column")
     source_mode: str | None = None
     used_stage_prefix: str | None = None
 
@@ -205,11 +206,15 @@ def _derive_robust_synthetic_features(
             out[column] = pd.Series(np.nan, index=out.index, dtype=float)
 
     if str(selection.get("metadata_source", "trigger_type")) == "robust_efficiency":
-        selected_count_column = {
+        selected_count_column = (
+            str(configured_selected_count_column).strip()
+            if configured_selected_count_column not in (None, "", "null", "None")
+            else {
             "four_plane_rate_hz": "four_plane_count",
             "four_plane_robust_hz": "four_plane_robust_count",
             "total_rate_hz": "total_count",
         }.get(selected_rate_column, selected_rate_column.replace("_rate_hz", "_count"))
+        )
     else:
         selected_count_column = selected_rate_column.replace("_rate_hz", "_count")
     out["selected_rate_hz"] = pd.to_numeric(out[selected_rate_column], errors="coerce")

@@ -53,6 +53,6 @@ plots:
   streamer_to_signal_contagion_strip_by_tt: usual
   streamer_to_highcharge_contagion_strip_by_tt: usual
   strip_activation_matrix_before_after: usual
-  plane_combination_filter_by_tt: essential
+  plane_combination_filter_by_tt: usual
   charge_by_strip_multiplicity_adj: usual
   charge_by_strip_multiplicity_dis: usual

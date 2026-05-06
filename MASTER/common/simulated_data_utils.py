@@ -15,6 +15,7 @@ Notes: Keep behavior configuration-driven and reproducible.
 from __future__ import annotations
 
 from functools import lru_cache
+import json
 from pathlib import Path
 from typing import Optional, Tuple, List
 
@@ -137,6 +138,42 @@ def load_simulated_z_positions(
         ]
     except (KeyError, TypeError, ValueError):
         return None
+
+
+def load_simulated_efficiencies(
+    param_hash: str,
+    sim_params_path: Path = SIM_PARAMS_DEFAULT,
+) -> Optional[List[float]]:
+    sim_params = _load_sim_params_df(sim_params_path)
+    if sim_params is None:
+        return None
+    if "param_hash" not in sim_params.columns or "efficiencies" not in sim_params.columns:
+        return None
+    matches = sim_params[sim_params["param_hash"] == param_hash]
+    if matches.empty:
+        return None
+    row = matches.iloc[0]
+    raw_efficiencies = row.get("efficiencies")
+    if raw_efficiencies is None:
+        return None
+    if isinstance(raw_efficiencies, str):
+        try:
+            parsed = json.loads(raw_efficiencies)
+        except json.JSONDecodeError:
+            return None
+    elif isinstance(raw_efficiencies, (list, tuple)):
+        parsed = list(raw_efficiencies)
+    else:
+        return None
+    if len(parsed) < 4:
+        return None
+    out: List[float] = []
+    for value in parsed[:4]:
+        try:
+            out.append(float(value))
+        except (TypeError, ValueError):
+            return None
+    return out
 
 
 def load_simulated_z_positions_for_file(

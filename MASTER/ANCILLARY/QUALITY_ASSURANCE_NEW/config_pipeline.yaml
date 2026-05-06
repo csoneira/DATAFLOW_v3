@@ -7,7 +7,7 @@ steps:
   - order: 2
     step_name: STEP_2_FILTERING
     display_name: filtering
-    enabled: false
+    enabled: true
 
   - order: 3
     step_name: STEP_3_DEEP_FILTER

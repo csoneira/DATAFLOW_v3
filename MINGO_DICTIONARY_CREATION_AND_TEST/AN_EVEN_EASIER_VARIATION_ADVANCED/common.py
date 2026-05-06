@@ -109,6 +109,7 @@ ROBUST_DIAGNOSTIC_COLUMNS = [
 ]
 ROBUST_EFFICIENCY_VARIANT_TO_SUFFIX = {
     "default": "",
+    "robust_xyphi": "",
     "plateau": "_plateau",
     "overall": "_overall",
     "median_x": "_median_x",
@@ -120,6 +121,10 @@ ROBUST_EFFICIENCY_VARIANT_ALIASES = {
     "plain": "default",
     "nominal": "default",
     "eff": "default",
+    "robust_xyphi": "robust_xyphi",
+    "xyphi": "robust_xyphi",
+    "fiducial": "robust_xyphi",
+    "fiducial_xyphi": "robust_xyphi",
     "plateau": "plateau",
     "overall": "overall",
     "median_x": "median_x",
@@ -502,11 +507,13 @@ def _derive_robust_efficiency_features(
         "robust_efficiency_source_columns": efficiency_source_columns,
         "plain_column_fallback_used": False,
         "source_rate_columns": {
+            "selected": selected_rate_column,
             "four_plane": ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["four_plane"],
             "four_plane_robust_hz": ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["four_plane_robust_hz"],
             "total": ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["total"],
         },
         "source_count_columns": {
+            "selected": selected_count_source,
             "four_plane": four_plane_count_source,
             "four_plane_robust_hz": four_plane_robust_count_source,
             "total": total_count_source,

@@ -150,7 +150,7 @@ PDF_TARGETS = {
         / "CONFIGURATIONS"
         / "PLOTS"
         / "configurations_metadata_report.pdf",
-        "description": "Configuration z-position metadata report",
+        "description": "[📄 configurations_metadata_report.pdf] Configuration z-position metadata report",
     },
     "rates_metadata_report": {
         "path": BASE_DIR
@@ -161,6 +161,16 @@ PDF_TARGETS = {
         / "PLOTS"
         / "rates_metadata_report.pdf",
         "description": "Rates metadata report",
+    },
+    "task4_chi2_four_plane_report": {
+        "path": BASE_DIR
+        / "MASTER"
+        / "ANCILLARY"
+        / "PLOTTERS"
+        / "TASK_4"
+        / "PLOTS"
+        / "task4_chi2_four_plane_report.pdf",
+        "description": "[📄 task4_chi2_four_plane_report.pdf] Task 4 chi2 four-plane histogram report",
     },
     "execution_metadata_report": {
         "path": BASE_DIR
@@ -247,6 +257,7 @@ PDF_COMMAND_ALIASES: dict[str, tuple[str, ...]] = {
     "trigger_rate_metadata_report": ("trig_rate",),
     "configurations_metadata_report": ("config_meta",),
     "rates_metadata_report": ("rates_meta",),
+    "task4_chi2_four_plane_report": ("chi2_4p", "chi2_t4"),
     "execution_metadata_report": ("exec_meta",),
     "efficiency_metadata_report": ("eff_meta",),
     "efficiencies_three_to_four_report": ("eff_34",),
@@ -294,8 +305,9 @@ DEFAULT_HELP_TEXT = (
     "  /exec_map - Definitive execution map PDF.\n"
     "  /filter_meta - Filter metadata PDF.\n"
     "  /trig_rate - Trigger-rate metadata PDF.\n"
-    "  /config_meta - Configuration z-position metadata PDF.\n"
+    "  /config_meta - [📄 configurations_metadata_report.pdf] Configuration z-position metadata PDF.\n"
     "  /rates_meta - Rates metadata PDF.\n"
+    "  /chi2_4p - [📄 task4_chi2_four_plane_report.pdf] Task 4 chi2 four-plane histogram PDF.\n"
     "  /exec_meta - Execution metadata PDF.\n"
     "  /eff_meta - Efficiency metadata PDF.\n"
     "  /eff_34 - Three-to-four efficiency metadata PDF.\n"

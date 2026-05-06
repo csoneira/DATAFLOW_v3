@@ -146,6 +146,62 @@ def update_status_progress(
     return False
 
 
+def rename_status_row(
+    status_csv_path: Path | str,
+    filename_base: str,
+    execution_date: str,
+    new_filename_base: str,
+) -> bool:
+    """Rename the matching status row without changing its execution key."""
+
+    path = Path(status_csv_path)
+    metadata_write_enabled, _, _ = should_write_step1_metadata(path)
+    if not metadata_write_enabled:
+        return True
+    if not path.exists():
+        return False
+
+    rows = _load_status_rows(path)
+    for row in reversed(rows):
+        if (
+            row.get("filename_base") == str(filename_base)
+            and row.get("execution_date") == execution_date
+        ):
+            row["filename_base"] = str(new_filename_base)
+            _write_status_rows(path, rows)
+            return True
+    return False
+
+
+def delete_status_row(
+    status_csv_path: Path | str,
+    filename_base: str,
+    execution_date: str,
+) -> bool:
+    """Delete the matching status row."""
+
+    path = Path(status_csv_path)
+    metadata_write_enabled, _, _ = should_write_step1_metadata(path)
+    if not metadata_write_enabled:
+        return True
+    if not path.exists():
+        return False
+
+    rows = _load_status_rows(path)
+    kept_rows = [
+        row
+        for row in rows
+        if not (
+            row.get("filename_base") == str(filename_base)
+            and row.get("execution_date") == execution_date
+        )
+    ]
+    if len(kept_rows) == len(rows):
+        return False
+    _write_status_rows(path, kept_rows)
+    return True
+
+
 def append_status_row(status_csv_path: Path | str) -> str:
     """Append a new row marking the start of an execution.
 

@@ -47,6 +47,13 @@ QA_REPROCESSING_FILENAME_SUFFIXES: frozenset[str] = frozenset(
 )
 
 
+def _normalize_legacy_station_prefix(text: str) -> str:
+    lowered = text.lower()
+    if lowered.startswith("mini"):
+        return "mi01" + text[4:]
+    return text
+
+
 def empty_qa_reprocessing_context() -> dict[str, object]:
     return {
         "qa_reprocessing_mode": 0,
@@ -99,7 +106,20 @@ def canonical_processing_basename(filename: object) -> str:
             break
         text = Path(text).stem.strip()
 
-    return text
+    return _normalize_legacy_station_prefix(text)
+
+
+def infer_station_number_from_processing_name(filename: object) -> int | None:
+    """Return station number parsed from a canonical processing basename."""
+
+    basename = canonical_processing_basename(filename)
+    lowered = basename.lower()
+    if len(lowered) < 4 or not lowered.startswith("mi0"):
+        return None
+    try:
+        return int(lowered[3])
+    except ValueError:
+        return None
 
 
 @lru_cache(maxsize=None)

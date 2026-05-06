@@ -17,12 +17,25 @@ from MASTER.common.reprocessing_utils import (  # noqa: E402
     empty_qa_reprocessing_context,
     filter_filenames_by_qa_retry_basenames,
     get_reprocessing_value,
+    infer_station_number_from_processing_name,
     load_active_qa_retry_basenames,
     load_qa_reprocessing_context_for_file,
 )
 
 
 class ReprocessingUtilsTests(unittest.TestCase):
+    def test_canonical_processing_basename_normalizes_legacy_mini_prefix(self) -> None:
+        self.assertEqual(
+            canonical_processing_basename("cleaned_minI24049012732.parquet"),
+            "mi0124049012732",
+        )
+
+    def test_infer_station_number_from_processing_name_supports_legacy_mini_prefix(self) -> None:
+        self.assertEqual(
+            infer_station_number_from_processing_name("cleaned_minI24049012732.parquet"),
+            1,
+        )
+
     def test_get_reprocessing_value_reads_component_columns_as_vector(self) -> None:
         params = pd.DataFrame(
             {

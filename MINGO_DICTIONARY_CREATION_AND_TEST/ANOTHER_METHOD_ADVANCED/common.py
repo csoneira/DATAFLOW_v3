@@ -110,6 +110,7 @@ ROBUST_DIAGNOSTIC_COLUMNS = [
 ]
 ROBUST_EFFICIENCY_VARIANT_TO_SUFFIX = {
     "default": "",
+    "robust_xyphi": "",
     "plateau": "_plateau",
     "overall": "_overall",
     "median_x": "_median_x",
@@ -121,6 +122,10 @@ ROBUST_EFFICIENCY_VARIANT_ALIASES = {
     "plain": "default",
     "nominal": "default",
     "eff": "default",
+    "robust_xyphi": "robust_xyphi",
+    "xyphi": "robust_xyphi",
+    "fiducial": "robust_xyphi",
+    "fiducial_xyphi": "robust_xyphi",
     "plateau": "plateau",
     "overall": "overall",
     "median_x": "median_x",
@@ -203,6 +208,13 @@ def _normalize_optional_int(value: Any) -> int | None:
     return int(value)
 
 
+def _normalize_optional_str(value: Any) -> str | None:
+    if value in (None, "", "null", "None"):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def get_trigger_type_selection(config: dict[str, Any]) -> dict[str, Any]:
     raw = config.get("trigger_type_selection", {})
     if not isinstance(raw, dict):
@@ -219,15 +231,27 @@ def get_trigger_type_selection(config: dict[str, Any]) -> dict[str, Any]:
                 f"{raw.get('robust_efficiency_variant')!r}. Supported values are: "
                 + ", ".join(sorted(ROBUST_EFFICIENCY_VARIANT_TO_SUFFIX))
             )
-        rate_family_raw = str(raw.get("rate_family", "1234")).strip().lower()
-        rate_family = ROBUST_RATE_FAMILY_ALIASES.get(rate_family_raw, rate_family_raw)
-        if rate_family not in ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN:
-            raise ValueError(
-                "Unsupported trigger_type_selection.rate_family for robust_efficiency metadata: "
-                f"{raw.get('rate_family')!r}. Supported values are: "
-                + ", ".join(sorted(ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN))
-            )
-        selected_source_rate_column = ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN[rate_family]
+        rate_family_text = str(raw.get("rate_family", "1234")).strip()
+        if not rate_family_text:
+            rate_family_text = "1234"
+        rate_family_lookup = rate_family_text.lower()
+        rate_family_alias = ROBUST_RATE_FAMILY_ALIASES.get(rate_family_lookup)
+        selected_source_override = _normalize_optional_str(raw.get("selected_source_rate_column"))
+        selected_count_override = _normalize_optional_str(raw.get("selected_count_column"))
+        selected_display_label = _normalize_optional_str(raw.get("selected_display_label"))
+
+        if selected_source_override is not None:
+            rate_family = rate_family_alias or selected_source_override
+            rate_family_column = selected_source_override
+            selected_source_rate_column = selected_source_override
+        elif rate_family_alias is not None:
+            rate_family = rate_family_alias
+            rate_family_column = ROBUST_RATE_FAMILY_TO_COLUMN[rate_family]
+            selected_source_rate_column = ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN[rate_family]
+        else:
+            rate_family = rate_family_text
+            rate_family_column = rate_family_text
+            selected_source_rate_column = rate_family_text
         return {
             "metadata_source": metadata_source,
             "source_name": "robust_efficiency",
@@ -236,8 +260,10 @@ def get_trigger_type_selection(config: dict[str, Any]) -> dict[str, Any]:
             "stage_prefix": None,
             "offender_threshold": None,
             "rate_family": rate_family,
-            "rate_family_column": ROBUST_RATE_FAMILY_TO_COLUMN[rate_family],
+            "rate_family_column": rate_family_column,
             "selected_source_rate_column": selected_source_rate_column,
+            "selected_count_column": selected_count_override,
+            "selected_display_label": selected_display_label or selected_source_rate_column,
             "robust_efficiency_variant": efficiency_variant,
         }
     if metadata_source != "trigger_type":
@@ -355,6 +381,65 @@ def _first_present_column(dataframe: pd.DataFrame, candidates: list[str]) -> str
     return None
 
 
+def _unique_preserve(items: list[str | None]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        if item in (None, ""):
+            continue
+        text = str(item)
+        if text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
+
+
+def _resolve_robust_selected_count_column(
+    dataframe: pd.DataFrame,
+    *,
+    selection: dict[str, Any],
+    total_count_source: str | None,
+    four_plane_count_source: str | None,
+    four_plane_robust_count_source: str | None,
+) -> str | None:
+    selected_source_rate_column = str(selection["selected_source_rate_column"])
+    configured_count_column = _normalize_optional_str(selection.get("selected_count_column"))
+
+    candidates: list[str | None] = [configured_count_column]
+    if selected_source_rate_column.endswith("_count"):
+        candidates.append(selected_source_rate_column)
+    if selected_source_rate_column.endswith("_hz"):
+        candidates.append(selected_source_rate_column[:-3] + "_count")
+    if selected_source_rate_column.endswith("_rate_hz"):
+        candidates.append(selected_source_rate_column.replace("_rate_hz", "_count"))
+
+    if str(selection.get("rate_family")) in ROBUST_RATE_FAMILY_TO_COUNT_COLUMN:
+        candidates.append(ROBUST_RATE_FAMILY_TO_COUNT_COLUMN[str(selection["rate_family"])])
+
+    if selected_source_rate_column in {
+        ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["total"],
+        ROBUST_RATE_FAMILY_TO_COLUMN["total"],
+    }:
+        candidates.extend([total_count_source, "total_count", "rate_total_count", "count_total"])
+    if selected_source_rate_column in {
+        ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["four_plane"],
+        ROBUST_RATE_FAMILY_TO_COLUMN["four_plane"],
+    }:
+        candidates.extend([four_plane_count_source, "four_plane_count", "rate_1234_count", "count_1234"])
+    if selected_source_rate_column in {
+        ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["four_plane_robust_hz"],
+        ROBUST_RATE_FAMILY_TO_COLUMN["four_plane_robust_hz"],
+    }:
+        candidates.extend([four_plane_robust_count_source, "four_plane_robust_count", "count_four_plane_robust"])
+    if selected_source_rate_column == "four_plane_robust_hz_union":
+        candidates.append("four_plane_robust_count_union")
+    if selected_source_rate_column == "four_plane_robust_hz_intersection":
+        candidates.append("four_plane_robust_count_intersection")
+
+    return _first_present_column(dataframe, _unique_preserve(candidates))
+
+
 def _derive_robust_efficiency_features(
     dataframe: pd.DataFrame,
     selection: dict[str, Any],
@@ -382,6 +467,13 @@ def _derive_robust_efficiency_features(
     four_plane_robust_count_source = _first_present_column(
         dataframe,
         ROBUST_OPTIONAL_COUNT_COLUMNS["four_plane_robust_hz"],
+    )
+    selected_count_source = _resolve_robust_selected_count_column(
+        dataframe,
+        selection=selection,
+        total_count_source=total_count_source,
+        four_plane_count_source=four_plane_count_source,
+        four_plane_robust_count_source=four_plane_robust_count_source,
     )
 
     out = dataframe.copy()
@@ -432,9 +524,8 @@ def _derive_robust_efficiency_features(
         efficiency_source_columns[f"plane_{plane_idx}"] = source_column
 
     selected_rate_column = str(selection["rate_family_column"])
-    selected_count_column = ROBUST_RATE_FAMILY_TO_COUNT_COLUMN[str(selection["rate_family"])]
     out["selected_rate_hz"] = pd.to_numeric(out[selected_rate_column], errors="coerce")
-    out["selected_rate_count"] = pd.to_numeric(out[selected_count_column], errors="coerce")
+    out["selected_rate_count"] = _optional_numeric_series(out, selected_count_source)
     out["rate_hz"] = out["selected_rate_hz"]
 
     metadata = {
@@ -450,15 +541,19 @@ def _derive_robust_efficiency_features(
         "rate_family": selection["rate_family"],
         "rate_family_column": selected_rate_column,
         "selected_source_rate_column": selection["selected_source_rate_column"],
+        "selected_source_count_column": selected_count_source,
+        "selected_display_label": selection.get("selected_display_label"),
         "robust_efficiency_variant": efficiency_variant,
         "robust_efficiency_source_columns": efficiency_source_columns,
         "plain_column_fallback_used": False,
         "source_rate_columns": {
+            "selected": selected_rate_column,
             "four_plane": ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["four_plane"],
             "four_plane_robust_hz": ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["four_plane_robust_hz"],
             "total": ROBUST_RATE_FAMILY_TO_SOURCE_COLUMN["total"],
         },
         "source_count_columns": {
+            "selected": selected_count_source,
             "four_plane": four_plane_count_source,
             "four_plane_robust_hz": four_plane_robust_count_source,
             "total": total_count_source,

@@ -19,6 +19,7 @@ import argparse
 import csv
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import io
 import json
 import os
 from pathlib import Path
@@ -74,6 +75,7 @@ ETA_MEDIUM_WINDOW = timedelta(hours=2)
 TASK_IDS: Tuple[int, ...] = (1, 2, 3, 4, 5)
 BASENAME_TIMESTAMP_DIGITS = 11
 FILENAME_TIMESTAMP_PATTERN = re.compile(r"mi0\d(\d{11})$", re.IGNORECASE)
+CSV_ROW_BASENAME_PATTERN = re.compile(r"([^\n])(mi0\d{12},)", re.IGNORECASE)
 STAGE0_COLOR = "#ffffff"
 PRE_TASK_STAGE_COLORS: Tuple[str, str] = ("#9e9e9e", "#616161")
 TASK_COLORMAP_NAME = "rainbow"
@@ -346,6 +348,29 @@ def csv_creation_like_timestamp(path: Path) -> Optional[pd.Timestamp]:
     return pd.Timestamp(datetime.fromtimestamp(stat.st_mtime))
 
 
+def _repair_concatenated_basename_rows(raw_text: str) -> str:
+    # Some metadata writers occasionally miss a newline between two CSV rows.
+    # Insert a row break before a basename token that appears mid-line.
+    return CSV_ROW_BASENAME_PATTERN.sub(r"\1\n\2", raw_text)
+
+
+def _read_csv_with_parser_recovery(path: Path) -> pd.DataFrame:
+    try:
+        return pd.read_csv(path)
+    except pd.errors.ParserError:
+        raw_text = path.read_text(encoding="utf-8", errors="replace")
+        repaired_text = _repair_concatenated_basename_rows(raw_text)
+
+        if repaired_text != raw_text:
+            try:
+                return pd.read_csv(io.StringIO(repaired_text))
+            except pd.errors.ParserError:
+                pass
+
+        # Last-resort fallback: keep load alive even with mixed-width rows.
+        return pd.read_csv(path, engine="python", on_bad_lines="skip")
+
+
 def _load_stage_dataframe_with_execution_agg(
     stage: StageSpec,
     *,
@@ -355,7 +380,7 @@ def _load_stage_dataframe_with_execution_agg(
         return pd.DataFrame(columns=["basename", "file_timestamp", "execution_timestamp"])
 
     try:
-        raw_df = pd.read_csv(stage.csv_path)
+        raw_df = _read_csv_with_parser_recovery(stage.csv_path)
     except Exception as exc:  # pragma: no cover - defensive
         print(
             f"[definitive_execution_plotter] Failed to read {stage.csv_path}: {exc}",

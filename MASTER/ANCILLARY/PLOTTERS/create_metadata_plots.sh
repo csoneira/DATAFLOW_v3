@@ -61,6 +61,11 @@ run_plotter \
   --config "$PLOTTERS_ROOT/RATES/rates_metadata_config.json"
 
 run_plotter \
+  "task4_chi2_four_plane_plotter" \
+  python3 -u "$PLOTTERS_ROOT/TASK_4/task4_chi2_four_plane_plotter.py" \
+  --config "$PLOTTERS_ROOT/TASK_4/task4_chi2_four_plane_config.json"
+
+run_plotter \
   "execution_metadata_plotter" \
   python3 -u "$PLOTTERS_ROOT/METADATA/EXECUTION/execution_metadata_plotter.py" \
   --config "$PLOTTERS_ROOT/METADATA/EXECUTION/execution_metadata_config.json"

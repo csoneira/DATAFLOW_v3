@@ -5,6 +5,7 @@ import argparse
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 import matplotlib
 
@@ -23,6 +24,7 @@ from common import (
     choose_reference_row,
     ensure_output_dirs,
     get_rate_column_name,
+    get_trigger_type_selection,
     load_config,
     q25,
     q75,
@@ -31,6 +33,165 @@ from common import (
 )
 
 log = logging.getLogger("another_method.step2")
+
+
+def _normalize_optional_text(value: Any) -> str | None:
+    if value in (None, "", "null", "None"):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _series_close_enough(left: pd.Series, right: pd.Series) -> bool:
+    left_numeric = pd.to_numeric(left, errors="coerce")
+    right_numeric = pd.to_numeric(right, errors="coerce")
+    mask = left_numeric.notna() & right_numeric.notna()
+    if not bool(mask.any()):
+        return False
+    return bool(np.allclose(left_numeric.loc[mask], right_numeric.loc[mask], rtol=0.0, atol=1e-12))
+
+
+def _validate_step1_selection(
+    dataframe: pd.DataFrame,
+    step1_meta: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    configured_selection = get_trigger_type_selection(config)
+    recorded_selection = step1_meta.get("trigger_rate_selection")
+    if not isinstance(recorded_selection, dict) or not recorded_selection:
+        recorded_selection = step1_meta.get("trigger_type_selection")
+    if not isinstance(recorded_selection, dict) or not recorded_selection:
+        recorded_selection = {}
+
+    configured_metadata_source = str(configured_selection.get("metadata_source", "trigger_type"))
+    if configured_metadata_source == "robust_efficiency" and not recorded_selection:
+        raise ValueError(
+            "Step 2 cannot verify the requested robust-efficiency selection because the existing Step 1 "
+            "metadata does not contain trigger_rate_selection details. Rerun Step 1 with the current config."
+        )
+    recorded_metadata_source = str(recorded_selection.get("metadata_source", configured_metadata_source))
+    if recorded_metadata_source != configured_metadata_source:
+        raise ValueError(
+            "Step 2 selection mismatch: Step 1 filtered data was built with "
+            f"metadata_source={recorded_metadata_source!r}, but the current config requests "
+            f"metadata_source={configured_metadata_source!r}. Rerun Step 1 with the current config."
+        )
+
+    configured_rate_family = _normalize_optional_text(configured_selection.get("rate_family"))
+    recorded_rate_family = _normalize_optional_text(recorded_selection.get("rate_family"))
+    if recorded_rate_family and configured_rate_family and recorded_rate_family != configured_rate_family:
+        raise ValueError(
+            "Step 2 selection mismatch: Step 1 filtered data was built with "
+            f"rate_family={recorded_rate_family!r}, but the current config requests "
+            f"rate_family={configured_rate_family!r}. Rerun Step 1 with the current config."
+        )
+
+    configured_rate_source = _normalize_optional_text(configured_selection.get("selected_source_rate_column"))
+    recorded_rate_source = _normalize_optional_text(recorded_selection.get("selected_source_rate_column"))
+    if recorded_rate_source and configured_rate_source and recorded_rate_source != configured_rate_source:
+        raise ValueError(
+            "Step 2 selection mismatch: Step 1 filtered data was built from "
+            f"rate source {recorded_rate_source!r}, but the current config requests "
+            f"{configured_rate_source!r}. Rerun Step 1 with the current config."
+        )
+
+    configured_count_source = _normalize_optional_text(configured_selection.get("selected_count_column"))
+    recorded_count_source = _normalize_optional_text(recorded_selection.get("selected_source_count_column"))
+    if (
+        configured_metadata_source == "robust_efficiency"
+        and configured_count_source is not None
+        and recorded_count_source is not None
+        and recorded_count_source != configured_count_source
+    ):
+        raise ValueError(
+            "Step 2 selection mismatch: Step 1 filtered data was built from "
+            f"count source {recorded_count_source!r}, but the current config requests "
+            f"{configured_count_source!r}. Rerun Step 1 with the current config."
+        )
+
+    configured_variant = _normalize_optional_text(configured_selection.get("robust_efficiency_variant"))
+    recorded_variant = _normalize_optional_text(recorded_selection.get("robust_efficiency_variant"))
+    if (
+        configured_metadata_source == "robust_efficiency"
+        and configured_variant is not None
+        and recorded_variant is not None
+        and recorded_variant != configured_variant
+    ):
+        raise ValueError(
+            "Step 2 selection mismatch: Step 1 filtered data was built with "
+            f"robust_efficiency_variant={recorded_variant!r}, but the current config requests "
+            f"{configured_variant!r}. Rerun Step 1 with the current config."
+        )
+
+    rate_reference_candidates = []
+    for candidate in (
+        configured_selection.get("rate_family_column"),
+        configured_selection.get("selected_source_rate_column"),
+        recorded_selection.get("rate_family_column"),
+        recorded_selection.get("selected_source_rate_column"),
+        "selected_rate_hz",
+    ):
+        text = _normalize_optional_text(candidate)
+        if text is not None and text not in rate_reference_candidates:
+            rate_reference_candidates.append(text)
+
+    matched_rate_column = None
+    for column in rate_reference_candidates:
+        if column in dataframe.columns and _series_close_enough(dataframe["rate_hz"], dataframe[column]):
+            matched_rate_column = column
+            break
+    if matched_rate_column is None:
+        present_candidates = [column for column in rate_reference_candidates if column in dataframe.columns]
+        raise ValueError(
+            "Step 2 validation failed: canonical rate_hz does not match the configured Step 1 selection. "
+            f"Checked columns: {present_candidates or rate_reference_candidates}. "
+            "Rerun Step 1 with the current config."
+        )
+
+    efficiency_source_columns = recorded_selection.get("robust_efficiency_source_columns", {})
+    if configured_metadata_source == "robust_efficiency":
+        if not isinstance(efficiency_source_columns, dict) or not efficiency_source_columns:
+            raise ValueError(
+                "Step 2 cannot verify the requested robust-efficiency source columns because the existing "
+                "Step 1 metadata is missing robust_efficiency_source_columns. Rerun Step 1 with the current config."
+            )
+        missing_source_columns = [
+            source_column
+            for source_column in efficiency_source_columns.values()
+            if _normalize_optional_text(source_column) is not None and str(source_column) not in dataframe.columns
+        ]
+        if missing_source_columns:
+            raise ValueError(
+                "Step 2 cannot verify the requested robust-efficiency source columns because the existing "
+                "Step 1 filtered CSV is missing: "
+                + ", ".join(sorted(set(str(column) for column in missing_source_columns)))
+                + ". Rerun Step 1 with the current config."
+            )
+    if configured_metadata_source == "robust_efficiency" and isinstance(efficiency_source_columns, dict):
+        for plane_idx in range(1, 5):
+            source_column = _normalize_optional_text(efficiency_source_columns.get(f"plane_{plane_idx}"))
+            target_column = f"eff_empirical_{plane_idx}"
+            if source_column is None or source_column not in dataframe.columns:
+                continue
+            if not _series_close_enough(dataframe[target_column], dataframe[source_column]):
+                raise ValueError(
+                    "Step 2 validation failed: canonical empirical efficiencies do not match the configured "
+                    f"robust source for plane {plane_idx} ({source_column!r}). "
+                    "Rerun Step 1 with the current config."
+                )
+
+    return {
+        "configured_selection": configured_selection,
+        "recorded_selection": recorded_selection,
+        "matched_rate_column": matched_rate_column,
+        "rate_display_label": _normalize_optional_text(
+            recorded_selection.get("selected_display_label")
+        )
+        or _normalize_optional_text(configured_selection.get("selected_display_label"))
+        or _normalize_optional_text(configured_selection.get("selected_source_rate_column"))
+        or _normalize_optional_text(configured_selection.get("rate_family_column"))
+        or get_rate_column_name(config),
+    }
 
 
 def _configure_logging() -> None:
@@ -426,9 +587,8 @@ def run(config_path: str | Path | None = None) -> Path:
     step1_meta = {}
     if step1_meta_path.exists():
         step1_meta = json.loads(step1_meta_path.read_text(encoding="utf-8"))
-    rate_column_name = str(
-        step1_meta.get("input_columns", {}).get("rate", get_rate_column_name(config))
-    )
+    selection_validation = _validate_step1_selection(dataframe, step1_meta, config)
+    rate_column_name = str(selection_validation["rate_display_label"])
 
     binned = assign_efficiency_bins(dataframe, CANONICAL_EFF_COLUMNS, efficiency_bin_width, suffix="_bin")
     for column in CANONICAL_EFF_COLUMNS:
@@ -564,6 +724,10 @@ def run(config_path: str | Path | None = None) -> Path:
         "selected_trigger": step1_meta.get("selected_trigger"),
         "trigger_values_in_filtered_data": step1_meta.get("trigger_values_in_filtered_data"),
         "rate_input_column": rate_input_column,
+        "validated_rate_display_label": rate_column_name,
+        "validated_rate_column_match": selection_validation["matched_rate_column"],
+        "configured_trigger_type_selection": selection_validation["configured_selection"],
+        "recorded_step1_trigger_type_selection": selection_validation["recorded_selection"],
         "efficiency_bin_width": efficiency_bin_width,
         "flux_bin_count": flux_bin_count,
         "flux_bin_edges": [float(value) for value in flux_edges.tolist()],

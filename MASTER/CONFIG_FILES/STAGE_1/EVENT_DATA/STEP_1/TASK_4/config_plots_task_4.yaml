@@ -24,15 +24,16 @@ plots:
   polar_theta_phi_tracking_tt_2d: usual
   events_per_second_by_plane_cardinality_double_row: usual
   timtrack_residuals_gaussian: usual
-  tim_th_chi_sigmafit_1234_histogram: usual
+  tim_th_chi_sigmafit_1234_histogram: essential
   external_residuals_gaussian: usual
   event_display_sample: usual
   track_consistency_loo_residuals: usual
   strip_hit_occupancy: essential
-  track_based_efficiency: essential
+  track_based_efficiency: usual
   total_event_charge_histogram: usual
   track_based_efficiency_tt_stability: usual
   track_based_efficiency_vs_theta: usual
+  track_efficiency_large_plot: essential
   timtrack_projection_ellipse_contours: usual
   timtrack_projection_scaled_angle_comparison: usual
   chi2_offender_populations: usual

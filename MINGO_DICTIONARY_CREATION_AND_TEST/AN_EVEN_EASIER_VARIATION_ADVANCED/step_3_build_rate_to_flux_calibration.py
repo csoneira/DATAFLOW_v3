@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,10 @@ from common import (
 )
 
 log = logging.getLogger("even_easier_advanced.step3")
+
+ALL_TRIGGER_GROUP = "__all_triggers__"
+MISSING_GEOMETRY_GROUP = "__missing_geometry__"
+MISSING_TRIGGER_GROUP = "__missing_trigger__"
 
 
 def _configure_logging() -> None:
@@ -138,10 +143,10 @@ def _build_efficiency_case_fits(
     min_points_per_case: int,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     work = training_df.copy()
-    work["flux_step3"] = pd.to_numeric(work["flux_step3"], errors="coerce")
-    work["corrected_rate_hz_step3"] = pd.to_numeric(work["corrected_rate_hz_step3"], errors="coerce")
-    work["eff_mean_step3"] = pd.to_numeric(work["eff_mean_step3"], errors="coerce")
-    work = work.replace([np.inf, -np.inf], np.nan)
+    numeric_columns = ["flux_step3", "corrected_rate_hz_step3", "eff_mean_step3"]
+    for column in numeric_columns:
+        work[column] = pd.to_numeric(work[column], errors="coerce")
+        work.loc[np.isinf(work[column]), column] = np.nan
     work = work.dropna(subset=["flux_step3", "corrected_rate_hz_step3", "eff_mean_step3"]).copy()
     work = work.loc[work["corrected_rate_hz_step3"] > 0.0].copy()
     work = work.loc[work["flux_step3"] > 0.0].copy()
@@ -240,109 +245,466 @@ def _asymptotic_reference_line(
     }
 
 
-def _plot_step3_calibration_figure(
-    prepared_training_df: pd.DataFrame,
-    fit_table: pd.DataFrame,
+def _normalize_group_text(value: Any, *, missing_value: str) -> str:
+    if value is None:
+        return missing_value
+    try:
+        if pd.isna(value):
+            return missing_value
+    except TypeError:
+        pass
+
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none", "null"}:
+        return missing_value
+
+    if text.startswith("[") and text.endswith("]"):
+        try:
+            decoded = json.loads(text)
+        except json.JSONDecodeError:
+            return text
+        return json.dumps(decoded)
+    return text
+
+
+def _resolve_trigger_group_column(dataframe: pd.DataFrame) -> str | None:
+    candidates = [
+        "trigger_combinations",
+        "trigger_group",
+        "selected_trigger_group",
+        "trigger_type",
+        "robust_efficiency_trigger_source",
+    ]
+    for candidate in candidates:
+        if candidate not in dataframe.columns:
+            continue
+        normalized = dataframe[candidate].map(
+            lambda value: _normalize_group_text(value, missing_value=MISSING_TRIGGER_GROUP)
+        )
+        unique_values = sorted({value for value in normalized.tolist() if value != MISSING_TRIGGER_GROUP})
+        if len(unique_values) > 1:
+            return candidate
+    return None
+
+
+def _prepare_group_columns(
+    dataframe: pd.DataFrame,
     *,
-    reference_line: dict[str, Any],
+    trigger_group_column: str | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    work = dataframe.copy()
+
+    if "z_config_id" in work.columns:
+        work["group_z_config_id"] = work["z_config_id"].map(
+            lambda value: _normalize_group_text(value, missing_value=MISSING_GEOMETRY_GROUP)
+        )
+    else:
+        work["group_z_config_id"] = MISSING_GEOMETRY_GROUP
+
+    if "z_config_label" in work.columns:
+        labels = work["z_config_label"].map(
+            lambda value: _normalize_group_text(value, missing_value=MISSING_GEOMETRY_GROUP)
+        )
+        work["group_z_config_label"] = labels.where(labels != MISSING_GEOMETRY_GROUP, work["group_z_config_id"])
+    else:
+        work["group_z_config_label"] = work["group_z_config_id"]
+
+    chosen_trigger_column = trigger_group_column
+    if chosen_trigger_column is None:
+        chosen_trigger_column = _resolve_trigger_group_column(work)
+
+    if chosen_trigger_column is not None and chosen_trigger_column in work.columns:
+        work["group_trigger_group"] = work[chosen_trigger_column].map(
+            lambda value: _normalize_group_text(value, missing_value=MISSING_TRIGGER_GROUP)
+        )
+        unique_trigger_groups = sorted(
+            {value for value in work["group_trigger_group"].tolist() if value != MISSING_TRIGGER_GROUP}
+        )
+        if len(unique_trigger_groups) <= 1:
+            chosen_trigger_column = None
+            work["group_trigger_group"] = ALL_TRIGGER_GROUP
+            unique_trigger_groups = [ALL_TRIGGER_GROUP]
+    else:
+        chosen_trigger_column = None
+        work["group_trigger_group"] = ALL_TRIGGER_GROUP
+        unique_trigger_groups = [ALL_TRIGGER_GROUP]
+
+    metadata = {
+        "geometry_group_column": "z_config_id" if "z_config_id" in dataframe.columns else None,
+        "trigger_group_column": chosen_trigger_column,
+        "geometry_groups_present": sorted(work["group_z_config_id"].astype(str).unique().tolist()),
+        "trigger_groups_present": unique_trigger_groups,
+    }
+    return work, metadata
+
+
+def _build_grouped_calibration_units(
+    prepared_training_df: pd.DataFrame,
+    *,
+    efficiency_case_bin_width: float,
+    min_points_per_case: int,
+    display_case_count: int,
+    efficiency_case_min: float,
+    efficiency_case_max: float,
+    asymptote_top_k_cases: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
+    grouped_training_df, grouping_meta = _prepare_group_columns(prepared_training_df)
+    grouped_units: list[dict[str, Any]] = []
+    skipped_groups: list[dict[str, Any]] = []
+
+    for (z_config_id, trigger_group), subset in grouped_training_df.groupby(
+        ["group_z_config_id", "group_trigger_group"],
+        sort=True,
+        dropna=False,
+    ):
+        subset = subset.copy()
+        z_config_label = str(subset["group_z_config_label"].iloc[0])
+
+        try:
+            fit_table_all, fit_input = _build_efficiency_case_fits(
+                subset,
+                efficiency_case_bin_width=efficiency_case_bin_width,
+                min_points_per_case=min_points_per_case,
+            )
+            fit_table_window = _filter_fit_cases_by_efficiency_window(
+                fit_table_all,
+                efficiency_case_min=efficiency_case_min,
+                efficiency_case_max=efficiency_case_max,
+            )
+            selected_case_bins = _select_display_case_bins(fit_table_window, display_case_count)
+            fit_table_selected = fit_table_window.loc[
+                fit_table_window["eff_case_bin_step3"].isin(selected_case_bins)
+            ].copy()
+            fit_table_selected = fit_table_selected.sort_values("eff_mean_step3").reset_index(drop=True)
+            if fit_table_selected.empty:
+                raise ValueError("No Step 3 efficiency cases were selected for plotting/calibration.")
+            reference_line = _asymptotic_reference_line(
+                fit_table_selected,
+                top_k_cases=min(asymptote_top_k_cases, len(fit_table_selected)),
+            )
+        except ValueError as exc:
+            skipped_groups.append(
+                {
+                    "group_z_config_id": str(z_config_id),
+                    "group_z_config_label": z_config_label,
+                    "group_trigger_group": str(trigger_group),
+                    "n_training_rows": int(len(subset)),
+                    "reason": str(exc),
+                }
+            )
+            log.warning(
+                "Skipping Step 3 calibration group z=%s trigger=%s: %s",
+                z_config_id,
+                trigger_group,
+                exc,
+            )
+            continue
+
+        grouped_units.append(
+            {
+                "group_z_config_id": str(z_config_id),
+                "group_z_config_label": z_config_label,
+                "group_trigger_group": str(trigger_group),
+                "n_training_rows": int(len(subset)),
+                "fit_input": fit_input,
+                "fit_table_all": fit_table_all,
+                "fit_table_window": fit_table_window,
+                "fit_table_selected": fit_table_selected,
+                "reference_line": reference_line,
+            }
+        )
+
+    grouped_units = sorted(
+        grouped_units,
+        key=lambda unit: (str(unit["group_z_config_id"]), str(unit["group_trigger_group"])),
+    )
+    if not grouped_units:
+        raise ValueError("No Step 3 grouped calibration unit could be built from the training dataframe.")
+
+    return grouped_units, grouping_meta, skipped_groups
+
+
+def _build_geometry_pooled_units(
+    prepared_training_df: pd.DataFrame,
+    *,
+    efficiency_case_bin_width: float,
+    min_points_per_case: int,
+    display_case_count: int,
+    efficiency_case_min: float,
+    efficiency_case_max: float,
+    asymptote_top_k_cases: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    grouped_training_df, _ = _prepare_group_columns(prepared_training_df)
+    pooled_units: list[dict[str, Any]] = []
+    skipped_groups: list[dict[str, Any]] = []
+
+    for z_config_id, subset in grouped_training_df.groupby("group_z_config_id", sort=True, dropna=False):
+        subset = subset.copy()
+        z_config_label = str(subset["group_z_config_label"].iloc[0])
+
+        try:
+            fit_table_all, fit_input = _build_efficiency_case_fits(
+                subset,
+                efficiency_case_bin_width=efficiency_case_bin_width,
+                min_points_per_case=min_points_per_case,
+            )
+            fit_table_window = _filter_fit_cases_by_efficiency_window(
+                fit_table_all,
+                efficiency_case_min=efficiency_case_min,
+                efficiency_case_max=efficiency_case_max,
+            )
+            selected_case_bins = _select_display_case_bins(fit_table_window, display_case_count)
+            fit_table_selected = fit_table_window.loc[
+                fit_table_window["eff_case_bin_step3"].isin(selected_case_bins)
+            ].copy()
+            fit_table_selected = fit_table_selected.sort_values("eff_mean_step3").reset_index(drop=True)
+            if fit_table_selected.empty:
+                raise ValueError("No Step 3 efficiency cases were selected for geometry-pooled calibration.")
+            reference_line = _asymptotic_reference_line(
+                fit_table_selected,
+                top_k_cases=min(asymptote_top_k_cases, len(fit_table_selected)),
+            )
+        except ValueError as exc:
+            skipped_groups.append(
+                {
+                    "group_z_config_id": str(z_config_id),
+                    "group_z_config_label": z_config_label,
+                    "n_training_rows": int(len(subset)),
+                    "reason": str(exc),
+                }
+            )
+            log.warning("Skipping Step 3 geometry-pooled calibration group z=%s: %s", z_config_id, exc)
+            continue
+
+        pooled_units.append(
+            {
+                "group_z_config_id": str(z_config_id),
+                "group_z_config_label": z_config_label,
+                "group_trigger_group": ALL_TRIGGER_GROUP,
+                "n_training_rows": int(len(subset)),
+                "fit_input": fit_input,
+                "fit_table_all": fit_table_all,
+                "fit_table_window": fit_table_window,
+                "fit_table_selected": fit_table_selected,
+                "reference_line": reference_line,
+            }
+        )
+
+    pooled_units = sorted(pooled_units, key=lambda unit: str(unit["group_z_config_id"]))
+    if not pooled_units:
+        raise ValueError("No Step 3 geometry-pooled calibration unit could be built from the training dataframe.")
+    return pooled_units, skipped_groups
+
+
+def _build_lines_table(grouped_units: list[dict[str, Any]]) -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+    for unit in grouped_units:
+        frame = unit["fit_table_selected"].copy()
+        frame.insert(0, "group_trigger_group", str(unit["group_trigger_group"]))
+        frame.insert(0, "group_z_config_label", str(unit["group_z_config_label"]))
+        frame.insert(0, "group_z_config_id", str(unit["group_z_config_id"]))
+        frames.append(frame)
+
+    if not frames:
+        return pd.DataFrame()
+
+    return pd.concat(frames, ignore_index=True).sort_values(
+        ["group_z_config_id", "group_trigger_group", "eff_case_bin_step3"]
+    ).reset_index(drop=True)
+
+
+def _reference_rows_from_units(units: list[dict[str, Any]], *, reference_scope: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for unit in units:
+        reference_line = unit["reference_line"]
+        rows.append(
+            {
+                "group_z_config_id": str(unit["group_z_config_id"]),
+                "group_z_config_label": str(unit["group_z_config_label"]),
+                "group_trigger_group": str(unit["group_trigger_group"]),
+                "reference_scope": reference_scope,
+                "reference_slope_flux_per_hz": float(reference_line["slope_flux_per_hz"]),
+                "reference_intercept_flux": float(reference_line["intercept_flux"]),
+                "reference_n_cases_used": int(reference_line["n_cases_used"]),
+                "reference_eff_mean_min": float(reference_line["eff_mean_range_used"][0]),
+                "reference_eff_mean_max": float(reference_line["eff_mean_range_used"][1]),
+                "reference_case_bins_used": json.dumps(
+                    [float(value) for value in reference_line["case_bins_used"]]
+                ),
+                "n_training_rows": int(unit["n_training_rows"]),
+                "n_fit_rows_used": int(len(unit["fit_input"])),
+                "n_efficiency_cases_fitted_total": int(len(unit["fit_table_all"])),
+                "n_efficiency_cases_in_window": int(len(unit["fit_table_window"])),
+                "n_efficiency_cases_selected": int(len(unit["fit_table_selected"])),
+                "selected_case_bins_plotted": json.dumps(
+                    [
+                        float(value)
+                        for value in unit["fit_table_selected"]["eff_case_bin_step3"].astype(float).tolist()
+                    ]
+                ),
+            }
+        )
+    return rows
+
+
+def _build_reference_tables(
+    exact_units: list[dict[str, Any]],
+    geometry_pooled_units: list[dict[str, Any]],
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    exact_rows: list[dict[str, Any]] = []
+    exact_rows.extend(_reference_rows_from_units(exact_units, reference_scope="geometry_and_trigger"))
+
+    exact_reference_table = (
+        pd.DataFrame(exact_rows)
+        .sort_values(["group_z_config_id", "group_trigger_group"])
+        .reset_index(drop=True)
+    )
+
+    geometry_rows = _reference_rows_from_units(
+        geometry_pooled_units,
+        reference_scope="geometry_only_pooled",
+    )
+
+    geometry_reference_table = (
+        pd.DataFrame(geometry_rows)
+        .sort_values(["group_z_config_id", "group_trigger_group"])
+        .reset_index(drop=True)
+    )
+
+    combined_reference_table = (
+        pd.concat([exact_reference_table, geometry_reference_table], ignore_index=True, sort=False)
+        .sort_values(["group_z_config_id", "reference_scope", "group_trigger_group"])
+        .reset_index(drop=True)
+    )
+    return exact_reference_table, geometry_reference_table, combined_reference_table
+
+
+def _plot_step3_calibration_figure(
+    grouped_units: list[dict[str, Any]],
+    *,
     output_path: Path,
     rate_column_label: str,
 ) -> None:
-    fig = plt.figure(figsize=(16, 9))
-    grid = fig.add_gridspec(2, 2, width_ratios=[2.2, 1.1], height_ratios=[1.0, 1.0], wspace=0.26, hspace=0.28)
-    ax_main = fig.add_subplot(grid[:, 0])
-    ax_slope = fig.add_subplot(grid[0, 1])
-    ax_intercept = fig.add_subplot(grid[1, 1])
+    if not grouped_units:
+        raise ValueError("No grouped Step 3 units were provided for plotting.")
 
-    scatter = ax_main.scatter(
-        prepared_training_df["corrected_rate_hz_step3"],
-        prepared_training_df["flux_step3"],
-        c=prepared_training_df["eff_mean_step3"],
-        cmap="viridis",
-        s=14,
-        alpha=0.16,
-        edgecolors="none",
+    n_units = len(grouped_units)
+    figure_height = max(8.5, 4.8 * n_units)
+    fig = plt.figure(figsize=(16, figure_height))
+    grid = fig.add_gridspec(
+        2 * n_units,
+        2,
+        width_ratios=[2.2, 1.1],
+        height_ratios=[1.0] * (2 * n_units),
+        wspace=0.26,
+        hspace=0.50,
     )
 
-    all_fits = fit_table.sort_values("eff_mean_step3").reset_index(drop=True)
-    cmap = plt.get_cmap("viridis")
-    for idx, row in all_fits.iterrows():
-        color = cmap(idx / max(len(all_fits) - 1, 1))
-        x_line = np.linspace(float(row["corrected_rate_min_hz"]), float(row["corrected_rate_max_hz"]), 160)
-        y_line = float(row["slope_flux_per_hz"]) * x_line + float(row["intercept_flux"])
-        ax_main.plot(
-            x_line,
-            y_line,
-            color=color,
-            linewidth=2.2,
-            label=f"mean eff ~ {float(row['eff_mean_step3']):.2f}",
+    for unit_index, unit in enumerate(grouped_units):
+        fit_input = unit["fit_input"]
+        fit_table = unit["fit_table_selected"]
+        reference_line = unit["reference_line"]
+        z_config_id = str(unit["group_z_config_id"])
+        trigger_group = str(unit["group_trigger_group"])
+
+        trigger_text = trigger_group if len(trigger_group) <= 66 else (trigger_group[:63] + "...")
+        row_start = 2 * unit_index
+        ax_main = fig.add_subplot(grid[row_start : row_start + 2, 0])
+        ax_slope = fig.add_subplot(grid[row_start, 1])
+        ax_intercept = fig.add_subplot(grid[row_start + 1, 1])
+
+        scatter = ax_main.scatter(
+            fit_input["corrected_rate_hz_step3"],
+            fit_input["flux_step3"],
+            c=fit_input["eff_mean_step3"],
+            cmap="viridis",
+            s=14,
+            alpha=0.16,
+            edgecolors="none",
         )
 
-    x_global = np.linspace(
-        float(np.nanmin(prepared_training_df["corrected_rate_hz_step3"])),
-        float(np.nanmax(prepared_training_df["corrected_rate_hz_step3"])),
-        220,
-    )
-    y_ref = float(reference_line["slope_flux_per_hz"]) * x_global + float(reference_line["intercept_flux"])
-    ax_main.plot(
-        x_global,
-        y_ref,
-        color="black",
-        linestyle="--",
-        linewidth=2.4,
-        label=(
-            "asymptotic reference: "
-            f"flux = {float(reference_line['slope_flux_per_hz']):.4f} * rate "
-            f"{float(reference_line['intercept_flux']):+.4f}"
-        ),
-    )
-    ax_main.set_xlabel(f"Corrected rate from {rate_column_label} [Hz]")
-    ax_main.set_ylabel("Simulated flux [cm^-2 min^-1]")
-    ax_main.set_title("Step 3: corrected-rate to simulated-flux calibration by efficiency case")
-    ax_main.grid(alpha=0.25)
-    ax_main.legend(fontsize=8, ncol=1, loc="best")
-    cbar = fig.colorbar(scatter, ax=ax_main)
-    cbar.set_label("Mean empirical efficiency (selected planes)")
+        all_fits = fit_table.sort_values("eff_mean_step3").reset_index(drop=True)
+        cmap = plt.get_cmap("viridis")
+        for idx, row in all_fits.iterrows():
+            color = cmap(idx / max(len(all_fits) - 1, 1))
+            x_line = np.linspace(float(row["corrected_rate_min_hz"]), float(row["corrected_rate_max_hz"]), 160)
+            y_line = float(row["slope_flux_per_hz"]) * x_line + float(row["intercept_flux"])
+            ax_main.plot(
+                x_line,
+                y_line,
+                color=color,
+                linewidth=2.2,
+                label=f"mean eff ~ {float(row['eff_mean_step3']):.2f}",
+            )
 
-    ax_slope.plot(
-        all_fits["eff_mean_step3"],
-        all_fits["slope_flux_per_hz"],
-        marker="o",
-        linewidth=1.7,
-        color="#1f77b4",
-    )
-    ax_slope.axhline(
-        float(reference_line["slope_flux_per_hz"]),
-        color="black",
-        linestyle="--",
-        linewidth=1.4,
-        label="asymptotic slope",
-    )
-    ax_slope.set_xlabel("Mean efficiency")
-    ax_slope.set_ylabel("Slope [flux/Hz]")
-    ax_slope.set_title("Slope vs efficiency mean")
-    ax_slope.grid(alpha=0.25)
-    ax_slope.legend(fontsize=8)
+        x_global = np.linspace(
+            float(np.nanmin(fit_input["corrected_rate_hz_step3"])),
+            float(np.nanmax(fit_input["corrected_rate_hz_step3"])),
+            220,
+        )
+        y_ref = float(reference_line["slope_flux_per_hz"]) * x_global + float(reference_line["intercept_flux"])
+        ax_main.plot(
+            x_global,
+            y_ref,
+            color="black",
+            linestyle="--",
+            linewidth=2.4,
+            label=(
+                "asymptotic reference: "
+                f"flux = {float(reference_line['slope_flux_per_hz']):.4f} * rate "
+                f"{float(reference_line['intercept_flux']):+.4f}"
+            ),
+        )
+        ax_main.set_xlabel(f"Corrected rate from {rate_column_label} [Hz]")
+        ax_main.set_ylabel("Simulated flux [cm^-2 min^-1]")
+        ax_main.set_title(
+            "Step 3: corrected-rate to simulated-flux calibration by efficiency case"
+            f"\n{z_config_id} | trigger={trigger_text}"
+        )
+        ax_main.grid(alpha=0.25)
+        ax_main.legend(fontsize=8, ncol=1, loc="best")
+        cbar = fig.colorbar(scatter, ax=ax_main)
+        cbar.set_label("Mean empirical efficiency (selected planes)")
 
-    ax_intercept.plot(
-        all_fits["eff_mean_step3"],
-        all_fits["intercept_flux"],
-        marker="o",
-        linewidth=1.7,
-        color="#d62728",
-    )
-    ax_intercept.axhline(
-        float(reference_line["intercept_flux"]),
-        color="black",
-        linestyle="--",
-        linewidth=1.4,
-        label="asymptotic intercept",
-    )
-    ax_intercept.set_xlabel("Mean efficiency")
-    ax_intercept.set_ylabel("Intercept [flux]")
-    ax_intercept.set_title("Y-intercept vs efficiency mean")
-    ax_intercept.grid(alpha=0.25)
-    ax_intercept.legend(fontsize=8)
+        ax_slope.plot(
+            all_fits["eff_mean_step3"],
+            all_fits["slope_flux_per_hz"],
+            marker="o",
+            linewidth=1.7,
+            color="#1f77b4",
+        )
+        ax_slope.axhline(
+            float(reference_line["slope_flux_per_hz"]),
+            color="black",
+            linestyle="--",
+            linewidth=1.4,
+            label="asymptotic slope",
+        )
+        ax_slope.set_xlabel("Mean efficiency")
+        ax_slope.set_ylabel("Slope [flux/Hz]")
+        ax_slope.set_title("Slope vs efficiency mean")
+        ax_slope.grid(alpha=0.25)
+        ax_slope.legend(fontsize=8)
+
+        ax_intercept.plot(
+            all_fits["eff_mean_step3"],
+            all_fits["intercept_flux"],
+            marker="o",
+            linewidth=1.7,
+            color="#d62728",
+        )
+        ax_intercept.axhline(
+            float(reference_line["intercept_flux"]),
+            color="black",
+            linestyle="--",
+            linewidth=1.4,
+            label="asymptotic intercept",
+        )
+        ax_intercept.set_xlabel("Mean efficiency")
+        ax_intercept.set_ylabel("Intercept [flux]")
+        ax_intercept.set_title("Y-intercept vs efficiency mean")
+        ax_intercept.grid(alpha=0.25)
+        ax_intercept.legend(fontsize=8)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=180)
@@ -400,6 +762,113 @@ def _plot_real_flux_time_series(
     fig.tight_layout()
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
+
+
+def _apply_reference_lines_to_real_data(
+    real_df: pd.DataFrame,
+    *,
+    real_rate_column: str,
+    exact_reference_table: pd.DataFrame,
+    geometry_reference_table: pd.DataFrame,
+    trigger_group_column: str | None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    work, grouping_meta = _prepare_group_columns(real_df, trigger_group_column=trigger_group_column)
+
+    exact_lookup = exact_reference_table[
+        [
+            "group_z_config_id",
+            "group_trigger_group",
+            "reference_slope_flux_per_hz",
+            "reference_intercept_flux",
+        ]
+    ].rename(
+        columns={
+            "reference_slope_flux_per_hz": "__exact_reference_slope_flux_per_hz",
+            "reference_intercept_flux": "__exact_reference_intercept_flux",
+        }
+    )
+    geometry_lookup = geometry_reference_table[
+        [
+            "group_z_config_id",
+            "reference_slope_flux_per_hz",
+            "reference_intercept_flux",
+        ]
+    ].rename(
+        columns={
+            "reference_slope_flux_per_hz": "__geometry_reference_slope_flux_per_hz",
+            "reference_intercept_flux": "__geometry_reference_intercept_flux",
+        }
+    )
+
+    work = work.merge(exact_lookup, how="left", on=["group_z_config_id", "group_trigger_group"])
+    work = work.merge(geometry_lookup, how="left", on=["group_z_config_id"])
+
+    exact_match = (
+        pd.to_numeric(work["__exact_reference_slope_flux_per_hz"], errors="coerce").notna()
+        & pd.to_numeric(work["__exact_reference_intercept_flux"], errors="coerce").notna()
+    )
+    geometry_match = (
+        pd.to_numeric(work["__geometry_reference_slope_flux_per_hz"], errors="coerce").notna()
+        & pd.to_numeric(work["__geometry_reference_intercept_flux"], errors="coerce").notna()
+    )
+
+    selected_slope = pd.to_numeric(work["__geometry_reference_slope_flux_per_hz"], errors="coerce")
+    selected_intercept = pd.to_numeric(work["__geometry_reference_intercept_flux"], errors="coerce")
+    selected_slope.loc[exact_match] = pd.to_numeric(
+        work.loc[exact_match, "__exact_reference_slope_flux_per_hz"],
+        errors="coerce",
+    )
+    selected_intercept.loc[exact_match] = pd.to_numeric(
+        work.loc[exact_match, "__exact_reference_intercept_flux"],
+        errors="coerce",
+    )
+
+    reference_match_type = pd.Series("unmatched", index=work.index, dtype="object")
+    reference_match_type.loc[geometry_match] = "geometry_only_pooled"
+    reference_match_type.loc[exact_match] = "geometry_and_trigger"
+
+    reference_trigger_group = pd.Series(pd.NA, index=work.index, dtype="object")
+    reference_trigger_group.loc[geometry_match] = ALL_TRIGGER_GROUP
+    reference_trigger_group.loc[exact_match] = work.loc[exact_match, "group_trigger_group"]
+
+    work["step3_reference_match_type"] = reference_match_type
+    work["step3_reference_group_z_config_id"] = work["group_z_config_id"]
+    work["step3_reference_group_trigger_group"] = reference_trigger_group
+    work["step3_reference_slope_flux_per_hz"] = selected_slope
+    work["step3_reference_intercept_flux"] = selected_intercept
+
+    rate_numeric = pd.to_numeric(work[real_rate_column], errors="coerce")
+    work["flux_from_step3_reference_cm2_min"] = selected_slope * rate_numeric + selected_intercept
+    work.loc[selected_slope.isna() | selected_intercept.isna(), "flux_from_step3_reference_cm2_min"] = np.nan
+
+    match_counts = (
+        work["step3_reference_match_type"]
+        .value_counts(dropna=False)
+        .sort_index()
+        .to_dict()
+    )
+    metadata = {
+        "grouping": grouping_meta,
+        "rows_total": int(len(work)),
+        "rows_with_assigned_reference": int(work["flux_from_step3_reference_cm2_min"].notna().sum()),
+        "reference_match_counts": {str(key): int(value) for key, value in match_counts.items()},
+    }
+
+    return (
+        work.drop(
+            columns=[
+                "group_z_config_id",
+                "group_z_config_label",
+                "group_trigger_group",
+                "__exact_reference_slope_flux_per_hz",
+                "__exact_reference_intercept_flux",
+                "__geometry_reference_slope_flux_per_hz",
+                "__geometry_reference_intercept_flux",
+            ],
+            errors="ignore",
+        ),
+        metadata,
+    )
 
 
 def run(config_path: str | Path | None = None) -> Path:
@@ -477,47 +946,40 @@ def run(config_path: str | Path | None = None) -> Path:
     )
     prepared_training_df["flux_step3"] = pd.to_numeric(prepared_training_df[flux_column], errors="coerce")
 
-    fit_table, fit_input = _build_efficiency_case_fits(
+    grouped_units, grouping_meta, skipped_groups = _build_grouped_calibration_units(
         prepared_training_df,
         efficiency_case_bin_width=efficiency_case_bin_width,
         min_points_per_case=min_points_per_case,
-    )
-    fit_table_window = _filter_fit_cases_by_efficiency_window(
-        fit_table,
+        display_case_count=display_case_count,
         efficiency_case_min=efficiency_case_min,
         efficiency_case_max=efficiency_case_max,
+        asymptote_top_k_cases=asymptote_top_k_cases,
     )
-    selected_case_bins = _select_display_case_bins(fit_table_window, display_case_count)
-    fit_table_selected = fit_table_window.loc[
-        fit_table_window["eff_case_bin_step3"].isin(selected_case_bins)
-    ].copy()
-    fit_table_selected = fit_table_selected.sort_values("eff_mean_step3").reset_index(drop=True)
-    if fit_table_selected.empty:
-        raise ValueError("No Step 3 efficiency cases were selected for plotting/calibration.")
-    reference_line = _asymptotic_reference_line(
-        fit_table_selected,
-        top_k_cases=min(asymptote_top_k_cases, len(fit_table_selected)),
+    geometry_pooled_units, geometry_pooled_skipped_groups = _build_geometry_pooled_units(
+        prepared_training_df,
+        efficiency_case_bin_width=efficiency_case_bin_width,
+        min_points_per_case=min_points_per_case,
+        display_case_count=display_case_count,
+        efficiency_case_min=efficiency_case_min,
+        efficiency_case_max=efficiency_case_max,
+        asymptote_top_k_cases=asymptote_top_k_cases,
+    )
+    lines_table = _build_lines_table(grouped_units)
+    exact_reference_table, geometry_reference_table, combined_reference_table = _build_reference_tables(
+        grouped_units,
+        geometry_pooled_units,
     )
 
     _plot_step3_calibration_figure(
-        fit_input,
-        fit_table_selected,
-        reference_line=reference_line,
+        grouped_units,
         output_path=plot_path,
         rate_column_label=rate_column,
     )
 
     lines_csv_path.parent.mkdir(parents=True, exist_ok=True)
-    fit_table_selected.to_csv(lines_csv_path, index=False)
-
-    reference_row = {
-        "reference_slope_flux_per_hz": float(reference_line["slope_flux_per_hz"]),
-        "reference_intercept_flux": float(reference_line["intercept_flux"]),
-        "reference_n_cases_used": int(reference_line["n_cases_used"]),
-        "reference_eff_mean_min": float(reference_line["eff_mean_range_used"][0]),
-        "reference_eff_mean_max": float(reference_line["eff_mean_range_used"][1]),
-    }
-    pd.DataFrame([reference_row]).to_csv(reference_csv_path, index=False)
+    reference_csv_path.parent.mkdir(parents=True, exist_ok=True)
+    lines_table.to_csv(lines_csv_path, index=False)
+    combined_reference_table.to_csv(reference_csv_path, index=False)
 
     real_df = pd.read_csv(step2_scaled_path, low_memory=False)
     real_rate_column = (
@@ -525,9 +987,12 @@ def run(config_path: str | Path | None = None) -> Path:
         if "corrected_rate_hz" in real_df.columns
         else _pick_first_existing_column(real_df.columns.tolist(), ["selected_rate_hz", "rate_hz"])
     )
-    real_df["flux_from_step3_reference_cm2_min"] = (
-        float(reference_line["slope_flux_per_hz"]) * pd.to_numeric(real_df[real_rate_column], errors="coerce")
-        + float(reference_line["intercept_flux"])
+    real_df, real_application_meta = _apply_reference_lines_to_real_data(
+        real_df,
+        real_rate_column=real_rate_column,
+        exact_reference_table=exact_reference_table,
+        geometry_reference_table=geometry_reference_table,
+        trigger_group_column=grouping_meta["trigger_group_column"],
     )
     real_flux_csv_path.parent.mkdir(parents=True, exist_ok=True)
     real_df.to_csv(real_flux_csv_path, index=False)
@@ -551,13 +1016,56 @@ def run(config_path: str | Path | None = None) -> Path:
         "min_points_per_efficiency_case": min_points_per_case,
         "display_efficiency_cases": display_case_count,
         "asymptote_top_k_cases": asymptote_top_k_cases,
+        "grouping": grouping_meta,
         "n_training_rows": int(len(training_df)),
-        "n_fit_rows_used": int(len(fit_input)),
-        "n_efficiency_cases_fitted_total": int(len(fit_table)),
-        "n_efficiency_cases_in_window": int(len(fit_table_window)),
-        "n_efficiency_cases_selected": int(len(fit_table_selected)),
-        "selected_case_bins_plotted": [float(value) for value in fit_table_selected["eff_case_bin_step3"].astype(float).tolist()],
-        "reference_rate_to_flux_line": reference_line,
+        "n_grouped_units_built": int(len(grouped_units)),
+        "n_grouped_units_skipped": int(len(skipped_groups)),
+        "n_geometry_pooled_units_built": int(len(geometry_pooled_units)),
+        "n_geometry_pooled_units_skipped": int(len(geometry_pooled_skipped_groups)),
+        "n_fit_rows_used_total": int(sum(len(unit["fit_input"]) for unit in grouped_units)),
+        "n_efficiency_cases_fitted_total": int(sum(len(unit["fit_table_all"]) for unit in grouped_units)),
+        "n_efficiency_cases_in_window_total": int(sum(len(unit["fit_table_window"]) for unit in grouped_units)),
+        "n_efficiency_cases_selected_total": int(sum(len(unit["fit_table_selected"]) for unit in grouped_units)),
+        "grouped_units": [
+            {
+                "group_z_config_id": str(unit["group_z_config_id"]),
+                "group_z_config_label": str(unit["group_z_config_label"]),
+                "group_trigger_group": str(unit["group_trigger_group"]),
+                "n_training_rows": int(unit["n_training_rows"]),
+                "n_fit_rows_used": int(len(unit["fit_input"])),
+                "n_efficiency_cases_fitted_total": int(len(unit["fit_table_all"])),
+                "n_efficiency_cases_in_window": int(len(unit["fit_table_window"])),
+                "n_efficiency_cases_selected": int(len(unit["fit_table_selected"])),
+                "selected_case_bins_plotted": [
+                    float(value)
+                    for value in unit["fit_table_selected"]["eff_case_bin_step3"].astype(float).tolist()
+                ],
+                "reference_line": unit["reference_line"],
+            }
+            for unit in grouped_units
+        ],
+        "skipped_groups": skipped_groups,
+        "geometry_pooled_units": [
+            {
+                "group_z_config_id": str(unit["group_z_config_id"]),
+                "group_z_config_label": str(unit["group_z_config_label"]),
+                "n_training_rows": int(unit["n_training_rows"]),
+                "n_fit_rows_used": int(len(unit["fit_input"])),
+                "n_efficiency_cases_fitted_total": int(len(unit["fit_table_all"])),
+                "n_efficiency_cases_in_window": int(len(unit["fit_table_window"])),
+                "n_efficiency_cases_selected": int(len(unit["fit_table_selected"])),
+                "selected_case_bins_plotted": [
+                    float(value)
+                    for value in unit["fit_table_selected"]["eff_case_bin_step3"].astype(float).tolist()
+                ],
+                "reference_line": unit["reference_line"],
+            }
+            for unit in geometry_pooled_units
+        ],
+        "geometry_pooled_skipped_groups": geometry_pooled_skipped_groups,
+        "reference_rate_to_flux_lines": exact_reference_table.to_dict(orient="records"),
+        "geometry_pooled_reference_lines": geometry_reference_table.to_dict(orient="records"),
+        "real_reference_application": real_application_meta,
         "outputs": {
             "step3_efficiency_case_lines_csv": str(lines_csv_path),
             "step3_reference_line_csv": str(reference_csv_path),
@@ -569,12 +1077,22 @@ def run(config_path: str | Path | None = None) -> Path:
     }
     write_json(meta_path, metadata)
 
-    log.info("Wrote Step 3 efficiency-case lines to %s", lines_csv_path)
-    log.info(
-        "Reference flux calibration line: flux = %.6f * rate + %.6f",
-        float(reference_line["slope_flux_per_hz"]),
-        float(reference_line["intercept_flux"]),
-    )
+    log.info("Wrote Step 3 efficiency-case lines for %d grouped units to %s", len(grouped_units), lines_csv_path)
+    for reference_row in exact_reference_table.to_dict(orient="records"):
+        log.info(
+            "Reference line [%s | trigger=%s]: flux = %.6f * rate + %.6f",
+            reference_row["group_z_config_id"],
+            reference_row["group_trigger_group"],
+            float(reference_row["reference_slope_flux_per_hz"]),
+            float(reference_row["reference_intercept_flux"]),
+        )
+    for reference_row in geometry_reference_table.to_dict(orient="records"):
+        log.info(
+            "Geometry-pooled reference line [%s]: flux = %.6f * rate + %.6f",
+            reference_row["group_z_config_id"],
+            float(reference_row["reference_slope_flux_per_hz"]),
+            float(reference_row["reference_intercept_flux"]),
+        )
     log.info("Wrote Step 3 calibration figure to %s", plot_path)
     log.info("Wrote Step 3 real-data flux output to %s", real_flux_csv_path)
     log.info("Wrote Step 3 calibrated flux time-series plot to %s", real_flux_plot_path)
