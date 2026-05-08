@@ -460,7 +460,7 @@ def render_task4_chi2_four_plane_histogram_to_pdf(
         ax.grid(True, alpha=float(grid_alpha))
         ax.legend(loc=legend_location)
 
-        # Log-scale in Y
+        # Scale in Y
         ax.set_yscale("log")
 
         pdf_save_rasterized_page(pdf, fig)
@@ -533,7 +533,7 @@ def render_task4_chi2_four_plane_histogram(
             label="Measured",
         )
     ax.set_xlim(*DEFAULT_PANEL_XLIM)
-    ax.set_yscale("log", nonpositive="clip")
+    # ax.set_yscale("log", nonpositive="clip")
     ax.set_ylim(bottom=0.8)
     ax.set_title(title)
     ax.set_xlabel("Chi2")
@@ -734,10 +734,10 @@ def _plot_station_page(
     if positive_values.size:
         vmin = float(np.nanmin(positive_values))
         vmax = float(np.nanmax(positive_values))
-        if np.isfinite(vmin) and np.isfinite(vmax) and vmax > 0:
-            if vmax <= vmin:
-                vmin = max(vmax * 0.5, 1e-12)
-            norm = LogNorm(vmin=max(vmin, 1e-12), vmax=vmax)
+        # if np.isfinite(vmin) and np.isfinite(vmax) and vmax > 0:
+        #     if vmax <= vmin:
+        #         vmin = max(vmax * 0.5, 1e-12)
+        #     norm = LogNorm(vmin=max(vmin, 1e-12), vmax=vmax)
 
     ax_hist.set_facecolor(plt.get_cmap("viridis")(0.0))
     mesh = ax_hist.pcolormesh(

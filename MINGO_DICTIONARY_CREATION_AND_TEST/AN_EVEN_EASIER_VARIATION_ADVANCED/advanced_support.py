@@ -20,6 +20,7 @@ DEFAULT_SIM_EFF_COLUMNS = ["eff_p1", "eff_p2", "eff_p3", "eff_p4"]
 DEFAULT_SIM_PARAMS_CSV = REPO_ROOT / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA" / "step_final_simulation_params.csv"
 DEFAULT_MINGO00_METADATA_ROOT = REPO_ROOT / "STATIONS" / "MINGO00" / "STAGE_1" / "EVENT_DATA" / "STEP_1"
 ONLINE_RUN_DICTIONARY_ROOT = REPO_ROOT / "MASTER" / "CONFIG_FILES" / "STAGE_0" / "ONLINE_RUN_DICTIONARY"
+DEFAULT_STATION0_Z_VECTOR = (0.0, 100.0, 200.0, 400.0)
 
 _DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _FILE_TS_RE = re.compile(r"(\d{11})$")
@@ -348,6 +349,71 @@ def load_simulation_params_with_efficiencies(config: dict[str, Any]) -> tuple[pd
     return dataframe, sim_params_path
 
 
+def _resolve_simulation_params_path(config: dict[str, Any] | None = None) -> Path:
+    if not isinstance(config, dict):
+        return DEFAULT_SIM_PARAMS_CSV
+
+    step0_config = config.get("step0", {})
+    if not isinstance(step0_config, dict):
+        step0_config = {}
+
+    raw_path = step0_config.get("simulation_params_csv")
+    if raw_path in (None, "", "null", "None"):
+        return DEFAULT_SIM_PARAMS_CSV
+
+    sim_params_path = Path(str(raw_path)).expanduser()
+    if not sim_params_path.is_absolute():
+        sim_params_path = resolve_path(config, sim_params_path)
+    return sim_params_path
+
+
+def _resolve_station0_z_vector(config: dict[str, Any] | None = None) -> tuple[tuple[float, float, float, float], Path]:
+    geometry_config = config.get("geometry", {}) if isinstance(config, dict) else {}
+    if not isinstance(geometry_config, dict):
+        geometry_config = {}
+
+    raw_z_vector = geometry_config.get("station0_z_positions", DEFAULT_STATION0_Z_VECTOR)
+    z_vector = normalize_z_vector(raw_z_vector)
+    sim_params_path = _resolve_simulation_params_path(config)
+    if not sim_params_path.exists():
+        raise FileNotFoundError(
+            f"Station 0 synthetic schedule requires the simulation params CSV, but it was not found: {sim_params_path}"
+        )
+
+    try:
+        available_df = pd.read_csv(sim_params_path, usecols=SIM_Z_COLUMNS, low_memory=False)
+    except ValueError as exc:
+        raise ValueError(f"Simulation params CSV is missing required z-plane columns: {sim_params_path}") from exc
+
+    available_vectors = {
+        normalize_z_vector([row[column] for column in SIM_Z_COLUMNS])
+        for _, row in available_df.dropna(subset=SIM_Z_COLUMNS).drop_duplicates().iterrows()
+    }
+    if z_vector not in available_vectors:
+        available_text = ", ".join(format_z_vector(vector) for vector in sorted(available_vectors))
+        raise ValueError(
+            "Configured geometry.station0_z_positions "
+            f"{format_z_vector(z_vector)} was not found in {sim_params_path}. "
+            f"Available simulated vectors: {available_text}"
+        )
+    return z_vector, sim_params_path
+
+
+def _load_station0_simulated_schedule(
+    config: dict[str, Any] | None = None,
+) -> tuple[pd.DataFrame, Path]:
+    z_vector, sim_params_path = _resolve_station0_z_vector(config)
+    log.info(
+        "Using synthetic station-0 schedule from %s with fixed z positions %s.",
+        sim_params_path,
+        format_z_vector(z_vector),
+    )
+    schedule_df = pd.DataFrame({"z_tuple": [z_vector]})
+    schedule_df["start_utc"] = pd.Series([pd.Timestamp("1970-01-01", tz="UTC")], dtype="datetime64[ns, UTC]")
+    schedule_df["end_utc"] = pd.Series([pd.NaT], dtype="datetime64[ns, UTC]")
+    return schedule_df, sim_params_path
+
+
 def _mingo00_metadata_path(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
     step0_config = config.get("step0", {})
     if not isinstance(step0_config, dict):
@@ -581,7 +647,13 @@ def online_run_dictionary_path(station_id: int) -> Path:
     raise FileNotFoundError(f"ONLINE_RUN_DICTIONARY CSV not found for station {station_id}")
 
 
-def load_online_schedule(station_id: int) -> tuple[pd.DataFrame, Path]:
+def load_online_schedule(
+    station_id: int,
+    config: dict[str, Any] | None = None,
+) -> tuple[pd.DataFrame, Path]:
+    if int(station_id) == 0:
+        return _load_station0_simulated_schedule(config)
+
     path = online_run_dictionary_path(station_id)
     raw = pd.read_csv(path, header=[0, 1], low_memory=False)
     if isinstance(raw.columns, pd.MultiIndex):

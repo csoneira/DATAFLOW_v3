@@ -108,6 +108,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print additional details, including matched source columns.",
     )
+    parser.add_argument(
+        "--plot-only",
+        action="store_true",
+        help="Skip Stage 2 dataset rebuilding and only regenerate the joined Stage 2 plot from existing outputs.",
+    )
     return parser.parse_args()
 
 
@@ -515,6 +520,48 @@ def rebuild_big_output(
     combined.to_csv(big_output_path, index=False, float_format="%.10g")
 
 
+def generate_station_stage2_plot(
+    *,
+    stage2_root: Path,
+    output_root: Path,
+    daily_prefix: str,
+    big_output_path: Path,
+    output_time_column: str,
+    count_column_name: str,
+    dry_run: bool,
+) -> int:
+    if not big_output_path.exists():
+        rebuild_big_output(
+            output_root,
+            daily_prefix=daily_prefix,
+            big_output_path=big_output_path,
+            time_column=output_time_column,
+        )
+        if not big_output_path.exists():
+            print(
+                "No joined Stage 2 CSV is available for plotting. "
+                f"Expected {big_output_path} or existing daily files under {output_root}."
+            )
+            return 1
+        print(f"Rebuilt {big_output_path}")
+
+    plot_output_path = stage2_root / "joined_stage_2_groups.png"
+    if dry_run:
+        print(f"[dry-run] would generate {plot_output_path} from {big_output_path}")
+        return 0
+
+    generate_joined_groups_plot(
+        big_output_path,
+        plot_output_path,
+        PLOT_CONFIG_PATH,
+        rate_column=count_column_name,
+        rate_title="Count",
+        rate_ylabel="Count",
+    )
+    print(f"Generated {plot_output_path}")
+    return 0
+
+
 def print_mapping_summary(label: str, matches: Mapping[str, object]) -> None:
     if not matches:
         print(f"  {label}: no mapped columns")
@@ -591,12 +638,24 @@ def main() -> int:
     copernicus_time_column = str(copernicus_config.get("time_column", "Time")).strip() or "Time"
 
     effective_ranges = effective_date_ranges_for_station(station_id, selection)
+    count_column_name = str(output_config.get("count_column", "count")).strip() or "count"
 
     event_days = [
         (day_value, path)
         for day_value, path in iter_daily_files(event_root, event_prefix)
         if date_in_ranges(day_value, effective_ranges)
     ]
+    if args.plot_only:
+        return generate_station_stage2_plot(
+            stage2_root=stage2_root,
+            output_root=output_root,
+            daily_prefix=daily_prefix,
+            big_output_path=big_output_path,
+            output_time_column=output_time_column,
+            count_column_name=count_column_name,
+            dry_run=args.dry_run,
+        )
+
     if not event_days:
         print(f"No event daily files found in {event_root}")
         return 0
@@ -605,7 +664,6 @@ def main() -> int:
         output_root.mkdir(parents=True, exist_ok=True)
         stage2_root.mkdir(parents=True, exist_ok=True)
 
-    count_column_name = str(output_config.get("count_column", "count")).strip() or "count"
     processed_days = 0
     skipped_up_to_date = 0
     skipped_incompatible_event = 0
@@ -735,16 +793,15 @@ def main() -> int:
     )
     print(f"Rebuilt {big_output_path}")
     try:
-        plot_output_path = stage2_root / "joined_stage_2_groups.png"
-        generate_joined_groups_plot(
-            big_output_path,
-            plot_output_path,
-            PLOT_CONFIG_PATH,
-            rate_column=count_column_name,
-            rate_title="Count",
-            rate_ylabel="Count",
+        generate_station_stage2_plot(
+            stage2_root=stage2_root,
+            output_root=output_root,
+            daily_prefix=daily_prefix,
+            big_output_path=big_output_path,
+            output_time_column=output_time_column,
+            count_column_name=count_column_name,
+            dry_run=False,
         )
-        print(f"Generated {plot_output_path}")
     except Exception as exc:
         print(f"Warning: unable to generate grouped Stage 2 plot: {exc}")
     print(

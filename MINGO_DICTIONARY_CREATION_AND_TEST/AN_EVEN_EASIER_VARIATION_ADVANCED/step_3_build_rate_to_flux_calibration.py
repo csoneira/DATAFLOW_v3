@@ -1113,3 +1113,600 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# ---------------------------------------------------------------------------
+# MINGO00-only validation plot:
+#   original simulated flux from SIMULATED_DATA vs STEP_3 estimated flux
+#
+# This block must be pasted at the end of:
+#   step_3_build_rate_to_flux_calibration.py
+#
+# It is intentionally strict:
+#   - runs only for MINGO00
+#   - merges only by param_hash
+#   - takes the simulated/original flux only from flux_cm2_min in:
+#       /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATED_DATA/
+#       step_final_simulation_params.csv
+# ---------------------------------------------------------------------------
+
+_STEP3_ORIGINAL_RUN = run
+
+
+def _step3_is_mingo00_config(config: dict[str, Any]) -> bool:
+    candidates: list[Any] = []
+
+    if "station" in config:
+        candidates.append(config.get("station"))
+
+    for section_name in ("step1", "step2", "step3", "step5", "trigger_type_selection"):
+        section = config.get(section_name, {})
+        if isinstance(section, dict) and "station" in section:
+            candidates.append(section.get("station"))
+
+    for value in candidates:
+        normalized = str(value).strip().lower().replace("_", "").replace("-", "")
+        if normalized in {"0", "00", "mingo0", "mingo00"}:
+            return True
+
+    return False
+
+
+def _step3_repo_root() -> Path:
+    # __file__:
+    #   /home/mingo/DATAFLOW_v3/
+    #   MINGO_DICTIONARY_CREATION_AND_TEST/
+    #   AN_EVEN_EASIER_VARIATION_ADVANCED/
+    #   step_3_build_rate_to_flux_calibration.py
+    #
+    # parents[2] is:
+    #   /home/mingo/DATAFLOW_v3
+    return Path(__file__).resolve().parents[2]
+
+
+def _step3_simulation_params_csv_path(config: dict[str, Any]) -> Path:
+    step0_config = config.get("step0", {})
+    if isinstance(step0_config, dict):
+        configured = step0_config.get("simulation_params_csv")
+        if configured not in (None, "", "null", "None"):
+            return resolve_path(config, configured)
+
+    return (
+        _step3_repo_root()
+        / "MINGO_DIGITAL_TWIN"
+        / "SIMULATED_DATA"
+        / "step_final_simulation_params.csv"
+    )
+
+
+def _step3_real_flux_csv_path(config: dict[str, Any]) -> Path:
+    return _path_from_config_or_default(
+        config,
+        "step3_real_flux_output_csv",
+        "OUTPUTS/FILES/step3_real_data_with_flux.csv",
+    )
+
+
+def _step3_sim_vs_est_output_csv_path(config: dict[str, Any]) -> Path:
+    return _path_from_config_or_default(
+        config,
+        "step3_simulated_vs_estimated_flux_csv",
+        "OUTPUTS/FILES/step3_simulated_vs_estimated_flux_by_param_hash.csv",
+    )
+
+
+def _step3_sim_vs_est_plot_path(config: dict[str, Any]) -> Path:
+    return _path_from_config_or_default(
+        config,
+        "step3_simulated_vs_estimated_flux_plot",
+        str(PLOTS_DIR / "step3_03_simulated_vs_estimated_flux_scatter.png"),
+    )
+
+
+def _step3_norm_param_hash(series: pd.Series) -> pd.Series:
+    return series.astype("string").str.strip()
+
+
+def _step3_pick_estimated_flux_column(real_df: pd.DataFrame) -> str:
+    candidates = [
+        "flux_from_step3_reference_cm2_min",
+        "estimated_flux_step3_cm2_min",
+        "flux_estimated_cm2_min",
+        "estimated_flux_cm2_min",
+    ]
+
+    for column in candidates:
+        if column in real_df.columns:
+            return column
+
+    raise KeyError(
+        "Could not find the STEP_3 estimated-flux column in the STEP_3 output. "
+        f"Tried: {candidates}. Available columns: {list(real_df.columns)}"
+    )
+
+
+def _step3_add_param_hash_from_training_if_needed(
+    real_df: pd.DataFrame,
+    config: dict[str, Any],
+) -> pd.DataFrame:
+    if "param_hash" in real_df.columns:
+        return real_df
+
+    if "filename_base" not in real_df.columns:
+        raise KeyError(
+            "STEP_3 output has no param_hash and no filename_base. "
+            "Cannot recover param_hash for the SIMULATED_DATA merge."
+        )
+
+    training_csv = cfg_path(config, "paths", "step0_training_csv")
+    if not training_csv.exists():
+        raise FileNotFoundError(
+            "STEP_3 output has no param_hash, and the STEP_0 training CSV used "
+            f"to recover param_hash does not exist: {training_csv}"
+        )
+
+    training_df = pd.read_csv(training_csv, low_memory=False)
+
+    required_training_columns = {"filename_base", "param_hash"}
+    missing = required_training_columns.difference(training_df.columns)
+    if missing:
+        raise KeyError(
+            f"Cannot recover param_hash from {training_csv}; missing columns: {sorted(missing)}"
+        )
+
+    bridge = (
+        training_df[["filename_base", "param_hash"]]
+        .dropna(subset=["filename_base", "param_hash"])
+        .drop_duplicates(subset=["filename_base"], keep="first")
+        .copy()
+    )
+
+    out = real_df.copy()
+    out["__filename_base_key"] = out["filename_base"].astype("string").str.strip()
+    bridge["__filename_base_key"] = bridge["filename_base"].astype("string").str.strip()
+
+    out = out.merge(
+        bridge[["__filename_base_key", "param_hash"]],
+        on="__filename_base_key",
+        how="left",
+        validate="many_to_one",
+    )
+
+    out = out.drop(columns=["__filename_base_key"], errors="ignore")
+
+    recovered = int(out["param_hash"].notna().sum())
+    log.info(
+        "Recovered param_hash for %d/%d STEP_3 rows using %s",
+        recovered,
+        len(out),
+        training_csv,
+    )
+
+    return out
+
+def _step3_build_simulated_vs_estimated_flux_table(
+    config: dict[str, Any],
+    real_flux_csv_path: Path,
+    simulation_params_csv_path: Path,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    real_df = pd.read_csv(real_flux_csv_path, low_memory=False)
+    sim_df = pd.read_csv(simulation_params_csv_path, low_memory=False)
+
+    real_df = _step3_add_param_hash_from_training_if_needed(real_df, config)
+
+    if "param_hash" not in real_df.columns:
+        raise KeyError("STEP_3 output still has no param_hash after recovery attempt.")
+
+    if "param_hash" not in sim_df.columns:
+        raise KeyError(
+            f"SIMULATED_DATA CSV has no param_hash column: {simulation_params_csv_path}"
+        )
+
+    if "flux_cm2_min" not in sim_df.columns:
+        raise KeyError(
+            f"SIMULATED_DATA CSV has no flux_cm2_min column: {simulation_params_csv_path}"
+        )
+
+    estimated_flux_col = _step3_pick_estimated_flux_column(real_df)
+
+    real_work = real_df.copy()
+    real_work["__param_hash_key"] = _step3_norm_param_hash(real_work["param_hash"]).str.lower()
+
+    sim_work = sim_df.copy()
+    sim_work["__param_hash_key"] = _step3_norm_param_hash(sim_work["param_hash"]).str.lower()
+
+    sim_lookup = (
+        sim_work[["__param_hash_key", "param_hash", "flux_cm2_min"]]
+        .dropna(subset=["__param_hash_key"])
+        .drop_duplicates(subset=["__param_hash_key"], keep="first")
+        .rename(
+            columns={
+                "param_hash": "simulated_param_hash",
+                "flux_cm2_min": "simulated_flux_original_cm2_min",
+            }
+        )
+        .copy()
+    )
+
+    merged = real_work.merge(
+        sim_lookup,
+        on="__param_hash_key",
+        how="left",
+        validate="many_to_one",
+    )
+
+    merged["simulated_flux_original_cm2_min"] = pd.to_numeric(
+        merged["simulated_flux_original_cm2_min"],
+        errors="coerce",
+    )
+
+    n_direct_matches = int(merged["simulated_flux_original_cm2_min"].notna().sum())
+
+    # -----------------------------------------------------------------------
+    # Fallback:
+    # If the current SIMULATED_DATA/step_final_simulation_params.csv has zero
+    # overlap with the recovered real-data param_hash values, use the STEP_0
+    # training merge. That file is the local product of the param_hash merge
+    # between MINGO00 metadata and SIMULATED_DATA and normally preserves
+    # flux_cm2_min for the same hashes that STEP_3 can recover.
+    # -----------------------------------------------------------------------
+    n_training_fallback_matches = 0
+    fallback_used = False
+
+    if n_direct_matches == 0:
+        training_csv = cfg_path(config, "paths", "step0_training_csv")
+
+        if training_csv.exists():
+            training_df = pd.read_csv(training_csv, low_memory=False)
+
+            if "param_hash" in training_df.columns and "flux_cm2_min" in training_df.columns:
+                training_work = training_df.copy()
+                training_work["__param_hash_key"] = (
+                    _step3_norm_param_hash(training_work["param_hash"]).str.lower()
+                )
+
+                training_lookup = (
+                    training_work[["__param_hash_key", "param_hash", "flux_cm2_min"]]
+                    .dropna(subset=["__param_hash_key"])
+                    .drop_duplicates(subset=["__param_hash_key"], keep="first")
+                    .rename(
+                        columns={
+                            "param_hash": "training_param_hash",
+                            "flux_cm2_min": "simulated_flux_original_cm2_min_from_step0_training",
+                        }
+                    )
+                    .copy()
+                )
+
+                merged = merged.merge(
+                    training_lookup,
+                    on="__param_hash_key",
+                    how="left",
+                    validate="many_to_one",
+                )
+
+                merged["simulated_flux_original_cm2_min_from_step0_training"] = pd.to_numeric(
+                    merged["simulated_flux_original_cm2_min_from_step0_training"],
+                    errors="coerce",
+                )
+
+                missing_direct = merged["simulated_flux_original_cm2_min"].isna()
+                merged.loc[missing_direct, "simulated_flux_original_cm2_min"] = merged.loc[
+                    missing_direct,
+                    "simulated_flux_original_cm2_min_from_step0_training",
+                ]
+
+                n_training_fallback_matches = int(
+                    merged["simulated_flux_original_cm2_min_from_step0_training"].notna().sum()
+                )
+                fallback_used = n_training_fallback_matches > 0
+
+                log.warning(
+                    "No param_hash overlap between STEP_3 rows and current SIMULATED_DATA CSV. "
+                    "Used STEP_0 training merge fallback: %s; matched flux rows from training=%d.",
+                    training_csv,
+                    n_training_fallback_matches,
+                )
+            else:
+                log.warning(
+                    "Could not use STEP_0 training fallback because %s lacks param_hash or flux_cm2_min.",
+                    training_csv,
+                )
+        else:
+            log.warning(
+                "Could not use STEP_0 training fallback because file does not exist: %s",
+                training_csv,
+            )
+
+    merged = merged.drop(columns=["__param_hash_key"], errors="ignore")
+
+    merged["estimated_flux_step3_cm2_min"] = pd.to_numeric(
+        merged[estimated_flux_col],
+        errors="coerce",
+    )
+
+    n_real = int(len(real_work))
+    n_sim = int(len(sim_work))
+    n_real_with_param_hash = int(real_work["param_hash"].notna().sum())
+    n_unique_real_param_hash = int(real_work["__param_hash_key"].dropna().nunique())
+    n_unique_sim_param_hash = int(sim_work["__param_hash_key"].dropna().nunique())
+    n_matched_sim_flux = int(merged["simulated_flux_original_cm2_min"].notna().sum())
+    n_valid_pairs = int(
+        (
+            merged["simulated_flux_original_cm2_min"].notna()
+            & merged["estimated_flux_step3_cm2_min"].notna()
+        ).sum()
+    )
+
+    meta = {
+        "real_flux_csv": str(real_flux_csv_path),
+        "simulation_params_csv": str(simulation_params_csv_path),
+        "join_key": "param_hash",
+        "simulated_flux_column": "flux_cm2_min",
+        "estimated_flux_column": estimated_flux_col,
+        "n_real_rows": n_real,
+        "n_simulation_rows": n_sim,
+        "n_real_rows_with_param_hash": n_real_with_param_hash,
+        "n_unique_real_param_hash": n_unique_real_param_hash,
+        "n_unique_simulation_param_hash": n_unique_sim_param_hash,
+        "n_direct_matches_from_simulation_params_csv": n_direct_matches,
+        "n_training_fallback_matches": n_training_fallback_matches,
+        "fallback_used_step0_training_csv": fallback_used,
+        "n_rows_with_matched_simulated_flux": n_matched_sim_flux,
+        "n_valid_simulated_estimated_pairs": n_valid_pairs,
+    }
+
+    log.info(
+        "MINGO00 simulated-vs-estimated merge by param_hash: "
+        "real_rows=%d, real_with_param_hash=%d, unique_real_hash=%d, "
+        "unique_sim_hash=%d, direct_sim_matches=%d, training_fallback_matches=%d, "
+        "valid_pairs=%d",
+        n_real,
+        n_real_with_param_hash,
+        n_unique_real_param_hash,
+        n_unique_sim_param_hash,
+        n_direct_matches,
+        n_training_fallback_matches,
+        n_valid_pairs,
+    )
+
+    if n_valid_pairs == 0:
+        real_hashes = set(real_work["__param_hash_key"].dropna().astype(str))
+        sim_hashes = set(sim_work["__param_hash_key"].dropna().astype(str))
+        overlap = real_hashes.intersection(sim_hashes)
+
+        log.error(
+            "No valid simulated-vs-estimated flux pairs after param_hash merge. "
+            "Direct overlap between STEP_3 recovered hashes and current SIMULATED_DATA hashes: %d. "
+            "This usually means the current step_final_simulation_params.csv is not the same "
+            "simulation-parameter table used to build step0_mingo00_training_merge.csv.",
+            len(overlap),
+        )
+
+        sample_cols = [
+            column
+            for column in [
+                "param_hash",
+                "simulated_param_hash",
+                "training_param_hash",
+                "simulated_flux_original_cm2_min",
+                "simulated_flux_original_cm2_min_from_step0_training",
+                estimated_flux_col,
+                "estimated_flux_step3_cm2_min",
+                "filename_base",
+                "file_timestamp_utc",
+            ]
+            if column in merged.columns
+        ]
+
+        log.error(
+            "Diagnostic sample:\n%s",
+            merged[sample_cols].head(30).to_string(index=False),
+        )
+
+    return merged, meta
+
+
+def _step3_plot_simulated_vs_estimated_flux(
+    merged: pd.DataFrame,
+    output_plot_path: Path,
+) -> dict[str, Any]:
+    valid = merged[
+        merged["simulated_flux_original_cm2_min"].notna()
+        & merged["estimated_flux_step3_cm2_min"].notna()
+    ].copy()
+
+    if valid.empty:
+        raise ValueError(
+            "No rows contain both simulated_flux_original_cm2_min and "
+            "estimated_flux_step3_cm2_min after merging by param_hash."
+        )
+
+    x = valid["simulated_flux_original_cm2_min"].to_numpy(dtype=float)
+    y = valid["estimated_flux_step3_cm2_min"].to_numpy(dtype=float)
+
+    residual = y - x
+
+    rmse = float(np.sqrt(np.mean(residual**2)))
+    mae = float(np.mean(np.abs(residual)))
+    bias = float(np.mean(residual))
+
+    if len(valid) >= 2 and np.std(x) > 0.0 and np.std(y) > 0.0:
+        pearson_r = float(np.corrcoef(x, y)[0, 1])
+        r2 = float(pearson_r**2)
+    else:
+        pearson_r = float("nan")
+        r2 = float("nan")
+
+    lower = float(np.nanmin([np.nanmin(x), np.nanmin(y)]))
+    upper = float(np.nanmax([np.nanmax(x), np.nanmax(y)]))
+    span = upper - lower
+    pad = 0.05 * span if span > 0.0 else 1.0
+
+    plot_min = lower - pad
+    plot_max = upper + pad
+
+    fig, ax = plt.subplots(figsize=(8.5, 7.2))
+
+    ax.scatter(
+        x,
+        y,
+        s=26,
+        alpha=0.70,
+        edgecolors="none",
+    )
+
+    ax.plot(
+        [plot_min, plot_max],
+        [plot_min, plot_max],
+        linestyle="--",
+        linewidth=1.5,
+        label="1:1 line",
+    )
+
+    ax.set_xlim(plot_min, plot_max)
+    ax.set_ylim(plot_min, plot_max)
+
+    ax.set_xlabel("Original simulated flux, flux_cm2_min [cm$^{-2}$ min$^{-1}$]")
+    ax.set_ylabel("STEP_3 estimated flux [cm$^{-2}$ min$^{-1}$]")
+    ax.set_title(
+        "MINGO00: original simulated flux vs STEP_3 estimated flux\n"
+        f"N={len(valid)} | RMSE={rmse:.4g} | MAE={mae:.4g} | "
+        f"bias={bias:.4g} | R$^2$={r2:.4g}"
+    )
+
+    ax.grid(alpha=0.25)
+    ax.legend(loc="best")
+
+    output_plot_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(output_plot_path, dpi=180)
+    plt.close(fig)
+
+    return {
+        "plot_path": str(output_plot_path),
+        "n_points": int(len(valid)),
+        "rmse_cm2_min": rmse,
+        "mae_cm2_min": mae,
+        "bias_estimated_minus_simulated_cm2_min": bias,
+        "pearson_r": pearson_r,
+        "r2": r2,
+    }
+
+
+def _step3_write_mingo00_simulated_vs_estimated_flux_products(
+    config_path: str | Path | None = None,
+    real_flux_csv_path: Path | None = None,
+) -> None:
+    config = load_config(config_path)
+
+    if not _step3_is_mingo00_config(config):
+        log.info(
+            "Skipping simulated-vs-estimated flux validation plot: "
+            "configured station is not MINGO00."
+        )
+        return
+
+    if real_flux_csv_path is None:
+        real_flux_csv_path = _step3_real_flux_csv_path(config)
+
+    simulation_params_csv_path = _step3_simulation_params_csv_path(config)
+    output_csv_path = _step3_sim_vs_est_output_csv_path(config)
+    output_plot_path = _step3_sim_vs_est_plot_path(config)
+
+    if not real_flux_csv_path.exists():
+        raise FileNotFoundError(f"Missing STEP_3 real-flux CSV: {real_flux_csv_path}")
+
+    if not simulation_params_csv_path.exists():
+        raise FileNotFoundError(
+            f"Missing SIMULATED_DATA simulation-params CSV: {simulation_params_csv_path}"
+        )
+
+    merged, merge_meta = _step3_build_simulated_vs_estimated_flux_table(
+        config,
+        real_flux_csv_path,
+        simulation_params_csv_path,
+    )
+
+    output_csv_path.parent.mkdir(parents=True, exist_ok=True)
+    merged.to_csv(output_csv_path, index=False)
+
+    plot_meta = _step3_plot_simulated_vs_estimated_flux(
+        merged,
+        output_plot_path,
+    )
+
+    meta_path = _path_from_config_or_default(
+        config,
+        "step3_meta_json",
+        "OUTPUTS/FILES/step3_meta.json",
+    )
+
+    if meta_path.exists():
+        try:
+            meta_payload = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            meta_payload = {}
+    else:
+        meta_payload = {}
+
+    meta_payload.setdefault("outputs", {})
+    meta_payload.setdefault("plots", {})
+
+    meta_payload["outputs"]["simulated_vs_estimated_flux_csv"] = str(output_csv_path)
+    meta_payload["plots"]["simulated_vs_estimated_flux"] = str(output_plot_path)
+    meta_payload["mingo00_simulated_vs_estimated_flux"] = {
+        "enabled": True,
+        "merge": merge_meta,
+        "plot": plot_meta,
+    }
+
+    write_json(meta_path, meta_payload)
+
+    log.info("Wrote MINGO00 simulated-vs-estimated flux CSV to %s", output_csv_path)
+    log.info("Wrote MINGO00 simulated-vs-estimated flux plot to %s", output_plot_path)
+
+
+def run(config_path: str | Path | None = None) -> Path:
+    real_flux_csv_path = _STEP3_ORIGINAL_RUN(config_path)
+
+    try:
+        _step3_write_mingo00_simulated_vs_estimated_flux_products(
+            config_path=config_path,
+            real_flux_csv_path=Path(real_flux_csv_path),
+        )
+    except Exception:
+        log.exception(
+            "Failed to create MINGO00 simulated-vs-estimated flux validation products."
+        )
+
+    return real_flux_csv_path
+
+
+def _step3_config_path_from_argv_for_post_hook() -> str | Path | None:
+    import sys
+
+    args = sys.argv[1:]
+
+    for idx, item in enumerate(args):
+        if item == "--config" and idx + 1 < len(args):
+            return args[idx + 1]
+        if item.startswith("--config="):
+            return item.split("=", 1)[1]
+
+    return DEFAULT_CONFIG_PATH
+
+
+if __name__ == "__main__":
+    # When this script is executed directly, the original main() block above has
+    # already run before this pasted post-hook. This call creates only the
+    # MINGO00 validation CSV and scatter plot.
+    try:
+        _step3_write_mingo00_simulated_vs_estimated_flux_products(
+            config_path=_step3_config_path_from_argv_for_post_hook(),
+            real_flux_csv_path=None,
+        )
+    except Exception:
+        log.exception(
+            "Failed to create direct-run MINGO00 simulated-vs-estimated flux validation products."
+        )

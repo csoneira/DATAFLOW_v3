@@ -59,7 +59,7 @@ MASTER_STAGE_ROOT=/home/mingo/DATAFLOW_v3/MASTER/STAGES
 
 # Clean files every hour (forced)
 # 0 * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/MAINTENANCE/CLEANERS/clean_dataflow.sh --force >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/CLEANERS/log_clean_dataflow.log 2>&1
-0 * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/MAINTENANCE/CLEANERS/clean_dataflow.sh --select temps,plots,completed --force >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/CLEANERS/log_temps_clean_dataflow.log 2>&1
+0 */2 * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/MAINTENANCE/CLEANERS/clean_dataflow.sh --select temps,plots,completed --force --keep-final >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/CLEANERS/log_temps_clean_dataflow.log 2>&1
 
 # Solve stale locks (force 15 min age and kill matching stale pipelines)
 */5 * * * * /usr/bin/env python3 $HOME/DATAFLOW_v3/OPERATIONS/ORCHESTRATION/SOLVE_STALE_LOCKS/solve_stale_locks.py --force-age-minutes 15 --kill-stale-processes >> $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/SOLVE_STALE_LOCKS/solve_stale_locks.cron.log 2>&1

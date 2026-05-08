@@ -16,6 +16,7 @@ Notes: Keep behavior configuration-driven and reproducible.
 from __future__ import annotations
 
 import argparse
+import io
 from pathlib import Path
 
 import ast
@@ -61,6 +62,12 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=2.0,
         help="cos_n value used for the n-specific flux histogram (default: 2).",
+    )
+    parser.add_argument(
+        "--pdf-dpi",
+        type=int,
+        default=300,
+        help="Rasterization DPI used before embedding the figure into the output PDF (default: 300).",
     )
     return parser.parse_args()
 
@@ -219,6 +226,28 @@ def make_fixed_date_locator(values: pd.Series, max_ticks: int = 4) -> mdates.Dat
     return mdates.YearLocator(base=years)
 
 
+def save_rasterized_pdf_page(pdf: PdfPages, fig: plt.Figure, *, dpi: int) -> None:
+    """Render a figure to a high-resolution raster image and embed it into the PDF."""
+    png_buffer = io.BytesIO()
+    fig.savefig(
+        png_buffer,
+        format="png",
+        dpi=int(dpi),
+        facecolor=fig.get_facecolor(),
+        edgecolor="none",
+    )
+    png_buffer.seek(0)
+    image = plt.imread(png_buffer)
+    png_buffer.close()
+
+    raster_fig = plt.figure(figsize=fig.get_size_inches(), dpi=72)
+    raster_ax = raster_fig.add_axes([0.0, 0.0, 1.0, 1.0])
+    raster_ax.imshow(image, aspect="auto")
+    raster_ax.axis("off")
+    pdf.savefig(raster_fig)
+    plt.close(raster_fig)
+
+
 
 
 def main() -> None:
@@ -227,6 +256,7 @@ def main() -> None:
     mesh_path = Path(args.mesh)
     completed_path = Path(args.completed)
     output_path = Path(args.output)
+    pdf_dpi = max(72, int(args.pdf_dpi))
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # load completed/full dataset first
@@ -518,7 +548,7 @@ def main() -> None:
                             ax.axvline(now, color="red", linestyle="--", alpha=0.3, zorder=10)
                         if i > j and param_list[i] in exec_time_cols:
                             ax.axhline(now, color="red", linestyle="--", alpha=0.3, zorder=10)
-            pdf.savefig(fig)
+            save_rasterized_pdf_page(pdf, fig, dpi=pdf_dpi)
             plt.close(fig)
 
 

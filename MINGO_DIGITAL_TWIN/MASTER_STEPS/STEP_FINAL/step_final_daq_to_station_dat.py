@@ -1542,13 +1542,20 @@ def main() -> None:
 
             # Auto-repair 1: remap one pending row with matching geometry
             # to the incoming combo.
+            _log_warn(
+                        f"HEYYYYY"
+                    )
             if candidates.empty:
                 z_only_mask = pd.Series(True, index=mesh.index)
                 z_only_mask &= mesh["done"] != 1
                 z_candidates = _z_filter(z_only_mask)
                 if not z_candidates.empty:
+                    _log_warn(
+                        f"HEYYYYY"
+                    )
                     remap_index = int(z_candidates.index[0])
                     mesh.loc[remap_index, "cos_n"] = float(step1_cfg.get("cos_n"))
+                    
                     mesh.loc[remap_index, "flux_cm2_min"] = float(step1_cfg.get("flux_cm2_min"))
                     mesh.loc[remap_index, "eff_p1"] = float(effs[0])
                     mesh.loc[remap_index, "eff_p2"] = float(effs[1])
@@ -1571,8 +1578,9 @@ def main() -> None:
                     if has_param_date:
                         mesh.loc[remap_index, "param_date"] = pd.NA
                     mesh.loc[remap_index, "done"] = 0
+                    
                     _log_warn(
-                        "No exact param_mesh match found; "
+                        "Hey. No exact param_mesh match found; "
                         f"auto-remapped pending row index={remap_index} for sim_run={sim_run}."
                     )
                     candidates = mesh.loc[[remap_index]]
@@ -1608,9 +1616,12 @@ def main() -> None:
                     warnings.simplefilter("ignore", FutureWarning)
                     mesh.loc[append_index] = auto_row
                 _log_warn(
-                    "No matching param_mesh row found; "
+                    "Hey. No matching param_mesh row found; "
                     f"auto-appended row index={append_index} for sim_run={sim_run}."
                 )
+                _log_warn(
+                        f"!!!!!!!!!!!!!!!!!!!!!! cos_n is {mesh.loc[remap_index, 'cos_n']}."
+                    )
                 candidates = mesh.loc[[append_index]]
 
             if len(candidates) > 1:

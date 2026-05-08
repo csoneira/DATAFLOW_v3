@@ -14524,7 +14524,7 @@ columns_to_keep = (
     + [
         # New definitions
         'x', 'x_err', 'y', 'y_err', 'theta', 'theta_err', 'phi', 'phi_err', 's', 's_err',
-        'tim_th_chi_sigmafit_1234',
+        'tim_th_chi_sigmafit_1234', 'xp', 'yp',
 
         # Charge
 

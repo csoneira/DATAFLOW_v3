@@ -160,11 +160,11 @@ def _load_method_frame(
 
 def _load_sources(config: dict[str, Any], join_keys: list[str]) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     even_path = cfg_path(config, "paths", "even_method_csv")
-    another_path = cfg_path(config, "paths", "another_method_csv")
+    definitive_path = cfg_path(config, "paths", "definitive_method_csv")
     if not even_path.exists():
         raise FileNotFoundError(f"Missing even-method CSV: {even_path}")
-    if not another_path.exists():
-        raise FileNotFoundError(f"Missing another-method CSV: {another_path}")
+    if not definitive_path.exists():
+        raise FileNotFoundError(f"Missing definitive-method CSV: {definitive_path}")
 
     even_required = [*join_keys, "eff_reference", "scale_factor", "selected_rate_hz", "corrected_rate_hz"]
     even_optional = [
@@ -185,62 +185,59 @@ def _load_sources(config: dict[str, Any], join_keys: list[str]) -> tuple[pd.Data
         label="AN_EVEN_EASIER_VARIATION_ADVANCED output",
     )
 
-    another_required = [*join_keys, "lut_scale_factor", "rate_hz", "corrected_rate_to_perfect_hz"]
-    another_optional = [
+    definitive_required = [*join_keys, "lut_scale_factor", "rate_hz", "corrected_rate_to_perfect_hz"]
+    definitive_optional = [
         "execution_timestamp_utc",
         "lut_match_method",
         "lut_match_distance",
-        "z_config_id",
-        "z_config_label",
         "selected_z_vector_match",
-        "selected_rate_hz",
-        "four_plane_robust_hz",
+        "rate_hz__four_plane_robust_hz",
         *[f"eff_empirical_{idx}" for idx in range(1, 5)],
     ]
-    another_frame = _load_method_frame(
-        another_path,
-        required_columns=another_required,
-        optional_columns=another_optional,
-        label="ANOTHER_METHOD_ADVANCED output",
+    definitive_frame = _load_method_frame(
+        definitive_path,
+        required_columns=definitive_required,
+        optional_columns=definitive_optional,
+        label="DEFINITIVE_METHOD four_plane_robust_hz output",
     )
 
-    return even_frame, another_frame, {
+    return even_frame, definitive_frame, {
         "even_path": str(even_path),
-        "another_path": str(another_path),
+        "definitive_path": str(definitive_path),
     }
 
 
 def _merge_method_outputs(
     even_frame: pd.DataFrame,
-    another_frame: pd.DataFrame,
+    definitive_frame: pd.DataFrame,
     *,
     join_keys: list[str],
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     even_joined, even_join_columns = _add_normalized_join_columns(even_frame, join_keys)
-    another_joined, another_join_columns = _add_normalized_join_columns(another_frame, join_keys)
+    definitive_joined, definitive_join_columns = _add_normalized_join_columns(definitive_frame, join_keys)
 
     _check_duplicate_keys(even_joined, even_join_columns, "AN_EVEN_EASIER_VARIATION_ADVANCED")
-    _check_duplicate_keys(another_joined, another_join_columns, "ANOTHER_METHOD_ADVANCED")
+    _check_duplicate_keys(definitive_joined, definitive_join_columns, "DEFINITIVE_METHOD")
 
     even_prefixed = _prefixed_columns(even_joined, prefix="even_", preserve_columns=[*join_keys, *even_join_columns])
-    another_prefixed = _prefixed_columns(
-        another_joined,
-        prefix="another_",
-        preserve_columns=another_join_columns,
+    definitive_prefixed = _prefixed_columns(
+        definitive_joined,
+        prefix="definitive_",
+        preserve_columns=definitive_join_columns,
     )
 
     outer = even_prefixed.merge(
-        another_prefixed,
+        definitive_prefixed,
         how="outer",
         on=even_join_columns,
         indicator=True,
     )
     merge_stats = {
         "rows_even": int(len(even_frame)),
-        "rows_another": int(len(another_frame)),
+        "rows_definitive": int(len(definitive_frame)),
         "rows_inner": int((outer["_merge"] == "both").sum()),
         "rows_even_only": int((outer["_merge"] == "left_only").sum()),
-        "rows_another_only": int((outer["_merge"] == "right_only").sum()),
+        "rows_definitive_only": int((outer["_merge"] == "right_only").sum()),
     }
 
     inner = outer.loc[outer["_merge"] == "both"].copy()
@@ -254,9 +251,9 @@ def _merge_method_outputs(
         inner["even_execution_timestamp_utc"] = pd.to_datetime(
             inner["even_execution_timestamp_utc"], errors="coerce", utc=True
         )
-    if "another_execution_timestamp_utc" in inner.columns:
-        inner["another_execution_timestamp_utc"] = pd.to_datetime(
-            inner["another_execution_timestamp_utc"], errors="coerce", utc=True
+    if "definitive_execution_timestamp_utc" in inner.columns:
+        inner["definitive_execution_timestamp_utc"] = pd.to_datetime(
+            inner["definitive_execution_timestamp_utc"], errors="coerce", utc=True
         )
     return inner.reset_index(drop=True), merge_stats
 
@@ -265,22 +262,22 @@ def _derive_comparison_columns(dataframe: pd.DataFrame) -> pd.DataFrame:
     work = dataframe.copy()
     work["even_eff_reference"] = pd.to_numeric(work["even_eff_reference"], errors="coerce")
     work["even_scale_factor"] = pd.to_numeric(work["even_scale_factor"], errors="coerce")
-    work["another_lut_scale_factor"] = pd.to_numeric(work["another_lut_scale_factor"], errors="coerce")
+    work["definitive_lut_scale_factor"] = pd.to_numeric(work["definitive_lut_scale_factor"], errors="coerce")
     work["even_selected_rate_hz"] = pd.to_numeric(work["even_selected_rate_hz"], errors="coerce")
-    work["another_rate_hz"] = pd.to_numeric(work["another_rate_hz"], errors="coerce")
+    work["definitive_rate_hz"] = pd.to_numeric(work["definitive_rate_hz"], errors="coerce")
     work["even_corrected_rate_hz"] = pd.to_numeric(work["even_corrected_rate_hz"], errors="coerce")
-    work["another_corrected_rate_to_perfect_hz"] = pd.to_numeric(
-        work["another_corrected_rate_to_perfect_hz"],
+    work["definitive_corrected_rate_to_perfect_hz"] = pd.to_numeric(
+        work["definitive_corrected_rate_to_perfect_hz"],
         errors="coerce",
     )
 
     work["even_inv_eff_reference"] = 1.0 / work["even_eff_reference"]
-    work["scale_factor_delta"] = work["another_lut_scale_factor"] - work["even_inv_eff_reference"]
-    work["scale_factor_ratio"] = work["another_lut_scale_factor"] / work["even_inv_eff_reference"]
+    work["scale_factor_delta"] = work["definitive_lut_scale_factor"] - work["even_inv_eff_reference"]
+    work["scale_factor_ratio"] = work["definitive_lut_scale_factor"] / work["even_inv_eff_reference"]
     work["corrected_rate_delta_hz"] = (
-        work["another_corrected_rate_to_perfect_hz"] - work["even_corrected_rate_hz"]
+        work["definitive_corrected_rate_to_perfect_hz"] - work["even_corrected_rate_hz"]
     )
-    work["selected_rate_delta_hz"] = work["another_rate_hz"] - work["even_selected_rate_hz"]
+    work["selected_rate_delta_hz"] = work["definitive_rate_hz"] - work["even_selected_rate_hz"]
     work["abs_scale_factor_delta"] = work["scale_factor_delta"].abs()
 
     if "file_timestamp_utc" in work.columns and pd.api.types.is_datetime64_any_dtype(work["file_timestamp_utc"]):
@@ -292,15 +289,15 @@ def _derive_comparison_columns(dataframe: pd.DataFrame) -> pd.DataFrame:
 
 
 def _summary_stats(dataframe: pd.DataFrame) -> dict[str, Any]:
-    valid = dataframe[["even_inv_eff_reference", "another_lut_scale_factor"]].dropna()
+    valid = dataframe[["even_inv_eff_reference", "definitive_lut_scale_factor"]].dropna()
     corr = float(valid.corr().iloc[0, 1]) if len(valid) >= 2 else None
     return {
         "matched_rows": int(len(dataframe)),
         "valid_scale_rows": int(len(valid)),
         "inverse_eff_reference_min": float(dataframe["even_inv_eff_reference"].min()),
         "inverse_eff_reference_max": float(dataframe["even_inv_eff_reference"].max()),
-        "lut_scale_factor_min": float(dataframe["another_lut_scale_factor"].min()),
-        "lut_scale_factor_max": float(dataframe["another_lut_scale_factor"].max()),
+        "lut_scale_factor_min": float(dataframe["definitive_lut_scale_factor"].min()),
+        "lut_scale_factor_max": float(dataframe["definitive_lut_scale_factor"].max()),
         "scale_factor_delta_median": float(dataframe["scale_factor_delta"].median()),
         "scale_factor_delta_abs_median": float(dataframe["abs_scale_factor_delta"].median()),
         "scale_factor_ratio_median": float(dataframe["scale_factor_ratio"].median()),
@@ -349,32 +346,32 @@ def _pairwise_numeric_alignment_check(
 
 def _build_alignment_checks(dataframe: pd.DataFrame) -> dict[str, Any]:
     checks: dict[str, Any] = {
-        "selected_rate_hz_even_vs_rate_hz_another": _pairwise_numeric_alignment_check(
+        "selected_rate_hz_even_vs_rate_hz_definitive": _pairwise_numeric_alignment_check(
             dataframe,
             "even_selected_rate_hz",
-            "another_rate_hz",
+            "definitive_rate_hz",
         ),
-        "selected_rate_hz_even_vs_selected_rate_hz_another": _pairwise_numeric_alignment_check(
+        "selected_rate_hz_even_vs_rate_hz__four_plane_robust_hz_definitive": _pairwise_numeric_alignment_check(
             dataframe,
             "even_selected_rate_hz",
-            "another_selected_rate_hz",
+            "definitive_rate_hz__four_plane_robust_hz",
         ),
-        "four_plane_robust_hz_even_vs_another": _pairwise_numeric_alignment_check(
+        "four_plane_robust_hz_even_vs_definitive_rate_hz__four_plane_robust_hz": _pairwise_numeric_alignment_check(
             dataframe,
             "even_four_plane_robust_hz",
-            "another_four_plane_robust_hz",
+            "definitive_rate_hz__four_plane_robust_hz",
         ),
     }
     for plane_idx in range(1, 5):
-        checks[f"eff_empirical_{plane_idx}_even_vs_another"] = _pairwise_numeric_alignment_check(
+        checks[f"eff_empirical_{plane_idx}_even_vs_definitive"] = _pairwise_numeric_alignment_check(
             dataframe,
             f"even_eff_empirical_{plane_idx}",
-            f"another_eff_empirical_{plane_idx}",
+            f"definitive_eff_empirical_{plane_idx}",
         )
-        checks[f"eff_empirical_raw_{plane_idx}_even_vs_another"] = _pairwise_numeric_alignment_check(
+        checks[f"eff_empirical_raw_{plane_idx}_even_vs_definitive"] = _pairwise_numeric_alignment_check(
             dataframe,
             f"even_eff_empirical_raw_{plane_idx}",
-            f"another_eff_empirical_{plane_idx}",
+            f"definitive_eff_empirical_{plane_idx}",
         )
         checks[f"eff_empirical_corrected_{plane_idx}_even_vs_even_eff_empirical_{plane_idx}"] = (
             _pairwise_numeric_alignment_check(
@@ -390,7 +387,7 @@ def _load_source_config_summaries(config: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for label, path_key in (
         ("even_method", "even_method_config"),
-        ("another_method", "another_method_config"),
+        ("definitive_method", "definitive_method_config"),
     ):
         raw_path = config.get("paths", {}).get(path_key)
         if raw_path in (None, "", "null", "None"):
@@ -400,19 +397,36 @@ def _load_source_config_summaries(config: dict[str, Any]) -> dict[str, Any]:
             out[label] = {"config_path": str(path), "exists": False}
             continue
         payload = json.loads(path.read_text(encoding="utf-8"))
+        if label == "even_method":
+            out[label] = {
+                "config_path": str(path),
+                "exists": True,
+                "metadata_source": payload.get("trigger_type_selection", {}).get("metadata_source"),
+                "rate_family": payload.get("trigger_type_selection", {}).get("rate_family"),
+                "selected_display_label": payload.get("trigger_type_selection", {}).get("selected_display_label"),
+                "robust_efficiency_variant": payload.get("trigger_type_selection", {}).get("robust_efficiency_variant"),
+                "corrected_eff": payload.get("corrected_eff"),
+                "even_efficiency_reference_mode": payload.get("step2", {}).get("efficiency_reference_mode"),
+                "even_efficiency_reference_planes": payload.get("step2", {}).get("efficiency_reference_planes"),
+            }
+            continue
+        definitive_csv_path = cfg_path(config, "paths", "definitive_method_csv")
+        selected_rate_case = definitive_csv_path.parent.parent.name
+        selected_rate_spec = next(
+            (spec for spec in payload.get("rates", []) if str(spec.get("name")) == selected_rate_case),
+            None,
+        )
         out[label] = {
             "config_path": str(path),
             "exists": True,
-            "metadata_source": payload.get("trigger_type_selection", {}).get("metadata_source"),
-            "rate_family": payload.get("trigger_type_selection", {}).get("rate_family"),
-            "selected_display_label": payload.get("trigger_type_selection", {}).get("selected_display_label"),
-            "robust_efficiency_variant": payload.get("trigger_type_selection", {}).get("robust_efficiency_variant"),
-            "corrected_eff": payload.get("corrected_eff"),
-            "even_efficiency_reference_mode": payload.get("step2", {}).get("efficiency_reference_mode"),
-            "even_efficiency_reference_planes": payload.get("step2", {}).get("efficiency_reference_planes"),
-            "another_step5_feature_mode": payload.get("step5", {}).get("selected_feature_columns_mode"),
-            "another_step3_lut_match_mode": payload.get("step3", {}).get("lut_match_mode"),
-            "another_step5_lut_match_mode": payload.get("step5", {}).get("lut_match_mode"),
+            "efficiency_metadata_relative_path": payload.get("efficiency", {}).get("metadata_relative_path"),
+            "efficiency_columns": payload.get("efficiency", {}).get("columns"),
+            "selected_rate_case": selected_rate_case,
+            "selected_rate_spec": selected_rate_spec,
+            "lut_flux_bin_count": payload.get("lut", {}).get("flux_bin_count"),
+            "lut_reference_curve_mode": payload.get("lut", {}).get("reference_curve_mode"),
+            "lut_reference_top_k_per_flux_bin": payload.get("lut", {}).get("reference_top_k_per_flux_bin"),
+            "lut_interpolation_mode": payload.get("lut", {}).get("interpolation_mode"),
         }
     return out
 
@@ -424,7 +438,7 @@ def _build_outlier_table(dataframe: pd.DataFrame, top_n: int) -> list[dict[str, 
         "filename_base",
         "file_timestamp_utc",
         "even_inv_eff_reference",
-        "another_lut_scale_factor",
+        "definitive_lut_scale_factor",
         "scale_factor_delta",
         "scale_factor_ratio",
     ]
@@ -444,7 +458,7 @@ def _plot_scatter(
     annotate_top_n: int,
     axis_limits: tuple[float, float] | None,
 ) -> None:
-    plot_frame = dataframe.dropna(subset=["even_inv_eff_reference", "another_lut_scale_factor"]).copy()
+    plot_frame = dataframe.dropna(subset=["even_inv_eff_reference", "definitive_lut_scale_factor"]).copy()
     fig, ax = plt.subplots(figsize=(11, 8))
 
     if color_by == "sequence":
@@ -457,7 +471,7 @@ def _plot_scatter(
     scatter = None
     clipped_mask = pd.Series(False, index=plot_frame.index, dtype=bool)
     x_values = pd.to_numeric(plot_frame["even_inv_eff_reference"], errors="coerce")
-    y_values = pd.to_numeric(plot_frame["another_lut_scale_factor"], errors="coerce")
+    y_values = pd.to_numeric(plot_frame["definitive_lut_scale_factor"], errors="coerce")
     plot_x = x_values.copy()
     plot_y = y_values.copy()
     if axis_limits is not None:
@@ -489,7 +503,7 @@ def _plot_scatter(
         )
 
     line_values = pd.concat(
-        [plot_frame["even_inv_eff_reference"], plot_frame["another_lut_scale_factor"]],
+        [plot_frame["even_inv_eff_reference"], plot_frame["definitive_lut_scale_factor"]],
         ignore_index=True,
     )
     line_values = pd.to_numeric(line_values, errors="coerce")
@@ -511,7 +525,7 @@ def _plot_scatter(
         )
 
     corr = None
-    valid = plot_frame[["even_inv_eff_reference", "another_lut_scale_factor"]].dropna()
+    valid = plot_frame[["even_inv_eff_reference", "definitive_lut_scale_factor"]].dropna()
     if len(valid) >= 2:
         corr = float(valid.corr().iloc[0, 1])
     ratio_median = float(plot_frame["scale_factor_ratio"].median())
@@ -544,7 +558,7 @@ def _plot_scatter(
         top_outliers = plot_frame.sort_values("abs_scale_factor_delta", ascending=False).head(int(annotate_top_n))
         for _, row in top_outliers.iterrows():
             x_value = float(row["even_inv_eff_reference"])
-            y_value = float(row["another_lut_scale_factor"])
+            y_value = float(row["definitive_lut_scale_factor"])
             if axis_limits is not None:
                 x_value = float(np.clip(x_value, axis_limits[0], axis_limits[1]))
                 y_value = float(np.clip(y_value, axis_limits[0], axis_limits[1]))
@@ -559,10 +573,10 @@ def _plot_scatter(
 
     ax.set_title(
         "Method comparison: inverse eff_reference vs LUT scale factor\n"
-        "AN_EVEN_EASIER_VARIATION_ADVANCED vs ANOTHER_METHOD_ADVANCED"
+        "AN_EVEN_EASIER_VARIATION_ADVANCED vs DEFINITIVE_METHOD four_plane_robust_hz"
     )
     ax.set_xlabel("AN_EVEN: 1 / eff_reference")
-    ax.set_ylabel("ANOTHER: lut_scale_factor")
+    ax.set_ylabel("DEFINITIVE: lut_scale_factor")
     if axis_limits is not None:
         ax.set_xlim(*axis_limits)
         ax.set_ylim(*axis_limits)
@@ -609,12 +623,12 @@ def _plot_time_series_comparison(
     )
     top_ax.plot(
         x_values,
-        plot_frame["another_lut_scale_factor"],
+        plot_frame["definitive_lut_scale_factor"],
         marker="o",
         markersize=3,
         linewidth=1.5,
         color="#8B1E3F",
-        label="ANOTHER: lut_scale_factor",
+        label="DEFINITIVE: lut_scale_factor",
     )
     top_ax.set_title("Scale-factor comparison over time")
     top_ax.set_ylabel("Scale-like value")
@@ -628,7 +642,7 @@ def _plot_time_series_comparison(
         markersize=2.8,
         linewidth=1.2,
         color="#1F6FEB",
-        label="ANOTHER - AN_EVEN",
+        label="DEFINITIVE - AN_EVEN",
     )
     bottom_ax.axhline(0.0, linestyle="--", linewidth=1.0, color="black", alpha=0.7)
     bottom_ax.set_xlabel(x_label)
@@ -717,8 +731,8 @@ def run(config_path: str | Path | None = None) -> Path:
     scatter_plot_path = cfg_path(config, "paths", "scatter_plot")
     timeseries_plot_path = cfg_path(config, "paths", "timeseries_plot")
 
-    even_frame, another_frame, source_paths = _load_sources(config, join_keys)
-    merged, merge_stats = _merge_method_outputs(even_frame, another_frame, join_keys=join_keys)
+    even_frame, definitive_frame, source_paths = _load_sources(config, join_keys)
+    merged, merge_stats = _merge_method_outputs(even_frame, definitive_frame, join_keys=join_keys)
     merged = _derive_comparison_columns(merged)
 
     merged_output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -772,7 +786,7 @@ def run(config_path: str | Path | None = None) -> Path:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Compare AN_EVEN_EASIER_VARIATION_ADVANCED against ANOTHER_METHOD_ADVANCED.")
+    parser = argparse.ArgumentParser(description="Compare AN_EVEN_EASIER_VARIATION_ADVANCED against DEFINITIVE_METHOD four_plane_robust_hz.")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Path to config JSON file.")
     args = parser.parse_args()
     run(args.config)

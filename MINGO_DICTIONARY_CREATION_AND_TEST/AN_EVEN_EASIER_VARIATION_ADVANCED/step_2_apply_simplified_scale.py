@@ -158,6 +158,31 @@ def _resolve_plot_moving_average(config: dict[str, Any]) -> tuple[bool, int]:
     return enabled, kernel
 
 
+def _resolve_scale_factor_smoothing(config: dict[str, Any]) -> dict[str, Any]:
+    step2_config = _step2_config(config)
+    enabled = _normalize_bool(step2_config.get("apply_scale_factor_smoothing", False))
+    method = str(step2_config.get("scale_factor_smoothing_method", "moving_average")).strip().lower()
+    kernel = int(step2_config.get("scale_factor_smoothing_kernel", 5))
+    if method != "moving_average":
+        raise ValueError("step2.scale_factor_smoothing_method currently supports only 'moving_average'.")
+    if kernel < 1:
+        raise ValueError("step2.scale_factor_smoothing_kernel must be >= 1.")
+    return {
+        "enabled": enabled,
+        "method": method,
+        "kernel": kernel,
+    }
+
+
+def _scale_factor_smoothing_label(settings: dict[str, Any]) -> str | None:
+    if not bool(settings.get("enabled")):
+        return None
+    kernel = int(settings.get("kernel", 1))
+    if kernel <= 1:
+        return None
+    return f"moving average n={kernel}"
+
+
 def _resolve_selected_series_plot_metadata(config: dict[str, Any]) -> dict[str, str]:
     selection = get_trigger_type_selection(config)
     source_column = str(selection["selected_source_rate_column"])
@@ -284,13 +309,50 @@ def _apply_simplified_scale(
     reference_frame = work[reference_columns].apply(pd.to_numeric, errors="coerce")
     if reference_mode == "product":
         work["eff_reference"] = reference_frame.prod(axis=1, min_count=len(reference_columns))
-        work["scale_factor"] = 1.0 / work["eff_reference"]
     else:
         work["eff_reference"] = reference_frame.mean(axis=1)
-        work["scale_factor"] = 1.0 / (work["eff_reference"] ** 4)
+    work["scale_factor_raw"] = np.where(
+        pd.to_numeric(work["eff_reference"], errors="coerce") > 0.0,
+        (
+            1.0 / work["eff_reference"]
+            if reference_mode == "product"
+            else 1.0 / (work["eff_reference"] ** 4)
+        ),
+        np.nan,
+    )
+    work["scale_factor_smoothed"] = pd.to_numeric(work["scale_factor_raw"], errors="coerce")
+    work["scale_factor"] = pd.to_numeric(work["scale_factor_raw"], errors="coerce")
     work["eff_reference_mode"] = reference_mode
     work["corrected_rate_hz"] = work["selected_rate_hz"].astype(float) * work["scale_factor"].astype(float)
     return work
+
+
+def _apply_scale_factor_smoothing(dataframe: pd.DataFrame, settings: dict[str, Any]) -> pd.DataFrame:
+    out = dataframe.copy()
+    raw_scale = pd.to_numeric(out["scale_factor_raw"], errors="coerce")
+    out["scale_factor_raw"] = raw_scale
+    if not bool(settings.get("enabled")) or int(settings.get("kernel", 1)) <= 1:
+        out["scale_factor_smoothed"] = raw_scale
+        out["scale_factor"] = raw_scale
+        return out
+
+    work = out.copy()
+    work["__row_id"] = np.arange(len(work), dtype=int)
+    ordered = _sort_by_time_axis_for_plotting(work)
+    ordered_raw = pd.to_numeric(ordered["scale_factor_raw"], errors="coerce")
+    ordered_smoothed = ordered_raw.rolling(
+        window=int(settings["kernel"]),
+        min_periods=1,
+        center=True,
+    ).mean()
+    ordered_smoothed = ordered_smoothed.where(ordered_raw.notna(), np.nan)
+
+    smoothed = pd.Series(np.nan, index=out.index, dtype=float)
+    row_ids = ordered["__row_id"].to_numpy(dtype=int)
+    smoothed.iloc[row_ids] = ordered_smoothed.to_numpy(dtype=float)
+    out["scale_factor_smoothed"] = smoothed
+    out["scale_factor"] = smoothed
+    return out
 
 
 def _filter_by_eff_reference_min(dataframe: pd.DataFrame, minimum: float | None) -> tuple[pd.DataFrame, int]:
@@ -370,16 +432,13 @@ def _plot_rate_series(
     dataframe: pd.DataFrame,
     output_path: Path,
     *,
-    apply_moving_average: bool,
-    moving_average_kernel: int,
+    scale_factor_smoothing_label: str | None,
     event_markers: list[dict[str, object]],
     selected_series_meta: dict[str, str],
 ) -> None:
-    plot_frame = _prepare_rate_plot_frame(
-        dataframe,
-        apply_moving_average=apply_moving_average,
-        moving_average_kernel=moving_average_kernel,
-    )
+    plot_frame = _sort_by_time_axis_for_plotting(dataframe)
+    numeric_columns = ["selected_rate_hz", "corrected_rate_hz"]
+    plot_frame[numeric_columns] = plot_frame[numeric_columns].apply(pd.to_numeric, errors="coerce")
     x_values, x_label = _resolve_time_axis(plot_frame)
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.plot(
@@ -399,8 +458,8 @@ def _plot_rate_series(
         label=selected_series_meta["corrected_label"],
     )
     title = f"Original and corrected {selected_series_meta['quantity_title']} time series"
-    if apply_moving_average and moving_average_kernel > 1:
-        title += f" | moving average = {moving_average_kernel}"
+    if scale_factor_smoothing_label:
+        title += f" | corrected with smoothed scale factor ({scale_factor_smoothing_label})"
     ax.set_title(title)
     ax.set_xlabel(x_label.replace("_", " "))
     ax.set_ylabel(selected_series_meta["y_label"])
@@ -422,16 +481,11 @@ def _plot_reference_efficiency_series(
     *,
     reference_mode: str,
     y_limits: tuple[float | None, float | None],
-    apply_moving_average: bool,
-    moving_average_kernel: int,
     event_markers: list[dict[str, object]],
 ) -> None:
-    plot_frame = _prepare_efficiency_plot_frame(
-        dataframe,
-        reference_columns,
-        apply_moving_average=apply_moving_average,
-        moving_average_kernel=moving_average_kernel,
-    )
+    plot_frame = _sort_by_time_axis_for_plotting(dataframe)
+    numeric_columns = [*reference_columns, "eff_reference"]
+    plot_frame[numeric_columns] = plot_frame[numeric_columns].apply(pd.to_numeric, errors="coerce")
     x_values, x_label = _resolve_time_axis(plot_frame)
     fig, ax = plt.subplots(figsize=(12, 6))
     colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728"]
@@ -458,8 +512,6 @@ def _plot_reference_efficiency_series(
         "Selected empirical efficiencies over time | reference = "
         + _reference_mode_label(reference_columns, reference_mode)
     )
-    if apply_moving_average and moving_average_kernel > 1:
-        title += f" | moving average = {moving_average_kernel}"
     ax.set_title(title)
     ax.set_xlabel(x_label.replace("_", " "))
     ax.set_ylabel("Empirical efficiency")
@@ -480,36 +532,39 @@ def _plot_inverse_eff_reference_series(
     dataframe: pd.DataFrame,
     output_path: Path,
     *,
-    apply_moving_average: bool,
-    moving_average_kernel: int,
+    scale_factor_smoothing_label: str | None,
     event_markers: list[dict[str, object]],
 ) -> None:
     plot_frame = _sort_by_time_axis_for_plotting(dataframe)
-    plot_frame["inv_eff_reference"] = 1.0 / pd.to_numeric(
-        plot_frame["eff_reference"],
-        errors="coerce",
-    )
-    if apply_moving_average and moving_average_kernel > 1:
-        plot_frame["inv_eff_reference"] = plot_frame["inv_eff_reference"].rolling(
-            window=moving_average_kernel,
-            min_periods=1,
-            center=True,
-        ).mean()
+    plot_frame["inv_eff_reference_raw"] = pd.to_numeric(plot_frame["scale_factor_raw"], errors="coerce")
+    plot_frame["inv_eff_reference_smoothed"] = pd.to_numeric(plot_frame["scale_factor_smoothed"], errors="coerce")
 
     x_values, x_label = _resolve_time_axis(plot_frame)
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.plot(
         x_values,
-        plot_frame["inv_eff_reference"].astype(float),
+        plot_frame["inv_eff_reference_raw"].astype(float),
         marker="o",
         markersize=3,
-        linewidth=1.6,
+        linewidth=1.0,
         color="#6a3d9a",
-        label="1 / eff_reference",
+        alpha=0.55,
+        label="1 / eff_reference (raw)",
     )
+    if scale_factor_smoothing_label:
+        ax.plot(
+            x_values,
+            plot_frame["inv_eff_reference_smoothed"].astype(float),
+            marker="o",
+            markersize=3,
+            linewidth=1.5,
+            color="#111111",
+            alpha=0.95,
+            label=f"1 / eff_reference (smoothed, {scale_factor_smoothing_label})",
+        )
     title = "Inverse reference efficiency over time"
-    if apply_moving_average and moving_average_kernel > 1:
-        title += f" | moving average = {moving_average_kernel}"
+    if scale_factor_smoothing_label:
+        title += f" | {scale_factor_smoothing_label}"
     ax.set_title(title)
     ax.set_xlabel(x_label.replace("_", " "))
     ax.set_ylabel("1 / eff_reference")
@@ -604,13 +659,19 @@ def run(config_path: str | Path | None = None) -> Path:
     reference_mode = _resolve_efficiency_reference_mode(config)
     eff_reference_min = _resolve_efficiency_reference_min(config)
     efficiency_plot_ylim = _resolve_efficiency_plot_ylim(config)
-    apply_plot_moving_average, plot_moving_average_kernel = _resolve_plot_moving_average(config)
+    scale_factor_smoothing = _resolve_scale_factor_smoothing(config)
+    scale_factor_smoothing_label = _scale_factor_smoothing_label(scale_factor_smoothing)
     selected_series_meta = _resolve_selected_series_plot_metadata(config)
     event_markers = _load_event_markers(config)
 
     dataframe = pd.read_csv(input_path, low_memory=False)
     _validate_columns(dataframe, reference_columns)
     scaled = _apply_simplified_scale(dataframe, reference_columns, reference_mode)
+    scaled = _apply_scale_factor_smoothing(scaled, scale_factor_smoothing)
+    scaled["corrected_rate_hz"] = pd.to_numeric(scaled["selected_rate_hz"], errors="coerce") * pd.to_numeric(
+        scaled["scale_factor"],
+        errors="coerce",
+    )
     scaled, removed_rows = _filter_by_eff_reference_min(scaled, eff_reference_min)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -620,8 +681,7 @@ def run(config_path: str | Path | None = None) -> Path:
     _plot_rate_series(
         scaled,
         plot_path,
-        apply_moving_average=apply_plot_moving_average,
-        moving_average_kernel=plot_moving_average_kernel,
+        scale_factor_smoothing_label=scale_factor_smoothing_label,
         event_markers=event_markers,
         selected_series_meta=selected_series_meta,
     )
@@ -632,16 +692,13 @@ def run(config_path: str | Path | None = None) -> Path:
         reference_columns,
         reference_mode=reference_mode,
         y_limits=efficiency_plot_ylim,
-        apply_moving_average=apply_plot_moving_average,
-        moving_average_kernel=plot_moving_average_kernel,
         event_markers=event_markers,
     )
     inv_eff_plot_path = output_path.parent.parent / "PLOTS" / "step2_04_inverse_eff_reference_series.png"
     _plot_inverse_eff_reference_series(
         scaled,
         inv_eff_plot_path,
-        apply_moving_average=apply_plot_moving_average,
-        moving_average_kernel=plot_moving_average_kernel,
+        scale_factor_smoothing_label=scale_factor_smoothing_label,
         event_markers=event_markers,
     )
     scatter_plot_path = output_path.parent.parent / "PLOTS" / "step2_03_eff_reference_vs_rate_scatter.png"
@@ -668,11 +725,8 @@ def run(config_path: str | Path | None = None) -> Path:
             removed_rows,
         )
     logging.info("Efficiency-series plot y limits: bottom=%s top=%s", efficiency_plot_ylim[0], efficiency_plot_ylim[1])
-    if apply_plot_moving_average:
-        logging.info(
-            "Applied moving average to Step 2 time-series plots with kernel=%d.",
-            plot_moving_average_kernel,
-        )
+    if scale_factor_smoothing_label:
+        logging.info("Applied scale-factor smoothing with %s.", scale_factor_smoothing_label)
     logging.info("Wrote reference-efficiency time series plot to %s", eff_plot_path)
     logging.info("Wrote inverse-eff_reference time series plot to %s", inv_eff_plot_path)
     logging.info("Wrote original vs corrected time series plot to %s", plot_path)

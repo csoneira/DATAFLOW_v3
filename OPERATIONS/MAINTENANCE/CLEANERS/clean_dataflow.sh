@@ -5,7 +5,7 @@
 # Purpose: Clean dataflow.
 # Owner: DATAFLOW_v3 contributors
 # Sign-off: csoneira <csoneira@ucm.es>
-# Last Updated: 2026-03-02
+# Last Updated: 2026-05-07
 # Runtime: bash
 # Usage: bash OPERATIONS/MAINTENANCE/CLEANERS/clean_dataflow.sh [options]
 # Inputs: CLI args, config files, environment variables, and/or upstream files.
@@ -50,7 +50,7 @@ clean_dataflow.sh
 Unified cleaner for DATAFLOW_v3 artefacts (COMPLETED_DIRECTORY exports, plot bundles, and Stage-0 buffers).
 
 Usage:
-  clean_dataflow.sh [--force|-f] [--threshold|-t <percent>] [--select|-s <list>] [--compact|-c]
+  clean_dataflow.sh [--force|-f] [--threshold|-t <percent>] [--select|-s <list>] [--compact|-c] [--keep-final]
 
 Options:
   -h, --help             Show this help message and exit.
@@ -60,11 +60,14 @@ Options:
   -s, --select <list>    Comma-separated list of cleanups to run (temps,plots,completed,cronlogs).
                          May be repeated. Defaults to all when omitted.
   -c, --compact          Compact output for chat/notification consumers.
+  --keep-final           Preserve STEP_1/TASK_5/INPUT_FILES/COMPLETED_DIRECTORY contents
+                         during completed cleanup.
 
 Examples:
   clean_dataflow.sh
   clean_dataflow.sh --threshold 65 --select plots,completed
   clean_dataflow.sh --force -s temps
+  clean_dataflow.sh --force --select completed --keep-final
   clean_dataflow.sh --force --compact
 EOF
 }
@@ -161,6 +164,12 @@ is_metadata_path() {
   [[ "$upper" == *"/METADATA/"* || "$upper" == *"/METADATA" ]]
 }
 
+is_final_completed_dir() {
+  local path="${1:-}"
+  local upper="${path^^}"
+  [[ "$upper" == *"/STAGE_1/EVENT_DATA/STEP_1/TASK_5/INPUT_FILES/COMPLETED_DIRECTORY" ]]
+}
+
 clean_completed() {
   local type="completed"
   local -a dirs=()
@@ -193,6 +202,10 @@ clean_completed() {
       [[ -n ${seen_dirs["$dir"]:-} ]] && continue
       if is_metadata_path "$dir"; then
         log_warn "Skipping metadata path during completed cleanup: $dir"
+        continue
+      fi
+      if [[ "$KEEP_FINAL" == true ]] && is_final_completed_dir "$dir"; then
+        log_info "Keeping final completed directory due to --keep-final: $dir"
         continue
       fi
       seen_dirs["$dir"]=1
@@ -547,6 +560,7 @@ clean_temps() {
 }
 
 FORCE=false
+KEEP_FINAL=false
 THRESHOLD=$(validate_threshold "50")
 declare -a SELECTION_ARGS=()
 
@@ -562,6 +576,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -c|--compact)
       COMPACT=true
+      shift
+      ;;
+    --keep-final)
+      KEEP_FINAL=true
       shift
       ;;
     -t|--threshold)
@@ -646,6 +664,9 @@ fi
 trap 'flock -u "$LOCK_FD" 2>/dev/null || true; rm -f "$LOCK_FILE" 2>/dev/null || true' EXIT
 
 log_info "Selected cleanups: $(join_by ', ' "${SELECTED_TYPES[@]}")"
+if [[ "$KEEP_FINAL" == true ]]; then
+  log_info "Keep-final flag enabled: STEP_1/TASK_5 completed inputs will be preserved."
+fi
 log_info "Disk usage before cleaning: $(disk_usage_summary)"
 
 if [[ "$FORCE" == true ]]; then

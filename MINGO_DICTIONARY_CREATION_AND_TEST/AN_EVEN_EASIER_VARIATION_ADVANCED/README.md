@@ -51,9 +51,15 @@ python3 run_all.py
 
 Edit `config.json` to change the station, date window, selected rate definition, or the Step 0 fit behavior.
 
+When `step5.station = "MINGO00"`, this workflow now falls back to a synthetic single-geometry
+schedule because there is no `ONLINE_RUN_DICTIONARY` CSV for station 0. By default it uses
+`geometry.station0_z_positions = [0.0, 100.0, 200.0, 400.0]`, validated against
+`step0.simulation_params_csv`.
+
 Key Step 0 controls:
 
 - `corrected_eff`
+- `geometry.station0_z_positions`
 - `step0.simulation_params_csv`
 - `step0.mingo00_metadata_root`
 - `step0.fit_polynomial_degree`

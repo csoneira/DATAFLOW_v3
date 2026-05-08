@@ -134,7 +134,7 @@ def _resolve_step5_window_geometry_ids(config: dict) -> tuple[set[str], dict[str
     date_from = parse_time_bound(step5_config.get("date_from"), end_of_day=False)
     date_to = parse_time_bound(step5_config.get("date_to"), end_of_day=True)
 
-    schedule_all, schedule_path = load_online_schedule(station_id)
+    schedule_all, schedule_path = load_online_schedule(station_id, config=config)
     schedule_window = select_schedule_rows_for_window(
         schedule_all,
         date_from=date_from,

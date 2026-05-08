@@ -27,6 +27,24 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import yaml
 
+import sys
+
+CURRENT_PATH = Path(__file__).resolve()
+MASTER_ROOT = None
+REPO_ROOT = None
+for parent in CURRENT_PATH.parents:
+    if parent.name == "MASTER":
+        MASTER_ROOT = parent
+        REPO_ROOT = parent.parent
+        break
+if MASTER_ROOT is None:
+    MASTER_ROOT = CURRENT_PATH.parents[-1]
+if REPO_ROOT is None:
+    REPO_ROOT = CURRENT_PATH.parents[-1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+
 from MASTER.common.selection_config import EventMarkerConfig, load_master_event_markers, parse_station_id
 
 
@@ -41,6 +59,35 @@ DEFAULT_PLOT_CONFIG = {
 DEFAULT_X_AXIS_CONFIG = {
     "tick_frequency": "1W",
 }
+
+
+def parse_time_bound(raw_value: object, *, end_of_day: bool) -> pd.Timestamp | None:
+    if raw_value in (None, "", "null", "None"):
+        return None
+
+    timestamp = pd.Timestamp(raw_value)
+    has_explicit_time = False
+    if isinstance(raw_value, str):
+        text = raw_value.strip()
+        has_explicit_time = any(token in text for token in (" ", "T", ":"))
+    elif isinstance(raw_value, pd.Timestamp):
+        has_explicit_time = any(
+            getattr(raw_value, attribute) != 0
+            for attribute in ("hour", "minute", "second", "microsecond", "nanosecond")
+        )
+    else:
+        python_dt = getattr(timestamp, "to_pydatetime", lambda: None)()
+        if python_dt is not None:
+            has_explicit_time = any(
+                getattr(python_dt, attribute, 0) != 0
+                for attribute in ("hour", "minute", "second", "microsecond")
+            )
+
+    if not has_explicit_time:
+        timestamp = timestamp.normalize()
+        if end_of_day:
+            timestamp = timestamp + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+    return timestamp
 
 
 def load_yaml_mapping(path: Path) -> dict[str, object]:
@@ -142,6 +189,28 @@ def prepare_plot_df(dataframe: pd.DataFrame, plot_config: Mapping[str, object]) 
             min_periods=1,
         ).median()
     return plot_df.reset_index()
+
+
+def apply_time_range_filter(dataframe: pd.DataFrame, raw_config: Mapping[str, object]) -> pd.DataFrame:
+    time_range = raw_config.get("time_range", {})
+    if not isinstance(time_range, Mapping):
+        time_range = {}
+
+    start = parse_time_bound(time_range.get("start"), end_of_day=False)
+    end = parse_time_bound(time_range.get("end"), end_of_day=True)
+    if start is None and end is None:
+        return dataframe
+    if start is not None and end is not None and start > end:
+        raise ValueError("time_range.start must be <= time_range.end in the plot config.")
+
+    filtered = dataframe.copy()
+    if start is not None:
+        filtered = filtered.loc[filtered["time"] >= start]
+    if end is not None:
+        filtered = filtered.loc[filtered["time"] <= end]
+    if filtered.empty:
+        raise ValueError("The configured plot time_range removed all rows.")
+    return filtered.reset_index(drop=True)
 
 
 def resolve_band_fraction(raw_value: object) -> float | None:
@@ -256,6 +325,7 @@ def add_event_markers(axes: Sequence[plt.Axes], event_markers: Sequence[Mapping[
     if not event_markers:
         return
 
+    x_limits = [axis.get_xlim() for axis in axes]
     label_levels = [0.98, 0.86, 0.74]
     top_axis = axes[0]
     for index, marker in enumerate(event_markers):
@@ -286,6 +356,8 @@ def add_event_markers(axes: Sequence[plt.Axes], event_markers: Sequence[Mapping[
                 "alpha": 0.7,
             },
         )
+    for axis, limits in zip(axes, x_limits):
+        axis.set_xlim(limits)
 
 
 def generate_joined_groups_plot(
@@ -307,6 +379,7 @@ def generate_joined_groups_plot(
     )
 
     dataframe = pd.read_csv(input_csv_path, parse_dates=["time"])
+    dataframe = apply_time_range_filter(dataframe, raw_config)
     plot_df = prepare_plot_df(dataframe, plot_config)
 
     fig, axes = plt.subplots(7, 1, figsize=(16, 20), sharex=True)

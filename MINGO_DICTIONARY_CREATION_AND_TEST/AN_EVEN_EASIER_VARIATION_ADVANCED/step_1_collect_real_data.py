@@ -364,7 +364,7 @@ def _collect_real_data_slice(
     if collected.empty:
         raise ValueError("No real rows remain after Step 1 event-count filtering.")
 
-    schedule_all, schedule_path = load_online_schedule(station_id)
+    schedule_all, schedule_path = load_online_schedule(station_id, config=config)
     schedule_window = select_schedule_rows_for_window(schedule_all, date_from=date_from, date_to=date_to)
     online_z = collected["file_timestamp_utc"].map(lambda ts: online_z_tuple_for_timestamp(ts, schedule_window))
     z_rows = [
