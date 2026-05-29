@@ -5,7 +5,7 @@
 # Purpose: Clean dataflow.
 # Owner: DATAFLOW_v3 contributors
 # Sign-off: csoneira <csoneira@ucm.es>
-# Last Updated: 2026-05-07
+# Last Updated: 2026-05-08
 # Runtime: bash
 # Usage: bash OPERATIONS/MAINTENANCE/CLEANERS/clean_dataflow.sh [options]
 # Inputs: CLI args, config files, environment variables, and/or upstream files.
@@ -60,8 +60,10 @@ Options:
   -s, --select <list>    Comma-separated list of cleanups to run (temps,plots,completed,cronlogs).
                          May be repeated. Defaults to all when omitted.
   -c, --compact          Compact output for chat/notification consumers.
-  --keep-final           Preserve STEP_1/TASK_5/INPUT_FILES/COMPLETED_DIRECTORY contents
-                         during completed cleanup.
+  --keep-final           Preserve STEP_1/TASK_*/INPUT_FILES/COMPLETED_DIRECTORY contents
+                         during completed cleanup. If /home usage rises above 90%,
+                         prune the oldest files from those final completed directories
+                         until usage drops to 60% or no files remain.
 
 Examples:
   clean_dataflow.sh
@@ -84,6 +86,8 @@ TEMP_ROOTS=(
 CRON_LOG_DIR="${DATAFLOW_CLEAN_CRON_LOG_DIR:-$DATAFLOW_ROOT/OPERATIONS_RUNTIME/CRON_LOGS}"
 SIM_JUNK_BASE="${DATAFLOW_CLEAN_SIM_JUNK_BASE:-$DATAFLOW_PARENT/SIMULATION_DATA_JUNK}"
 PLOTS_KEEP_FRESHEST="${DATAFLOW_CLEAN_PLOTS_KEEP_FRESHEST:-5}"
+KEEP_FINAL_TRIGGER_PCT="${DATAFLOW_CLEAN_KEEP_FINAL_TRIGGER_PCT:-90}"
+KEEP_FINAL_TARGET_PCT="${DATAFLOW_CLEAN_KEEP_FINAL_TARGET_PCT:-60}"
 
 declare -A TYPE_BEFORE=()
 declare -A TYPE_AFTER=()
@@ -167,12 +171,74 @@ is_metadata_path() {
 is_final_completed_dir() {
   local path="${1:-}"
   local upper="${path^^}"
-  [[ "$upper" == *"/STAGE_1/EVENT_DATA/STEP_1/TASK_5/INPUT_FILES/COMPLETED_DIRECTORY" ]]
+  [[ "$upper" == *"/STAGE_1/EVENT_DATA/STEP_1/TASK_"*"/INPUT_FILES/COMPLETED_DIRECTORY" ]]
+}
+
+prune_final_completed_if_needed() {
+  local -a final_dirs=("$@")
+  if [[ "$KEEP_FINAL" != true ]] || (( ${#final_dirs[@]} == 0 )); then
+    return 0
+  fi
+
+  local current_usage
+  current_usage=$(disk_usage_percent)
+  if [[ -z "$current_usage" ]]; then
+    log_warn "Unable to determine disk usage for final completed pruning check. Preserving final completed files."
+    return 0
+  fi
+
+  if (( current_usage < KEEP_FINAL_TRIGGER_PCT )); then
+    log_info "Keeping final completed directories: disk usage ${current_usage}% is below emergency trigger ${KEEP_FINAL_TRIGGER_PCT}%."
+    return 0
+  fi
+
+  log_warn "Disk usage ${current_usage}% exceeds keep-final emergency trigger ${KEEP_FINAL_TRIGGER_PCT}%. Pruning oldest final completed files until ${KEEP_FINAL_TARGET_PCT}% or no files remain."
+
+  local deleted_count=0
+  local deleted_bytes=0
+  local candidate_count=0
+  local record rest file_size file_path
+  while IFS= read -r -d '' record; do
+    [[ -n "$record" ]] || continue
+    candidate_count=$((candidate_count + 1))
+    rest="${record#*$'\t'}"
+    file_size="${rest%%$'\t'*}"
+    file_path="${rest#*$'\t'}"
+    [[ -f "$file_path" ]] || continue
+
+    chmod u+w -- "$file_path" 2>/dev/null || true
+    if rm -f -- "$file_path" 2>/dev/null; then
+      deleted_count=$((deleted_count + 1))
+      deleted_bytes=$((deleted_bytes + file_size))
+      current_usage=$(disk_usage_percent)
+      if [[ -n "$current_usage" ]] && (( current_usage <= KEEP_FINAL_TARGET_PCT )); then
+        break
+      fi
+    else
+      log_warn "Failed to remove final completed file during emergency prune: $file_path"
+    fi
+  done < <(find "${final_dirs[@]}" -type f -printf '%T@\t%s\t%p\0' 2>/dev/null | sort -z -n)
+
+  find "${final_dirs[@]}" -depth -type d -empty -delete 2>/dev/null || true
+
+  current_usage=$(disk_usage_percent)
+  if (( candidate_count == 0 )); then
+    log_warn "Emergency final completed pruning was triggered, but no files were found."
+    return 0
+  fi
+
+  log_info "Emergency final completed pruning removed ${deleted_count} file(s)"
+  log_info "   Freed:       $(format_bytes "$deleted_bytes")"
+  log_info "   Disk usage:  ${current_usage}%"
+  if [[ -n "$current_usage" ]] && (( current_usage > KEEP_FINAL_TARGET_PCT )); then
+    log_warn "Disk usage remains above target ${KEEP_FINAL_TARGET_PCT}% after pruning. No more eligible final completed files remain or more cleanup is needed elsewhere."
+  fi
 }
 
 clean_completed() {
   local type="completed"
   local -a dirs=()
+  local -a final_dirs=()
   if [[ ! -d "$STATIONS_BASE" ]]; then
     log_info "Skipping completed cleanup: $STATIONS_BASE not found."
     TYPE_BEFORE["$type"]=0
@@ -206,6 +272,7 @@ clean_completed() {
       fi
       if [[ "$KEEP_FINAL" == true ]] && is_final_completed_dir "$dir"; then
         log_info "Keeping final completed directory due to --keep-final: $dir"
+        final_dirs+=("$dir")
         continue
       fi
       seen_dirs["$dir"]=1
@@ -219,6 +286,7 @@ clean_completed() {
     TYPE_AFTER["$type"]=0
     TYPE_FREED["$type"]=0
     TYPE_COUNTS["$type"]=0
+    prune_final_completed_if_needed "${final_dirs[@]}"
     return 0
   fi
 
@@ -244,6 +312,8 @@ clean_completed() {
   log_info "   Size before: $(format_bytes "$total_before")"
   log_info "   Size after:  $(format_bytes "$total_after")"
   log_info "   Freed:       $(format_bytes "$freed")"
+
+  prune_final_completed_if_needed "${final_dirs[@]}"
 }
 
 clean_step1_queue_sidecars() {
@@ -665,7 +735,8 @@ trap 'flock -u "$LOCK_FD" 2>/dev/null || true; rm -f "$LOCK_FILE" 2>/dev/null ||
 
 log_info "Selected cleanups: $(join_by ', ' "${SELECTED_TYPES[@]}")"
 if [[ "$KEEP_FINAL" == true ]]; then
-  log_info "Keep-final flag enabled: STEP_1/TASK_5 completed inputs will be preserved."
+  log_info "Keep-final flag enabled: STEP_1/TASK_*/INPUT_FILES/COMPLETED_DIRECTORY contents will be preserved."
+  log_info "Emergency keep-final policy: if /home usage rises above ${KEEP_FINAL_TRIGGER_PCT}%, prune oldest final completed files until ${KEEP_FINAL_TARGET_PCT}%."
 fi
 log_info "Disk usage before cleaning: $(disk_usage_summary)"
 

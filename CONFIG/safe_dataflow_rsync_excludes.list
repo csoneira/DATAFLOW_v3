@@ -4,3 +4,35 @@ STATIONS
 OPERATIONS_RUNTIME
 MINGO_DIGITAL_TWIN/INTERSTEPS
 MINGO_DIGITAL_TWIN/SIMULATED_DATA
+
+# Generated outputs / figures / plots / logs
+LOG_BACKUP/runtime
+**/OUTPUTS
+**/PLOTS
+**/FIGURES
+**/LOGS
+**/NMDB
+**/__pycache__
+**/.pytest_cache
+
+# Known standalone generated data files outside output trees
+QUICK_TEST/*.csv
+
+# Heavy generated files that do not belong in the safe code mirror
+*.log
+*.out
+*.err
+*.parquet
+*.feather
+*.root
+*.h5
+*.hdf5
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.png
+*.jpg
+*.jpeg
+*.pdf
+*.svg

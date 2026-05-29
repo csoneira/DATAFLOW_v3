@@ -13,7 +13,7 @@ complete_reanalysis: false
 stratos_save: false
 # create_plots options: null | debug | usual | essential | all
 # Task 3 plot statuses by alias live in config_plots_task_3.yaml
-create_plots: null
+create_plots: essential
 keep_all_columns_output: false
 removed_marker: x
 removed_marker_size: 10
@@ -43,7 +43,7 @@ charge_asymmetry_x_high_quantile: 99.5
 # Manual fallback / optional explicit grid.
 list_tt_charge_thresholds: [0, 5, 10, 20, 50]
 limit_number: null
-y_new_method: true
+y_new_method: false
 # Fixed Q_sum boundary for topology coding:
 # 0 = no charge, 1 = avalanche, 2 = streamer. Set null to fall back to auto-detection.
 streamer_charge_sum_threshold: 100.0

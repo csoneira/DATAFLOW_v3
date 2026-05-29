@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from glob import glob
+from pathlib import Path
+import sys
+
+import pyarrow.parquet as pq
+
+
+OUTPUT_PATH = Path(
+    "/home/mingo/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/columns_review.md"
+)
+
+
+@dataclass(frozen=True)
+class Section:
+    title: str
+    display_pattern: str
+    glob_pattern: str
+
+
+SECTIONS = [
+    Section(
+        title="TASK_1 -> TASK_2",
+        display_pattern=(
+            "~/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            "TASK_2/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
+        ),
+        glob_pattern=(
+            "/home/mingo/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            "TASK_2/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
+        ),
+    ),
+    Section(
+        title="TASK_2 -> TASK_3",
+        display_pattern=(
+            "~/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            "TASK_3/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
+        ),
+        glob_pattern=(
+            "/home/mingo/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            "TASK_3/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
+        ),
+    ),
+    Section(
+        title="TASK_3 -> TASK_4",
+        display_pattern=(
+            "~/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            "TASK_4/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
+        ),
+        glob_pattern=(
+            "/home/mingo/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            "TASK_4/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
+        ),
+    ),
+    Section(
+        title="TASK_4 -> TASK_5",
+        display_pattern=(
+            "~/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            "TASK_5/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
+        ),
+        glob_pattern=(
+            "/home/mingo/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            "TASK_5/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
+        ),
+    ),
+    Section(
+        title="TASK_5 -> OUT",
+        display_pattern=(
+            "~/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_2/"
+            "INPUT_FILES/COMPLETED/*_*.parquet"
+        ),
+        glob_pattern=(
+            "/home/mingo/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_2/"
+            "INPUT_FILES/COMPLETED/*_*.parquet"
+        ),
+    ),
+]
+
+
+def get_first_file(pattern: str) -> Path | None:
+    matches = sorted(glob(pattern))
+    if not matches:
+        return None
+    return Path(matches[0])
+
+
+def get_columns(parquet_path: Path) -> list[str]:
+    parquet_file = pq.ParquetFile(parquet_path)
+    try:
+        batch = next(parquet_file.iter_batches(batch_size=5))
+        return list(batch.schema.names)
+    except StopIteration:
+        return list(parquet_file.schema_arrow.names)
+
+
+def build_document() -> tuple[str, list[str]]:
+    lines = ["# Columns in pipeline files", ""]
+    sample_files: list[str] = []
+
+    for section in SECTIONS:
+        lines.append(f"## {section.title}")
+        lines.append(f"### from the {section.display_pattern}")
+        lines.append("")
+
+        sample_file = get_first_file(section.glob_pattern)
+        if sample_file is None:
+            lines.append("No parquet files found")
+        else:
+            sample_files.append(str(sample_file))
+            lines.extend(get_columns(sample_file))
+
+        lines.append("")
+        lines.append("")
+
+    return "\n".join(lines), sample_files
+
+
+def main() -> int:
+    document, sample_files = build_document()
+    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    OUTPUT_PATH.write_text(document, encoding="utf-8")
+    print(f"Wrote {OUTPUT_PATH}")
+    for sample_file in sample_files:
+        print(f"Sampled: {sample_file}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

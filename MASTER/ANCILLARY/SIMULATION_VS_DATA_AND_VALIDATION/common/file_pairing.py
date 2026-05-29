@@ -81,6 +81,29 @@ def load_json_config(path: str | Path) -> dict[str, Any]:
     return config
 
 
+def execution_output_timestamp(config: dict[str, Any]) -> str:
+    stamp = config.get("_output_run_timestamp")
+    if isinstance(stamp, str) and stamp:
+        return stamp
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    config["_output_run_timestamp"] = stamp
+    return stamp
+
+
+def resolve_timestamped_pair_output_dir(config: dict[str, Any], selection: FilePairSelection) -> Path:
+    raw = str(config.get("output_dir", "OUTPUTS"))
+    base = Path(raw)
+    if not base.is_absolute():
+        base = (Path(config["_config_dir"]) / base).resolve()
+    pair_dir = (
+        f"{selection.station_of_study_label.lower()}_{execution_output_timestamp(config)}_"
+        f"{selection.study_filename_base}__vs__{selection.reference_filename_base}"
+    )
+    out_dir = base / pair_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return out_dir
+
+
 def station_root(station: int) -> Path:
     return STATIONS_BASE / f"MINGO{station:02d}" / "STAGE_1/EVENT_DATA/STEP_1"
 

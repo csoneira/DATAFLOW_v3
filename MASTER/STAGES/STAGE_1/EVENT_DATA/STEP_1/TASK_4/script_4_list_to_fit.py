@@ -29,11 +29,9 @@ directory bookkeeping are kept in sync so the pipeline can hand off cleanly to
 the correction stage.
 """
 # Standard Library
-import argparse
 import atexit
 import builtins
-import csv
-from datetime import datetime, timedelta
+from datetime import datetime
 import gc
 import math
 import os
@@ -45,24 +43,17 @@ import sys
 import time
 import warnings
 from collections import defaultdict
-from functools import reduce
-from itertools import combinations
-from typing import Dict, Iterable, List, Mapping, Tuple
+from typing import Iterable, Mapping
 
 # Scientific Computing
 import numpy as np
 import pandas as pd
 import scipy.linalg as linalg
 from scipy.constants import c
-from scipy.interpolate import CubicSpline
-from scipy.ndimage import gaussian_filter, gaussian_filter1d
-from scipy.optimize import OptimizeWarning, brentq, curve_fit, minimize_scalar
+from scipy.ndimage import gaussian_filter
+from scipy.optimize import OptimizeWarning, curve_fit
 from scipy.special import erf
-from scipy.stats import norm, poisson, linregress, median_abs_deviation, skew
-
-# Machine Learning
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import r2_score
+from scipy.stats import norm, poisson
 
 # Plotting
 import matplotlib
@@ -70,21 +61,17 @@ matplotlib.use("Agg")
 import matplotlib as mpl
 import matplotlib.patheffects as path_effects
 import matplotlib.pyplot as plt
-from matplotlib import gridspec
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.gridspec import GridSpec
 from matplotlib.lines import Line2D
 from matplotlib.patches import Ellipse
 from mpl_toolkits.mplot3d import Axes3D
-import seaborn as sns
 
 # Image Processing
 from PIL import Image
 
 # Progress Bar
 from tqdm import tqdm
-
-import yaml
 
 # Resolve repo root for local imports
 CURRENT_PATH = Path(__file__).resolve()
@@ -98,11 +85,6 @@ if REPO_ROOT is None:
 if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
-from MASTER.common.config_loader import (
-    load_declared_parameter_names,
-    load_parameter_overrides,
-    update_config_with_parameters,
-)
 from MASTER.common.debug_plots import plot_debug_histograms
 from MASTER.common.execution_logger import set_station, start_timer
 from MASTER.common.file_selection import (
@@ -114,7 +96,6 @@ from MASTER.common.file_selection import (
 )
 from MASTER.common.input_file_config import select_input_file_configuration
 from MASTER.common.path_config import (
-    get_master_config_root,
     get_repo_root,
     resolve_home_path_from_config,
 )
@@ -147,24 +128,22 @@ from MASTER.common.simulated_data_utils import (
 from MASTER.common.step1_shared import (
     add_normalized_count_metadata,
     add_trigger_type_total_offender_threshold_metadata,
-    apply_step1_master_overrides,
-    apply_step1_task_parameter_overrides,
     build_events_per_second_metadata,
     build_step1_cli_parser,
     build_step1_filtered_print,
-    collect_columns,
     extract_chi2_four_plane_metadata,
     extract_rate_histogram_metadata,
     extract_trigger_type_metadata,
     is_trigger_type_file_column,
     is_trigger_type_metadata_column,
     is_specific_metadata_excluded_column,
-    load_itineraries_from_file,
+    load_step1_task_config_bundle,
+    load_step1_task_plot_catalog,
     normalize_tt_label,
     prune_redundant_count_metadata,
+    resolve_step1_effective_task_config,
     save_metadata,
     set_global_rate_from_tt_rates,
-    load_step1_task_plot_catalog,
     resolve_step1_plot_options,
     step1_logging_enabled,
     step1_task_plot_enabled,
@@ -174,103 +153,56 @@ from MASTER.common.step1_shared import (
 from MASTER.ANCILLARY.PLOTTERS.TASK_4.task4_chi2_four_plane_plotter import (
     render_task4_chi2_four_plane_histogram,
 )
+from analysis_functions import (
+    _cfg_float_or_default,
+    _cfg_int_or_default,
+    _coerce_nonnegative_int_tuple,
+    _coerce_probability_tuple,
+    _coerce_tt_label_tuple,
+    _safe_cfg_float,
+    _safe_cfg_int,
+    _safe_cfg_optional_float,
+    _task4_get_optional_config_float,
+    _task4_parse_optional_float,
+)
+from plotting_functions import (
+    _format_task4_percent_label,
+    _safe_hist_params,
+)
 
 task_number = 4
+TASK4_PRIMARY_TT_COLUMN = "fit_tt"
+TASK4_EXTENSION_TT_COLUMNS: dict[int, list[str]] = {
+    i_plane: [
+        f"P{i_plane}_T_sum_final",
+        f"P{i_plane}_T_dif_final",
+        f"P{i_plane}_Q_sum_final",
+        f"P{i_plane}_Q_dif_final",
+        f"P{i_plane}_Y_final",
+    ]
+    for i_plane in range(1, 5)
+}
+TASK4_EVENT_ATOMIC_COLUMNS: tuple[str, ...] = (
+    "charge_event",
+    "x",
+    "y",
+    "s",
+    "theta",
+    "phi",
+)
+TASK4_FINAL_FIT_TT_MIN = 10
+TASK4_FINAL_FILTER_REMOVE_SMALL = False
+TASK4_FINAL_FILTER_REMOVE_SMALL_EPS = 1e-7
 
 try:
     import pyarrow as pa
 except Exception:  # pragma: no cover - pyarrow is already required for parquet IO here.
     pa = None
 
-
-def _preferred_parquet_compression() -> str:
-    if pa is not None:
-        try:
-            if pa.Codec.is_available("snappy"):
-                return "snappy"
-        except Exception:
-            pass
-    return "zstd"
-
-# I want to chrono the execution time of the script
-start_execution_time_counting = datetime.now()
-_prof_t0 = time.perf_counter()
-_prof = {}
-
-STATION_CHOICES = ("0", "1", "2", "3", "4")
-TASK4_PLOT_ALIASES: tuple[str, ...] = (
-    "debug_suite",
-    "usual_suite",
-    "essential_suite",
-    "flat_values_histogram",
-    "detached_timeseries_combo",
-    "detached_residuals_combo",
-    "timtrack_timeseries_combo",
-    "timtrack_residuals_combo",
-    "combined_timeseries_combo",
-    "combined_residuals_combo",
-    "hist_core_errs_combined",
-    "hist_core_errs_combined_with_fits",
-    "stat_window_accumulation",
-    "trigger_types_raw_and_list",
-    "trigger_types_tracking_and_list",
-    "trigger_types_tracking_and_raw",
-    "trigger_types_definitive_tt_and_raw",
-    "timtrack_results_hexbin_combination_projections",
-    "timtrack_results_scatter_combination_projections",
-    "theta_det_theta_zoom_tracking_tt",
-    "polar_theta_phi_definitive_tt_2d",
-    "polar_theta_phi_tracking_tt_2d",
-    "events_per_second_by_plane_cardinality_double_row",
-    "timtrack_residuals_gaussian",
-    "tim_th_chi_sigmafit_1234_histogram",
-    "external_residuals_gaussian",
-    "all_channels_charge",
-    "event_display_sample",
-    "track_consistency_loo_residuals",
-    "strip_hit_occupancy",
-    "track_based_efficiency",
-    "total_event_charge_histogram",
-    "track_based_efficiency_tt_stability",
-    "track_based_efficiency_vs_theta",
-    "track_efficiency_large_plot",
-    "timtrack_projection_ellipse_contours",
-    "timtrack_projection_scaled_angle_comparison",
-    "chi2_offender_populations",
-    "offender_angle_populations",
-    "offender_kinematics_populations",
-    "offender_tt_balance",
-    "offender_zigzag_populations",
-    "chi2_charge_populations",
-    "chi2_residuals_populations",
-    "event_display_sample_3fold",
-    "chi2_charge_populations_3fold",
-    "chi2_residuals_populations_3fold",
-    "adj_dis_comparison",
-)
-task4_plot_status_by_alias: dict[str, str] = {}
-_TRACK_EFF_REPRESENTATIVE_LINESTYLE = (0, (10, 3))
-_TRACK_EFF_SIMULATION_LINESTYLE = (0, (3, 2))
-
-
 def task4_plot_enabled(alias: str) -> bool:
     if not task4_plot_status_by_alias:
         return True
     return step1_task_plot_enabled(alias, task4_plot_status_by_alias, plot_mode)
-
-
-TASK4_PLOT_PREFIX_ALIASES: tuple[tuple[str, str], ...] = (
-    ("detached_timeseries_combo_", "detached_timeseries_combo"),
-    ("detached_residuals_combo_", "detached_residuals_combo"),
-    ("timtrack_timeseries_combo_", "timtrack_timeseries_combo"),
-    ("timtrack_residuals_combo_", "timtrack_residuals_combo"),
-    ("combined_timeseries_combo_", "combined_timeseries_combo"),
-    ("combined_residuals_combo_", "combined_residuals_combo"),
-    ("stat_window_accumulation_", "stat_window_accumulation"),
-    ("timtrack_residuals_with_gaussian_for_processed_type_", "timtrack_residuals_gaussian"),
-    ("external_residuals_with_gaussian_for_processed_type_", "external_residuals_gaussian"),
-    ("all_channels_charge_mingo0", "all_channels_charge"),
-)
 
 
 def resolve_task4_plot_alias(save_path: str, alias: str | None = None) -> str | None:
@@ -286,7 +218,6 @@ def resolve_task4_plot_alias(save_path: str, alias: str | None = None) -> str | 
             return mapped_alias
     return None
 
-
 def apply_task4_plot_catalog_modes() -> None:
     global create_plots, create_essential_plots, create_debug_plots, save_plots, create_pdf
     if not task4_plot_status_by_alias:
@@ -296,18 +227,6 @@ def apply_task4_plot_catalog_modes() -> None:
     create_debug_plots = create_debug_plots and task4_plot_enabled("debug_suite")
     save_plots = bool(create_plots or create_essential_plots or create_debug_plots)
     create_pdf = save_plots
-
-CLI_PARSER = build_step1_cli_parser("Run Stage 1 STEP_1 TASK_4 (LIST->FIT).", STATION_CHOICES)
-CLI_ARGS = CLI_PARSER.parse_args()
-validate_step1_input_file_args(CLI_PARSER, CLI_ARGS)
-
-VERBOSE = bool(os.environ.get("DATAFLOW_VERBOSE")) or CLI_ARGS.verbose
-print = build_step1_filtered_print(
-    verbose=VERBOSE,
-    debug_mode_getter=lambda: bool(globals().get("debug_mode", False)),
-    raw_print=builtins.print,
-)
-FILTER_METRICS_LOGGING_ENABLED = step1_logging_enabled("filter_metrics")[0]
 
 
 def _log_filter_metrics_message(message: str) -> None:
@@ -322,11 +241,6 @@ def safe_move(source_path: str, dest_path: str) -> str:
         print(f"Error moving '{source_path}' to '{dest_path}': {exc}")
         raise
 
-MAX_OPEN_FIGURES = 16
-_OPEN_FIGURE_IDS: list[int] = []
-_ORIGINAL_PLT_FIGURE = plt.figure
-_ORIGINAL_PLT_SUBPLOTS = plt.subplots
-_ORIGINAL_PLT_CLOSE = plt.close
 
 def _track_figure(fig: mpl.figure.Figure) -> mpl.figure.Figure:
     fig_number = getattr(fig, "number", None)
@@ -359,15 +273,6 @@ def _guarded_close(*args, **kwargs):
     elif isinstance(target, int) and target in _OPEN_FIGURE_IDS:
         _OPEN_FIGURE_IDS.remove(target)
     return result
-
-plt.figure = _guarded_figure
-plt.subplots = _guarded_subplots
-plt.close = _guarded_close
-
-_direct_pdf_pages: PdfPages | None = None
-_direct_pdf_page_count = 0
-_direct_pdf_target_path: str | None = None
-_direct_pdf_temp_path: str | None = None
 
 
 def _build_temp_pdf_path(target_path: str) -> str:
@@ -423,9 +328,6 @@ def close_direct_pdf_writer() -> None:
     _direct_pdf_temp_path = None
 
 
-atexit.register(close_direct_pdf_writer)
-
-
 def _resolve_task4_total_event_charge_series(
     df: pd.DataFrame,
 ) -> tuple[pd.Series | None, str | None]:
@@ -470,69 +372,6 @@ def _resolve_task4_total_event_charge_series(
 
     return None, None
 
-# Warning Filters
-warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
-
-start_timer(__file__)
-config_root = get_master_config_root()
-config_file_path = (
-    config_root
-    / "STAGE_1"
-    / "EVENT_DATA"
-    / "STEP_1"
-    / "TASK_4"
-    / "config_task_4.yaml"
-)
-plot_catalog_file_path = (
-    config_root
-    / "STAGE_1"
-    / "EVENT_DATA"
-    / "STEP_1"
-    / "TASK_4"
-    / "config_plots_task_4.yaml"
-)
-parameter_config_file_path = (
-    config_root
-    / "STAGE_1"
-    / "EVENT_DATA"
-    / "STEP_1"
-    / "TASK_4"
-    / "config_parameters_task_4.csv"
-)
-filter_parameter_config_file_path = (
-    config_root
-    / "STAGE_1"
-    / "EVENT_DATA"
-    / "STEP_1"
-    / "TASK_4"
-    / "config_filter_parameters_task_4.csv"
-)
-fallback_parameter_config_file_path = (
-    config_root
-    / "STAGE_1"
-    / "EVENT_DATA"
-    / "STEP_1"
-    / "config_parameters.csv"
-)
-print(f"Using config file: {config_file_path}")
-print(f"Using plot catalog file: {plot_catalog_file_path}")
-with config_file_path.open("r", encoding="utf-8") as config_file:
-    config = yaml.safe_load(config_file)
-filter_parameter_config_file_path = filter_parameter_config_file_path.with_name(
-    str(config.get("filter_parameter_config_csv", filter_parameter_config_file_path.name))
-)
-print(f"Using filter parameter config file: {filter_parameter_config_file_path}")
-task4_plot_status_by_alias = load_step1_task_plot_catalog(
-    plot_catalog_file_path,
-    TASK4_PLOT_ALIASES,
-    "Task 4",
-    log_fn=print,
-)
-debug_mode = False
-
-home_path = str(resolve_home_path_from_config(config))
-REFERENCE_TABLES_DIR = Path(home_path) / "DATAFLOW_v3" / "MASTER" / "CONFIG_FILES" / "METADATA_REPRISE" / "REFERENCE_TABLES"
-
 
 def _coerce_config_bool(value: object, default: bool = False) -> bool:
     if value is None:
@@ -546,7 +385,6 @@ def _coerce_config_bool(value: object, default: bool = False) -> bool:
         if normalized in {"0", "false", "no", "off"}:
             return False
     return bool(value)
-
 
 def _task4_config_float(
     config_obj: dict[str, object],
@@ -570,106 +408,6 @@ def _task4_config_float(
     return float(default)
 
 
-def _coerce_nonnegative_int_tuple(raw_value: object, default: Iterable[int]) -> tuple[int, ...]:
-    if raw_value is None:
-        return tuple(int(x) for x in default)
-    if isinstance(raw_value, (int, np.integer)):
-        return (max(0, int(raw_value)),)
-    if isinstance(raw_value, str):
-        items = [chunk.strip() for chunk in raw_value.split(",") if chunk.strip()]
-    elif isinstance(raw_value, (list, tuple, set, np.ndarray, pd.Series)):
-        items = list(raw_value)
-    else:
-        return tuple(int(x) for x in default)
-
-    parsed: list[int] = []
-    for item in items:
-        try:
-            parsed.append(max(0, int(item)))
-        except (TypeError, ValueError):
-            continue
-    if not parsed:
-        return tuple(int(x) for x in default)
-    return tuple(sorted(set(parsed)))
-
-
-def _coerce_tt_label_tuple(raw_value: object, default: Iterable[object]) -> tuple[str, ...]:
-    source = list(default) if raw_value is None else raw_value
-    if isinstance(source, str):
-        source = [chunk.strip() for chunk in source.split(",") if chunk.strip()]
-    elif not isinstance(source, (list, tuple, set, np.ndarray, pd.Series)):
-        source = list(default)
-
-    labels: list[str] = []
-    for item in source:
-        label = normalize_tt_label(item, default="")
-        if label and label != "0" and label not in labels:
-            labels.append(label)
-    if labels:
-        return tuple(labels)
-    return tuple(normalize_tt_label(item, default="0") for item in default)
-
-
-def _coerce_probability_tuple(raw_value: object, default: Iterable[float]) -> tuple[float, ...]:
-    source = list(default) if raw_value is None else raw_value
-    if isinstance(source, str):
-        source = [chunk.strip() for chunk in source.split(",") if chunk.strip()]
-    elif not isinstance(source, (list, tuple, set, np.ndarray, pd.Series)):
-        source = list(default)
-
-    values: list[float] = []
-    for item in source:
-        try:
-            value = float(item)
-        except (TypeError, ValueError):
-            continue
-        if not np.isfinite(value) or not (0.0 < value < 1.0):
-            continue
-        if not any(abs(value - existing) < 1e-12 for existing in values):
-            values.append(value)
-    if values:
-        return tuple(sorted(values))
-    return tuple(float(item) for item in default)
-
-
-_offender_plot_settings = config.get("offender_plot_settings", {})
-if not isinstance(_offender_plot_settings, dict):
-    _offender_plot_settings = {}
-OFFENDER_THETA_MIN_DEG = float(_offender_plot_settings.get("theta_min_deg", 0.0))
-OFFENDER_THETA_MAX_DEG = float(_offender_plot_settings.get("theta_max_deg", 90.0))
-if not np.isfinite(OFFENDER_THETA_MIN_DEG):
-    OFFENDER_THETA_MIN_DEG = 0.0
-if not np.isfinite(OFFENDER_THETA_MAX_DEG):
-    OFFENDER_THETA_MAX_DEG = 90.0
-if OFFENDER_THETA_MAX_DEG <= OFFENDER_THETA_MIN_DEG:
-    OFFENDER_THETA_MIN_DEG = 0.0
-    OFFENDER_THETA_MAX_DEG = 90.0
-OFFENDER_FOCUS_TTS_CFG = _coerce_tt_label_tuple(
-    _offender_plot_settings.get("focus_definitive_tt", None),
-    default=("123", "124", "134", "234", "1234"),
-)
-OFFENDER_TASK1_CUMULATIVE_THRESHOLDS = _coerce_nonnegative_int_tuple(
-    _offender_plot_settings.get("task1_cumulative_thresholds", None),
-    default=tuple(range(0, 11)),
-)
-OFFENDER_TOTAL_CUMULATIVE_THRESHOLDS = _coerce_nonnegative_int_tuple(
-    _offender_plot_settings.get(
-        "total_cumulative_thresholds",
-        _offender_plot_settings.get("task1_cumulative_thresholds", None),
-    ),
-    default=tuple(range(0, 11)),
-)
-if 0 not in OFFENDER_TOTAL_CUMULATIVE_THRESHOLDS:
-    OFFENDER_TOTAL_CUMULATIVE_THRESHOLDS = tuple(
-        sorted((0, *OFFENDER_TOTAL_CUMULATIVE_THRESHOLDS))
-    )
-
-_CURVE_FIT_WARNING_FILTERS: tuple[tuple[str, type[Warning]], ...] = (
-    (r"Covariance of the parameters could not be estimated", OptimizeWarning),
-    (r"overflow encountered in matmul", RuntimeWarning),
-)
-
-
 def _curve_fit_checked(*args, **kwargs):
     """Run curve_fit while suppressing known covariance-only warnings."""
     try:
@@ -688,7 +426,6 @@ def _curve_fit_checked(*args, **kwargs):
     if popt.ndim != 1 or not np.all(np.isfinite(popt)):
         raise RuntimeError("curve_fit returned non-finite parameters")
     return popt, pcov
-
 
 def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.99, fit_gaussian=False):
     global fig_idx
@@ -829,23 +566,6 @@ def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.9
     if show_plots:
         plt.show()
     plt.close()
-
-# Time series + histogram helper ------------------------------------------------
-def _safe_hist_params(series, max_bins=50):
-    """Return (bins, range) for hist; avoid zero-range/invalid bins."""
-    finite_series = series[np.isfinite(series)]
-    if finite_series.empty:
-        return None, None
-    vmin = finite_series.min()
-    vmax = finite_series.max()
-    if not np.isfinite(vmin) or not np.isfinite(vmax):
-        return None, None
-    if vmin == vmax:
-        pad = 0.5 if vmin == 0 else 0.05 * abs(vmin)
-        return 1, (vmin - pad, vmax + pad)
-    unique_count = int(finite_series.nunique())
-    bins = int(min(max_bins, max(1, unique_count)))
-    return bins, (vmin, vmax)
 
 def plot_ts_with_side_hist(df, columns, time_col, title, width_ratios=(3, 1)):
     """Plot time series with side histograms for each column."""
@@ -1141,44 +861,944 @@ def plot_residuals_ts_hist(df, prefixes, time_col, title):
         plt.show()
     plt.close()
 
-# Dedicated two-column plot for combined errors
-def plot_err_only_ts_hist(df, base_cols, time_col, title):
-    """Plot error time series and histograms for given `<col>_err` fields."""
+
+def _exit_without_status_row(message: str) -> None:
+    print(message)
+    if status_execution_date is not None:
+        deleted = delete_status_row(
+            early_status_csv_path,
+            filename_base=status_filename_base,
+            execution_date=status_execution_date,
+        )
+        if not deleted:
+            print(
+                "Warning: unable to delete startup status row "
+                f"{status_filename_base} ({status_execution_date})."
+            )
+    sys.exit(0)
+
+
+def _expected_input_files(file_names):
+    return sorted(
+        filter_expected_artifact_names(
+            file_names,
+            prefix=EXPECTED_INPUT_PREFIX,
+            extension=EXPECTED_INPUT_EXTENSION,
+        )
+    )
+
+
+def process_file(source_path, dest_path):
+    print("Source path:", source_path)
+    print("Destination path:", dest_path)
+    
+    if source_path == dest_path:
+        return True
+    
+    if os.path.exists(dest_path):
+        print(f"File already exists at destination (removing...)")
+        os.remove(dest_path)
+        # return False
+    
+    print("**********************************************************************")
+    print(f"Moving\n'{source_path}'\nto\n'{dest_path}'...")
+    print("**********************************************************************")
+    
+    safe_move(source_path, dest_path)
+    now = time.time()
+    os.utime(dest_path, (now, now))
+    return True
+
+
+def ensure_global_count_keys(prefixes: Iterable[str]) -> None:
+    for prefix in prefixes:
+        for tt_value in TT_COUNT_VALUES:
+            global_variables.setdefault(f"{prefix}_{tt_value}_count", 0)
+
+
+def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:
+    """Compute trigger type based on planes with non-zero charge."""
+    tt_str = pd.Series("", index=df.index, dtype="object")
+    for plane in range(1, 5):
+        if columns_map:
+            charge_columns = [col for col in columns_map.get(plane, []) if col in df.columns]
+        else:
+            charge_columns = [
+                col
+                for col in [
+                    f"Q{plane}_F_1",
+                    f"Q{plane}_F_2",
+                    f"Q{plane}_F_3",
+                    f"Q{plane}_F_4",
+                    f"Q{plane}_B_1",
+                    f"Q{plane}_B_2",
+                    f"Q{plane}_B_3",
+                    f"Q{plane}_B_4",
+                ]
+                if col in df.columns
+            ]
+        if charge_columns:
+            has_charge = df.loc[:, charge_columns].ne(0).any(axis=1)
+            tt_str = tt_str.where(~has_charge, tt_str + str(plane))
+    df.loc[:, column_name] = tt_str.replace("", "0").astype(int)
+    return df
+
+def compute_fit_tt_from_charge(df: pd.DataFrame) -> pd.Series:
+    """
+    Compute fit_tt from observed plane activity, constrained by list_tt.
+
+    A plane can only be active in fit_tt if it was already active in list_tt
+    (keep-or-diminish rule). Plane activity is then validated from charge-like
+    observables; this intentionally avoids extension/projection-only occupancy.
+    """
+    charge_threshold = _task4_parse_optional_float(config.get("fit_tt_plane_charge_threshold"))
+    if charge_threshold is None:
+        charge_threshold = 0.0
+
+    list_tt_series: pd.Series | None = None
+    if "list_tt" in df.columns:
+        list_tt_series = pd.to_numeric(df["list_tt"], errors="coerce").fillna(0).astype(int)
+    elif "processed_tt" in df.columns:
+        list_tt_series = pd.to_numeric(df["processed_tt"], errors="coerce").fillna(0).astype(int)
+
+    if list_tt_series is not None:
+        list_tt_labels = list_tt_series.astype(str)
+    else:
+        list_tt_labels = pd.Series("", index=df.index, dtype="object")
+
+    tt_str = pd.Series("", index=df.index, dtype="object")
+    for plane in range(1, 5):
+        if list_tt_series is not None:
+            allowed_by_list_tt = list_tt_labels.str.contains(str(plane), regex=False)
+        else:
+            allowed_by_list_tt = pd.Series(True, index=df.index)
+
+        candidate_columns: list[str] = [
+            col_name
+            for col_name in (
+                f"charge_{plane}",
+                f"tim_charge_{plane}",
+                f"P{plane}_Q_sum_final",
+            )
+            if col_name in df.columns
+        ]
+        if not candidate_columns:
+            candidate_columns = [
+                f"Q_P{plane}s{strip}" for strip in range(1, 5) if f"Q_P{plane}s{strip}" in df.columns
+            ]
+        if not candidate_columns:
+            continue
+
+        charge_values = (
+            df.loc[:, candidate_columns]
+            .apply(pd.to_numeric, errors="coerce")
+            .fillna(0.0)
+        )
+        has_charge = charge_values.gt(float(charge_threshold)).any(axis=1)
+        plane_active = allowed_by_list_tt & has_charge
+        tt_str = tt_str.where(~plane_active, tt_str + str(plane))
+    return tt_str.replace("", "0").astype(int)
+
+
+def get_task4_tt_column(df_input: pd.DataFrame, preferred: str | None = None) -> str | None:
+    if preferred is None:
+        preferred = TASK4_PRIMARY_TT_COLUMN
+    if preferred in df_input.columns:
+        return preferred
+    return None
+
+def get_task4_tt_series(df_input: pd.DataFrame, preferred: str | None = None) -> pd.Series:
+    if preferred is None:
+        preferred = TASK4_PRIMARY_TT_COLUMN
+    tt_col = get_task4_tt_column(df_input, preferred=preferred)
+    if tt_col is None:
+        return pd.Series(0, index=df_input.index, dtype=int)
+    return pd.to_numeric(df_input[tt_col], errors="coerce").fillna(0).astype(int)
+
+def refresh_task4_trigger_columns(
+    df_input: pd.DataFrame,
+) -> pd.DataFrame:
+    df_output = compute_tt(df_input, "extension_tt", TASK4_EXTENSION_TT_COLUMNS)
+    fit_tt_series = compute_fit_tt_from_charge(df_output)
+    df_output.loc[:, TASK4_PRIMARY_TT_COLUMN] = fit_tt_series
+    return df_output
+
+def _resolve_task4_track_efficiency_fiducial_cfg(config_obj: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "charge_event_left": _task4_get_optional_config_float(config_obj, "fiducial_charge_event_left"),
+        "charge_event_right": _task4_get_optional_config_float(config_obj, "fiducial_charge_event_right"),
+        # "x_left": _task4_get_optional_config_float(
+        #     config_obj,
+        #     "fiducial_x_left",
+        #     "fiducial_x_plane_1_left",
+        # ),
+        # "x_right": _task4_get_optional_config_float(
+        #     config_obj,
+        #     "fiducial_x_right",
+        #     "fiducial_x_plane_1_right",
+        # ),
+        "theta_left_deg": _task4_get_optional_config_float(config_obj, "fiducial_theta_left"),
+        "theta_right_deg": _task4_get_optional_config_float(config_obj, "fiducial_theta_right"),
+        "x_by_plane": {
+            plane: {
+                "left": _task4_get_optional_config_float(config_obj, f"fiducial_x_plane_{plane}_left"),
+                "right": _task4_get_optional_config_float(config_obj, f"fiducial_x_plane_{plane}_right"),
+            }
+            for plane in range(1, 5)
+        },
+        "y_by_plane": {
+            plane: {
+                "left": _task4_get_optional_config_float(config_obj, f"fiducial_y_plane_{plane}_left"),
+                "right": _task4_get_optional_config_float(config_obj, f"fiducial_y_plane_{plane}_right"),
+            }
+            for plane in range(1, 5)
+        },
+    }
+
+def _task4_resolve_region_bounds(
+    left_limit: float | None,
+    right_limit: float | None,
+    physical_left: float,
+    physical_right: float,
+) -> tuple[float, float]:
+    left = float(left_limit) if left_limit is not None else float(physical_left)
+    right = float(right_limit) if right_limit is not None else float(physical_right)
+    left = max(float(physical_left), min(left, float(physical_right)))
+    right = max(float(physical_left), min(right, float(physical_right)))
+    if right <= left:
+        return float(physical_left), float(physical_right)
+    return left, right
+
+def _task4_track_efficiency_fiducial_is_active(cfg_fiducial: Mapping[str, object]) -> bool:
+    scalar_keys = (
+        "charge_event_left",
+        "charge_event_right",
+        # "x_left",
+        # "x_right",
+        "theta_left_deg",
+        "theta_right_deg",
+    )
+    for key in scalar_keys:
+        if cfg_fiducial.get(key, None) is not None:
+            return True
+    x_by_plane = cfg_fiducial.get("x_by_plane", {})
+    if isinstance(x_by_plane, Mapping):
+        for plane_cfg in x_by_plane.values():
+            if not isinstance(plane_cfg, Mapping):
+                continue
+            if plane_cfg.get("left", None) is not None or plane_cfg.get("right", None) is not None:
+                return True
+    y_by_plane = cfg_fiducial.get("y_by_plane", {})
+    if isinstance(y_by_plane, Mapping):
+        for plane_cfg in y_by_plane.values():
+            if not isinstance(plane_cfg, Mapping):
+                continue
+            if plane_cfg.get("left", None) is not None or plane_cfg.get("right", None) is not None:
+                return True
+    return False
+
+def _task4_resolve_efficiency_param_hash(
+    explicit_param_hash: object,
+    df_input: pd.DataFrame,
+) -> str:
+    if explicit_param_hash is not None:
+        text = str(explicit_param_hash).strip()
+        if text:
+            return text
+    if "param_hash" in df_input.columns:
+        param_series = df_input["param_hash"].astype(str).str.strip()
+        nonempty = param_series[(param_series != "") & (param_series.str.lower() != "nan")]
+        if not nonempty.empty:
+            return str(nonempty.iloc[0])
+    return ""
+
+def normalize_task4_event_component_blocks(
+    df_input: pd.DataFrame,
+    *,
+    apply_changes: bool,
+) -> dict[str, int]:
+    """Zero the full Task 4 event block when any atomic event component is zero."""
+    event_cols = [col for col in TASK4_EVENT_ATOMIC_COLUMNS if col in df_input.columns]
+    if not event_cols:
+        return {
+            "rows_affected": 0,
+            "values_zeroed": 0,
+            "column_count": 0,
+        }
+
+    block_values = np.column_stack(
+        [
+            pd.to_numeric(df_input[col], errors="coerce").to_numpy(dtype=float, copy=True)
+            for col in event_cols
+        ]
+    )
+    any_zero = np.any(block_values == 0.0, axis=1)
+    all_zero = np.all(block_values == 0.0, axis=1)
+    partial_zero = any_zero & ~all_zero
+
+    values_zeroed = 0
+    for idx in range(len(event_cols)):
+        if not np.any(partial_zero):
+            break
+        values_zeroed += int(np.count_nonzero(block_values[partial_zero, idx]))
+
+    if apply_changes and np.any(any_zero):
+        block_values[any_zero, :] = 0.0
+        df_input.loc[:, event_cols] = block_values
+
+    return {
+        "rows_affected": int(np.count_nonzero(partial_zero)),
+        "values_zeroed": int(values_zeroed),
+        "column_count": len(event_cols),
+    }
+
+
+def load_iteration_settings(cfg):
+    number_of_det_executions = max(1, int(cfg.get("number_of_det_executions", 1)))
+    number_of_tt_executions = max(1, int(cfg.get("number_of_tt_executions", 1)))
+    return (
+        number_of_det_executions,
+        cfg["fixed_speed"],
+        cfg["res_ana_removing_planes"],
+        number_of_tt_executions,
+        cfg.get("complete_reanalysis", False),
+        cfg.get("limit_number", None),
+    )
+
+def initialize_task4_runtime_context(
+    cfg: dict[str, object],
+    metadata_store: dict[str, object],
+    namespace: dict[str, object],
+    *,
+    announce_fit_method: bool = False,
+    announce_geometry: bool = False,
+) -> dict[str, object]:
+    runtime: dict[str, object] = {
+        "fast_mode": False,
+        "debug_mode": False,
+        "last_file_test": cfg["last_file_test"],
+        "crontab_execution": cfg["crontab_execution"],
+    }
+
+    (
+        number_of_det_executions,
+        fixed_speed,
+        res_ana_removing_planes,
+        number_of_tt_executions,
+        complete_reanalysis,
+        limit_number,
+    ) = load_iteration_settings(cfg)
+    runtime.update(
+        {
+            "number_of_det_executions": number_of_det_executions,
+            "fixed_speed": fixed_speed,
+            "res_ana_removing_planes": res_ana_removing_planes,
+            "number_of_tt_executions": number_of_tt_executions,
+            "complete_reanalysis": complete_reanalysis,
+            "limit_number": limit_number,
+            "limit": limit_number is not None,
+        }
+    )
+
+    fit_method = str(cfg.get("fit_method", "both")).strip().lower()
+    if fit_method not in {"detached", "timtrack", "both"}:
+        print(f"Warning: Invalid fit_method='{fit_method}'. Falling back to 'both'.")
+        fit_method = "both"
+    runtime.update(
+        {
+            "fit_method": fit_method,
+            "run_detached_fit": fit_method in {"detached", "both"},
+            "run_timtrack_fit": fit_method in {"timtrack", "both"},
+        }
+    )
+    if announce_fit_method:
+        print(f"Fitting mode selected: fit_method='{fit_method}'")
+
+    runtime.update(
+        {
+            "T_side_left_pre_cal_debug": cfg.get("T_side_left_pre_cal_debug", -500),
+            "T_side_right_pre_cal_debug": cfg.get("T_side_right_pre_cal_debug", 500),
+            "T_side_left_pre_cal_default": cfg.get("T_side_left_pre_cal_default", -200),
+            "T_side_right_pre_cal_default": cfg.get("T_side_right_pre_cal_default", -100),
+            "T_side_left_pre_cal_ST": cfg.get("T_side_left_pre_cal_ST", -200),
+            "T_side_right_pre_cal_ST": cfg.get("T_side_right_pre_cal_ST", -50),
+        }
+    )
+
+    runtime["T_sum_RPC_left"] = _task4_config_float(
+        cfg,
+        "T_sum_RPC_left",
+        "plane_combination_plane_t_sum_sum_left",
+        "plane_combination_same_plane_t_sum_sum_left",
+        "plane_combination_self_t_sum_sum_left",
+        default=-25.0,
+    )
+    runtime["T_sum_RPC_right"] = _task4_config_float(
+        cfg,
+        "T_sum_RPC_right",
+        "plane_combination_plane_t_sum_sum_right",
+        "plane_combination_same_plane_t_sum_sum_right",
+        "plane_combination_self_t_sum_sum_right",
+        default=25.0,
+    )
+
+    det_phi_filter_abs = abs(
+        float(cfg.get("det_phi_filter_abs", cfg.get("det_phi_right_filter", 3.141592)))
+    )
+    runtime.update(
+        {
+            "det_pos_filter": cfg["det_pos_filter"],
+            "det_theta_left_filter": cfg["det_theta_left_filter"],
+            "det_theta_right_filter": cfg["det_theta_right_filter"],
+            "det_phi_filter_abs": det_phi_filter_abs,
+            "det_phi_right_filter": det_phi_filter_abs,
+            "det_phi_left_filter": -det_phi_filter_abs,
+            "det_slowness_filter_left": cfg["det_slowness_filter_left"],
+            "det_slowness_filter_right": cfg["det_slowness_filter_right"],
+            "det_res_ystr_filter": cfg["det_res_ystr_filter"],
+            "det_res_tsum_filter": cfg["det_res_tsum_filter"],
+            "det_res_tdif_filter": cfg["det_res_tdif_filter"],
+            "det_ext_res_ystr_filter": cfg["det_ext_res_ystr_filter"],
+            "det_ext_res_tsum_filter": cfg["det_ext_res_tsum_filter"],
+            "det_ext_res_tdif_filter": cfg["det_ext_res_tdif_filter"],
+            "proj_filter": cfg["proj_filter"],
+            "res_ystr_filter": cfg["res_ystr_filter"],
+            "res_tsum_filter": cfg["res_tsum_filter"],
+            "res_tdif_filter": cfg["res_tdif_filter"],
+            "ext_res_ystr_filter": cfg["ext_res_ystr_filter"],
+            "ext_res_tsum_filter": cfg["ext_res_tsum_filter"],
+            "ext_res_tdif_filter": cfg["ext_res_tdif_filter"],
+            "delta_s_left": cfg.get("delta_s_left", -0.0003),
+            "delta_s_right": cfg.get("delta_s_right", 0.0003),
+            "coincidence_window_cal_ns": cfg["coincidence_window_cal_ns"],
+            "coincidence_window_cal_number_of_points": cfg["coincidence_window_cal_number_of_points"],
+            "beta": cfg["beta"],
+            "strip_speed_factor_of_c": cfg["strip_speed_factor_of_c"],
+            "strip_length": cfg["strip_length"],
+            "narrow_strip": cfg["narrow_strip"],
+            "wide_strip": cfg["wide_strip"],
+            "d0": cfg["d0"],
+            "cocut": cfg["cocut"],
+            "iter_max": cfg["iter_max"],
+            "anc_sy": cfg["anc_sy"],
+            "anc_sts": cfg["anc_sts"],
+            "anc_std": cfg["anc_std"],
+            "anc_sz": cfg["anc_sz"],
+            "n_planes_timtrack": cfg["n_planes_timtrack"],
+            "T_clip_min_debug": cfg.get("T_clip_min_debug", -500),
+            "T_clip_max_debug": cfg.get("T_clip_max_debug", 500),
+            "Q_clip_min_debug": cfg.get("Q_clip_min_debug", -500),
+            "Q_clip_max_debug": cfg.get("Q_clip_max_debug", 500),
+            "num_bins_debug": cfg.get("num_bins_debug", 100),
+            "T_clip_min_default": cfg.get("T_clip_min_default", -300),
+            "T_clip_max_default": cfg.get("T_clip_max_default", 100),
+            "Q_clip_min_default": cfg.get("Q_clip_min_default", 0),
+            "Q_clip_max_default": cfg.get("Q_clip_max_default", 500),
+            "num_bins_default": cfg.get("num_bins_default", 100),
+            "T_clip_min_ST": cfg.get("T_clip_min_ST", -300),
+            "T_clip_max_ST": cfg.get("T_clip_max_ST", 100),
+            "Q_clip_min_ST": cfg.get("Q_clip_min_ST", 0),
+            "Q_clip_max_ST": cfg.get("Q_clip_max_ST", 500),
+            "time_window_fitting": cfg["time_window_fitting"],
+            "charge_plot_limit_left": cfg["charge_plot_limit_left"],
+            "charge_plot_limit_right": cfg["charge_plot_limit_right"],
+            "charge_plot_event_limit_right": cfg.get("charge_plot_event_limit_right", 400),
+            "Q_sum_color": "orange",
+            "Q_dif_color": "red",
+            "T_sum_color": "blue",
+            "T_dif_color": "green",
+        }
+    )
+
+    runtime["pos_filter"] = runtime["det_pos_filter"]
+    runtime["t0_left_filter"] = runtime["T_sum_RPC_left"]
+    runtime["t0_right_filter"] = runtime["T_sum_RPC_right"]
+    runtime["slowness_filter_left"] = runtime["det_slowness_filter_left"]
+    runtime["slowness_filter_right"] = runtime["det_slowness_filter_right"]
+    runtime["theta_left_filter"] = runtime["det_theta_left_filter"]
+    runtime["theta_right_filter"] = runtime["det_theta_right_filter"]
+    runtime["phi_left_filter"] = runtime["det_phi_left_filter"]
+    runtime["phi_right_filter"] = runtime["det_phi_right_filter"]
+
+    fig_idx, plot_list = ensure_plot_state(namespace)
+    runtime["fig_idx"] = fig_idx
+    runtime["plot_list"] = plot_list
+
+    runtime["time_dif_distance"] = 30
+    runtime["time_dif_reference"] = np.array([
+        [-0.0573, 0.031275, 1.033875, 0.761475],
+        [-0.914, -0.873975, -0.19815, 0.452025],
+        [0.8769, 1.2008, 1.014, 2.43915],
+        [1.508825, 2.086375, 1.6876, 3.023575],
+    ])
+    runtime["charge_sum_distance"] = 30
+    runtime["charge_sum_reference"] = np.array([
+        [89.4319, 98.19605, 95.99055, 91.83875],
+        [96.55775, 94.50385, 94.9254, 91.0775],
+        [92.12985, 92.23395, 90.60545, 95.5214],
+        [93.75635, 93.57425, 93.07055, 89.27305],
+    ])
+    runtime["charge_dif_distance"] = 30
+    runtime["charge_dif_reference"] = np.array([
+        [4.512, 0.58715, 1.3204, -1.3918],
+        [-4.50885, 0.918, -3.39445, -0.12325],
+        [-3.8931, -3.28515, 3.27295, 1.0554],
+        [-2.29505, 0.012, 2.49045, -2.14565],
+    ])
+    runtime["time_sum_distance"] = 30
+    runtime["time_sum_reference"] = np.array([
+        [0.0, -0.3886308, -0.53020947, 0.33711737],
+        [-0.80494094, -0.68836069, -2.01289387, -1.13481931],
+        [-0.23899338, -0.51373738, 0.50845317, 0.11685095],
+        [0.33586385, 1.08329847, 0.91410244, 0.58815813],
+    ])
+
+    runtime["T_F_left_pre_cal"] = runtime["T_side_left_pre_cal_default"]
+    runtime["T_F_right_pre_cal"] = runtime["T_side_right_pre_cal_default"]
+    runtime["T_B_left_pre_cal"] = runtime["T_side_left_pre_cal_default"]
+    runtime["T_B_right_pre_cal"] = runtime["T_side_right_pre_cal_default"]
+    runtime["T_F_left_pre_cal_ST"] = runtime["T_side_left_pre_cal_ST"]
+    runtime["T_F_right_pre_cal_ST"] = runtime["T_side_right_pre_cal_ST"]
+    runtime["T_B_left_pre_cal_ST"] = runtime["T_side_left_pre_cal_ST"]
+    runtime["T_B_right_pre_cal_ST"] = runtime["T_side_right_pre_cal_ST"]
+
+    y_widths = [
+        np.array([runtime["wide_strip"], runtime["wide_strip"], runtime["wide_strip"], runtime["narrow_strip"]]),
+        np.array([runtime["narrow_strip"], runtime["wide_strip"], runtime["wide_strip"], runtime["wide_strip"]]),
+    ]
+    runtime["y_widths"] = y_widths
+    runtime["y_pos_T"] = [y_pos(y_widths[0]), y_pos(y_widths[1])]
+    runtime["y_width_P1_and_P3"] = y_widths[0]
+    runtime["y_width_P2_and_P4"] = y_widths[1]
+    runtime["y_pos_P1_and_P3"] = y_pos(runtime["y_width_P1_and_P3"])
+    runtime["y_pos_P2_and_P4"] = y_pos(runtime["y_width_P2_and_P4"])
+    runtime["total_width"] = np.sum(runtime["y_width_P1_and_P3"])
+
+    c_mm_ns = c / 1000000
+    runtime["c_mm_ns"] = c_mm_ns
+    if announce_geometry:
+        print(c_mm_ns)
+
+    runtime["muon_speed"] = runtime["beta"] * c_mm_ns
+    runtime["strip_speed"] = runtime["strip_speed_factor_of_c"] * c_mm_ns
+    runtime["tdiff_to_x"] = runtime["strip_speed"]
+    runtime["vc"] = runtime["beta"] * c_mm_ns
+    runtime["sc"] = 1 / runtime["vc"]
+    runtime["ss"] = 1 / runtime["strip_speed"]
+    runtime["nplan"] = runtime["n_planes_timtrack"]
+    runtime["lenx"] = runtime["strip_length"]
+    runtime["anc_sx"] = runtime["tdiff_to_x"] * runtime["anc_std"]
+
+    runtime["T_clip_min"] = runtime["T_clip_min_default"]
+    runtime["T_clip_max"] = runtime["T_clip_max_default"]
+    runtime["Q_clip_min"] = runtime["Q_clip_min_default"]
+    runtime["Q_clip_max"] = runtime["Q_clip_max_default"]
+    runtime["num_bins"] = runtime["num_bins_default"]
+
+    metadata_store["unc_y"] = runtime["anc_sy"]
+    metadata_store["unc_tsum"] = runtime["anc_sts"]
+    metadata_store["unc_tdif"] = runtime["anc_std"]
+    return runtime
+
+
+def load_reprocessing_parameters_for_file(station_id: str, task_id: str, basename: str) -> pd.DataFrame:
+    """Return matching reprocessing parameters for *basename* or an empty frame."""
+    station_str = str(station_id).zfill(2)
+    table_path = REFERENCE_TABLES_DIR / f"reprocess_files_station_{station_str}_task_{task_id}.csv"
+    if not table_path.exists():
+        return pd.DataFrame()
+    try:
+        table_df = pd.read_csv(table_path)
+    except Exception as exc:
+        print(f"Warning: unable to read reprocessing table {table_path}: {exc}")
+        return pd.DataFrame()
+    if "filename_base" not in table_df.columns:
+        return pd.DataFrame()
+    matches = table_df[table_df["filename_base"] == basename]
+    return matches.reset_index(drop=True)
+
+def _gaussian_model(x: np.ndarray, mu: float, sigma: float, amplitude: float) -> np.ndarray:
+    sigma = np.abs(float(sigma))
+    if sigma == 0:
+        sigma = 1e-12
+    return amplitude * np.exp(-((x - mu) ** 2) / (2 * sigma ** 2))
+
+def _fit_gaussian_mu_sigma(series: pd.Series, quantile: float = 0.99) -> tuple[float, float]:
+    """Return Gaussian (mu, sigma) using the same histogram-fit logic as the residual plots."""
+    arr = np.asarray(series, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size < 10:
+        return np.nan, np.nan
+
+    hist_data, bin_edges = np.histogram(arr, bins=50)
+    if hist_data.size == 0 or np.max(hist_data) <= 0:
+        return np.nan, np.nan
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+    try:
+        lower_q, upper_q = np.quantile(arr, [1.0 - quantile, quantile])
+        filt_data = arr[(arr >= lower_q) & (arr <= upper_q)]
+        if filt_data.size < 2:
+            filt_data = arr
+        sigma0 = float(np.nanstd(filt_data))
+        if not np.isfinite(sigma0) or sigma0 <= 0:
+            sigma0 = float(np.nanstd(arr))
+        if not np.isfinite(sigma0) or sigma0 <= 0:
+            return np.nan, np.nan
+        popt, _ = _curve_fit_checked(
+            _gaussian_model,
+            bin_centers,
+            hist_data,
+            p0=[float(np.nanmean(filt_data)), sigma0, float(np.max(hist_data))],
+            maxfev=10000,
+        )
+        mu = float(popt[0])
+        sigma = float(abs(popt[1]))
+    except Exception:
+        return np.nan, np.nan
+    if not np.isfinite(mu) or not np.isfinite(sigma) or sigma <= 0:
+        return np.nan, np.nan
+    return mu, sigma
+
+def _fit_gaussian_sigma(series: pd.Series, quantile: float = 0.99) -> float:
+    """Return Gaussian sigma using the same histogram-fit logic as the residual plots."""
+    _, sigma = _fit_gaussian_mu_sigma(series, quantile=quantile)
+    return sigma
+
+def compute_timtrack_gaussian_sigma_chi2(
+    sigma_source_df: pd.DataFrame,
+    target_df: pd.DataFrame,
+    *,
+    combo_tt: int = 1234,
+    quantile: float = 0.99,
+    output_col: str = "tim_th_chi_sigmafit_1234",
+) -> None:
+    """Build a 1234-only chi2 using Gaussian-fit residual sigmas from timtrack residual columns."""
+    sigma_tt_col = get_task4_tt_column(sigma_source_df)
+    target_tt_col = get_task4_tt_column(target_df)
+    if sigma_tt_col is None or target_tt_col is None:
+        target_df[output_col] = np.nan
+        return
+
+    residual_groups = (
+        ("ystr", "tim_res_ystr"),
+        ("tsum", "tim_res_tsum"),
+        ("tdif", "tim_res_tdif"),
+    )
+    sigma_source_tt = pd.to_numeric(sigma_source_df[sigma_tt_col], errors="coerce")
+    sigma_fit_df = sigma_source_df.loc[sigma_source_tt == float(combo_tt)]
+
+    mu_vector = []
+    sigma_vector = []
+    sigma_labels = []
+    for metric_name, prefix in residual_groups:
+        for plane in range(1, 5):
+            col = f"{prefix}_{plane}"
+            if col in sigma_fit_df.columns:
+                mu, sigma = _fit_gaussian_mu_sigma(sigma_fit_df[col], quantile=quantile)
+            else:
+                mu, sigma = np.nan, np.nan
+            mu_vector.append(mu)
+            sigma_vector.append(sigma)
+            sigma_labels.append(col)
+            global_variables[f"{col}_{combo_tt}_gauss_mu"] = mu
+            global_variables[f"{col}_{combo_tt}_gauss_sigma"] = sigma
+
+    mu_vector_arr = np.asarray(mu_vector, dtype=float)
+    sigma_vector_arr = np.asarray(sigma_vector, dtype=float)
+    target_df[output_col] = np.nan
+    valid_sigma_mask = np.isfinite(sigma_vector_arr) & (sigma_vector_arr > 0)
+    if not valid_sigma_mask.all():
+        missing_cols = [label for label, ok in zip(sigma_labels, valid_sigma_mask) if not ok]
+        print(
+            f"[timtrack_sigmafit_chi2] unable to build {output_col}; missing/invalid sigma for: "
+            f"{', '.join(missing_cols)}"
+        )
+        global_variables[f"{output_col}_valid_sigma_count"] = int(valid_sigma_mask.sum())
+        return
+
+    residual_cols = list(sigma_labels)
+    residual_matrix = np.column_stack([
+        pd.to_numeric(target_df[col], errors="coerce").to_numpy(dtype=float, copy=False)
+        for col in residual_cols
+    ])
+    target_tt = pd.to_numeric(target_df[target_tt_col], errors="coerce").to_numpy(dtype=float, copy=False)
+    valid_rows = (target_tt == float(combo_tt)) & np.isfinite(residual_matrix).all(axis=1)
+    if np.any(valid_rows):
+        scaled = (residual_matrix[valid_rows] - mu_vector_arr) / sigma_vector_arr
+        target_df.loc[valid_rows, output_col] = np.sum(scaled ** 2, axis=1)
+
+    mu_matrix = mu_vector_arr.reshape(3, 4)
+    sigma_matrix = sigma_vector_arr.reshape(3, 4)
+    global_variables[f"{output_col}_mu_matrix"] = np.array2string(mu_matrix, precision=6, suppress_small=False)
+    global_variables[f"{output_col}_sigma_matrix"] = np.array2string(sigma_matrix, precision=6, suppress_small=False)
+    print(
+        f"[timtrack_sigmafit_chi2] built {output_col} for tt={combo_tt} | "
+        f"valid_rows={int(valid_rows.sum())} | "
+        f"mus(ystr/tsum/tdif)xplane={np.array2string(mu_matrix, precision=4, suppress_small=False)} | "
+        f"sigmas(ystr/tsum/tdif)xplane={np.array2string(sigma_matrix, precision=4, suppress_small=False)}"
+    )
+    global_variables[f"{output_col}_valid_sigma_count"] = int(valid_sigma_mask.sum())
+    global_variables[f"{output_col}_filled_rows"] = int(valid_rows.sum())
+
+
+def record_filter_metric(name: str, removed: float, total: float) -> None:
+    """Record percentage removed for a filter."""
+    pct = 0.0 if total == 0 else 100.0 * float(removed) / float(total)
+    filter_metrics[name] = round(pct, 4)
+    _log_filter_metrics_message(
+        f"[filter-metrics] {name}: removed {removed} of {total} ({pct:.2f}%)"
+    )
+
+def record_residual_sigmas(df: pd.DataFrame) -> None:
+    """Fit Gaussian sigmas for residual columns per track combination and plane."""
+    tt_col = "list_tt" if "list_tt" in df.columns else "processed_tt"
+    if tt_col not in df.columns:
+        return
+
+    processed = df[tt_col].astype(str)
+    for combo in TRACK_COMBINATIONS:
+        combo_str = str(combo)
+        combo_mask = processed == combo_str
+        combo_df = df.loc[combo_mask]
+        for plane in range(1, 5):
+            if str(plane) not in combo_str:
+                continue  # skip planes not present in the trigger combination
+            for metric in RESIDUAL_SERIES:
+                if metric.startswith("ext_") and len(combo_str) < 3:
+                    continue  # external residuals need at least 3 planes
+                col = f"{metric}_{plane}"
+                key = f"{col}_{combo_str}_sigma"
+                if col not in df.columns or combo_df.empty:
+                    continue
+                sigma = _fit_gaussian_sigma(combo_df[col])
+                if np.isnan(sigma):
+                    continue  # avoid recording meaningless NaNs
+                global_variables[key] = sigma
+
+
+def _zpos_from_conf(row):
+    return np.array([row.get(f"P{i}", np.nan) for i in range(1, 5)])
+
+
+# ---------------------------------------------------------------------------
+# 1. Geometrical line fit (orthogonal-distance regression) ------------------
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# ---------------------------- Loop starts here -----------------------------
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Vectorized replacement for the per-event detached fitting loop.
+# Groups events by active-plane bitmask; within each group a single batched
+# np.linalg.svd call replaces N individual calls. np.polyfit is replaced by
+# the closed-form OLS formula so it can be applied across the batch in one go.
+# Numerically identical to the original per-event loop.
+# ---------------------------------------------------------------------------
+def _detached_vectorized(
+    det_Q, det_Tdif, det_Y, det_Tsum,
+    z_positions, tdiff_to_x,
+    anc_sx, anc_sy, anc_sz, anc_sts,
+    n, nplan,
+    fit_res, slow_res,
+    ext_res_ystr, ext_res_tsum, ext_res_tdif,
+):
+    _sx2sy2sz2 = float(anc_sx**2 + anc_sy**2 + anc_sz**2)
+
+    def _batch_line_fit(x_b, y_b, z_sel):
+        """Batched SVD line fit. x_b, y_b: (n_g, n_pl); z_sel: (n_pl,)."""
+        n_g, n_pl = x_b.shape
+        z_br  = np.broadcast_to(z_sel, (n_g, n_pl))
+        pts   = np.stack([x_b, y_b, z_br], axis=2)        # (n_g, n_pl, 3)
+        c     = pts.mean(axis=1, keepdims=True)             # (n_g,  1,   3)
+        pts_c = pts - c
+        _, _, vt = np.linalg.svd(pts_c, full_matrices=False)
+        d = vt[:, 0, :].copy()                              # (n_g, 3)
+        d[d[:, 2] < 0] *= -1
+        d /= np.linalg.norm(d, axis=1, keepdims=True)
+        c3  = c[:, 0, :]
+        t0  = np.where(d[:, 2] != 0.0, -c3[:, 2] / d[:, 2], np.nan)
+        xz0 = c3[:, 0] + t0 * d[:, 0]
+        yz0 = c3[:, 1] + t0 * d[:, 1]
+        pdot = np.einsum('npi,ni->np', pts_c, d)            # (n_g, n_pl)
+        proj = pdot[:, :, np.newaxis] * d[:, np.newaxis, :] # (n_g, n_pl, 3)
+        res  = pts_c - proj
+        res_td = res[:, :, 0] / tdiff_to_x
+        res_y  = res[:, :, 1]
+        chi2   = np.einsum('npi,npi->n', res, res) / _sx2sy2sz2
+        return d, xz0, yz0, chi2, res_td, res_y
+
+    def _batch_slowness(xz0, yz0, d, z_sel, Tsum_g):
+        """Vectorized polyfit(s_rel, t_rel, 1) for a batch of events."""
+        n_g, n_pl = Tsum_g.shape
+        x_fit = xz0[:, np.newaxis] + d[:, 0:1] * z_sel / d[:, 2:3]
+        y_fit = yz0[:, np.newaxis] + d[:, 1:2] * z_sel / d[:, 2:3]
+        pos   = np.stack([x_fit, y_fit, np.broadcast_to(z_sel, (n_g, n_pl))], axis=2)
+        rdist = np.einsum('npi,ni->np', pos, d)             # (n_g, n_pl)
+        s_rel = rdist - rdist[:, 0:1]
+        t_rel = Tsum_g - Tsum_g[:, 0:1]
+        s_m   = s_rel.mean(axis=1); t_m = t_rel.mean(axis=1)
+        ss2   = np.sum(s_rel ** 2, axis=1)
+        st    = np.sum(s_rel * t_rel, axis=1)
+        denom = ss2 - n_pl * s_m ** 2
+        k     = np.where(np.abs(denom) > 0.0, (st - n_pl * s_m * t_m) / denom, 0.0)
+        b     = t_m - k * s_m
+        t_fit = k[:, np.newaxis] * s_rel + b[:, np.newaxis]
+        res   = t_rel - t_fit
+        chi2  = np.sum((res / anc_sts) ** 2, axis=1)
+        return k, b, chi2, res, rdist
+
+    q_pos   = det_Q > 0                                              # (n, nplan) bool
+    bitmask = (q_pos * (1 << np.arange(nplan))).sum(axis=1).astype(np.int32)
+
+    for bm in np.unique(bitmask):
+        if bm == 0:
+            continue
+        active_idx = np.array([p for p in range(nplan) if bm & (1 << p)], dtype=int)
+        n_pl       = len(active_idx)
+        if n_pl < 2:
+            continue
+        plane_ids = active_idx + 1                                    # 1-based
+        g_idx     = np.where(bitmask == bm)[0]
+        n_g       = len(g_idx)
+        z_sel     = z_positions[active_idx]                           # (n_pl,)
+        Tdif_g    = det_Tdif[np.ix_(g_idx, active_idx)]
+        Y_g       = det_Y   [np.ix_(g_idx, active_idx)]
+        Tsum_g    = det_Tsum[np.ix_(g_idx, active_idx)]
+        x_g       = tdiff_to_x * Tdif_g
+        y_g       = Y_g
+
+        # --- Primary fit ---
+        d, xz0, yz0, chi2, res_td, res_y = _batch_line_fit(x_g, y_g, z_sel)
+        theta = np.arccos(np.clip(d[:, 2], -1.0, 1.0))
+        phi   = np.arctan2(d[:, 1], d[:, 0])
+        fit_res['det_x']    [g_idx] = xz0
+        fit_res['det_y']    [g_idx] = yz0
+        fit_res['det_theta'][g_idx] = theta
+        fit_res['det_phi']  [g_idx] = phi
+        fit_res['det_chi2'] [g_idx] = chi2
+        for k_pl, pid in enumerate(plane_ids):
+            fit_res[f'det_res_tdif_{pid}'][g_idx] = res_td[:, k_pl]
+            fit_res[f'det_res_ystr_{pid}'][g_idx] = res_y [:, k_pl]
+
+        # --- Slowness ---
+        k_slow, b_slow, chi2_slow, res_slow, _ = _batch_slowness(xz0, yz0, d, z_sel, Tsum_g)
+        slow_res['det_s']         [g_idx] = k_slow
+        slow_res['det_s_ordinate'][g_idx] = b_slow
+        slow_res['chi2_tsum_fit'] [g_idx] = chi2_slow
+        for k_pl, pid in enumerate(plane_ids):
+            slow_res[f'det_res_tsum_{pid}'][g_idx] = res_slow[:, k_pl]
+
+        # --- Leave-one-out (requires ≥3 active planes) ---
+        if n_pl < 3:
+            continue
+        for k_exc in range(n_pl):
+            lo_k = [j for j in range(n_pl) if j != k_exc]
+            if len(lo_k) < 2:
+                continue
+            pid_exc = int(plane_ids[k_exc])
+            out_p   = pid_exc - 1                                     # 0-based output col
+            z_lo    = z_sel[lo_k]
+            x_lo    = x_g[:, lo_k]
+            y_lo    = y_g[:, lo_k]
+            ts_lo   = Tsum_g[:, lo_k]
+
+            d_lo, xz0_lo, yz0_lo, _, _, _ = _batch_line_fit(x_lo, y_lo, z_lo)
+
+            z_p    = float(z_sel[k_exc])
+            x_pred = xz0_lo + d_lo[:, 0] * z_p / d_lo[:, 2]
+            y_pred = yz0_lo + d_lo[:, 1] * z_p / d_lo[:, 2]
+
+            ext_res_tdif[g_idx, out_p] = (x_g[:, k_exc] - x_pred) / tdiff_to_x
+            ext_res_ystr[g_idx, out_p] = (y_g[:, k_exc] - y_pred)
+
+            # Tsum external residual
+            k_lo, b_lo, _, _, rdist_lo = _batch_slowness(xz0_lo, yz0_lo, d_lo, z_lo, ts_lo)
+            pos_p  = np.stack([x_pred, y_pred, np.full(n_g, z_p)], axis=1)
+            s_p    = np.einsum('ni,ni->n', pos_p, d_lo) - rdist_lo[:, 0]
+            t_p    = Tsum_g[:, k_exc] - ts_lo[:, 0]
+            ext_res_tsum[g_idx, out_p] = t_p - (k_lo * s_p + b_lo)
+
+
+def plot_ts_err_with_hist(df, base_cols, time_col, title):
+    """Plot combined data: data TS+hist and error TS+hist (4 columns per variable)."""
     global fig_idx
     if df.empty:
         return
     n_vars = len(base_cols)
     fig, axes = plt.subplots(
-        n_vars, 2, figsize=(14, 2.0 * n_vars),
-        gridspec_kw={"width_ratios": [3, 1]},
+        n_vars, 4, figsize=(18, 2.2 * n_vars),
+        gridspec_kw={"width_ratios": [3, 1, 3, 1]},
         sharex="col"
     )
     if n_vars == 1:
         axes = np.array([axes])
     for idx, col in enumerate(base_cols):
-        ts_ax, hist_ax = axes[idx]
-        err_col = f"{col}_err"
-        if err_col not in df.columns:
-            ts_ax.set_visible(False)
-            hist_ax.set_visible(False)
+        ts_ax, hist_ax, ts_err_ax, hist_err_ax = axes[idx]
+        if col not in df.columns:
+            for ax in (ts_ax, hist_ax, ts_err_ax, hist_err_ax):
+                ax.set_visible(False)
             continue
-        # series = df[err_col].dropna().abs()
-        series = df[err_col].dropna()
+        value_mask = df[col].notna() & np.isfinite(df[col].to_numpy(dtype=float, copy=False))
+        plot_df = df.loc[value_mask, [time_col, col]].copy()
+        series = plot_df[col]
         if series.empty:
-            ts_ax.set_visible(False)
-            hist_ax.set_visible(False)
+            for ax in (ts_ax, hist_ax, ts_err_ax, hist_err_ax):
+                ax.set_visible(False)
             continue
-        ts_ax.plot(df[time_col], series, ".", ms=1, alpha=0.8)
-        ts_ax.set_ylabel(f"{col}_err")
+        err_col = f"{col}_err"
+        err_series = None
+        yerr = None
+        if err_col in df.columns:
+            err_mask = df[err_col].notna() & np.isfinite(df[err_col].to_numpy(dtype=float, copy=False))
+            err_plot_df = df.loc[value_mask & err_mask, [time_col, col, err_col]].copy()
+            if not err_plot_df.empty:
+                err_series = err_plot_df[err_col]
+                yerr = err_series.abs()
+                ts_ax.errorbar(err_plot_df[time_col], err_plot_df[col], yerr=yerr, fmt=".", ms=1, alpha=0.85)
+            else:
+                ts_ax.plot(plot_df[time_col], plot_df[col], ".", ms=1, alpha=0.85)
+        else:
+            ts_ax.plot(plot_df[time_col], plot_df[col], ".", ms=1, alpha=0.85)
+        ts_ax.set_ylabel(col)
         ts_ax.grid(True, alpha=0.3)
-        hist_ax.hist(series, bins=50, orientation="horizontal", color="C4", alpha=0.7)
-        # Let each histogram scale independently so one peak doesn't compress others
-        hist_ax.set_autoscale_on(True)
-        hist_ax.autoscale_view()
+        bins, hist_range = _safe_hist_params(series, max_bins=50)
+        if bins is not None:
+            hist_ax.hist(
+                series,
+                bins=bins,
+                range=hist_range,
+                orientation="horizontal",
+                color="C2",
+                alpha=0.8,
+            )
         hist_ax.set_xlabel("count")
-        hist_ax.set_xscale("log")
         hist_ax.grid(True, alpha=0.2)
+        if err_series is not None and not err_series.empty:
+            ts_err_ax.plot(err_plot_df[time_col], err_series, ".", ms=1, alpha=0.8, label=f"{col}_err")
+            ts_err_ax.grid(True, alpha=0.3)
+            ts_err_ax.legend(fontsize="x-small")
+            err_bins, err_range = _safe_hist_params(err_series, max_bins=50)
+            if err_bins is not None:
+                hist_err_ax.hist(
+                    err_series,
+                    bins=err_bins,
+                    range=err_range,
+                    orientation="horizontal",
+                    color="C4",
+                    alpha=0.7,
+                )
+            hist_err_ax.set_autoscale_on(True)
+            hist_err_ax.autoscale_view()
+            hist_err_ax.set_xscale("log")
+            hist_err_ax.set_xlabel("count")
+            hist_err_ax.grid(True, alpha=0.2)
+        else:
+            ts_err_ax.set_visible(False)
+            hist_err_ax.set_visible(False)
     axes[-1, 0].set_xlabel(time_col)
+    axes[-1, 2].set_xlabel(time_col)
     plt.suptitle(title, fontsize=12)
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     if save_plots:
@@ -1190,6 +1810,3021 @@ def plot_err_only_ts_hist(df, base_cols, time_col, title):
     if show_plots:
         plt.show()
     plt.close()
+
+
+def fmahd(npar, vin1, vin2, merr): # Mahalanobis distance
+    merr_diag = np.diag(merr) if merr.ndim > 1 else merr
+    acc = 0.0
+    for i in range(npar):
+        d = vin1[i] - vin2[i]
+        m = merr_diag[i]
+        if m != 0.0:
+            acc += d * d / m
+    return math.sqrt(acc)
+
+def solve_only(matrix, rhs):
+    """Solve matrix @ x = rhs (fast path for code paths that do not need covariance)."""
+    try:
+        return np.linalg.solve(matrix, rhs)
+    except np.linalg.LinAlgError:
+        return np.linalg.pinv(matrix) @ rhs
+
+def solve_and_covdiag(matrix, rhs):
+    """Solve matrix @ x = rhs and return (x, diag(inv(matrix))) with one factorization.
+
+    Fast path computes inverse once and reuses it for both the linear solve and
+    covariance-diagonal extraction. Fallback uses pinv once.
+    """
+    try:
+        inv_matrix = np.linalg.inv(matrix)
+        sol = inv_matrix @ rhs
+        inv_diag = np.diag(inv_matrix)
+        return sol, inv_diag
+    except np.linalg.LinAlgError:
+        matrix_pinv = np.linalg.pinv(matrix)
+        return matrix_pinv @ rhs, np.diag(matrix_pinv)
+
+def _accumulate_mk_va(npar, vs, ydat, tsdat, tddat, zi, w_arr, ss, lenx, sc_val, fixed_speed_flag, mk, va):
+    """In-place TimTrack accumulator: adds one plane contribution into mk and va.
+
+    Avoids per-plane temporary (npar x npar) and (npar,) allocations from
+    return-based helpers in the main fitting hot loop.
+    """
+    XP = vs[1]
+    YP = vs[3]
+    S0 = sc_val if fixed_speed_flag else vs[5]
+    kz = math.sqrt(1.0 + XP * XP + YP * YP)
+    kzi = 1.0 / kz
+
+    w0 = w_arr[0]
+    w1 = w_arr[1]
+    w2 = w_arr[2]
+
+    zi2 = zi * zi
+    sszi = ss * zi
+    th = 0.5 * lenx * ss
+
+    # Non-zero entries of the 3 Jacobian rows (g0, g1, g2)
+    g0_2 = 1.0
+    g0_3 = zi
+
+    g1_1 = kzi * S0 * XP * zi
+    g1_3 = kzi * S0 * YP * zi
+    g1_4 = 1.0
+
+    g2_0 = ss
+    g2_1 = sszi
+
+    # vdmg terms simplify exactly for this linearised model
+    vd0 = ydat
+    vd1 = tsdat - th
+    vd2 = tddat
+
+    # g0 contribution (weight w0)
+    mk[2, 2] += w0 * g0_2 * g0_2
+    mk[2, 3] += w0 * g0_2 * g0_3
+    mk[3, 2] += w0 * g0_3 * g0_2
+    mk[3, 3] += w0 * g0_3 * g0_3
+    va[2] += w0 * g0_2 * vd0
+    va[3] += w0 * g0_3 * vd0
+
+    # g2 contribution (weight w2)
+    mk[0, 0] += w2 * g2_0 * g2_0
+    mk[0, 1] += w2 * g2_0 * g2_1
+    mk[1, 0] += w2 * g2_1 * g2_0
+    mk[1, 1] += w2 * g2_1 * g2_1
+    va[0] += w2 * g2_0 * vd2
+    va[1] += w2 * g2_1 * vd2
+
+    # g1 contribution (weight w1)
+    mk[1, 1] += w1 * g1_1 * g1_1
+    mk[1, 3] += w1 * g1_1 * g1_3
+    mk[3, 1] += w1 * g1_3 * g1_1
+    mk[1, 4] += w1 * g1_1 * g1_4
+    mk[4, 1] += w1 * g1_4 * g1_1
+    mk[3, 3] += w1 * g1_3 * g1_3
+    mk[3, 4] += w1 * g1_3 * g1_4
+    mk[4, 3] += w1 * g1_4 * g1_3
+    mk[4, 4] += w1 * g1_4 * g1_4
+    va[1] += w1 * g1_1 * vd1
+    va[3] += w1 * g1_3 * vd1
+    va[4] += w1 * g1_4 * vd1
+
+    if not fixed_speed_flag:
+        g1_5 = kz * zi
+        mk[1, 5] += w1 * g1_1 * g1_5
+        mk[5, 1] += w1 * g1_5 * g1_1
+        mk[3, 5] += w1 * g1_3 * g1_5
+        mk[5, 3] += w1 * g1_5 * g1_3
+        mk[4, 5] += w1 * g1_4 * g1_5
+        mk[5, 4] += w1 * g1_5 * g1_4
+        mk[5, 5] += w1 * g1_5 * g1_5
+        va[5] += w1 * g1_5 * vd1
+
+def _build_mk_va_base(
+    plane_idx_arr,
+    y_row,
+    td_row,
+    z_pos_arr,
+    w_arr,
+    ss,
+    mk_base,
+    va_base,
+):
+    """Build per-event constant TimTrack terms (independent of current vs)."""
+    mk_base.fill(0.0)
+    va_base.fill(0.0)
+
+    w0 = w_arr[0]
+    w2 = w_arr[2]
+    ss2 = ss * ss
+    w2_ss = w2 * ss
+    w2_ss2 = w2 * ss2
+
+    for plane_idx in plane_idx_arr:
+        zi = z_pos_arr[plane_idx]
+        ydat = y_row[plane_idx]
+        tddat = td_row[plane_idx]
+        sszi = ss * zi
+        zi2 = zi * zi
+
+        # g0 contribution (weight w0)
+        mk_base[2, 2] += w0
+        mk_base[2, 3] += w0 * zi
+        mk_base[3, 2] += w0 * zi
+        mk_base[3, 3] += w0 * zi2
+        va_base[2] += w0 * ydat
+        va_base[3] += w0 * zi * ydat
+
+        # g2 contribution (weight w2)
+        mk_base[0, 0] += w2_ss2
+        mk_base[0, 1] += w2_ss2 * zi
+        mk_base[1, 0] += w2_ss2 * zi
+        mk_base[1, 1] += w2 * sszi * sszi
+        va_base[0] += w2_ss * tddat
+        va_base[1] += w2 * sszi * tddat
+
+def _accumulate_mk_va_dynamic_g1(
+    vs,
+    plane_idx_arr,
+    ts_row,
+    z_pos_arr,
+    w1,
+    half_lenx_ss,
+    sc_val,
+    fixed_speed_flag,
+    mk,
+    va,
+):
+    """Add per-iteration dynamic g1 terms (depend on current vs)."""
+    XP = vs[1]
+    YP = vs[3]
+    S0 = sc_val if fixed_speed_flag else vs[5]
+    kz = math.sqrt(1.0 + XP * XP + YP * YP)
+    kzi = 1.0 / kz
+
+    for plane_idx in plane_idx_arr:
+        zi = z_pos_arr[plane_idx]
+        vd1 = ts_row[plane_idx] - half_lenx_ss
+
+        g1_1 = kzi * S0 * XP * zi
+        g1_3 = kzi * S0 * YP * zi
+
+        mk[1, 1] += w1 * g1_1 * g1_1
+        mk[1, 3] += w1 * g1_1 * g1_3
+        mk[3, 1] += w1 * g1_3 * g1_1
+        mk[1, 4] += w1 * g1_1
+        mk[4, 1] += w1 * g1_1
+        mk[3, 3] += w1 * g1_3 * g1_3
+        mk[3, 4] += w1 * g1_3
+        mk[4, 3] += w1 * g1_3
+        mk[4, 4] += w1
+        va[1] += w1 * g1_1 * vd1
+        va[3] += w1 * g1_3 * vd1
+        va[4] += w1 * vd1
+
+        if not fixed_speed_flag:
+            g1_5 = kz * zi
+            mk[1, 5] += w1 * g1_1 * g1_5
+            mk[5, 1] += w1 * g1_5 * g1_1
+            mk[3, 5] += w1 * g1_3 * g1_5
+            mk[5, 3] += w1 * g1_5 * g1_3
+            mk[4, 5] += w1 * g1_5
+            mk[5, 4] += w1 * g1_5
+            mk[5, 5] += w1 * g1_5 * g1_5
+            va[5] += w1 * g1_5 * vd1
+
+def _build_loo_single_step_system(
+    vs,
+    plane_idx_arr,
+    plane_idx_ref,
+    y_row,
+    ts_row,
+    td_row,
+    z_pos_arr,
+    w_arr,
+    ss,
+    half_lenx_ss,
+    sc_val,
+    fixed_speed_flag,
+    mk,
+    va,
+):
+    """Build LOO normal equations for one hidden plane in single-step mode.
+
+    This is equivalent to repeated _accumulate_mk_va calls with shifted z, but
+    avoids per-plane helper call overhead in the hottest residual-LOO path.
+    """
+    mk.fill(0.0)
+    va.fill(0.0)
+
+    XP = vs[1]
+    YP = vs[3]
+    S0 = sc_val if fixed_speed_flag else vs[5]
+    kz = math.sqrt(1.0 + XP * XP + YP * YP)
+    kzi = 1.0 / kz
+
+    a1 = kzi * S0 * XP
+    a3 = kzi * S0 * YP
+
+    w0 = w_arr[0]
+    w1 = w_arr[1]
+    w2 = w_arr[2]
+    w2_ss = w2 * ss
+    w2_ss2 = w2_ss * ss
+
+    z_ref = z_pos_arr[plane_idx_ref]
+
+    for plane_idx in plane_idx_arr:
+        if plane_idx == plane_idx_ref:
+            continue
+
+        zi = z_pos_arr[plane_idx] - z_ref
+        zi2 = zi * zi
+        sszi = ss * zi
+
+        ydat = y_row[plane_idx]
+        tsdat = ts_row[plane_idx]
+        tddat = td_row[plane_idx]
+        vd1 = tsdat - half_lenx_ss
+
+        # g0 contribution (weight w0)
+        mk[2, 2] += w0
+        mk[2, 3] += w0 * zi
+        mk[3, 2] += w0 * zi
+        mk[3, 3] += w0 * zi2
+        va[2] += w0 * ydat
+        va[3] += w0 * zi * ydat
+
+        # g2 contribution (weight w2)
+        mk[0, 0] += w2_ss2
+        mk[0, 1] += w2_ss2 * zi
+        mk[1, 0] += w2_ss2 * zi
+        mk[1, 1] += w2 * sszi * sszi
+        va[0] += w2_ss * tddat
+        va[1] += w2 * sszi * tddat
+
+        # g1 contribution (weight w1)
+        g1_1 = a1 * zi
+        g1_3 = a3 * zi
+        mk[1, 1] += w1 * g1_1 * g1_1
+        mk[1, 3] += w1 * g1_1 * g1_3
+        mk[3, 1] += w1 * g1_3 * g1_1
+        mk[1, 4] += w1 * g1_1
+        mk[4, 1] += w1 * g1_1
+        mk[3, 3] += w1 * g1_3 * g1_3
+        mk[3, 4] += w1 * g1_3
+        mk[4, 3] += w1 * g1_3
+        mk[4, 4] += w1
+        va[1] += w1 * g1_1 * vd1
+        va[3] += w1 * g1_3 * vd1
+        va[4] += w1 * vd1
+
+        if not fixed_speed_flag:
+            g1_5 = kz * zi
+            mk[1, 5] += w1 * g1_1 * g1_5
+            mk[5, 1] += w1 * g1_5 * g1_1
+            mk[3, 5] += w1 * g1_3 * g1_5
+            mk[5, 3] += w1 * g1_5 * g1_3
+            mk[4, 5] += w1 * g1_5
+            mk[5, 4] += w1 * g1_5
+            mk[5, 5] += w1 * g1_5 * g1_5
+            va[5] += w1 * g1_5 * vd1
+
+
+# Calculate angles -------------------------------------------------------------------
+def calculate_angles(xproj, yproj):
+    phi = np.arctan2(yproj, xproj)
+    theta = np.arccos(1 / np.sqrt(xproj**2 + yproj**2 + 1))
+    return theta, phi
+
+
+def apply_task4_final_filter(
+    df_input: pd.DataFrame,
+    *,
+    apply_changes: bool,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, int | float]]:
+    input_rows = int(len(df_input))
+    if input_rows == 0:
+        return df_input.copy(), pd.DataFrame(), {
+            "input_rows": 0,
+            "rows_affected": 0,
+            "values_zeroed": 0,
+            "rows_failed_fit_tt_min": 0,
+            "rows_failed_nonzero_required": 0,
+            "pre_event_rows_affected": 0,
+            "pre_event_values_zeroed": 0,
+            "post_event_rows_affected": 0,
+            "post_event_values_zeroed": 0,
+        }
+
+    working = df_input.copy() if apply_changes else df_input
+    summary: dict[str, int | float] = {
+        "input_rows": input_rows,
+        "rows_affected": 0,
+        "values_zeroed": 0,
+        "rows_failed_fit_tt_min": 0,
+        "rows_failed_nonzero_required": 0,
+        "pre_event_rows_affected": 0,
+        "pre_event_values_zeroed": 0,
+        "post_event_rows_affected": 0,
+        "post_event_values_zeroed": 0,
+    }
+    final_mask = np.ones(input_rows, dtype=bool)
+    fail_reason_parts = np.empty(input_rows, dtype=object)
+    fail_reason_parts.fill("")
+
+    final_filter_remove_small = TASK4_FINAL_FILTER_REMOVE_SMALL
+    final_filter_remove_small_eps = TASK4_FINAL_FILTER_REMOVE_SMALL_EPS
+    if final_filter_remove_small:
+        small_mask = working.map(
+            lambda x: isinstance(x, (int, float)) and x != 0 and abs(x) < final_filter_remove_small_eps
+        )
+        nonzero_numeric_mask = working.map(lambda x: isinstance(x, (int, float)) and x != 0)
+        total_nonzero = int(nonzero_numeric_mask.sum().sum())
+        total_small = int(small_mask.sum().sum())
+        rows_with_small = int(small_mask.any(axis=1).sum())
+        summary["values_zeroed"] = total_small
+        summary["rows_with_small_values"] = rows_with_small
+        if apply_changes and total_small > 0:
+            working = working.mask(small_mask, 0)
+        record_filter_metric(
+            "small_values_zeroed_event_pct",
+            rows_with_small,
+            input_rows if input_rows else 0,
+        )
+        record_filter_metric(
+            "small_values_zeroed_value_pct",
+            total_small,
+            total_nonzero if total_nonzero else 0,
+        )
+    else:
+        record_filter_metric("small_values_zeroed_event_pct", 0, input_rows if input_rows else 0)
+        record_filter_metric("small_values_zeroed_value_pct", 0, input_rows if input_rows else 0)
+
+    task4_pre_event_block_summary = normalize_task4_event_component_blocks(
+        working,
+        apply_changes=apply_changes,
+    )
+    summary["pre_event_rows_affected"] = int(task4_pre_event_block_summary["rows_affected"])
+    summary["pre_event_values_zeroed"] = int(task4_pre_event_block_summary["values_zeroed"])
+    summary["event_block_column_count"] = int(task4_pre_event_block_summary["column_count"])
+    summary["values_zeroed"] = int(summary["values_zeroed"]) + int(
+        task4_pre_event_block_summary["values_zeroed"]
+    )
+
+    fit_tt_min = TASK4_FINAL_FIT_TT_MIN
+    fit_tt_series = get_task4_tt_series(working, preferred=TASK4_PRIMARY_TT_COLUMN)
+    fit_tt_pass = fit_tt_series >= fit_tt_min
+    fit_tt_fail = ~fit_tt_pass.to_numpy(dtype=bool, copy=False)
+    summary["rows_failed_fit_tt_min"] = int(fit_tt_fail.sum())
+    final_mask &= ~fit_tt_fail
+    fail_reason_parts[fit_tt_fail] = np.where(
+        fail_reason_parts[fit_tt_fail] == "",
+        f"fit_tt<{fit_tt_min}",
+        fail_reason_parts[fit_tt_fail] + f";fit_tt<{fit_tt_min}",
+    )
+
+    required_nonzero_cols = [col for col in TASK4_EVENT_ATOMIC_COLUMNS if col in working.columns]
+    if required_nonzero_cols:
+        nonzero_mask = np.ones(input_rows, dtype=bool)
+        zero_count_per_row = np.zeros(input_rows, dtype=int)
+        primary_zero_col = np.full(input_rows, "", dtype=object)
+        for col in required_nonzero_cols:
+            col_values = pd.to_numeric(working[col], errors="coerce").to_numpy(dtype=float, copy=False)
+            finite_mask = np.isfinite(col_values)
+            nonzero_col_mask = finite_mask & (col_values != 0.0)
+            nonzero_mask &= nonzero_col_mask
+            zero_or_invalid = ~nonzero_col_mask
+            zero_count_per_row += zero_or_invalid.astype(int)
+            primary_assign_mask = (primary_zero_col == "") & zero_or_invalid
+            primary_zero_col[primary_assign_mask] = col
+        nonzero_fail = ~nonzero_mask
+        summary["rows_failed_nonzero_required"] = int(nonzero_fail.sum())
+        summary["rows_failed_nonzero_single"] = int(np.count_nonzero(nonzero_fail & (zero_count_per_row == 1)))
+        summary["rows_failed_nonzero_multi"] = int(np.count_nonzero(nonzero_fail & (zero_count_per_row >= 2)))
+        final_mask &= ~nonzero_fail
+        fail_reason_parts[nonzero_fail] = np.where(
+            fail_reason_parts[nonzero_fail] == "",
+            "required_nonzero_violation",
+            fail_reason_parts[nonzero_fail] + ";required_nonzero_violation",
+        )
+        for col in required_nonzero_cols:
+            summary[f"rows_failed_primary_zero_{col}"] = int(
+                np.count_nonzero(nonzero_fail & (primary_zero_col == col))
+            )
+    else:
+        zero_count_per_row = np.zeros(input_rows, dtype=int)
+        primary_zero_col = np.full(input_rows, "", dtype=object)
+
+    def _numeric_column_or_nan(column_name: str) -> np.ndarray:
+        if column_name not in working.columns:
+            return np.full(input_rows, np.nan, dtype=float)
+        return pd.to_numeric(working[column_name], errors="coerce").to_numpy(dtype=float, copy=False)
+
+    def _apply_numeric_range_filter(
+        values: np.ndarray,
+        *,
+        left_limit: float | None,
+        right_limit: float | None,
+        summary_key: str,
+        reason_key: str,
+    ) -> None:
+        nonlocal final_mask
+        if left_limit is None and right_limit is None:
+            return
+        pass_mask = np.isfinite(values)
+        if left_limit is not None:
+            pass_mask &= values >= left_limit
+        if right_limit is not None:
+            pass_mask &= values <= right_limit
+        fail_mask = ~pass_mask
+        summary[f"rows_failed_{summary_key}"] = int(fail_mask.sum())
+        final_mask &= ~fail_mask
+        fail_reason_parts[fail_mask] = np.where(
+            fail_reason_parts[fail_mask] == "",
+            f"{reason_key}_out_of_range",
+            fail_reason_parts[fail_mask] + f";{reason_key}_out_of_range",
+        )
+
+    det_pos_filter_abs = abs(_task4_config_float(config, "det_pos_filter", default=200.0))
+    det_phi_filter_abs = abs(
+        _task4_config_float(
+            config,
+            "det_phi_filter_abs",
+            "det_phi_right_filter",
+            default=3.141592,
+        )
+    )
+    event_variable_specs = (
+        (
+            "charge_event",
+            "event_combination_detector_charge_event_left",
+            "event_combination_detector_charge_event_right",
+            _task4_config_float(config, "charge_plot_limit_left", default=0.0),
+            _task4_config_float(
+                config,
+                "charge_plot_event_limit_right",
+                "charge_plot_limit_right",
+                default=400.0,
+            ),
+        ),
+        (
+            "x",
+            "event_combination_detector_x_left",
+            "event_combination_detector_x_right",
+            -det_pos_filter_abs,
+            det_pos_filter_abs,
+        ),
+        (
+            "y",
+            "event_combination_detector_y_left",
+            "event_combination_detector_y_right",
+            -det_pos_filter_abs,
+            det_pos_filter_abs,
+        ),
+        (
+            "s",
+            "event_combination_detector_s_left",
+            "event_combination_detector_s_right",
+            _task4_config_float(config, "det_slowness_filter_left", default=-0.02),
+            _task4_config_float(config, "det_slowness_filter_right", default=0.03),
+        ),
+        (
+            "theta",
+            "event_combination_detector_theta_left",
+            "event_combination_detector_theta_right",
+            _task4_config_float(config, "det_theta_left_filter", default=0.0),
+            _task4_config_float(config, "det_theta_right_filter", default=1.5708),
+        ),
+        (
+            "phi",
+            "event_combination_detector_phi_left",
+            "event_combination_detector_phi_right",
+            -det_phi_filter_abs,
+            det_phi_filter_abs,
+        ),
+    )
+    for (
+        variable_name,
+        left_key,
+        right_key,
+        default_left,
+        default_right,
+    ) in event_variable_specs:
+        has_explicit_bounds = any(
+            _task4_parse_optional_float(config.get(key)) is not None
+            for key in (left_key, right_key)
+        )
+        if not has_explicit_bounds:
+            continue
+        left_limit = _task4_get_optional_config_float(
+            config,
+            left_key,
+        )
+        right_limit = _task4_get_optional_config_float(
+            config,
+            right_key,
+        )
+        if left_limit is None:
+            left_limit = float(default_left)
+        if right_limit is None:
+            right_limit = float(default_right)
+        _apply_numeric_range_filter(
+            _numeric_column_or_nan(variable_name),
+            left_limit=left_limit,
+            right_limit=right_limit,
+            summary_key=f"{variable_name}_range",
+            reason_key=variable_name,
+        )
+
+    rows_affected = int((~final_mask).sum())
+    summary["rows_affected"] = rows_affected
+    summary["flagged_rows"] = rows_affected
+    summary["failed_pair_any"] = rows_affected
+    if not apply_changes:
+        return df_input, pd.DataFrame(), summary
+
+    filtered_df = working.loc[final_mask].copy()
+    rejected_df = working.loc[~final_mask].copy()
+    task4_post_event_block_summary = normalize_task4_event_component_blocks(
+        filtered_df,
+        apply_changes=True,
+    )
+    summary["post_event_rows_affected"] = int(task4_post_event_block_summary["rows_affected"])
+    summary["post_event_values_zeroed"] = int(task4_post_event_block_summary["values_zeroed"])
+    summary["values_zeroed"] = int(summary["values_zeroed"]) + int(
+        task4_post_event_block_summary["values_zeroed"]
+    )
+    if not rejected_df.empty:
+        rejected_df["reject_stage"] = "final_filtering"
+        rejected_df["reject_reason"] = fail_reason_parts[~final_mask]
+        rejected_df["zero_count"] = zero_count_per_row[~final_mask]
+        rejected_df["primary_zero_col"] = primary_zero_col[~final_mask]
+    return filtered_df, rejected_df, summary
+
+
+# -----------------------------------------------------------------------------
+# -------------- Correlate trigger types in different stages ------------------
+# -----------------------------------------------------------------------------
+
+def plot_tt_correlation(df, row_label, col_label, title, filename_suffix, fig_idx, base_dir, show_plots=False, save_plots=False, plot_list=None):
+
+    analysis_data = df[[row_label, col_label]]
+    counts = analysis_data.groupby([row_label, col_label]).size().unstack(fill_value=0)
+
+    row_order = sorted(analysis_data[row_label].unique(), reverse=True)
+    col_unique = analysis_data[col_label].unique()
+    col_order = list(row_order) + [x for x in col_unique if x not in row_order]
+    counts = counts.reindex(index=row_order, columns=col_order, fill_value=0)
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+    ax.set_xticks(np.arange(len(counts.columns)))
+    ax.set_yticks(np.arange(len(counts.index)))
+    ax.set_xticklabels(counts.columns)
+    ax.set_yticklabels(counts.index)
+
+    ax.set_xlabel(col_label)
+    ax.set_ylabel(row_label)
+    ax.set_title(title)
+
+    im = ax.imshow(counts, cmap='plasma', origin='lower')
+    total = counts.values.sum()
+
+    for i in range(len(counts.index)):
+        for j in range(len(counts.columns)):
+            value = counts.iloc[i, j]
+            if value > 0:
+                pct = 100 * value / total
+                if pct > 1:
+                    ax.text(j, i, f"{pct:.1f}%",
+                            ha="center", va="center",
+                            color="black" if value > counts.values.max() * 0.5 else "white")
+
+    plt.tight_layout()
+    if save_plots:
+        final_filename = f'{fig_idx}_{filename_suffix}.png'
+        save_fig_path = os.path.join(base_dir, final_filename)
+        if plot_list is not None:
+            plot_list.append(save_fig_path)
+        save_plot_figure(save_fig_path, format='png')
+    if show_plots:
+        plt.show()
+    plt.close()
+
+    return fig_idx + 1
+
+
+def _resolve_task4_efficiency_metadata_cfg(config_dict):
+    raw = config_dict.get("efficiency_metadata", {})
+    if not isinstance(raw, dict):
+        raw = {}
+    return {
+        "x_bin_count": max(1, _safe_cfg_int(raw.get("x_bin_count", 15), 15)),
+        "y_bin_count": max(1, _safe_cfg_int(raw.get("y_bin_count", 20), 20)),
+        "theta_bin_count": max(1, _safe_cfg_int(raw.get("theta_bin_count", 20), 20)),
+        "phi_bin_count": max(1, _safe_cfg_int(raw.get("phi_bin_count", 24), 24)),
+        "x_min_mm": raw.get("x_min_mm", None),
+        "x_max_mm": raw.get("x_max_mm", None),
+        "y_min_mm": raw.get("y_min_mm", None),
+        "y_max_mm": raw.get("y_max_mm", None),
+        "theta_min_deg": raw.get("theta_min_deg", None),
+        "theta_max_deg": raw.get("theta_max_deg", None),
+        "phi_min_deg": raw.get("phi_min_deg", None),
+        "phi_max_deg": raw.get("phi_max_deg", None),
+        "min_pool_events": max(1, _safe_cfg_int(raw.get("min_pool_events", 20), 20)),
+        "min_accepted_events": max(1, _safe_cfg_int(raw.get("min_accepted_events", 10), 10)),
+        "summary_fiducial_x_abs_max_mm": _safe_cfg_optional_float(
+            raw.get("summary_fiducial_x_abs_max_mm", None)
+        ),
+        "summary_fiducial_y_abs_max_mm": _safe_cfg_optional_float(
+            raw.get("summary_fiducial_y_abs_max_mm", None)
+        ),
+        "summary_fiducial_theta_max_deg": _safe_cfg_optional_float(
+            raw.get("summary_fiducial_theta_max_deg", None)
+        ),
+        "summary_fiducial_phi_abs_max_deg": _safe_cfg_optional_float(
+            raw.get("summary_fiducial_phi_abs_max_deg", None)
+        ),
+    }
+
+def _resolve_projection_ellipse_diagnostic_cfg(config_dict, default_half_range):
+    raw = config_dict.get("projection_ellipse_diagnostic", {})
+    if not isinstance(raw, dict):
+        raw = {}
+
+    default_half_range = float(default_half_range)
+    x_min = _safe_cfg_optional_float(raw.get("x_min", None))
+    x_max = _safe_cfg_optional_float(raw.get("x_max", None))
+    y_min = _safe_cfg_optional_float(raw.get("y_min", None))
+    y_max = _safe_cfg_optional_float(raw.get("y_max", None))
+    if x_min is None:
+        x_min = -default_half_range
+    if x_max is None:
+        x_max = default_half_range
+    if y_min is None:
+        y_min = -default_half_range
+    if y_max is None:
+        y_max = default_half_range
+    if x_max <= x_min:
+        x_min, x_max = -default_half_range, default_half_range
+    if y_max <= y_min:
+        y_min, y_max = -default_half_range, default_half_range
+
+    smoothing_sigma_bins = raw.get("smoothing_sigma_bins", 1.0)
+    try:
+        smoothing_sigma_bins = float(smoothing_sigma_bins)
+    except (TypeError, ValueError):
+        smoothing_sigma_bins = 1.0
+    if not np.isfinite(smoothing_sigma_bins) or smoothing_sigma_bins < 0.0:
+        smoothing_sigma_bins = 1.0
+
+    axis_quantile_min = _safe_cfg_optional_float(raw.get("axis_quantile_min", 0.01))
+    axis_quantile_max = _safe_cfg_optional_float(raw.get("axis_quantile_max", 0.99))
+    if axis_quantile_min is None:
+        axis_quantile_min = 0.01
+    if axis_quantile_max is None:
+        axis_quantile_max = 0.99
+
+    return {
+        "bin_count": max(24, _safe_cfg_int(raw.get("bin_count", 140), 140)),
+        "min_points": max(50, _safe_cfg_int(raw.get("min_points", 300), 300)),
+        "smoothing_sigma_bins": smoothing_sigma_bins,
+        "x_min": float(x_min),
+        "x_max": float(x_max),
+        "y_min": float(y_min),
+        "y_max": float(y_max),
+        "axis_quantile_min": min(max(float(axis_quantile_min), 0.0), 0.49),
+        "axis_quantile_max": max(min(float(axis_quantile_max), 1.0), 0.51),
+        "cmap": str(raw.get("cmap", "turbo")).strip() or "turbo",
+        "contour_fractions": _coerce_probability_tuple(
+            raw.get("contour_fractions", None),
+            default=(0.25, 0.5, 0.75),
+        ),
+        "focus_definitive_tt": _coerce_tt_label_tuple(
+            raw.get("focus_definitive_tt", None),
+            default=OFFENDER_FOCUS_TTS_CFG,
+        ),
+    }
+
+def _efficiency_center_field(axis_name):
+    return "center_deg" if axis_name == "theta" else "center_mm"
+
+
+def _make_efficiency_curve(values, fired, bins):
+    vals = np.asarray(values, dtype=float)
+    fire = np.asarray(fired, dtype=float)
+    centers = 0.5 * (bins[:-1] + bins[1:])
+    num, _ = np.histogram(vals[fire > 0.5], bins=bins)
+    den, _ = np.histogram(vals, bins=bins)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        eff = np.where(den > 0, num / den, np.nan)
+        unc = np.where(
+            den > 0,
+            np.sqrt(np.maximum(eff * (1.0 - eff) / np.maximum(den, 1), 0.0)),
+            np.nan,
+        )
+    return {
+        "centers": centers.astype(float),
+        "eff": np.asarray(eff, dtype=float),
+        "unc": np.asarray(unc, dtype=float),
+        "den": np.asarray(den, dtype=float),
+    }
+
+def _histogram_bin_indices(values, bins):
+    vals = np.asarray(values, dtype=float)
+    out = np.full(vals.shape, -1, dtype=np.int32)
+    if vals.size == 0 or len(bins) < 2:
+        return out
+
+    valid = np.isfinite(vals) & (vals >= float(bins[0])) & (vals <= float(bins[-1]))
+    if not np.any(valid):
+        return out
+
+    out[valid] = np.digitize(vals[valid], bins[1:-1], right=False).astype(np.int32)
+    return out
+
+def _compute_efficiency_summary_bin_mask(centers, eff_vals, den_vals, axis_name, cfg_eff):
+    valid = np.isfinite(centers) & np.isfinite(eff_vals) & np.isfinite(den_vals) & (den_vals > 0)
+    if axis_name == "x":
+        limit = cfg_eff.get("summary_fiducial_x_abs_max_mm", None)
+        if limit is not None:
+            valid &= np.abs(centers) <= float(limit)
+    elif axis_name == "y":
+        limit = cfg_eff.get("summary_fiducial_y_abs_max_mm", None)
+        if limit is not None:
+            valid &= np.abs(centers) <= float(limit)
+    elif axis_name == "theta":
+        limit = cfg_eff.get("summary_fiducial_theta_max_deg", None)
+        if limit is not None:
+            valid &= centers <= float(limit)
+    elif axis_name == "phi":
+        limit = cfg_eff.get("summary_fiducial_phi_abs_max_deg", None)
+        if limit is not None:
+            valid &= np.abs(centers) <= float(limit)
+    return valid
+
+def _extract_efficiency_summary_arrays(axis_payload, axis_name, cfg_eff):
+    centers = np.asarray(axis_payload.get("centers", []), dtype=float)
+    eff_vals = np.asarray(axis_payload.get("eff", []), dtype=float)
+    unc_vals = np.asarray(axis_payload.get("unc", []), dtype=float)
+    den_vals = np.asarray(axis_payload.get("den", []), dtype=float)
+    valid = _compute_efficiency_summary_bin_mask(
+        centers,
+        eff_vals,
+        den_vals,
+        axis_name,
+        cfg_eff,
+    )
+    return centers, eff_vals, unc_vals, den_vals, valid
+
+def _compute_robust_x_center_eff(axis_payload, cfg_eff):
+    summary = _compute_efficiency_scalar_summary(axis_payload, "x", cfg_eff)
+    eff = summary.get("eff", np.nan)
+    return float(eff) if np.isfinite(eff) else np.nan
+
+def _intersect_required_indices(*indices):
+    if not indices or any(index is None for index in indices):
+        return None
+    intersection = pd.Index(indices[0])
+    for index in indices[1:]:
+        intersection = intersection.intersection(pd.Index(index), sort=False)
+    return intersection
+
+def _required_track_efficiency_hit_columns():
+    return tuple(
+        f"P{plane}_{suffix}"
+        for plane in range(1, 5)
+        for suffix in ("T_dif_final", "Y_final")
+    )
+
+def _extract_track_efficiency_hit_arrays(df_plot, tdiff_to_x):
+    x_hits = np.column_stack(
+        [
+            pd.to_numeric(df_plot[f"P{plane}_T_dif_final"], errors="coerce").to_numpy(dtype=float)
+            * float(tdiff_to_x)
+            for plane in range(1, 5)
+        ]
+    )
+    y_hits = np.column_stack(
+        [
+            pd.to_numeric(df_plot[f"P{plane}_Y_final"], errors="coerce").to_numpy(dtype=float)
+            for plane in range(1, 5)
+        ]
+    )
+    return x_hits, y_hits
+
+def _fit_three_plane_telescope_projection(x_hits, y_hits, z_arr, test_plane_zero_idx):
+    other_idx = [idx for idx in range(4) if idx != int(test_plane_zero_idx)]
+    z_known = np.asarray(z_arr[other_idx], dtype=float)
+    z_test = float(z_arr[int(test_plane_zero_idx)])
+    z_mean = float(np.mean(z_known))
+    z_delta = z_known - z_mean
+    z_denom = float(np.sum(z_delta * z_delta))
+
+    n_rows = int(x_hits.shape[0])
+    out = {
+        "x_pred": np.full(n_rows, np.nan, dtype=float),
+        "y_pred": np.full(n_rows, np.nan, dtype=float),
+        "theta_pred_deg": np.full(n_rows, np.nan, dtype=float),
+        "phi_pred_deg": np.full(n_rows, np.nan, dtype=float),
+        "valid": np.zeros(n_rows, dtype=bool),
+    }
+    if n_rows == 0 or not np.isfinite(z_denom) or z_denom <= 0.0:
+        return out
+
+    x_known = np.asarray(x_hits[:, other_idx], dtype=float)
+    y_known = np.asarray(y_hits[:, other_idx], dtype=float)
+    valid = np.isfinite(x_known).all(axis=1) & np.isfinite(y_known).all(axis=1)
+    if not np.any(valid):
+        return out
+
+    x_fit = x_known[valid]
+    y_fit = y_known[valid]
+    x_mean = np.mean(x_fit, axis=1)
+    y_mean = np.mean(y_fit, axis=1)
+    slope_x = np.sum((x_fit - x_mean[:, None]) * z_delta[None, :], axis=1) / z_denom
+    slope_y = np.sum((y_fit - y_mean[:, None]) * z_delta[None, :], axis=1) / z_denom
+    intercept_x = x_mean - slope_x * z_mean
+    intercept_y = y_mean - slope_y * z_mean
+
+    out["x_pred"][valid] = intercept_x + slope_x * z_test
+    out["y_pred"][valid] = intercept_y + slope_y * z_test
+    out["theta_pred_deg"][valid] = np.degrees(np.arctan(np.hypot(slope_x, slope_y)))
+    out["phi_pred_deg"][valid] = np.degrees(np.arctan2(slope_y, slope_x))
+    out["valid"] = valid
+    return out
+
+def _select_robust_plateau_event_indices(
+    axis_payload,
+    *,
+    cfg_eff,
+    axis_values,
+    bins,
+    accepted_indices,
+    axis_name="x",
+    tolerance,
+    center_eff=np.nan,
+    fired=None,
+    fired_only=False,
+):
+    centers = np.asarray(axis_payload.get("centers", []), dtype=float)
+    eff_vals = np.asarray(axis_payload.get("eff", []), dtype=float)
+    den_vals = np.asarray(axis_payload.get("den", []), dtype=float)
+    valid_bins = _compute_efficiency_summary_bin_mask(
+        centers,
+        eff_vals,
+        den_vals,
+        axis_name,
+        cfg_eff,
+    )
+    if not np.any(valid_bins):
+        return None
+
+    if eff_vals.shape[0] != len(bins) - 1:
+        return None
+
+    if not np.isfinite(center_eff):
+        center_eff = _compute_efficiency_scalar_summary(axis_payload, axis_name, cfg_eff).get("eff", np.nan)
+    if not np.isfinite(center_eff):
+        return None
+
+    plateau_bins = valid_bins & (np.abs(eff_vals - center_eff) <= float(tolerance))
+
+    accepted_index = pd.Index(accepted_indices)
+    bin_indices = _histogram_bin_indices(axis_values, bins)
+    if len(accepted_index) != len(bin_indices):
+        return None
+
+    selected = bin_indices >= 0
+    if fired_only:
+        if fired is None:
+            return None
+        fired_arr = np.asarray(fired, dtype=float)
+        if len(fired_arr) != len(bin_indices):
+            return None
+        selected &= fired_arr > 0.5
+    if np.any(selected):
+        in_plateau = np.zeros(selected.shape, dtype=bool)
+        in_plateau[selected] = plateau_bins[bin_indices[selected]]
+        selected &= in_plateau
+
+    return accepted_index[selected]
+
+def _select_efficiency_summary_event_indices(
+    axis_payload,
+    *,
+    cfg_eff,
+    axis_values,
+    bins,
+    accepted_indices,
+    axis_name="x",
+    fired=None,
+    fired_only=False,
+):
+    centers = np.asarray(axis_payload.get("centers", []), dtype=float)
+    eff_vals = np.asarray(axis_payload.get("eff", []), dtype=float)
+    den_vals = np.asarray(axis_payload.get("den", []), dtype=float)
+    valid_bins = _compute_efficiency_summary_bin_mask(
+        centers,
+        eff_vals,
+        den_vals,
+        axis_name,
+        cfg_eff,
+    )
+    if not np.any(valid_bins):
+        return None
+
+    if eff_vals.shape[0] != len(bins) - 1:
+        return None
+
+    accepted_index = pd.Index(accepted_indices)
+    bin_indices = _histogram_bin_indices(axis_values, bins)
+    if len(accepted_index) != len(bin_indices):
+        return None
+
+    selected = bin_indices >= 0
+    if fired_only:
+        if fired is None:
+            return None
+        fired_arr = np.asarray(fired, dtype=float)
+        if len(fired_arr) != len(bin_indices):
+            return None
+        selected &= fired_arr > 0.5
+    if np.any(selected):
+        in_summary = np.zeros(selected.shape, dtype=bool)
+        in_summary[selected] = valid_bins[bin_indices[selected]]
+        selected &= in_summary
+
+    return accepted_index[selected]
+
+def _compute_efficiency_scalar_summary(axis_payload, axis_name, cfg_eff):
+    centers, eff_vals, unc_vals, den_vals, valid = _extract_efficiency_summary_arrays(
+        axis_payload,
+        axis_name,
+        cfg_eff,
+    )
+
+    out = {
+        "eff": np.nan,
+        "unc": np.nan,
+        "n_denom": 0,
+        "n_bins_used": int(np.sum(valid)),
+        "selected_center": np.nan,
+    }
+    if not np.any(valid):
+        return out
+
+    if axis_name == "theta":
+        valid_idx = np.flatnonzero(valid)
+        # The theta scalar summary is defined by the bin closest to normal incidence,
+        # not by the maximum efficiency inside the fiducial theta band.
+        best_local = valid_idx[np.nanargmin(np.abs(centers[valid_idx]))]
+        out["eff"] = float(eff_vals[best_local])
+        out["unc"] = float(unc_vals[best_local]) if best_local < len(unc_vals) else np.nan
+        out["n_denom"] = int(den_vals[best_local]) if best_local < len(den_vals) else 0
+        out["selected_center"] = float(centers[best_local])
+        return out
+
+    den_region = den_vals[valid]
+    eff_region = eff_vals[valid]
+    denom = float(np.sum(den_region))
+    if not np.isfinite(denom) or denom <= 0.0:
+        return out
+    num = float(np.sum(den_region * eff_region))
+    eff_mean = num / denom
+    out["eff"] = float(eff_mean)
+    out["unc"] = float(np.sqrt(max(eff_mean * (1.0 - eff_mean) / denom, 0.0)))
+    out["n_denom"] = int(round(denom))
+    return out
+
+def _resolve_efficiency_edges(
+    *,
+    cfg_eff,
+    strip_half,
+    width_half,
+    theta_left_filter,
+    theta_right_filter,
+    phi_left_filter,
+    phi_right_filter,
+):
+    x_min = _safe_cfg_float(cfg_eff.get("x_min_mm", None), -float(strip_half))
+    x_max = _safe_cfg_float(cfg_eff.get("x_max_mm", None), float(strip_half))
+    y_min = _safe_cfg_float(cfg_eff.get("y_min_mm", None), -float(width_half))
+    y_max = _safe_cfg_float(cfg_eff.get("y_max_mm", None), float(width_half))
+    theta_min_deg = _safe_cfg_float(
+        cfg_eff.get("theta_min_deg", None),
+        float(np.degrees(theta_left_filter)),
+    )
+    theta_max_deg = _safe_cfg_float(
+        cfg_eff.get("theta_max_deg", None),
+        float(np.degrees(theta_right_filter)),
+    )
+    phi_min_deg = _safe_cfg_float(
+        cfg_eff.get("phi_min_deg", None),
+        float(np.degrees(phi_left_filter)),
+    )
+    phi_max_deg = _safe_cfg_float(
+        cfg_eff.get("phi_max_deg", None),
+        float(np.degrees(phi_right_filter)),
+    )
+
+    x_min = max(-float(strip_half), min(x_min, float(strip_half)))
+    x_max = max(-float(strip_half), min(x_max, float(strip_half)))
+    y_min = max(-float(width_half), min(y_min, float(width_half)))
+    y_max = max(-float(width_half), min(y_max, float(width_half)))
+    theta_min_deg = max(0.0, theta_min_deg)
+    theta_max_deg = max(theta_min_deg + 1e-6, min(theta_max_deg, 90.0))
+    phi_min_deg = max(-180.0, min(phi_min_deg, 180.0))
+    phi_max_deg = max(-180.0, min(phi_max_deg, 180.0))
+
+    if x_max <= x_min:
+        x_min, x_max = -float(strip_half), float(strip_half)
+    if y_max <= y_min:
+        y_min, y_max = -float(width_half), float(width_half)
+    if phi_max_deg <= phi_min_deg:
+        phi_min_deg = float(np.degrees(phi_left_filter))
+        phi_max_deg = float(np.degrees(phi_right_filter))
+        if phi_max_deg <= phi_min_deg:
+            phi_min_deg, phi_max_deg = -180.0, 180.0
+
+    return {
+        "x": np.linspace(x_min, x_max, int(cfg_eff["x_bin_count"]) + 1),
+        "y": np.linspace(y_min, y_max, int(cfg_eff["y_bin_count"]) + 1),
+        "theta": np.linspace(theta_min_deg, theta_max_deg, int(cfg_eff["theta_bin_count"]) + 1),
+        "phi": np.linspace(phi_min_deg, phi_max_deg, int(cfg_eff["phi_bin_count"]) + 1),
+    }
+
+def _compute_track_based_efficiency_payload(
+    df_plot,
+    *,
+    cfg_eff,
+    cfg_fiducial,
+    z_positions,
+    tdiff_to_x,
+    strip_half,
+    width_half,
+    theta_left_filter,
+    theta_right_filter,
+    phi_left_filter,
+    phi_right_filter,
+    y_pos_p13,
+    y_pos_p24,
+):
+    edges = _resolve_efficiency_edges(
+        cfg_eff=cfg_eff,
+        strip_half=strip_half,
+        width_half=width_half,
+        theta_left_filter=theta_left_filter,
+        theta_right_filter=theta_right_filter,
+        phi_left_filter=phi_left_filter,
+        phi_right_filter=phi_right_filter,
+    )
+    plane_pool_tt = {
+        1: [234, 1234],
+        2: [134, 1234],
+        3: [124, 1234],
+        4: [123, 1234],
+    }
+    payload = {
+        "available": False,
+        "reason": "",
+        "config": dict(cfg_eff),
+        "edges": edges,
+        "plane_results": {},
+        "trigger_source": "",
+        "pool_source": "",
+    }
+
+    trigger_source = "fit_tt"
+    payload["trigger_source"] = trigger_source
+    pool_source = trigger_source
+    payload["pool_source"] = pool_source
+
+    required = tuple(_required_track_efficiency_hit_columns()) + (trigger_source, pool_source)
+    missing = [col for col in required if col not in df_plot.columns]
+    if missing:
+        if trigger_source in missing:
+            payload["reason"] = "missing_fit_tt"
+        else:
+            payload["reason"] = f"missing_required_columns:{','.join(missing)}"
+        return payload
+
+    z_arr = np.asarray(z_positions, dtype=float)
+    x_hits_all, y_hits_all = _extract_track_efficiency_hit_arrays(df_plot, tdiff_to_x)
+    dtt_all = (
+        pd.to_numeric(df_plot[trigger_source], errors="coerce")
+        .fillna(0)
+        .to_numpy(dtype=np.int32)
+    )
+    pool_tt_all = (
+        pd.to_numeric(df_plot[pool_source], errors="coerce")
+        .fillna(0)
+        .to_numpy(dtype=np.int32)
+    )
+    charge_series, _ = _resolve_task4_total_event_charge_series(df_plot)
+    if charge_series is not None:
+        charge_all = charge_series.to_numpy(dtype=float, copy=False)
+    else:
+        charge_all = np.full(len(df_plot), np.nan, dtype=float)
+
+    any_plane_available = False
+    for plane in range(1, 5):
+        x_scalar_summary = _compute_efficiency_scalar_summary({}, "x", cfg_eff)
+        y_reference = y_pos_p13 if (plane - 1) % 2 == 0 else y_pos_p24
+        plane_result = {
+            "plane": int(plane),
+            "overall_eff": np.nan,
+            "n_denom": 0,
+            "y_reference": np.asarray(y_reference, dtype=float),
+            "eff_2d": np.full(
+                (len(edges["x"]) - 1, len(edges["y"]) - 1),
+                np.nan,
+                dtype=float,
+            ),
+            "x": _make_efficiency_curve(np.asarray([], dtype=float), np.asarray([], dtype=float), edges["x"]),
+            "y": _make_efficiency_curve(np.asarray([], dtype=float), np.asarray([], dtype=float), edges["y"]),
+            "theta": _make_efficiency_curve(
+                np.asarray([], dtype=float),
+                np.asarray([], dtype=float),
+                edges["theta"],
+            ),
+            "phi": _make_efficiency_curve(
+                np.asarray([], dtype=float),
+                np.asarray([], dtype=float),
+                edges["phi"],
+            ),
+            "eff_theta_phi": np.full(
+                (len(edges["theta"]) - 1, len(edges["phi"]) - 1),
+                np.nan,
+                dtype=float,
+            ),
+            "scalar_summary": {
+                "x": {
+                    "eff": np.nan,
+                    "unc": np.nan,
+                    "n_denom": 0,
+                    "n_bins_used": 0,
+                    "selected_center": np.nan,
+                },
+                "y": {
+                    "eff": np.nan,
+                    "unc": np.nan,
+                    "n_denom": 0,
+                    "n_bins_used": 0,
+                    "selected_center": np.nan,
+                },
+                "theta": {
+                    "eff": np.nan,
+                    "unc": np.nan,
+                    "n_denom": 0,
+                    "n_bins_used": 0,
+                    "selected_center": np.nan,
+                },
+                "phi": {
+                    "eff": np.nan,
+                    "unc": np.nan,
+                    "n_denom": 0,
+                    "n_bins_used": 0,
+                    "selected_center": np.nan,
+                },
+            },
+            "accepted_indices": None,
+            "robust_x_summary_accepted_indices": None,
+            "robust_x_summary_fired_indices": None,
+            "robust_x_plateau_accepted_indices": None,
+            "robust_x_plateau_fired_indices": None,
+            "robust_y_plateau_accepted_indices": None,
+            "robust_y_plateau_fired_indices": None,
+            "robust_phi_plateau_accepted_indices": None,
+            "robust_phi_plateau_fired_indices": None,
+            "robust_x_center_eff": np.nan,
+            "robust_xyphi_accepted_indices": None,
+            "robust_xyphi_fired_indices": None,
+            "robust_xyphi_eff": np.nan,
+        }
+
+        projection = _fit_three_plane_telescope_projection(
+            x_hits_all,
+            y_hits_all,
+            z_arr,
+            plane - 1,
+        )
+        # Denominator/numerator are both defined from fit_tt combinations:
+        # pool in {3-plane,1234}, fired in {1234}.
+        pool_mask = np.isin(pool_tt_all, plane_pool_tt[plane]) & projection["valid"]
+        if int(np.sum(pool_mask)) < int(cfg_eff["min_pool_events"]):
+            payload["plane_results"][plane] = plane_result
+            continue
+
+        x_pred = projection["x_pred"][pool_mask]
+        y_pred = projection["y_pred"][pool_mask]
+        theta_pred_deg = projection["theta_pred_deg"][pool_mask]
+        phi_pred_deg = projection["phi_pred_deg"][pool_mask]
+        charge_pred = charge_all[pool_mask]
+        fired = (dtt_all[pool_mask] == 1234).astype(float)
+
+        # x_left, x_right = _task4_resolve_region_bounds(
+        #     cfg_fiducial.get("x_left", None),
+        #     cfg_fiducial.get("x_right", None),
+        #     -float(strip_half),
+        #     float(strip_half),
+        # )
+        plane_x_cfg = cfg_fiducial.get("x_by_plane", {}).get(plane, {})
+        x_left, x_right = _task4_resolve_region_bounds(
+            plane_x_cfg.get("left", None),
+            plane_x_cfg.get("right", None),
+            -float(width_half),
+            float(width_half),
+        )
+        plane_y_cfg = cfg_fiducial.get("y_by_plane", {}).get(plane, {})
+        y_left, y_right = _task4_resolve_region_bounds(
+            plane_y_cfg.get("left", None),
+            plane_y_cfg.get("right", None),
+            -float(width_half),
+            float(width_half),
+        )
+
+        accepted_region = (
+            np.isfinite(x_pred)
+            & np.isfinite(y_pred)
+            & (x_pred >= x_left)
+            & (x_pred <= x_right)
+            & (y_pred >= y_left)
+            & (y_pred <= y_right)
+        )
+        charge_left = cfg_fiducial.get("charge_event_left", None)
+        charge_right = cfg_fiducial.get("charge_event_right", None)
+        if charge_left is not None or charge_right is not None:
+            charge_pass = np.isfinite(charge_pred)
+            if charge_left is not None:
+                charge_pass &= charge_pred >= float(charge_left)
+            if charge_right is not None:
+                charge_pass &= charge_pred <= float(charge_right)
+            accepted_region &= charge_pass
+
+        theta_left_deg = cfg_fiducial.get("theta_left_deg", None)
+        theta_right_deg = cfg_fiducial.get("theta_right_deg", None)
+        if theta_left_deg is not None or theta_right_deg is not None:
+            theta_pass = np.isfinite(theta_pred_deg)
+            if theta_left_deg is not None:
+                theta_pass &= theta_pred_deg >= float(theta_left_deg)
+            if theta_right_deg is not None:
+                theta_pass &= theta_pred_deg <= float(theta_right_deg)
+            accepted_region &= theta_pass
+
+        accepted_theta = accepted_region & np.isfinite(theta_pred_deg)
+        accepted_phi = accepted_region & np.isfinite(phi_pred_deg)
+        accepted_theta_phi = accepted_theta & np.isfinite(phi_pred_deg)
+
+        x_acc = x_pred[accepted_region]
+        y_acc = y_pred[accepted_region]
+        fired_acc = fired[accepted_region]
+        accepted_index = df_plot.index[pool_mask][accepted_region]
+        theta_acc = theta_pred_deg[accepted_theta]
+        fired_theta = fired[accepted_theta]
+        phi_acc = phi_pred_deg[accepted_phi]
+        fired_phi = fired[accepted_phi]
+        theta_map_acc = theta_pred_deg[accepted_theta_phi]
+        phi_map_acc = phi_pred_deg[accepted_theta_phi]
+        fired_theta_phi = fired[accepted_theta_phi]
+
+        plane_result["n_denom"] = int(len(fired_acc))
+        plane_result["accepted_indices"] = pd.Index(accepted_index)
+        if len(fired_acc) > 0:
+            plane_result["overall_eff"] = float(np.mean(fired_acc) * 100.0)
+
+        if len(fired_acc) >= int(cfg_eff["min_accepted_events"]):
+            num_2d, _, _ = np.histogram2d(
+                x_acc[fired_acc > 0.5],
+                y_acc[fired_acc > 0.5],
+                bins=[edges["x"], edges["y"]],
+            )
+            den_2d, _, _ = np.histogram2d(
+                x_acc,
+                y_acc,
+                bins=[edges["x"], edges["y"]],
+            )
+            with np.errstate(invalid="ignore", divide="ignore"):
+                plane_result["eff_2d"] = np.where(den_2d > 0, num_2d / den_2d, np.nan)
+
+            plane_result["x"] = _make_efficiency_curve(x_acc, fired_acc, edges["x"])
+            plane_result["y"] = _make_efficiency_curve(y_acc, fired_acc, edges["y"])
+            x_scalar_summary = _compute_efficiency_scalar_summary(
+                plane_result["x"],
+                "x",
+                cfg_eff,
+            )
+            plane_result["robust_x_center_eff"] = float(x_scalar_summary.get("eff", np.nan))
+            plane_result["robust_x_summary_accepted_indices"] = _select_efficiency_summary_event_indices(
+                plane_result["x"],
+                cfg_eff=cfg_eff,
+                axis_values=x_acc,
+                bins=edges["x"],
+                accepted_indices=accepted_index,
+                axis_name="x",
+            )
+            plane_result["robust_x_summary_fired_indices"] = _select_efficiency_summary_event_indices(
+                plane_result["x"],
+                cfg_eff=cfg_eff,
+                axis_values=x_acc,
+                bins=edges["x"],
+                accepted_indices=accepted_index,
+                axis_name="x",
+                fired=fired_acc,
+                fired_only=True,
+            )
+            plane_result["robust_x_plateau_accepted_indices"] = _select_robust_plateau_event_indices(
+                plane_result["x"],
+                cfg_eff=cfg_eff,
+                axis_values=x_acc,
+                bins=edges["x"],
+                accepted_indices=accepted_index,
+                axis_name="x",
+                tolerance=_ROBUST_EFFICIENCY_PLATEAU_TOLERANCE,
+                center_eff=plane_result["robust_x_center_eff"],
+            )
+            plane_result["robust_x_plateau_fired_indices"] = _select_robust_plateau_event_indices(
+                plane_result["x"],
+                cfg_eff=cfg_eff,
+                axis_values=x_acc,
+                bins=edges["x"],
+                accepted_indices=accepted_index,
+                axis_name="x",
+                tolerance=_ROBUST_EFFICIENCY_PLATEAU_TOLERANCE,
+                center_eff=plane_result["robust_x_center_eff"],
+                fired=fired_acc,
+                fired_only=True,
+            )
+            any_plane_available = True
+
+        if len(fired_theta) >= int(cfg_eff["min_accepted_events"]):
+            plane_result["theta"] = _make_efficiency_curve(
+                theta_acc,
+                fired_theta,
+                edges["theta"],
+            )
+            any_plane_available = True
+
+        if len(fired_phi) >= int(cfg_eff["min_accepted_events"]):
+            plane_result["phi"] = _make_efficiency_curve(
+                phi_acc,
+                fired_phi,
+                edges["phi"],
+            )
+            any_plane_available = True
+
+        if len(fired_theta_phi) >= int(cfg_eff["min_accepted_events"]):
+            num_theta_phi, _, _ = np.histogram2d(
+                theta_map_acc[fired_theta_phi > 0.5],
+                phi_map_acc[fired_theta_phi > 0.5],
+                bins=[edges["theta"], edges["phi"]],
+            )
+            den_theta_phi, _, _ = np.histogram2d(
+                theta_map_acc,
+                phi_map_acc,
+                bins=[edges["theta"], edges["phi"]],
+            )
+            with np.errstate(invalid="ignore", divide="ignore"):
+                plane_result["eff_theta_phi"] = np.where(
+                    den_theta_phi > 0,
+                    num_theta_phi / den_theta_phi,
+                    np.nan,
+                )
+            any_plane_available = True
+
+        y_scalar_summary = _compute_efficiency_scalar_summary(
+            plane_result.get("y", {}),
+            "y",
+            cfg_eff,
+        )
+        theta_scalar_summary = _compute_efficiency_scalar_summary(
+            plane_result.get("theta", {}),
+            "theta",
+            cfg_eff,
+        )
+        phi_scalar_summary = _compute_efficiency_scalar_summary(
+            plane_result.get("phi", {}),
+            "phi",
+            cfg_eff,
+        )
+        plane_result["scalar_summary"] = {
+            "x": x_scalar_summary,
+            "y": y_scalar_summary,
+            "theta": theta_scalar_summary,
+            "phi": phi_scalar_summary,
+        }
+        plane_result["robust_x_center_eff"] = float(
+            plane_result["scalar_summary"]["x"].get("eff", np.nan)
+        )
+        plane_result["robust_y_plateau_accepted_indices"] = _select_robust_plateau_event_indices(
+            plane_result.get("y", {}),
+            cfg_eff=cfg_eff,
+            axis_values=y_acc,
+            bins=edges["y"],
+            accepted_indices=accepted_index,
+            axis_name="y",
+            tolerance=_ROBUST_EFFICIENCY_PLATEAU_TOLERANCE,
+            center_eff=y_scalar_summary.get("eff", np.nan),
+        )
+        plane_result["robust_y_plateau_fired_indices"] = _select_robust_plateau_event_indices(
+            plane_result.get("y", {}),
+            cfg_eff=cfg_eff,
+            axis_values=y_acc,
+            bins=edges["y"],
+            accepted_indices=accepted_index,
+            axis_name="y",
+            tolerance=_ROBUST_EFFICIENCY_PLATEAU_TOLERANCE,
+            center_eff=y_scalar_summary.get("eff", np.nan),
+            fired=fired_acc,
+            fired_only=True,
+        )
+        plane_result["robust_phi_plateau_accepted_indices"] = _select_robust_plateau_event_indices(
+            plane_result.get("phi", {}),
+            cfg_eff=cfg_eff,
+            axis_values=phi_acc,
+            bins=edges["phi"],
+            accepted_indices=pd.Index(df_plot.index[pool_mask][accepted_phi]),
+            axis_name="phi",
+            tolerance=_ROBUST_EFFICIENCY_PLATEAU_TOLERANCE,
+            center_eff=phi_scalar_summary.get("eff", np.nan),
+        )
+        plane_result["robust_phi_plateau_fired_indices"] = _select_robust_plateau_event_indices(
+            plane_result.get("phi", {}),
+            cfg_eff=cfg_eff,
+            axis_values=phi_acc,
+            bins=edges["phi"],
+            accepted_indices=pd.Index(df_plot.index[pool_mask][accepted_phi]),
+            axis_name="phi",
+            tolerance=_ROBUST_EFFICIENCY_PLATEAU_TOLERANCE,
+            center_eff=phi_scalar_summary.get("eff", np.nan),
+            fired=fired_phi,
+            fired_only=True,
+        )
+        plane_result["robust_xyphi_accepted_indices"] = _intersect_required_indices(
+            plane_result.get("robust_x_plateau_accepted_indices", None),
+            plane_result.get("robust_y_plateau_accepted_indices", None),
+            plane_result.get("robust_phi_plateau_accepted_indices", None),
+        )
+        plane_result["robust_xyphi_fired_indices"] = _intersect_required_indices(
+            plane_result.get("robust_x_plateau_fired_indices", None),
+            plane_result.get("robust_y_plateau_fired_indices", None),
+            plane_result.get("robust_phi_plateau_fired_indices", None),
+        )
+        if plane_result["robust_xyphi_accepted_indices"] is not None:
+            robust_xyphi_n_denom = int(len(plane_result["robust_xyphi_accepted_indices"]))
+            robust_xyphi_fired_index = plane_result.get("robust_xyphi_fired_indices", None)
+            robust_xyphi_n_num = int(len(robust_xyphi_fired_index)) if robust_xyphi_fired_index is not None else 0
+            if robust_xyphi_n_denom > 0:
+                plane_result["robust_xyphi_eff"] = float(robust_xyphi_n_num / robust_xyphi_n_denom)
+
+        payload["plane_results"][plane] = plane_result
+
+    payload["available"] = bool(any_plane_available)
+    if not payload["available"] and not payload["reason"]:
+        payload["reason"] = "no_planes_with_minimum_statistics"
+    return payload
+
+def _flatten_track_based_efficiency_metadata(
+    payload,
+    *,
+    filename_base,
+    execution_timestamp,
+    param_hash,
+):
+    row = {
+        "filename_base": filename_base,
+        "execution_timestamp": execution_timestamp,
+        "param_hash": param_hash,
+        "efficiency_metadata_available": bool(isinstance(payload, dict) and payload.get("available", False)),
+        "efficiency_metadata_reason": (
+            str(payload.get("reason", "")) if isinstance(payload, dict) else "payload_missing"
+        ),
+    }
+    if not isinstance(payload, dict):
+        return row
+
+    cfg_eff = payload.get("config", {})
+    if isinstance(cfg_eff, dict):
+        for key in (
+            "x_bin_count",
+            "y_bin_count",
+            "theta_bin_count",
+            "phi_bin_count",
+            "min_pool_events",
+            "min_accepted_events",
+            "summary_fiducial_x_abs_max_mm",
+            "summary_fiducial_y_abs_max_mm",
+            "summary_fiducial_theta_max_deg",
+            "summary_fiducial_phi_abs_max_deg",
+            "phi_min_deg",
+            "phi_max_deg",
+        ):
+            row[f"efficiency_metadata_{key}"] = cfg_eff.get(key, "")
+
+    for plane in range(1, 5):
+        plane_result = payload.get("plane_results", {}).get(plane, {})
+        row[f"efficiency_vector_p{plane}_overall_eff_percent"] = plane_result.get("overall_eff", "")
+        row[f"efficiency_vector_p{plane}_n_denom"] = plane_result.get("n_denom", "")
+        scalar_summary = plane_result.get("scalar_summary", {})
+        for axis_name in _EFFICIENCY_VECTOR_AXIS_ORDER:
+            summary = scalar_summary.get(axis_name, {})
+            row[f"efficiency_scalar_p{plane}_{axis_name}_fiducial_eff"] = summary.get("eff", "")
+            row[f"efficiency_scalar_p{plane}_{axis_name}_fiducial_unc"] = summary.get("unc", "")
+            row[f"efficiency_scalar_p{plane}_{axis_name}_fiducial_n_denom"] = summary.get("n_denom", "")
+            row[f"efficiency_scalar_p{plane}_{axis_name}_fiducial_n_bins_used"] = summary.get("n_bins_used", "")
+            if axis_name == "theta":
+                row[f"efficiency_scalar_p{plane}_{axis_name}_fiducial_selected_center_deg"] = summary.get(
+                    "selected_center", ""
+                )
+
+        for axis_name in _EFFICIENCY_VECTOR_AXIS_ORDER:
+            axis_payload = plane_result.get(axis_name, {})
+            centers = np.asarray(axis_payload.get("centers", []), dtype=float)
+            eff_vals = np.asarray(axis_payload.get("eff", []), dtype=float)
+            unc_vals = np.asarray(axis_payload.get("unc", []), dtype=float)
+            center_field = _efficiency_center_field(axis_name)
+            n_bins = max(len(centers), len(eff_vals), len(unc_vals))
+            for idx in range(n_bins):
+                prefix = f"efficiency_vector_p{plane}_{axis_name}_bin_{idx:03d}"
+                center_val = centers[idx] if idx < len(centers) else np.nan
+                eff_val = eff_vals[idx] if idx < len(eff_vals) else np.nan
+                unc_val = unc_vals[idx] if idx < len(unc_vals) else np.nan
+                row[f"{prefix}_{center_field}"] = center_val
+                row[f"{prefix}_eff"] = eff_val
+                row[f"{prefix}_unc"] = unc_val
+    return row
+
+def _format_task4_efficiency_vector_title_line(payload) -> str:
+    if not isinstance(payload, dict):
+        return "Track-based efficiency vector (3-plane -> 4-plane): unavailable"
+
+    plane_results = payload.get("plane_results", {})
+    if not isinstance(plane_results, dict):
+        return "Track-based efficiency vector (3-plane -> 4-plane): unavailable"
+
+    fragments: list[str] = []
+    for plane in range(1, 5):
+        plane_result = plane_results.get(plane, {})
+        if not isinstance(plane_result, dict):
+            fragments.append(f"P{plane}=n/a")
+            continue
+        overall_eff = plane_result.get("overall_eff", np.nan)
+        n_denom = int(plane_result.get("n_denom", 0) or 0)
+        if np.isfinite(overall_eff) and n_denom > 0:
+            fragments.append(f"P{plane}={float(overall_eff):.1f}%")
+        else:
+            fragments.append(f"P{plane}=n/a")
+    return "Track-based efficiency vector (3-plane -> 4-plane): " + ", ".join(fragments)
+
+def _format_task4_simulated_efficiency_title_line(sim_efficiencies_percent) -> str:
+    if not sim_efficiencies_percent:
+        return "Simulation reference: unavailable"
+    fragments: list[str] = []
+    for plane in range(1, 5):
+        if plane - 1 < len(sim_efficiencies_percent) and np.isfinite(sim_efficiencies_percent[plane - 1]):
+            fragments.append(f"P{plane}={float(sim_efficiencies_percent[plane - 1]):.1f}%")
+        else:
+            fragments.append(f"P{plane}=n/a")
+    return "Simulation reference: " + ", ".join(fragments)
+
+def _resolve_track_efficiency_four_plane_fiducial_index(
+    payload,
+    *,
+    fit_tt_1234_index: pd.Index | None = None,
+) -> pd.Index:
+    if not isinstance(payload, dict):
+        return pd.Index([])
+    plane_results = payload.get("plane_results", {})
+    if not isinstance(plane_results, dict):
+        return pd.Index([])
+
+    accepted_indices: list[pd.Index] = []
+    for plane in range(1, 5):
+        plane_result = plane_results.get(plane, {})
+        if not isinstance(plane_result, dict):
+            return pd.Index([])
+        accepted = plane_result.get("accepted_indices", None)
+        if accepted is None:
+            return pd.Index([])
+        accepted_indices.append(pd.Index(accepted))
+
+    if not accepted_indices:
+        return pd.Index([])
+
+    fiducial_index = accepted_indices[0]
+    for accepted_index in accepted_indices[1:]:
+        fiducial_index = fiducial_index.intersection(accepted_index, sort=False)
+
+    if fit_tt_1234_index is not None:
+        fiducial_index = fiducial_index.intersection(pd.Index(fit_tt_1234_index), sort=False)
+    return fiducial_index
+
+def _resolve_track_efficiency_representative(plane_result):
+    if not isinstance(plane_result, dict):
+        return (np.nan, "fid representative", "missing", None, None)
+
+    xyphi_eff = plane_result.get("robust_xyphi_eff", np.nan)
+    xyphi_accepted = plane_result.get("robust_xyphi_accepted_indices", None)
+    xyphi_fired = plane_result.get("robust_xyphi_fired_indices", None)
+    if np.isfinite(xyphi_eff):
+        return (
+            float(xyphi_eff),
+            "fid representative x/y/phi plateau",
+            "xyphi_plateau",
+            pd.Index(xyphi_accepted) if xyphi_accepted is not None else None,
+            pd.Index(xyphi_fired) if xyphi_fired is not None else None,
+        )
+
+    x_summary_eff = plane_result.get("robust_x_center_eff", np.nan)
+    x_summary_accepted = plane_result.get("robust_x_summary_accepted_indices", None)
+    x_summary_fired = plane_result.get("robust_x_summary_fired_indices", None)
+    if np.isfinite(x_summary_eff):
+        return (
+            float(x_summary_eff),
+            "fid representative x-summary",
+            "x_summary",
+            pd.Index(x_summary_accepted) if x_summary_accepted is not None else None,
+            pd.Index(x_summary_fired) if x_summary_fired is not None else None,
+        )
+
+    overall_eff_percent = plane_result.get("overall_eff", np.nan)
+    if np.isfinite(overall_eff_percent):
+        return (
+            float(overall_eff_percent) / 100.0,
+            "fid overall",
+            "overall",
+            None,
+            None,
+        )
+
+    return (np.nan, "fid representative", "missing", None, None)
+
+def _plot_track_efficiency_curve_panel(
+    axis,
+    *,
+    axis_payload,
+    axis_payload_full,
+    n_denom,
+    n_denom_full,
+    overall_eff,
+    overall_eff_full,
+    representative_eff,
+    representative_label,
+    sim_eff_percent,
+    plane_color,
+    xlabel,
+    xlim,
+    x_reference_values=(),
+    label_fontsize=8,
+    legend_fontsize=7,
+):
+    centers = np.asarray(axis_payload.get("centers", []), dtype=float)
+    eff_vals = np.asarray(axis_payload.get("eff", []), dtype=float)
+    unc_vals = np.asarray(axis_payload.get("unc", []), dtype=float)
+    den_vals = np.asarray(axis_payload.get("den", []), dtype=float)
+    valid = np.isfinite(eff_vals) & (den_vals > 0)
+
+    centers_full = np.asarray(axis_payload_full.get("centers", []), dtype=float)
+    eff_vals_full = np.asarray(axis_payload_full.get("eff", []), dtype=float)
+    unc_vals_full = np.asarray(axis_payload_full.get("unc", []), dtype=float)
+    den_vals_full = np.asarray(axis_payload_full.get("den", []), dtype=float)
+    valid_full = np.isfinite(eff_vals_full) & (den_vals_full > 0)
+
+    if np.any(valid_full):
+        axis.errorbar(
+            centers_full[valid_full],
+            eff_vals_full[valid_full],
+            yerr=unc_vals_full[valid_full],
+            fmt="o--",
+            ms=3.5,
+            color="0.45",
+            alpha=0.80,
+            label=(
+                f"no fid  (n={int(n_denom_full)}, "
+                f"{_format_task4_percent_label(overall_eff_full)})"
+            ),
+        )
+    if np.any(valid):
+        axis.errorbar(
+            centers[valid],
+            eff_vals[valid],
+            yerr=unc_vals[valid],
+            fmt="o-",
+            ms=4,
+            color=plane_color,
+            alpha=0.85,
+            label=f"fiducial  (n={int(n_denom)}, {_format_task4_percent_label(overall_eff)})",
+        )
+    if np.isfinite(representative_eff):
+        _representative_line = axis.axhline(
+            float(representative_eff),
+            color=plane_color,
+            lw=2.0,
+            ls=_TRACK_EFF_REPRESENTATIVE_LINESTYLE,
+            alpha=0.95,
+            zorder=4,
+            label=f"{representative_label}  {_format_task4_percent_label(representative_eff)}",
+        )
+        _representative_line.set_path_effects(
+            [
+                path_effects.Stroke(linewidth=4.2, foreground="white", alpha=0.95),
+                path_effects.Normal(),
+            ]
+        )
+    for x_reference in x_reference_values:
+        if np.isfinite(x_reference):
+            axis.axvline(float(x_reference), color="lightgray", lw=0.9, ls="--", alpha=0.8)
+    if np.isfinite(sim_eff_percent):
+        axis.axhline(
+            float(sim_eff_percent) / 100.0,
+            color="black",
+            lw=1.0,
+            ls=_TRACK_EFF_SIMULATION_LINESTYLE,
+            alpha=0.75,
+            zorder=3,
+            label=f"simulation  {_format_task4_percent_label(sim_eff_percent)}",
+        )
+    axis.set_ylim(0, 1.08)
+    axis.set_xlim(*xlim)
+    axis.set_xlabel(xlabel, fontsize=label_fontsize)
+    axis.set_ylabel("Efficiency", fontsize=label_fontsize)
+    axis.grid(True, alpha=0.3)
+    handles, labels = axis.get_legend_handles_labels()
+    if handles:
+        axis.legend(fontsize=legend_fontsize)
+
+def _format_robust_efficiency_trace_line(row) -> str:
+    def _fmt(value):
+        try:
+            out = float(value)
+        except (TypeError, ValueError):
+            out = np.nan
+        return f"{out:.4f}" if np.isfinite(out) else "nan"
+
+    fragments: list[str] = []
+    for plane in range(1, 5):
+        robust_eff = row.get(f"eff{plane}_robust", np.nan)
+        robust_xyphi_eff = row.get(f"eff{plane}_robust_xyphi", np.nan)
+        center_eff = row.get(f"eff{plane}_median_x", np.nan)
+        robust_n_denom = row.get(f"eff{plane}_robust_n_denom", np.nan)
+        plateau_eff = row.get(f"eff{plane}_plateau", np.nan)
+        overall_eff = row.get(f"eff{plane}_overall", np.nan)
+        n_bins = row.get(f"eff{plane}_n_valid_bins", 0)
+        n_plateau_bins = row.get(f"eff{plane}_n_plateau_bins", 0)
+        fragments.append(
+            f"P{plane}(robust={_fmt(robust_eff)}, "
+            f"xyphi={_fmt(robust_xyphi_eff)}, "
+            f"median_x={_fmt(center_eff)}, "
+            f"robust_n_denom={int(robust_n_denom) if np.isfinite(robust_n_denom) else 'nan'}, "
+            f"plateau={_fmt(plateau_eff)}, "
+            f"overall={_fmt(overall_eff)}, "
+            f"bins={int(n_bins or 0)}, plateau_bins={int(n_plateau_bins or 0)})"
+        )
+    return (
+        f"[ROBUST_EFF_TRACE] filename_base={row.get('filename_base', '')} "
+        + " ".join(fragments)
+    )
+
+def _build_robust_efficiency_row(
+    payload,
+    *,
+    df_events: pd.DataFrame,
+    denominator_seconds: float,
+    filename_base: str,
+    execution_timestamp: str,
+    param_hash: str,
+):
+    row = {
+        "filename_base": filename_base,
+        "execution_timestamp": execution_timestamp,
+        "param_hash": param_hash,
+        "robust_efficiency_trigger_source": (
+            str(payload.get("trigger_source", "")) if isinstance(payload, dict) else ""
+        ),
+    }
+
+    plane_results = payload.get("plane_results", {}) if isinstance(payload, dict) else {}
+    cfg_eff = payload.get("config", {}) if isinstance(payload, dict) else {}
+    plane_fiducial_accepted_indices: dict[int, pd.Index] = {}
+    plane_plateau_indices: dict[int, pd.Index] = {}
+    plane_plateau_accepted_indices: dict[int, pd.Index] = {}
+    for plane in range(1, 5):
+        plane_result = plane_results.get(plane, {}) if isinstance(plane_results, dict) else {}
+        axis_payload = plane_result.get("x", {}) if isinstance(plane_result, dict) else {}
+        accepted_indices = (
+            plane_result.get("accepted_indices", None)
+            if isinstance(plane_result, dict)
+            else None
+        )
+        if accepted_indices is not None:
+            plane_fiducial_accepted_indices[plane] = pd.Index(accepted_indices)
+        _, eff_vals, _, _, valid = _extract_efficiency_summary_arrays(
+            axis_payload,
+            "x",
+            cfg_eff,
+        )
+        center_eff = plane_result.get("robust_x_center_eff", np.nan)
+        center_eff = float(center_eff) if np.isfinite(center_eff) else _compute_robust_x_center_eff(
+            axis_payload,
+            cfg_eff,
+        )
+        (
+            representative_eff,
+            _representative_label,
+            representative_method,
+            representative_accepted_index,
+            representative_fired_index,
+        ) = _resolve_track_efficiency_representative(plane_result)
+        overall_eff_percent = plane_result.get("overall_eff", np.nan) if isinstance(plane_result, dict) else np.nan
+        overall_eff_fraction = (
+            float(overall_eff_percent) / 100.0
+            if np.isfinite(overall_eff_percent)
+            else np.nan
+        )
+        row[f"eff{plane}_n_valid_bins"] = int(np.sum(valid))
+        if np.any(valid) and np.isfinite(center_eff):
+            plateau_bins = valid & (
+                np.abs(eff_vals - center_eff) <= _ROBUST_EFFICIENCY_PLATEAU_TOLERANCE
+            )
+            row[f"eff{plane}_n_plateau_bins"] = int(np.sum(plateau_bins))
+        else:
+            row[f"eff{plane}_n_plateau_bins"] = 0
+        row[f"eff{plane}_robust_method"] = representative_method
+        row[f"eff{plane}_robust"] = representative_eff
+        row[f"eff{plane}_robust_xyphi"] = plane_result.get("robust_xyphi_eff", np.nan)
+        row[f"eff{plane}_median_x"] = center_eff
+        row[f"eff{plane}_overall"] = overall_eff_fraction
+        row[f"eff{plane}"] = representative_eff if np.isfinite(representative_eff) else overall_eff_fraction
+
+        robust_xyphi_accepted = (
+            plane_result.get("robust_xyphi_accepted_indices", None) if isinstance(plane_result, dict) else None
+        )
+        if robust_xyphi_accepted is not None:
+            row[f"eff{plane}_robust_xyphi_n_denom"] = int(len(pd.Index(robust_xyphi_accepted)))
+        else:
+            row[f"eff{plane}_robust_xyphi_n_denom"] = np.nan
+
+        robust_xyphi_fired = (
+            plane_result.get("robust_xyphi_fired_indices", None) if isinstance(plane_result, dict) else None
+        )
+        if robust_xyphi_fired is not None:
+            row[f"eff{plane}_robust_xyphi_n_num"] = int(len(pd.Index(robust_xyphi_fired)))
+        else:
+            row[f"eff{plane}_robust_xyphi_n_num"] = np.nan
+
+        if representative_accepted_index is not None:
+            row[f"eff{plane}_robust_n_denom"] = int(len(representative_accepted_index))
+        else:
+            robust_scalar_summary = plane_result.get("scalar_summary", {}).get("x", {})
+            robust_n_denom = robust_scalar_summary.get("n_denom", np.nan)
+            row[f"eff{plane}_robust_n_denom"] = (
+                int(robust_n_denom) if np.isfinite(robust_n_denom) else np.nan
+            )
+
+        if representative_fired_index is not None:
+            row[f"eff{plane}_robust_n_num"] = int(len(representative_fired_index))
+        else:
+            if np.isfinite(representative_eff) and np.isfinite(row[f"eff{plane}_robust_n_denom"]):
+                row[f"eff{plane}_robust_n_num"] = int(
+                    round(float(representative_eff) * float(row[f"eff{plane}_robust_n_denom"]))
+                )
+            else:
+                row[f"eff{plane}_robust_n_num"] = np.nan
+
+        plateau_accepted = (
+            plane_result.get("robust_x_plateau_accepted_indices", None)
+            if isinstance(plane_result, dict)
+            else None
+        )
+        if plateau_accepted is not None:
+            plateau_accepted_index = pd.Index(plateau_accepted)
+            plane_plateau_accepted_indices[plane] = plateau_accepted_index
+            row[f"eff{plane}_plateau_n_denom"] = int(len(plateau_accepted_index))
+        else:
+            row[f"eff{plane}_plateau_n_denom"] = np.nan
+
+        plateau_fired = (
+            plane_result.get("robust_x_plateau_fired_indices", None)
+            if isinstance(plane_result, dict)
+            else None
+        )
+        if plateau_fired is None:
+            row[f"eff{plane}_plateau_n_num"] = np.nan
+            row[f"eff{plane}_plateau"] = overall_eff_fraction
+            row[f"eff{plane}"] = overall_eff_fraction
+            continue
+        plateau_fired_index = pd.Index(plateau_fired)
+        plane_plateau_indices[plane] = plateau_fired_index
+        row[f"eff{plane}_plateau_n_num"] = int(len(plateau_fired_index))
+
+        plateau_eff = np.nan
+        if plane in plane_plateau_accepted_indices and len(plane_plateau_accepted_indices[plane]) > 0:
+            plateau_eff = float(len(plateau_fired_index) / len(plane_plateau_accepted_indices[plane]))
+        row[f"eff{plane}_plateau"] = plateau_eff
+
+    fit_tt_1234_index = None
+    if "fit_tt" in df_events.columns:
+        tt_values = pd.to_numeric(df_events["fit_tt"], errors="coerce").to_numpy(dtype=float)
+        fit_tt_1234_index = pd.Index(df_events.index[tt_values == 1234.0])
+        n_events_1234 = int(len(fit_tt_1234_index))
+    else:
+        n_events_1234 = None
+
+    total_events = int(len(df_events))
+    denom = float(denominator_seconds) if np.isfinite(denominator_seconds) else 0.0
+    row["count_rate_denominator_seconds"] = int(round(denom)) if denom > 0.0 else 0
+    row["four_plane_count"] = int(n_events_1234) if n_events_1234 is not None else np.nan
+    row["total_count"] = int(total_events)
+    if n_events_1234 is not None and denom > 0.0:
+        row["rate_1234_hz"] = float(n_events_1234 / denom)
+    else:
+        row["rate_1234_hz"] = np.nan
+
+    robust_union_index = None
+    robust_intersection_index = None
+    if fit_tt_1234_index is not None and plane_fiducial_accepted_indices:
+        robust_indices = [
+            accepted_index.intersection(fit_tt_1234_index, sort=False)
+            for accepted_index in plane_fiducial_accepted_indices.values()
+        ]
+        robust_union_index = robust_indices[0]
+        robust_intersection_index = robust_indices[0]
+        for robust_index in robust_indices[1:]:
+            robust_union_index = robust_union_index.union(robust_index, sort=False)
+            robust_intersection_index = robust_intersection_index.intersection(robust_index, sort=False)
+
+    if robust_union_index is not None:
+        row["four_plane_robust_count_union"] = int(len(robust_union_index))
+        row["four_plane_robust_hz_union"] = float(len(robust_union_index) / denom) if denom > 0.0 else np.nan
+    else:
+        row["four_plane_robust_count_union"] = np.nan
+        row["four_plane_robust_hz_union"] = np.nan
+
+    if robust_intersection_index is not None:
+        row["four_plane_robust_count_intersection"] = int(len(robust_intersection_index))
+        row["four_plane_robust_hz_intersection"] = (
+            float(len(robust_intersection_index) / denom)
+            if denom > 0.0
+            else np.nan
+        )
+    else:
+        row["four_plane_robust_count_intersection"] = np.nan
+        row["four_plane_robust_hz_intersection"] = np.nan
+
+    if fit_tt_1234_index is not None and len(plane_fiducial_accepted_indices) == 4 and robust_intersection_index is not None:
+        n_events_four_plane_robust = int(len(robust_intersection_index))
+        row["four_plane_robust_count"] = n_events_four_plane_robust
+        row["four_plane_robust_hz"] = float(n_events_four_plane_robust / denom) if denom > 0.0 else np.nan
+    else:
+        row["four_plane_robust_count"] = np.nan
+        row["four_plane_robust_hz"] = np.nan
+
+    if denom > 0.0:
+        row["rate_total_hz"] = float(total_events / denom)
+    else:
+        row["rate_total_hz"] = np.nan
+
+    if n_events_1234 is not None and int(n_events_1234) > 0:
+        union_count = row.get("four_plane_robust_count_union", np.nan)
+        intersection_count = row.get("four_plane_robust_count_intersection", np.nan)
+        default_count = row.get("four_plane_robust_count", np.nan)
+        row["four_plane_robust_efficiency_union"] = (
+            float(union_count) / float(n_events_1234)
+            if np.isfinite(union_count)
+            else np.nan
+        )
+        row["four_plane_robust_efficiency_intersection"] = (
+            float(intersection_count) / float(n_events_1234)
+            if np.isfinite(intersection_count)
+            else np.nan
+        )
+        row["four_plane_robust_efficiency"] = (
+            float(default_count) / float(n_events_1234)
+            if np.isfinite(default_count)
+            else np.nan
+        )
+    else:
+        row["four_plane_robust_efficiency_union"] = np.nan
+        row["four_plane_robust_efficiency_intersection"] = np.nan
+        row["four_plane_robust_efficiency"] = np.nan
+    return row
+
+def _extract_projection_arrays(df_input: pd.DataFrame) -> tuple[np.ndarray | None, np.ndarray | None, str]:
+    if {"tim_xp", "tim_yp"}.issubset(df_input.columns):
+        return (
+            pd.to_numeric(df_input["tim_xp"], errors="coerce").to_numpy(dtype=float),
+            pd.to_numeric(df_input["tim_yp"], errors="coerce").to_numpy(dtype=float),
+            "tim_xp_tim_yp",
+        )
+
+    if {"xp", "yp"}.issubset(df_input.columns):
+        return (
+            pd.to_numeric(df_input["xp"], errors="coerce").to_numpy(dtype=float),
+            pd.to_numeric(df_input["yp"], errors="coerce").to_numpy(dtype=float),
+            "xp_yp",
+        )
+
+    if {"theta", "phi"}.issubset(df_input.columns):
+        theta_vals = pd.to_numeric(df_input["theta"], errors="coerce").to_numpy(dtype=float)
+        phi_vals = pd.to_numeric(df_input["phi"], errors="coerce").to_numpy(dtype=float)
+        tan_theta_vals = np.tan(theta_vals)
+        return (
+            tan_theta_vals * np.cos(phi_vals),
+            tan_theta_vals * np.sin(phi_vals),
+            "theta_phi_backcalc",
+        )
+
+    return None, None, "missing"
+
+def _ellipse_scale_for_peak_fraction(peak_fraction: float) -> float:
+    try:
+        value = float(peak_fraction)
+    except (TypeError, ValueError):
+        return float("nan")
+    if not np.isfinite(value) or not (0.0 < value < 1.0):
+        return float("nan")
+    return float(np.sqrt(max(0.0, -2.0 * np.log(value))))
+
+def _fit_elliptical_gaussian_to_density(
+    density: np.ndarray,
+    x_centers: np.ndarray,
+    y_centers: np.ndarray,
+) -> dict[str, object] | None:
+    density = np.asarray(density, dtype=float)
+    if density.ndim != 2 or density.size == 0:
+        return None
+
+    weights = np.where(np.isfinite(density) & (density > 0.0), density, 0.0)
+    total_weight = float(weights.sum())
+    if total_weight <= 0.0:
+        return None
+
+    xx, yy = np.meshgrid(np.asarray(x_centers, dtype=float), np.asarray(y_centers, dtype=float), indexing="ij")
+    x_flat = xx.ravel()
+    y_flat = yy.ravel()
+    w_flat = weights.ravel()
+    positive = w_flat > 0.0
+    if int(np.count_nonzero(positive)) < 6:
+        return None
+
+    x_vals = x_flat[positive]
+    y_vals = y_flat[positive]
+    w_vals = w_flat[positive]
+
+    center_x = float(np.average(x_vals, weights=w_vals))
+    center_y = float(np.average(y_vals, weights=w_vals))
+    dx = x_vals - center_x
+    dy = y_vals - center_y
+    cov_xx = float(np.average(dx * dx, weights=w_vals))
+    cov_xy = float(np.average(dx * dy, weights=w_vals))
+    cov_yy = float(np.average(dy * dy, weights=w_vals))
+    cov = np.array([[cov_xx, cov_xy], [cov_xy, cov_yy]], dtype=float)
+    if not np.all(np.isfinite(cov)):
+        return None
+
+    eigvals, eigvecs = np.linalg.eigh(cov)
+    order = np.argsort(eigvals)[::-1]
+    eigvals = np.asarray(eigvals[order], dtype=float)
+    eigvecs = np.asarray(eigvecs[:, order], dtype=float)
+    eigvals = np.clip(eigvals, 0.0, None)
+    if eigvals.size < 2 or eigvals[1] <= 0.0:
+        return None
+
+    sigma_major = float(np.sqrt(eigvals[0]))
+    sigma_minor = float(np.sqrt(eigvals[1]))
+    if not (np.isfinite(sigma_major) and np.isfinite(sigma_minor) and sigma_minor > 0.0):
+        return None
+
+    major_vector = eigvecs[:, 0]
+    minor_vector = eigvecs[:, 1]
+    rotation_deg = float(np.degrees(np.arctan2(major_vector[1], major_vector[0])))
+    while rotation_deg > 90.0:
+        rotation_deg -= 180.0
+    while rotation_deg <= -90.0:
+        rotation_deg += 180.0
+
+    return {
+        "center_x": center_x,
+        "center_y": center_y,
+        "cov_xx": cov_xx,
+        "cov_yy": cov_yy,
+        "sigma_x": float(np.sqrt(max(cov_xx, 0.0))),
+        "sigma_y": float(np.sqrt(max(cov_yy, 0.0))),
+        "sigma_major": sigma_major,
+        "sigma_minor": sigma_minor,
+        "major_vector": major_vector.astype(float),
+        "minor_vector": minor_vector.astype(float),
+        "rotation_deg": rotation_deg,
+        "covariance": cov,
+    }
+
+def _build_projection_ellipse_diagnostic_payload(
+    df_input: pd.DataFrame,
+    cfg: dict[str, object],
+) -> dict[str, object]:
+    tt_col = get_task4_tt_column(df_input, preferred=TASK4_PRIMARY_TT_COLUMN)
+    if tt_col is None:
+        return {
+            "available": False,
+            "reason": "missing_fit_tt",
+            "config": cfg,
+            "projection_source": "missing",
+            "tt_results": {},
+        }
+
+    xproj_all, yproj_all, projection_source = _extract_projection_arrays(df_input)
+    if xproj_all is None or yproj_all is None:
+        return {
+            "available": False,
+            "reason": "missing_projection_columns",
+            "config": cfg,
+            "projection_source": projection_source,
+            "tt_results": {},
+        }
+
+    tt_all = pd.to_numeric(df_input[tt_col], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
+    x_min = float(cfg["x_min"])
+    x_max = float(cfg["x_max"])
+    y_min = float(cfg["y_min"])
+    y_max = float(cfg["y_max"])
+    axis_quantile_min = float(cfg["axis_quantile_min"])
+    axis_quantile_max = float(cfg["axis_quantile_max"])
+    if axis_quantile_max <= axis_quantile_min:
+        axis_quantile_min = 0.01
+        axis_quantile_max = 0.99
+    bin_count = int(cfg["bin_count"])
+    fwhm_scale = _ellipse_scale_for_peak_fraction(0.5)
+
+    tt_results: dict[str, dict[str, object]] = {}
+    available_any = False
+    for tt_label in tuple(cfg.get("focus_definitive_tt", ())):
+        tt_int = int(normalize_tt_label(tt_label, default="0") or 0)
+        tt_mask = tt_all == tt_int
+        x_tt = np.asarray(xproj_all[tt_mask], dtype=float)
+        y_tt = np.asarray(yproj_all[tt_mask], dtype=float)
+        valid = (
+            np.isfinite(x_tt)
+            & np.isfinite(y_tt)
+            & (x_tt >= x_min)
+            & (x_tt <= x_max)
+            & (y_tt >= y_min)
+            & (y_tt <= y_max)
+        )
+        x_sel = x_tt[valid]
+        y_sel = y_tt[valid]
+
+        result: dict[str, object] = {
+            "available": False,
+            "reason": "insufficient_points",
+            "tt_label": tt_label,
+            "n_points": int(x_sel.size),
+            "projection_source": projection_source,
+        }
+        if x_sel.size < int(cfg["min_points"]):
+            tt_results[str(tt_label)] = result
+            continue
+
+        x_q_lo, x_q_hi = np.quantile(x_sel, [axis_quantile_min, axis_quantile_max])
+        y_q_lo, y_q_hi = np.quantile(y_sel, [axis_quantile_min, axis_quantile_max])
+        x_mid = 0.5 * float(x_q_lo + x_q_hi)
+        y_mid = 0.5 * float(y_q_lo + y_q_hi)
+        half_span = 0.5 * max(float(x_q_hi - x_q_lo), float(y_q_hi - y_q_lo))
+        min_half_span = 0.025 * max(float(x_max - x_min), float(y_max - y_min))
+        half_span = max(half_span, min_half_span)
+        plot_x_min = max(float(x_min), x_mid - half_span)
+        plot_x_max = min(float(x_max), x_mid + half_span)
+        plot_y_min = max(float(y_min), y_mid - half_span)
+        plot_y_max = min(float(y_max), y_mid + half_span)
+        x_edges = np.linspace(plot_x_min, plot_x_max, bin_count + 1)
+        y_edges = np.linspace(plot_y_min, plot_y_max, bin_count + 1)
+        x_centers = 0.5 * (x_edges[:-1] + x_edges[1:])
+        y_centers = 0.5 * (y_edges[:-1] + y_edges[1:])
+
+        hist, _, _ = np.histogram2d(x_sel, y_sel, bins=[x_edges, y_edges])
+        density = np.asarray(hist, dtype=float)
+        sigma_bins = float(cfg["smoothing_sigma_bins"])
+        if sigma_bins > 0.0:
+            density = gaussian_filter(density, sigma=sigma_bins, mode="nearest")
+
+        peak_density = float(np.nanmax(density)) if density.size > 0 else 0.0
+        if not np.isfinite(peak_density) or peak_density <= 0.0:
+            result["reason"] = "zero_density"
+            tt_results[str(tt_label)] = result
+            continue
+
+        ellipse_model = _fit_elliptical_gaussian_to_density(density, x_centers, y_centers)
+        if ellipse_model is None:
+            result["reason"] = "ellipse_fit_failed"
+            tt_results[str(tt_label)] = result
+            continue
+
+        sigma_major = float(ellipse_model["sigma_major"])
+        sigma_minor = float(ellipse_model["sigma_minor"])
+        major_vector = np.asarray(ellipse_model["major_vector"], dtype=float)
+        minor_vector = np.asarray(ellipse_model["minor_vector"], dtype=float)
+        fwhm_semiaxis_major = sigma_major * fwhm_scale
+        fwhm_semiaxis_minor = sigma_minor * fwhm_scale
+        fwhm_halfwidth_x = float(
+            np.sqrt(
+                (fwhm_semiaxis_major * major_vector[0]) ** 2
+                + (fwhm_semiaxis_minor * minor_vector[0]) ** 2
+            )
+        )
+        fwhm_halfwidth_y = float(
+            np.sqrt(
+                (fwhm_semiaxis_major * major_vector[1]) ** 2
+                + (fwhm_semiaxis_minor * minor_vector[1]) ** 2
+            )
+        )
+        fwhm_axis_ratio = (
+            float(fwhm_semiaxis_major / fwhm_semiaxis_minor)
+            if fwhm_semiaxis_minor > 0.0
+            else float("nan")
+        )
+        fwhm_halfwidth_x_over_y = (
+            float(fwhm_halfwidth_x / fwhm_halfwidth_y)
+            if fwhm_halfwidth_y > 0.0
+            else float("nan")
+        )
+
+        result.update(
+            {
+                "available": True,
+                "reason": "ok",
+                "peak_density": peak_density,
+                "density": density,
+                "normalized_density": density / peak_density,
+                "x_edges": x_edges,
+                "y_edges": y_edges,
+                "x_centers": x_centers,
+                "y_centers": y_centers,
+                "contour_fractions": np.asarray(cfg["contour_fractions"], dtype=float),
+                "ellipse_model": ellipse_model,
+                "plot_x_min": plot_x_min,
+                "plot_x_max": plot_x_max,
+                "plot_y_min": plot_y_min,
+                "plot_y_max": plot_y_max,
+                "fwhm_semiaxis_major": float(fwhm_semiaxis_major),
+                "fwhm_semiaxis_minor": float(fwhm_semiaxis_minor),
+                "fwhm_axis_ratio_major_over_minor": fwhm_axis_ratio,
+                "fwhm_halfwidth_xproj": fwhm_halfwidth_x,
+                "fwhm_halfwidth_yproj": fwhm_halfwidth_y,
+                "fwhm_halfwidth_x_over_y": fwhm_halfwidth_x_over_y,
+            }
+        )
+        tt_results[str(tt_label)] = result
+        available_any = True
+
+    return {
+        "available": available_any,
+        "reason": "ok" if available_any else "no_valid_tt_payloads",
+        "config": cfg,
+        "projection_source": projection_source,
+        "tt_results": tt_results,
+    }
+
+def _append_projection_ellipse_metadata(payload: dict[str, object]) -> None:
+    cfg = payload.get("config", {})
+    tt_results = payload.get("tt_results", {})
+    if not isinstance(cfg, dict):
+        cfg = {}
+    if not isinstance(tt_results, dict):
+        tt_results = {}
+
+    global_variables["timtrack_projection_ellipse_available"] = bool(payload.get("available", False))
+    global_variables["timtrack_projection_ellipse_reason"] = str(payload.get("reason", ""))
+    global_variables["timtrack_projection_ellipse_projection_source"] = str(
+        payload.get("projection_source", "missing")
+    )
+    global_variables["timtrack_projection_ellipse_bin_count"] = int(cfg.get("bin_count", 0) or 0)
+    global_variables["timtrack_projection_ellipse_min_points"] = int(cfg.get("min_points", 0) or 0)
+    global_variables["timtrack_projection_ellipse_smoothing_sigma_bins"] = float(
+        cfg.get("smoothing_sigma_bins", np.nan)
+    )
+    global_variables["timtrack_projection_ellipse_axis_quantile_min"] = float(
+        cfg.get("axis_quantile_min", np.nan)
+    )
+    global_variables["timtrack_projection_ellipse_axis_quantile_max"] = float(
+        cfg.get("axis_quantile_max", np.nan)
+    )
+    global_variables["timtrack_projection_ellipse_cmap"] = str(cfg.get("cmap", ""))
+    global_variables["timtrack_projection_ellipse_contour_fractions"] = [
+        float(value) for value in tuple(cfg.get("contour_fractions", ()))
+    ]
+
+    for tt_label in tuple(cfg.get("focus_definitive_tt", ())):
+        result = tt_results.get(str(tt_label), {})
+        prefix = f"timtrack_projection_ellipse_tt_{tt_label}"
+        available = bool(isinstance(result, dict) and result.get("available", False))
+        global_variables[f"{prefix}_available"] = available
+        global_variables[f"{prefix}_reason"] = (
+            str(result.get("reason", "")) if isinstance(result, dict) else "missing"
+        )
+        global_variables[f"{prefix}_n_points"] = int(result.get("n_points", 0) or 0)
+        global_variables[f"{prefix}_peak_density"] = (
+            float(result.get("peak_density", np.nan)) if available else np.nan
+        )
+        if not available:
+            for suffix in (
+                "center_xproj",
+                "center_yproj",
+                "plot_x_min",
+                "plot_x_max",
+                "plot_y_min",
+                "plot_y_max",
+                "xproj_scaling_factor_to_match_y",
+                "rotation_deg",
+                "sigma_x",
+                "sigma_y",
+                "fwhm_semiaxis_major",
+                "fwhm_semiaxis_minor",
+                "fwhm_axis_ratio_major_over_minor",
+                "fwhm_halfwidth_xproj",
+                "fwhm_halfwidth_yproj",
+                "fwhm_halfwidth_x_over_y",
+            ):
+                global_variables[f"{prefix}_{suffix}"] = np.nan
+            continue
+
+        ellipse_model = result.get("ellipse_model", {})
+        if not isinstance(ellipse_model, dict):
+            ellipse_model = {}
+        global_variables[f"{prefix}_center_xproj"] = float(ellipse_model.get("center_x", np.nan))
+        global_variables[f"{prefix}_center_yproj"] = float(ellipse_model.get("center_y", np.nan))
+        global_variables[f"{prefix}_plot_x_min"] = float(result.get("plot_x_min", np.nan))
+        global_variables[f"{prefix}_plot_x_max"] = float(result.get("plot_x_max", np.nan))
+        global_variables[f"{prefix}_plot_y_min"] = float(result.get("plot_y_min", np.nan))
+        global_variables[f"{prefix}_plot_y_max"] = float(result.get("plot_y_max", np.nan))
+        _scaling_factor = (
+            float(result.get("fwhm_halfwidth_yproj", np.nan)) / float(result.get("fwhm_halfwidth_xproj", np.nan))
+            if np.isfinite(float(result.get("fwhm_halfwidth_xproj", np.nan)))
+            and float(result.get("fwhm_halfwidth_xproj", np.nan)) > 0.0
+            and np.isfinite(float(result.get("fwhm_halfwidth_yproj", np.nan)))
+            else np.nan
+        )
+        global_variables[f"{prefix}_xproj_scaling_factor_to_match_y"] = _scaling_factor
+        global_variables[f"{prefix}_rotation_deg"] = float(ellipse_model.get("rotation_deg", np.nan))
+        global_variables[f"{prefix}_sigma_x"] = float(ellipse_model.get("sigma_x", np.nan))
+        global_variables[f"{prefix}_sigma_y"] = float(ellipse_model.get("sigma_y", np.nan))
+        global_variables[f"{prefix}_fwhm_semiaxis_major"] = float(
+            result.get("fwhm_semiaxis_major", np.nan)
+        )
+        global_variables[f"{prefix}_fwhm_semiaxis_minor"] = float(
+            result.get("fwhm_semiaxis_minor", np.nan)
+        )
+        global_variables[f"{prefix}_fwhm_axis_ratio_major_over_minor"] = float(
+            result.get("fwhm_axis_ratio_major_over_minor", np.nan)
+        )
+        global_variables[f"{prefix}_fwhm_halfwidth_xproj"] = float(
+            result.get("fwhm_halfwidth_xproj", np.nan)
+        )
+        global_variables[f"{prefix}_fwhm_halfwidth_yproj"] = float(
+            result.get("fwhm_halfwidth_yproj", np.nan)
+        )
+        global_variables[f"{prefix}_fwhm_halfwidth_x_over_y"] = float(
+            result.get("fwhm_halfwidth_x_over_y", np.nan)
+        )
+
+def _select_projection_scaling_reference(
+    payload: dict[str, object],
+) -> tuple[str | None, dict[str, object] | None]:
+    tt_results = payload.get("tt_results", {})
+    if not isinstance(tt_results, dict):
+        return None, None
+
+    best_label: str | None = None
+    best_result: dict[str, object] | None = None
+    best_n = -1
+    for tt_label, result in tt_results.items():
+        if not isinstance(result, dict) or not bool(result.get("available", False)):
+            continue
+        n_points = int(result.get("n_points", 0) or 0)
+        if n_points > best_n:
+            best_label = str(tt_label)
+            best_result = result
+            best_n = n_points
+    return best_label, best_result
+
+def _summarize_projection_scaling(payload: dict[str, object]) -> dict[str, object]:
+    tt_results = payload.get("tt_results", {})
+    if not isinstance(tt_results, dict):
+        return {
+            "global_factor": np.nan,
+            "global_method": "weighted_mean_by_n_points",
+            "n_contributing_tts": 0,
+            "total_weight": 0.0,
+        }
+
+    factors: list[float] = []
+    weights: list[float] = []
+    for result in tt_results.values():
+        if not isinstance(result, dict) or not bool(result.get("available", False)):
+            continue
+        x_half = float(result.get("fwhm_halfwidth_xproj", np.nan))
+        y_half = float(result.get("fwhm_halfwidth_yproj", np.nan))
+        n_points = int(result.get("n_points", 0) or 0)
+        if not (np.isfinite(x_half) and x_half > 0.0 and np.isfinite(y_half) and n_points > 0):
+            continue
+        factors.append(float(y_half / x_half))
+        weights.append(float(n_points))
+
+    if not factors:
+        return {
+            "global_factor": np.nan,
+            "global_method": "weighted_mean_by_n_points",
+            "n_contributing_tts": 0,
+            "total_weight": 0.0,
+        }
+
+    factor_arr = np.asarray(factors, dtype=float)
+    weight_arr = np.asarray(weights, dtype=float)
+    global_factor = float(np.average(factor_arr, weights=weight_arr))
+    return {
+        "global_factor": global_factor,
+        "global_method": "weighted_mean_by_n_points",
+        "n_contributing_tts": int(len(factor_arr)),
+        "total_weight": float(np.sum(weight_arr)),
+    }
+
+
+def _build_offender_tt_labels(values: pd.Series) -> np.ndarray:
+    return np.asarray(
+        [normalize_tt_label(value, default="0") for value in values],
+        dtype=object,
+    )
+
+def _resolve_offender_focus_tts(tt_labels: np.ndarray) -> tuple[str, ...]:
+    available = [tt_label for tt_label in _OFFENDER_FOCUS_TTS if np.any(tt_labels == tt_label)]
+    if available:
+        return tuple(available)
+    fallback = sorted(
+        {
+            str(tt_label)
+            for tt_label in tt_labels
+            if str(tt_label) not in ("", "0", "nan", "None")
+        },
+        key=lambda tt_label: (len(tt_label), tt_label),
+    )
+    return tuple(fallback[: min(5, len(fallback))])
+
+def _make_offender_hist_bins(
+    values: np.ndarray,
+    fallback: tuple[float, float],
+    *,
+    nbins: int = 55,
+    clip_percentiles: tuple[float, float] = (0.5, 99.5),
+    force_zero_left: bool = False,
+) -> np.ndarray:
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        left, right = fallback
+    else:
+        left = float(np.nanpercentile(arr, clip_percentiles[0]))
+        right = float(np.nanpercentile(arr, clip_percentiles[1]))
+        if force_zero_left:
+            left = 0.0
+        if not np.isfinite(left) or not np.isfinite(right):
+            left, right = fallback
+    if not np.isfinite(left) or not np.isfinite(right):
+        left, right = fallback
+    if right <= left:
+        span = float(abs(fallback[1] - fallback[0])) if np.isfinite(fallback[1] - fallback[0]) else 1.0
+        if span <= 0:
+            span = 1.0
+        right = left + span
+    return np.linspace(left, right, nbins)
+
+def _resolve_total_offender_counts(df_input: pd.DataFrame) -> tuple[np.ndarray | None, str]:
+    if "total_problematic_offender_count" in df_input.columns:
+        counts = pd.to_numeric(
+            df_input["total_problematic_offender_count"],
+            errors="coerce",
+        ).to_numpy(dtype=float)
+        counts = np.clip(counts, 0.0, None)
+        return counts, "total_problematic_offender_count"
+
+    component_columns = [
+        column_name
+        for column_name in (
+            "task1_problematic_channel_count",
+            "task2_problematic_strip_count",
+            "task3_problematic_plane_count",
+        )
+        if column_name in df_input.columns
+    ]
+    if not component_columns:
+        return None, ""
+
+    total_counts = np.zeros(len(df_input), dtype=float)
+    finite_any = np.zeros(len(df_input), dtype=bool)
+    for column_name in component_columns:
+        raw_values = pd.to_numeric(df_input[column_name], errors="coerce").to_numpy(dtype=float)
+        finite = np.isfinite(raw_values)
+        finite_any |= finite
+        safe_values = np.where(finite, raw_values, 0.0)
+        total_counts += np.clip(safe_values, 0.0, None)
+
+    total_counts[~finite_any] = np.nan
+    source = " + ".join(component_columns)
+    return total_counts, source
+
+def _plot_offender_cumulative_hist_panel(
+    ax: plt.Axes,
+    observable_values: np.ndarray,
+    offender_counts: np.ndarray,
+    thresholds: Iterable[int],
+    bins: np.ndarray,
+    *,
+    x_label: str,
+    panel_title: str = "",
+    show_legend: bool = False,
+) -> None:
+    observable = np.asarray(observable_values, dtype=float)
+    counts = np.asarray(offender_counts, dtype=float)
+    valid = np.isfinite(observable) & np.isfinite(counts)
+
+    threshold_values = sorted({max(0, int(value)) for value in thresholds})
+    if not threshold_values:
+        threshold_values = [0]
+    colors = plt.cm.viridis(np.linspace(0.10, 0.92, len(threshold_values)))
+
+    plotted = False
+    selected_at_max = 0
+    for idx, threshold in enumerate(threshold_values):
+        selected = valid & (counts <= float(threshold))
+        values = observable[selected]
+        if values.size == 0:
+            continue
+        ax.hist(
+            values,
+            bins=bins,
+            density=True,
+            histtype="step",
+            lw=1.45,
+            color=colors[idx],
+            label=f"<= {threshold} (n={values.size:,})",
+        )
+        ax.axvline(float(np.median(values)), color=colors[idx], lw=0.9, ls="--", alpha=0.65)
+        plotted = True
+        if threshold == threshold_values[-1]:
+            selected_at_max = int(values.size)
+
+    if not plotted:
+        ax.text(
+            0.5,
+            0.5,
+            "No data",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=8,
+            color="0.45",
+        )
+
+    total_count = int(np.count_nonzero(valid))
+    summary_lines = [f"n={total_count:,}"]
+    if total_count > 0:
+        summary_lines.append(
+            f"<= {threshold_values[-1]}: {100.0 * float(selected_at_max) / float(total_count):.1f}%"
+        )
+    ax.text(
+        0.02,
+        0.98,
+        "\n".join(summary_lines),
+        transform=ax.transAxes,
+        va="top",
+        ha="left",
+        fontsize=7,
+        bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.75, "edgecolor": "0.8"},
+    )
+
+    if panel_title:
+        ax.set_title(panel_title, fontsize=9)
+    ax.set_xlim(float(bins[0]), float(bins[-1]))
+    ax.set_xlabel(x_label, fontsize=8)
+    ax.set_ylabel("density", fontsize=8)
+    ax.grid(True, alpha=0.25)
+    ax.tick_params(labelsize=7)
+    if show_legend:
+        ax.legend(fontsize=7, loc="upper right")
+
+def _plot_offender_hist_panel(
+    ax: plt.Axes,
+    zero_values: np.ndarray,
+    nonzero_values: np.ndarray,
+    bins: np.ndarray,
+    *,
+    x_label: str,
+    panel_title: str = "",
+    show_legend: bool = False,
+) -> None:
+    zero_values = np.asarray(zero_values, dtype=float)
+    nonzero_values = np.asarray(nonzero_values, dtype=float)
+    zero_values = zero_values[np.isfinite(zero_values)]
+    nonzero_values = nonzero_values[np.isfinite(nonzero_values)]
+
+    plotted = False
+    for values, color, label in (
+        (zero_values, _OFFENDER_ZERO_COLOR, "0 offenders"),
+        (nonzero_values, _OFFENDER_NONZERO_COLOR, ">0 offenders"),
+    ):
+        if values.size == 0:
+            continue
+        ax.hist(
+            values,
+            bins=bins,
+            density=True,
+            histtype="stepfilled",
+            alpha=0.16,
+            color=color,
+        )
+        ax.hist(
+            values,
+            bins=bins,
+            density=True,
+            histtype="step",
+            lw=1.6,
+            color=color,
+            label=f"{label} (n={values.size:,})",
+        )
+        ax.axvline(float(np.median(values)), color=color, lw=1.0, ls="--", alpha=0.75)
+        plotted = True
+
+    if not plotted:
+        ax.text(
+            0.5,
+            0.5,
+            "No data",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=8,
+            color="0.45",
+        )
+
+    total_count = int(zero_values.size + nonzero_values.size)
+    nonzero_fraction = (
+        100.0 * float(nonzero_values.size) / float(total_count)
+        if total_count > 0
+        else float("nan")
+    )
+    summary_lines = [f"n={total_count:,}"]
+    if total_count > 0:
+        summary_lines.append(f">0={nonzero_fraction:.1f}%")
+    if zero_values.size > 0:
+        summary_lines.append(f"m0={float(np.median(zero_values)):.2f}")
+    if nonzero_values.size > 0:
+        summary_lines.append(f"m>0={float(np.median(nonzero_values)):.2f}")
+    ax.text(
+        0.02,
+        0.98,
+        "\n".join(summary_lines),
+        transform=ax.transAxes,
+        va="top",
+        ha="left",
+        fontsize=7,
+        bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.75, "edgecolor": "0.8"},
+    )
+
+    if panel_title:
+        ax.set_title(panel_title, fontsize=9)
+    ax.set_xlim(float(bins[0]), float(bins[-1]))
+    ax.set_xlabel(x_label, fontsize=8)
+    ax.set_ylabel("density", fontsize=8)
+    ax.grid(True, alpha=0.25)
+    ax.tick_params(labelsize=7)
+    if show_legend:
+        ax.legend(fontsize=7, loc="upper right")
+
+def _build_offender_zigzag_payload(
+    df_input: pd.DataFrame,
+    tt_labels: np.ndarray,
+) -> dict[str, dict[str, np.ndarray]]:
+    required = (
+        "x",
+        "y",
+        "theta",
+        "phi",
+        "P1_T_dif_final",
+        "P2_T_dif_final",
+        "P3_T_dif_final",
+        "P4_T_dif_final",
+        "P1_Y_final",
+        "P2_Y_final",
+        "P3_Y_final",
+        "P4_Y_final",
+    )
+    if not all(column_name in df_input.columns for column_name in required):
+        return {}
+
+    path_x_all = np.column_stack(
+        [
+            pd.to_numeric(df_input[f"P{plane}_T_dif_final"], errors="coerce").to_numpy(dtype=float)
+            for plane in range(1, 5)
+        ]
+    ) * float(tdiff_to_x)
+    path_y_all = np.column_stack(
+        [
+            pd.to_numeric(df_input[f"P{plane}_Y_final"], errors="coerce").to_numpy(dtype=float)
+            for plane in range(1, 5)
+        ]
+    )
+    x0_all = pd.to_numeric(df_input["x"], errors="coerce").to_numpy(dtype=float)
+    y0_all = pd.to_numeric(df_input["y"], errors="coerce").to_numpy(dtype=float)
+    theta_all = pd.to_numeric(df_input["theta"], errors="coerce").to_numpy(dtype=float)
+    phi_all = pd.to_numeric(df_input["phi"], errors="coerce").to_numpy(dtype=float)
+    tan_theta_all = np.tan(theta_all)
+    xp_all = tan_theta_all * np.cos(phi_all)
+    yp_all = tan_theta_all * np.sin(phi_all)
+    z_all = np.asarray(z_positions, dtype=float)
+
+    payload: dict[str, dict[str, np.ndarray]] = {}
+    for tt_label in _resolve_offender_focus_tts(tt_labels):
+        active_planes = [int(char) for char in str(tt_label) if char in "1234"]
+        if len(active_planes) < 3:
+            continue
+        active_idx = np.asarray([plane - 1 for plane in active_planes], dtype=int)
+        active_z = z_all[active_idx]
+        z_order = np.argsort(active_z)
+        active_idx = active_idx[z_order]
+        active_z = active_z[z_order]
+
+        path_x = path_x_all[:, active_idx]
+        path_y = path_y_all[:, active_idx]
+        path_dx = np.diff(path_x, axis=1)
+        path_dy = np.diff(path_y, axis=1)
+        path_dz = np.diff(active_z).astype(float)
+        measured_path_all = np.sum(
+            np.sqrt(path_dx ** 2 + path_dy ** 2 + path_dz[None, :] ** 2),
+            axis=1,
+        )
+
+        z_first = float(active_z[0])
+        z_last = float(active_z[-1])
+        fit_x_first_all = x0_all + xp_all * z_first
+        fit_y_first_all = y0_all + yp_all * z_first
+        fit_x_last_all = x0_all + xp_all * z_last
+        fit_y_last_all = y0_all + yp_all * z_last
+        fit_length_all = np.sqrt(
+            (fit_x_last_all - fit_x_first_all) ** 2
+            + (fit_y_last_all - fit_y_first_all) ** 2
+            + (z_last - z_first) ** 2
+        )
+
+        valid_mask = (
+            (tt_labels == tt_label)
+            & np.isfinite(path_x).all(axis=1)
+            & np.isfinite(path_y).all(axis=1)
+            & np.isfinite(x0_all)
+            & np.isfinite(y0_all)
+            & np.isfinite(theta_all)
+            & np.isfinite(phi_all)
+            & np.isfinite(xp_all)
+            & np.isfinite(yp_all)
+            & np.isfinite(measured_path_all)
+            & np.isfinite(fit_length_all)
+            & (measured_path_all > 0)
+        )
+        if int(np.count_nonzero(valid_mask)) < 5:
+            continue
+
+        theta_selected = theta_all[valid_mask]
+        measured_path = measured_path_all[valid_mask]
+        fit_length = fit_length_all[valid_mask]
+        zigzag_ratio = fit_length / (measured_path + 1e-9)
+        zigzag_excess = np.clip(measured_path - fit_length, 0.0, None)
+        projected_excess = zigzag_excess * np.clip(np.cos(theta_selected), 1e-6, None)
+        payload[tt_label] = {
+            "row_mask": valid_mask,
+            "theta_deg": np.degrees(theta_selected),
+            "zigzag_ratio": zigzag_ratio,
+            "projected_excess": projected_excess,
+            "measured_path": measured_path,
+            "fit_length": fit_length,
+        }
+    return payload
+
+
+# Simulated-data truth comparison in slowness basis.
+# Classic relative error: (s_cal - s_c) / s_c, with s_c = 1/c.
+# Median excludes zero slowness entries (placeholders/non-fits).
+def _store_slowness_relerr_to_sc(metadata_key: str, slowness_col: str) -> None:
+    if not is_simulated_file or slowness_col not in working_df.columns:
+        global_variables[metadata_key] = np.nan
+        return
+
+    slowness_arr = pd.to_numeric(working_df[slowness_col], errors="coerce").to_numpy(dtype=float)
+    valid_slowness = slowness_arr[np.isfinite(slowness_arr) & (slowness_arr != 0.0)]
+    if valid_slowness.size == 0:
+        global_variables[metadata_key] = np.nan
+        return
+
+    relerr_arr = (valid_slowness - sc) / sc
+    relerr_arr = relerr_arr[np.isfinite(relerr_arr)]
+    global_variables[metadata_key] = float(np.median(relerr_arr)) if relerr_arr.size > 0 else np.nan
+
+
+def round_array_to_significant_digits(values: np.ndarray, significant_digits: int = 4) -> np.ndarray:
+    rounded = values.astype(float, copy=True)
+    finite_nonzero = np.isfinite(rounded) & (rounded != 0)
+    if np.any(finite_nonzero):
+        magnitudes = np.floor(np.log10(np.abs(rounded[finite_nonzero]))).astype(int)
+        scales = np.power(10.0, significant_digits - 1 - magnitudes)
+        rounded[finite_nonzero] = np.round(rounded[finite_nonzero] * scales) / scales
+    return rounded
+
+
+def _preferred_parquet_compression() -> str:
+    if pa is not None:
+        try:
+            if pa.Codec.is_available("snappy"):
+                return "snappy"
+        except Exception:
+            pass
+    return "zstd"
+
+# I want to chrono the execution time of the script
+start_execution_time_counting = datetime.now()
+_prof_t0 = time.perf_counter()
+_prof = {}
+
+STATION_CHOICES = ("0", "1", "2", "3", "4")
+TASK4_PLOT_ALIASES: tuple[str, ...] = (
+    "debug_suite",
+    "usual_suite",
+    "essential_suite",
+    "flat_values_histogram",
+    "detached_timeseries_combo",
+    "detached_residuals_combo",
+    "timtrack_timeseries_combo",
+    "timtrack_residuals_combo",
+    "combined_timeseries_combo",
+    "combined_residuals_combo",
+    "hist_core_errs_combined",
+    "hist_core_errs_combined_with_fits",
+    "stat_window_accumulation",
+    "trigger_types_raw_and_list",
+    "trigger_types_tracking_and_list",
+    "trigger_types_tracking_and_raw",
+    "trigger_types_definitive_tt_and_raw",
+    "timtrack_results_hexbin_combination_projections",
+    "timtrack_results_scatter_combination_projections",
+    "theta_det_theta_zoom_tracking_tt",
+    "polar_theta_phi_definitive_tt_2d",
+    "polar_theta_phi_tracking_tt_2d",
+    "events_per_second_by_plane_cardinality_double_row",
+    "timtrack_residuals_gaussian",
+    "tim_th_chi_sigmafit_1234_histogram",
+    "external_residuals_gaussian",
+    "all_channels_charge",
+    "event_display_sample",
+    "track_consistency_loo_residuals",
+    "strip_hit_occupancy",
+    "track_based_efficiency",
+    "total_event_charge_histogram",
+    "track_based_efficiency_tt_stability",
+    "track_based_efficiency_vs_theta",
+    "track_efficiency_large_plot",
+    "timtrack_projection_ellipse_contours",
+    "timtrack_projection_scaled_angle_comparison",
+    "chi2_offender_populations",
+    "offender_angle_populations",
+    "offender_kinematics_populations",
+    "offender_tt_balance",
+    "offender_zigzag_populations",
+    "chi2_charge_populations",
+    "chi2_residuals_populations",
+    "event_display_sample_3fold",
+    "chi2_charge_populations_3fold",
+    "chi2_residuals_populations_3fold",
+    "adj_dis_comparison",
+)
+task4_plot_status_by_alias: dict[str, str] = {}
+_TRACK_EFF_REPRESENTATIVE_LINESTYLE = (0, (10, 3))
+_TRACK_EFF_SIMULATION_LINESTYLE = (0, (3, 2))
+TASK4_PLOT_PREFIX_ALIASES: tuple[tuple[str, str], ...] = (
+    ("detached_timeseries_combo_", "detached_timeseries_combo"),
+    ("detached_residuals_combo_", "detached_residuals_combo"),
+    ("timtrack_timeseries_combo_", "timtrack_timeseries_combo"),
+    ("timtrack_residuals_combo_", "timtrack_residuals_combo"),
+    ("combined_timeseries_combo_", "combined_timeseries_combo"),
+    ("combined_residuals_combo_", "combined_residuals_combo"),
+    ("stat_window_accumulation_", "stat_window_accumulation"),
+    ("timtrack_residuals_with_gaussian_for_processed_type_", "timtrack_residuals_gaussian"),
+    ("external_residuals_with_gaussian_for_processed_type_", "external_residuals_gaussian"),
+    ("all_channels_charge_mingo0", "all_channels_charge"),
+)
+CLI_PARSER = build_step1_cli_parser("Run Stage 1 STEP_1 TASK_4 (LIST->FIT).", STATION_CHOICES)
+CLI_ARGS = CLI_PARSER.parse_args()
+validate_step1_input_file_args(CLI_PARSER, CLI_ARGS)
+
+VERBOSE = bool(os.environ.get("DATAFLOW_VERBOSE")) or CLI_ARGS.verbose
+print = build_step1_filtered_print(
+    verbose=VERBOSE,
+    debug_mode_getter=lambda: bool(globals().get("debug_mode", False)),
+    raw_print=builtins.print,
+)
+FILTER_METRICS_LOGGING_ENABLED = step1_logging_enabled("filter_metrics")[0]
+MAX_OPEN_FIGURES = 16
+_OPEN_FIGURE_IDS: list[int] = []
+_ORIGINAL_PLT_FIGURE = plt.figure
+_ORIGINAL_PLT_SUBPLOTS = plt.subplots
+_ORIGINAL_PLT_CLOSE = plt.close
+plt.figure = _guarded_figure
+plt.subplots = _guarded_subplots
+plt.close = _guarded_close
+
+_direct_pdf_pages: PdfPages | None = None
+_direct_pdf_page_count = 0
+_direct_pdf_target_path: str | None = None
+_direct_pdf_temp_path: str | None = None
+atexit.register(close_direct_pdf_writer)
+# Warning Filters
+warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
+
+start_timer(__file__)
+task_config_bundle = load_step1_task_config_bundle(
+    task_number,
+    include_filter_parameter_config=True,
+    log_fn=print,
+)
+config_root = task_config_bundle["config_root"]
+config_file_path = task_config_bundle["config_file_path"]
+plot_catalog_file_path = task_config_bundle["plot_catalog_file_path"]
+parameter_config_file_path = task_config_bundle["parameter_config_file_path"]
+plot_parameter_config_file_path = task_config_bundle["plot_parameter_config_file_path"]
+filter_parameter_config_file_path = task_config_bundle["filter_parameter_config_file_path"]
+fallback_parameter_config_file_path = task_config_bundle["fallback_parameter_config_file_path"]
+config = task_config_bundle["config"]
+task4_plot_status_by_alias = load_step1_task_plot_catalog(
+    plot_catalog_file_path,
+    TASK4_PLOT_ALIASES,
+    "Task 4",
+    log_fn=print,
+)
+debug_mode = False
+
+home_path = str(resolve_home_path_from_config(config))
+REFERENCE_TABLES_DIR = Path(home_path) / "DATAFLOW_v3" / "MASTER" / "CONFIG_FILES" / "METADATA_REPRISE" / "REFERENCE_TABLES"
+_offender_plot_settings = config.get("offender_plot_settings", {})
+if not isinstance(_offender_plot_settings, dict):
+    _offender_plot_settings = {}
+OFFENDER_THETA_MIN_DEG = float(_offender_plot_settings.get("theta_min_deg", 0.0))
+OFFENDER_THETA_MAX_DEG = float(_offender_plot_settings.get("theta_max_deg", 90.0))
+if not np.isfinite(OFFENDER_THETA_MIN_DEG):
+    OFFENDER_THETA_MIN_DEG = 0.0
+if not np.isfinite(OFFENDER_THETA_MAX_DEG):
+    OFFENDER_THETA_MAX_DEG = 90.0
+if OFFENDER_THETA_MAX_DEG <= OFFENDER_THETA_MIN_DEG:
+    OFFENDER_THETA_MIN_DEG = 0.0
+    OFFENDER_THETA_MAX_DEG = 90.0
+OFFENDER_FOCUS_TTS_CFG = _coerce_tt_label_tuple(
+    _offender_plot_settings.get("focus_definitive_tt", None),
+    default=("123", "124", "134", "234", "1234"),
+)
+OFFENDER_TASK1_CUMULATIVE_THRESHOLDS = _coerce_nonnegative_int_tuple(
+    _offender_plot_settings.get("task1_cumulative_thresholds", None),
+    default=tuple(range(0, 11)),
+)
+OFFENDER_TOTAL_CUMULATIVE_THRESHOLDS = _coerce_nonnegative_int_tuple(
+    _offender_plot_settings.get(
+        "total_cumulative_thresholds",
+        _offender_plot_settings.get("task1_cumulative_thresholds", None),
+    ),
+    default=tuple(range(0, 11)),
+)
+if 0 not in OFFENDER_TOTAL_CUMULATIVE_THRESHOLDS:
+    OFFENDER_TOTAL_CUMULATIVE_THRESHOLDS = tuple(
+        sorted((0, *OFFENDER_TOTAL_CUMULATIVE_THRESHOLDS))
+    )
+
+_CURVE_FIT_WARNING_FILTERS: tuple[tuple[str, type[Warning]], ...] = (
+    (r"Covariance of the parameters could not be estimated", OptimizeWarning),
+    (r"overflow encountered in matmul", RuntimeWarning),
+)
+# Dedicated two-column plot for combined errors
 
 #%%
 
@@ -1203,34 +4838,19 @@ station = str(CLI_ARGS.station)
 set_station(station)
 
 use_filter_parameter_config = bool(config.get("use_filter_parameter_config", True))
-filter_parameter_declared_keys: set[str] = set()
-filter_parameter_overrides: dict[str, object] = {}
-if use_filter_parameter_config and filter_parameter_config_file_path.exists():
-    filter_parameter_declared_keys = load_declared_parameter_names(filter_parameter_config_file_path)
-    filter_parameter_overrides = load_parameter_overrides(filter_parameter_config_file_path, station)
-elif use_filter_parameter_config:
-    print(f"Warning: Requested filter parameter config not found: {filter_parameter_config_file_path}")
-else:
-    print("Info: Skipping filter parameter config (use_filter_parameter_config=false).")
-
-config = apply_step1_task_parameter_overrides(
-    config_obj=config,
+config = resolve_step1_effective_task_config(
+    config,
     station_id=station,
-    task_parameter_path=str(parameter_config_file_path),
-    fallback_parameter_path=str(fallback_parameter_config_file_path),
     task_number=task_number,
-    update_fn=update_config_with_parameters,
+    config_root=config_root,
+    parameter_config_file_path=parameter_config_file_path,
+    fallback_parameter_config_file_path=fallback_parameter_config_file_path,
+    plot_parameter_config_file_path=plot_parameter_config_file_path,
+    filter_parameter_config_file_path=filter_parameter_config_file_path,
+    use_filter_parameter_config=use_filter_parameter_config,
+    warn_if_missing_filter=True,
     log_fn=print,
-    exclude_keys=filter_parameter_declared_keys,
 )
-config = apply_step1_master_overrides(
-    config_obj=config,
-    master_config_root=config_root,
-    log_fn=print,
-)
-if use_filter_parameter_config and filter_parameter_config_file_path.exists():
-    config.update(filter_parameter_overrides)
-    print(f"Info: Loaded filter parameters from {filter_parameter_config_file_path}")
 process_only_qa_retry_files = bool(config.get("process_only_qa_retry_files", False))
 if process_only_qa_retry_files:
     print(
@@ -1294,23 +4914,6 @@ status_execution_date = initialize_status_row(
     filename_base=status_filename_base,
     completion_fraction=0.0,
 )
-
-
-def _exit_without_status_row(message: str) -> None:
-    print(message)
-    if status_execution_date is not None:
-        deleted = delete_status_row(
-            early_status_csv_path,
-            filename_base=status_filename_base,
-            execution_date=status_execution_date,
-        )
-        if not deleted:
-            print(
-                "Warning: unable to delete startup status row "
-                f"{status_filename_base} ({status_execution_date})."
-            )
-    sys.exit(0)
-
 base_directory = str(repo_root / "STATIONS" / f"MINGO0{station}" / "STAGE_1" / "EVENT_DATA")
 raw_to_list_working_directory = os.path.join(base_directory, f"STEP_1/TASK_{task_number}")
 
@@ -1361,17 +4964,6 @@ base_directories = {
 
 EXPECTED_INPUT_PREFIX = "listed_"
 EXPECTED_INPUT_EXTENSION = ".parquet"
-
-
-def _expected_input_files(file_names):
-    return sorted(
-        filter_expected_artifact_names(
-            file_names,
-            prefix=EXPECTED_INPUT_PREFIX,
-            extension=EXPECTED_INPUT_EXTENSION,
-        )
-    )
-
 # Accessing all the variables from the configuration
 crontab_execution = config["crontab_execution"]
 (
@@ -1487,31 +5079,6 @@ print("----------------------------------------------------------------------")
 unprocessed_files = _expected_input_files(os.listdir(base_directories["unprocessed_directory"]))
 processing_files = _expected_input_files(os.listdir(base_directories["processing_directory"]))
 completed_files = _expected_input_files(os.listdir(base_directories["completed_directory"]))
-
-def process_file(source_path, dest_path):
-    print("Source path:", source_path)
-    print("Destination path:", dest_path)
-    
-    if source_path == dest_path:
-        return True
-    
-    if os.path.exists(dest_path):
-        print(f"File already exists at destination (removing...)")
-        os.remove(dest_path)
-        # return False
-    
-    print("**********************************************************************")
-    print(f"Moving\n'{source_path}'\nto\n'{dest_path}'...")
-    print("**********************************************************************")
-    
-    safe_move(source_path, dest_path)
-    now = time.time()
-    os.utime(dest_path, (now, now))
-    return True
-
-def get_file_path(directory, file_name):
-    return os.path.join(directory, file_name)
-
 # Create ALL directories if they don't already exist
 
 for directory in base_directories.values():
@@ -1901,12 +5468,6 @@ if simulated_param_hash:
 TT_COUNT_VALUES: tuple[int, ...] = (
     0, 1, 2, 3, 4, 12, 13, 14, 23, 24, 34, 123, 124, 134, 234, 1234
 )
-
-def ensure_global_count_keys(prefixes: Iterable[str]) -> None:
-    for prefix in prefixes:
-        for tt_value in TT_COUNT_VALUES:
-            global_variables.setdefault(f"{prefix}_{tt_value}_count", 0)
-
 analysis_date = datetime.now().strftime("%Y-%m-%d")
 print(f"Analysis date and time: {analysis_date}")
 
@@ -1967,6 +5528,23 @@ elif simulated_param_hash:
         print(f"Warning: param_hash validation fallback used due to error: {exc}")
     if _ph_missing.any():
         working_df.loc[_ph_missing, "param_hash"] = str(simulated_param_hash)
+if not simulated_param_hash and "param_hash" in working_df.columns:
+    try:
+        _recovered_param_hash_series = working_df["param_hash"].astype(str).str.strip()
+        _recovered_param_hash_series = _recovered_param_hash_series[_recovered_param_hash_series.ne("")]
+    except Exception as exc:
+        print(f"Warning: unable to inspect parquet param_hash column after load: {exc}")
+        _recovered_param_hash_series = pd.Series(dtype=str)
+    if not _recovered_param_hash_series.empty:
+        _recovered_param_hash = _recovered_param_hash_series.iloc[0]
+        simulated_z_positions, simulated_param_hash = resolve_simulated_z_positions(
+            basename_no_ext,
+            Path(base_directory),
+            param_hash=_recovered_param_hash,
+        )
+        if simulated_param_hash:
+            global_variables["param_hash"] = simulated_param_hash
+            print(f"Recovered simulated param_hash from parquet column: {simulated_param_hash}")
 print(f"Listed dataframe reloaded from: {file_path}")
 # print("Columns loaded from parquet:")
 # for col in working_df.columns:
@@ -2003,278 +5581,13 @@ if create_debug_plots:
             max_cols_per_fig=20,
         )
 
-def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:
-    """Compute trigger type based on planes with non-zero charge."""
-    tt_str = pd.Series("", index=df.index, dtype="object")
-    for plane in range(1, 5):
-        if columns_map:
-            charge_columns = [col for col in columns_map.get(plane, []) if col in df.columns]
-        else:
-            charge_columns = [
-                col
-                for col in [
-                    f"Q{plane}_F_1",
-                    f"Q{plane}_F_2",
-                    f"Q{plane}_F_3",
-                    f"Q{plane}_F_4",
-                    f"Q{plane}_B_1",
-                    f"Q{plane}_B_2",
-                    f"Q{plane}_B_3",
-                    f"Q{plane}_B_4",
-                ]
-                if col in df.columns
-            ]
-        if charge_columns:
-            has_charge = df.loc[:, charge_columns].ne(0).any(axis=1)
-            tt_str = tt_str.where(~has_charge, tt_str + str(plane))
-    df.loc[:, column_name] = tt_str.replace("", "0").astype(int)
-    return df
-
-
-def compute_fit_tt_from_charge(df: pd.DataFrame) -> pd.Series:
-    """
-    Compute fit_tt from observed plane activity, constrained by list_tt.
-
-    A plane can only be active in fit_tt if it was already active in list_tt
-    (keep-or-diminish rule). Plane activity is then validated from charge-like
-    observables; this intentionally avoids extension/projection-only occupancy.
-    """
-    charge_threshold = _task4_parse_optional_float(config.get("fit_tt_plane_charge_threshold"))
-    if charge_threshold is None:
-        charge_threshold = 0.0
-
-    list_tt_series: pd.Series | None = None
-    if "list_tt" in df.columns:
-        list_tt_series = pd.to_numeric(df["list_tt"], errors="coerce").fillna(0).astype(int)
-    elif "processed_tt" in df.columns:
-        list_tt_series = pd.to_numeric(df["processed_tt"], errors="coerce").fillna(0).astype(int)
-
-    if list_tt_series is not None:
-        list_tt_labels = list_tt_series.astype(str)
-    else:
-        list_tt_labels = pd.Series("", index=df.index, dtype="object")
-
-    tt_str = pd.Series("", index=df.index, dtype="object")
-    for plane in range(1, 5):
-        if list_tt_series is not None:
-            allowed_by_list_tt = list_tt_labels.str.contains(str(plane), regex=False)
-        else:
-            allowed_by_list_tt = pd.Series(True, index=df.index)
-
-        candidate_columns: list[str] = [
-            col_name
-            for col_name in (
-                f"charge_{plane}",
-                f"tim_charge_{plane}",
-                f"P{plane}_Q_sum_final",
-            )
-            if col_name in df.columns
-        ]
-        if not candidate_columns:
-            candidate_columns = [
-                f"Q_P{plane}s{strip}" for strip in range(1, 5) if f"Q_P{plane}s{strip}" in df.columns
-            ]
-        if not candidate_columns:
-            continue
-
-        charge_values = (
-            df.loc[:, candidate_columns]
-            .apply(pd.to_numeric, errors="coerce")
-            .fillna(0.0)
-        )
-        has_charge = charge_values.gt(float(charge_threshold)).any(axis=1)
-        plane_active = allowed_by_list_tt & has_charge
-        tt_str = tt_str.where(~plane_active, tt_str + str(plane))
-    return tt_str.replace("", "0").astype(int)
-
-
-TASK4_PRIMARY_TT_COLUMN = "fit_tt"
-TASK4_COMPAT_TT_COLUMN = "definitive_tt"
-TASK4_EXTENSION_TT_COLUMNS: dict[int, list[str]] = {
-    i_plane: [
-        f"P{i_plane}_T_sum_final",
-        f"P{i_plane}_T_dif_final",
-        f"P{i_plane}_Q_sum_final",
-        f"P{i_plane}_Q_dif_final",
-        f"P{i_plane}_Y_final",
-    ]
-    for i_plane in range(1, 5)
-}
-
-
-def get_task4_tt_column(df_input: pd.DataFrame, preferred: str = TASK4_PRIMARY_TT_COLUMN) -> str | None:
-    if preferred in df_input.columns:
-        return preferred
-    if TASK4_COMPAT_TT_COLUMN in df_input.columns:
-        return TASK4_COMPAT_TT_COLUMN
-    return None
-
-
-def get_task4_tt_series(df_input: pd.DataFrame, preferred: str = TASK4_PRIMARY_TT_COLUMN) -> pd.Series:
-    tt_col = get_task4_tt_column(df_input, preferred=preferred)
-    if tt_col is None:
-        return pd.Series(0, index=df_input.index, dtype=int)
-    return pd.to_numeric(df_input[tt_col], errors="coerce").fillna(0).astype(int)
-
-
-def refresh_task4_trigger_columns(
-    df_input: pd.DataFrame,
-    *,
-    include_compatibility_alias: bool = True,
-) -> pd.DataFrame:
-    df_output = compute_tt(df_input, "extension_tt", TASK4_EXTENSION_TT_COLUMNS)
-    fit_tt_series = compute_fit_tt_from_charge(df_output)
-    df_output.loc[:, TASK4_PRIMARY_TT_COLUMN] = fit_tt_series
-    if include_compatibility_alias:
-        df_output.loc[:, TASK4_COMPAT_TT_COLUMN] = fit_tt_series
-    return df_output
-
-
-def _task4_parse_optional_float(raw_value: object) -> float | None:
-    if raw_value is None:
-        return None
-    if isinstance(raw_value, str) and raw_value.strip().lower() in {"", "none", "null"}:
-        return None
-    try:
-        parsed = float(raw_value)
-    except (TypeError, ValueError):
-        return None
-    if not np.isfinite(parsed):
-        return None
-    return float(parsed)
-
-
-def _task4_get_optional_config_float(config_obj: Mapping[str, object], *keys: str) -> float | None:
-    for key in keys:
-        if not key:
-            continue
-        if key in config_obj:
-            return _task4_parse_optional_float(config_obj.get(key))
-    return None
-
-
-def _resolve_task4_track_efficiency_fiducial_cfg(config_obj: Mapping[str, object]) -> dict[str, object]:
-    return {
-        "charge_event_left": _task4_get_optional_config_float(config_obj, "fiducial_charge_event_left"),
-        "charge_event_right": _task4_get_optional_config_float(config_obj, "fiducial_charge_event_right"),
-        # "x_left": _task4_get_optional_config_float(
-        #     config_obj,
-        #     "fiducial_x_left",
-        #     "fiducial_x_plane_1_left",
-        # ),
-        # "x_right": _task4_get_optional_config_float(
-        #     config_obj,
-        #     "fiducial_x_right",
-        #     "fiducial_x_plane_1_right",
-        # ),
-        "theta_left_deg": _task4_get_optional_config_float(config_obj, "fiducial_theta_left"),
-        "theta_right_deg": _task4_get_optional_config_float(config_obj, "fiducial_theta_right"),
-        "x_by_plane": {
-            plane: {
-                "left": _task4_get_optional_config_float(config_obj, f"fiducial_x_plane_{plane}_left"),
-                "right": _task4_get_optional_config_float(config_obj, f"fiducial_x_plane_{plane}_right"),
-            }
-            for plane in range(1, 5)
-        },
-        "y_by_plane": {
-            plane: {
-                "left": _task4_get_optional_config_float(config_obj, f"fiducial_y_plane_{plane}_left"),
-                "right": _task4_get_optional_config_float(config_obj, f"fiducial_y_plane_{plane}_right"),
-            }
-            for plane in range(1, 5)
-        },
-    }
-
-
-def _task4_resolve_region_bounds(
-    left_limit: float | None,
-    right_limit: float | None,
-    physical_left: float,
-    physical_right: float,
-) -> tuple[float, float]:
-    left = float(left_limit) if left_limit is not None else float(physical_left)
-    right = float(right_limit) if right_limit is not None else float(physical_right)
-    left = max(float(physical_left), min(left, float(physical_right)))
-    right = max(float(physical_left), min(right, float(physical_right)))
-    if right <= left:
-        return float(physical_left), float(physical_right)
-    return left, right
-
-
-def _task4_track_efficiency_fiducial_is_active(cfg_fiducial: Mapping[str, object]) -> bool:
-    scalar_keys = (
-        "charge_event_left",
-        "charge_event_right",
-        # "x_left",
-        # "x_right",
-        "theta_left_deg",
-        "theta_right_deg",
-    )
-    for key in scalar_keys:
-        if cfg_fiducial.get(key, None) is not None:
-            return True
-    x_by_plane = cfg_fiducial.get("x_by_plane", {})
-    if isinstance(x_by_plane, Mapping):
-        for plane_cfg in x_by_plane.values():
-            if not isinstance(plane_cfg, Mapping):
-                continue
-            if plane_cfg.get("left", None) is not None or plane_cfg.get("right", None) is not None:
-                return True
-    y_by_plane = cfg_fiducial.get("y_by_plane", {})
-    if isinstance(y_by_plane, Mapping):
-        for plane_cfg in y_by_plane.values():
-            if not isinstance(plane_cfg, Mapping):
-                continue
-            if plane_cfg.get("left", None) is not None or plane_cfg.get("right", None) is not None:
-                return True
-    return False
-
-
-def _task4_resolve_efficiency_param_hash(
-    explicit_param_hash: object,
-    df_input: pd.DataFrame,
-) -> str:
-    if explicit_param_hash is not None:
-        text = str(explicit_param_hash).strip()
-        if text:
-            return text
-    if "param_hash" in df_input.columns:
-        param_series = df_input["param_hash"].astype(str).str.strip()
-        nonempty = param_series[(param_series != "") & (param_series.str.lower() != "nan")]
-        if not nonempty.empty:
-            return str(nonempty.iloc[0])
-    return ""
-
-
-def _task4_parse_filter_columns(raw_value: object, default: Iterable[str]) -> list[str]:
-    if raw_value is None:
-        source = list(default)
-    elif isinstance(raw_value, str):
-        source = [chunk.strip() for chunk in re.split(r"[\s,;]+", raw_value) if chunk.strip()]
-    elif isinstance(raw_value, (list, tuple, set, np.ndarray, pd.Series)):
-        source = [str(item).strip() for item in raw_value if str(item).strip()]
-    else:
-        source = list(default)
-    return list(dict.fromkeys(source))
-
-list_tt_columns = {
-    i_plane: [
-        f"P{i_plane}_T_sum_final",
-        f"P{i_plane}_T_dif_final",
-        f"P{i_plane}_Q_sum_final",
-        f"P{i_plane}_Q_dif_final",
-        f"P{i_plane}_Y_final",
-    ]
-    for i_plane in range(1, 5)
-}
-
 # the analysis mode indicates if it is a regular analysis or a repeated, careful analysis
 # 0 -> regular analysis
 # 1 -> repeated, careful analysis
 
 # Keep list_tt from Task 3 when present; compute only if missing.
 if "list_tt" not in working_df.columns:
-    working_df = compute_tt(working_df, "list_tt", list_tt_columns)
+    working_df = compute_tt(working_df, "list_tt", TASK4_EXTENSION_TT_COLUMNS)
 else:
     working_df.loc[:, "list_tt"] = (
         pd.to_numeric(working_df["list_tt"], errors="coerce")
@@ -2311,255 +5624,6 @@ print("Execution time is:", execution_time)
 ITINERARY_FILE_PATH = Path(
     f"{home_path}/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
 )
-
-def load_iteration_settings(cfg):
-    number_of_det_executions = max(1, int(cfg.get("number_of_det_executions", 1)))
-    number_of_tt_executions = max(1, int(cfg.get("number_of_tt_executions", 1)))
-    return (
-        number_of_det_executions,
-        cfg["fixed_speed"],
-        cfg["res_ana_removing_planes"],
-        number_of_tt_executions,
-        cfg.get("complete_reanalysis", False),
-        cfg.get("limit_number", None),
-    )
-
-
-def initialize_task4_runtime_context(
-    cfg: dict[str, object],
-    metadata_store: dict[str, object],
-    namespace: dict[str, object],
-    *,
-    announce_fit_method: bool = False,
-    announce_geometry: bool = False,
-) -> dict[str, object]:
-    runtime: dict[str, object] = {
-        "fast_mode": False,
-        "debug_mode": False,
-        "last_file_test": cfg["last_file_test"],
-        "crontab_execution": cfg["crontab_execution"],
-    }
-
-    (
-        number_of_det_executions,
-        fixed_speed,
-        res_ana_removing_planes,
-        number_of_tt_executions,
-        complete_reanalysis,
-        limit_number,
-    ) = load_iteration_settings(cfg)
-    runtime.update(
-        {
-            "number_of_det_executions": number_of_det_executions,
-            "fixed_speed": fixed_speed,
-            "res_ana_removing_planes": res_ana_removing_planes,
-            "number_of_tt_executions": number_of_tt_executions,
-            "complete_reanalysis": complete_reanalysis,
-            "limit_number": limit_number,
-            "limit": limit_number is not None,
-        }
-    )
-
-    fit_method = str(cfg.get("fit_method", "both")).strip().lower()
-    if fit_method not in {"detached", "timtrack", "both"}:
-        print(f"Warning: Invalid fit_method='{fit_method}'. Falling back to 'both'.")
-        fit_method = "both"
-    runtime.update(
-        {
-            "fit_method": fit_method,
-            "run_detached_fit": fit_method in {"detached", "both"},
-            "run_timtrack_fit": fit_method in {"timtrack", "both"},
-        }
-    )
-    if announce_fit_method:
-        print(f"Fitting mode selected: fit_method='{fit_method}'")
-
-    runtime.update(
-        {
-            "T_side_left_pre_cal_debug": cfg.get("T_side_left_pre_cal_debug", -500),
-            "T_side_right_pre_cal_debug": cfg.get("T_side_right_pre_cal_debug", 500),
-            "T_side_left_pre_cal_default": cfg.get("T_side_left_pre_cal_default", -200),
-            "T_side_right_pre_cal_default": cfg.get("T_side_right_pre_cal_default", -100),
-            "T_side_left_pre_cal_ST": cfg.get("T_side_left_pre_cal_ST", -200),
-            "T_side_right_pre_cal_ST": cfg.get("T_side_right_pre_cal_ST", -50),
-        }
-    )
-
-    runtime["T_sum_RPC_left"] = _task4_config_float(
-        cfg,
-        "T_sum_RPC_left",
-        "plane_combination_plane_t_sum_sum_left",
-        "plane_combination_same_plane_t_sum_sum_left",
-        "plane_combination_self_t_sum_sum_left",
-        default=-25.0,
-    )
-    runtime["T_sum_RPC_right"] = _task4_config_float(
-        cfg,
-        "T_sum_RPC_right",
-        "plane_combination_plane_t_sum_sum_right",
-        "plane_combination_same_plane_t_sum_sum_right",
-        "plane_combination_self_t_sum_sum_right",
-        default=25.0,
-    )
-
-    det_phi_filter_abs = abs(
-        float(cfg.get("det_phi_filter_abs", cfg.get("det_phi_right_filter", 3.141592)))
-    )
-    runtime.update(
-        {
-            "det_pos_filter": cfg["det_pos_filter"],
-            "det_theta_left_filter": cfg["det_theta_left_filter"],
-            "det_theta_right_filter": cfg["det_theta_right_filter"],
-            "det_phi_filter_abs": det_phi_filter_abs,
-            "det_phi_right_filter": det_phi_filter_abs,
-            "det_phi_left_filter": -det_phi_filter_abs,
-            "det_slowness_filter_left": cfg["det_slowness_filter_left"],
-            "det_slowness_filter_right": cfg["det_slowness_filter_right"],
-            "det_res_ystr_filter": cfg["det_res_ystr_filter"],
-            "det_res_tsum_filter": cfg["det_res_tsum_filter"],
-            "det_res_tdif_filter": cfg["det_res_tdif_filter"],
-            "det_ext_res_ystr_filter": cfg["det_ext_res_ystr_filter"],
-            "det_ext_res_tsum_filter": cfg["det_ext_res_tsum_filter"],
-            "det_ext_res_tdif_filter": cfg["det_ext_res_tdif_filter"],
-            "proj_filter": cfg["proj_filter"],
-            "res_ystr_filter": cfg["res_ystr_filter"],
-            "res_tsum_filter": cfg["res_tsum_filter"],
-            "res_tdif_filter": cfg["res_tdif_filter"],
-            "ext_res_ystr_filter": cfg["ext_res_ystr_filter"],
-            "ext_res_tsum_filter": cfg["ext_res_tsum_filter"],
-            "ext_res_tdif_filter": cfg["ext_res_tdif_filter"],
-            "delta_s_left": cfg.get("delta_s_left", -0.0003),
-            "delta_s_right": cfg.get("delta_s_right", 0.0003),
-            "coincidence_window_cal_ns": cfg["coincidence_window_cal_ns"],
-            "coincidence_window_cal_number_of_points": cfg["coincidence_window_cal_number_of_points"],
-            "beta": cfg["beta"],
-            "strip_speed_factor_of_c": cfg["strip_speed_factor_of_c"],
-            "strip_length": cfg["strip_length"],
-            "narrow_strip": cfg["narrow_strip"],
-            "wide_strip": cfg["wide_strip"],
-            "d0": cfg["d0"],
-            "cocut": cfg["cocut"],
-            "iter_max": cfg["iter_max"],
-            "anc_sy": cfg["anc_sy"],
-            "anc_sts": cfg["anc_sts"],
-            "anc_std": cfg["anc_std"],
-            "anc_sz": cfg["anc_sz"],
-            "n_planes_timtrack": cfg["n_planes_timtrack"],
-            "T_clip_min_debug": cfg.get("T_clip_min_debug", -500),
-            "T_clip_max_debug": cfg.get("T_clip_max_debug", 500),
-            "Q_clip_min_debug": cfg.get("Q_clip_min_debug", -500),
-            "Q_clip_max_debug": cfg.get("Q_clip_max_debug", 500),
-            "num_bins_debug": cfg.get("num_bins_debug", 100),
-            "T_clip_min_default": cfg.get("T_clip_min_default", -300),
-            "T_clip_max_default": cfg.get("T_clip_max_default", 100),
-            "Q_clip_min_default": cfg.get("Q_clip_min_default", 0),
-            "Q_clip_max_default": cfg.get("Q_clip_max_default", 500),
-            "num_bins_default": cfg.get("num_bins_default", 100),
-            "T_clip_min_ST": cfg.get("T_clip_min_ST", -300),
-            "T_clip_max_ST": cfg.get("T_clip_max_ST", 100),
-            "Q_clip_min_ST": cfg.get("Q_clip_min_ST", 0),
-            "Q_clip_max_ST": cfg.get("Q_clip_max_ST", 500),
-            "time_window_fitting": cfg["time_window_fitting"],
-            "charge_plot_limit_left": cfg["charge_plot_limit_left"],
-            "charge_plot_limit_right": cfg["charge_plot_limit_right"],
-            "charge_plot_event_limit_right": cfg.get("charge_plot_event_limit_right", 400),
-            "Q_sum_color": "orange",
-            "Q_dif_color": "red",
-            "T_sum_color": "blue",
-            "T_dif_color": "green",
-        }
-    )
-
-    runtime["pos_filter"] = runtime["det_pos_filter"]
-    runtime["t0_left_filter"] = runtime["T_sum_RPC_left"]
-    runtime["t0_right_filter"] = runtime["T_sum_RPC_right"]
-    runtime["slowness_filter_left"] = runtime["det_slowness_filter_left"]
-    runtime["slowness_filter_right"] = runtime["det_slowness_filter_right"]
-    runtime["theta_left_filter"] = runtime["det_theta_left_filter"]
-    runtime["theta_right_filter"] = runtime["det_theta_right_filter"]
-    runtime["phi_left_filter"] = runtime["det_phi_left_filter"]
-    runtime["phi_right_filter"] = runtime["det_phi_right_filter"]
-
-    fig_idx, plot_list = ensure_plot_state(namespace)
-    runtime["fig_idx"] = fig_idx
-    runtime["plot_list"] = plot_list
-
-    runtime["time_dif_distance"] = 30
-    runtime["time_dif_reference"] = np.array([
-        [-0.0573, 0.031275, 1.033875, 0.761475],
-        [-0.914, -0.873975, -0.19815, 0.452025],
-        [0.8769, 1.2008, 1.014, 2.43915],
-        [1.508825, 2.086375, 1.6876, 3.023575],
-    ])
-    runtime["charge_sum_distance"] = 30
-    runtime["charge_sum_reference"] = np.array([
-        [89.4319, 98.19605, 95.99055, 91.83875],
-        [96.55775, 94.50385, 94.9254, 91.0775],
-        [92.12985, 92.23395, 90.60545, 95.5214],
-        [93.75635, 93.57425, 93.07055, 89.27305],
-    ])
-    runtime["charge_dif_distance"] = 30
-    runtime["charge_dif_reference"] = np.array([
-        [4.512, 0.58715, 1.3204, -1.3918],
-        [-4.50885, 0.918, -3.39445, -0.12325],
-        [-3.8931, -3.28515, 3.27295, 1.0554],
-        [-2.29505, 0.012, 2.49045, -2.14565],
-    ])
-    runtime["time_sum_distance"] = 30
-    runtime["time_sum_reference"] = np.array([
-        [0.0, -0.3886308, -0.53020947, 0.33711737],
-        [-0.80494094, -0.68836069, -2.01289387, -1.13481931],
-        [-0.23899338, -0.51373738, 0.50845317, 0.11685095],
-        [0.33586385, 1.08329847, 0.91410244, 0.58815813],
-    ])
-
-    runtime["T_F_left_pre_cal"] = runtime["T_side_left_pre_cal_default"]
-    runtime["T_F_right_pre_cal"] = runtime["T_side_right_pre_cal_default"]
-    runtime["T_B_left_pre_cal"] = runtime["T_side_left_pre_cal_default"]
-    runtime["T_B_right_pre_cal"] = runtime["T_side_right_pre_cal_default"]
-    runtime["T_F_left_pre_cal_ST"] = runtime["T_side_left_pre_cal_ST"]
-    runtime["T_F_right_pre_cal_ST"] = runtime["T_side_right_pre_cal_ST"]
-    runtime["T_B_left_pre_cal_ST"] = runtime["T_side_left_pre_cal_ST"]
-    runtime["T_B_right_pre_cal_ST"] = runtime["T_side_right_pre_cal_ST"]
-
-    y_widths = [
-        np.array([runtime["wide_strip"], runtime["wide_strip"], runtime["wide_strip"], runtime["narrow_strip"]]),
-        np.array([runtime["narrow_strip"], runtime["wide_strip"], runtime["wide_strip"], runtime["wide_strip"]]),
-    ]
-    runtime["y_widths"] = y_widths
-    runtime["y_pos_T"] = [y_pos(y_widths[0]), y_pos(y_widths[1])]
-    runtime["y_width_P1_and_P3"] = y_widths[0]
-    runtime["y_width_P2_and_P4"] = y_widths[1]
-    runtime["y_pos_P1_and_P3"] = y_pos(runtime["y_width_P1_and_P3"])
-    runtime["y_pos_P2_and_P4"] = y_pos(runtime["y_width_P2_and_P4"])
-    runtime["total_width"] = np.sum(runtime["y_width_P1_and_P3"])
-
-    c_mm_ns = c / 1000000
-    runtime["c_mm_ns"] = c_mm_ns
-    if announce_geometry:
-        print(c_mm_ns)
-
-    runtime["muon_speed"] = runtime["beta"] * c_mm_ns
-    runtime["strip_speed"] = runtime["strip_speed_factor_of_c"] * c_mm_ns
-    runtime["tdiff_to_x"] = runtime["strip_speed"]
-    runtime["vc"] = runtime["beta"] * c_mm_ns
-    runtime["sc"] = 1 / runtime["vc"]
-    runtime["ss"] = 1 / runtime["strip_speed"]
-    runtime["nplan"] = runtime["n_planes_timtrack"]
-    runtime["lenx"] = runtime["strip_length"]
-    runtime["anc_sx"] = runtime["tdiff_to_x"] * runtime["anc_std"]
-
-    runtime["T_clip_min"] = runtime["T_clip_min_default"]
-    runtime["T_clip_max"] = runtime["T_clip_max_default"]
-    runtime["Q_clip_min"] = runtime["Q_clip_min_default"]
-    runtime["Q_clip_max"] = runtime["Q_clip_max_default"]
-    runtime["num_bins"] = runtime["num_bins_default"]
-
-    metadata_store["unc_y"] = runtime["anc_sy"]
-    metadata_store["unc_tsum"] = runtime["anc_sts"]
-    metadata_store["unc_tdif"] = runtime["anc_std"]
-    return runtime
-
 globals().update(
     initialize_task4_runtime_context(
         config,
@@ -2569,12 +5633,6 @@ globals().update(
         announce_geometry=True,
     )
 )
-
-
-
-
-
-
 
 TRACK_COMBINATIONS: tuple[str, ...] = (
     "12", "13", "14", "23", "24", "34",
@@ -2618,186 +5676,7 @@ FILTER_METRIC_NAMES: tuple[str, ...] = (
 )
 
 reprocessing_parameters = pd.DataFrame()
-
-def load_reprocessing_parameters_for_file(station_id: str, task_id: str, basename: str) -> pd.DataFrame:
-    """Return matching reprocessing parameters for *basename* or an empty frame."""
-    station_str = str(station_id).zfill(2)
-    table_path = REFERENCE_TABLES_DIR / f"reprocess_files_station_{station_str}_task_{task_id}.csv"
-    if not table_path.exists():
-        return pd.DataFrame()
-    try:
-        table_df = pd.read_csv(table_path)
-    except Exception as exc:
-        print(f"Warning: unable to read reprocessing table {table_path}: {exc}")
-        return pd.DataFrame()
-    if "filename_base" not in table_df.columns:
-        return pd.DataFrame()
-    matches = table_df[table_df["filename_base"] == basename]
-    return matches.reset_index(drop=True)
-
-def _gaussian_model(x: np.ndarray, mu: float, sigma: float, amplitude: float) -> np.ndarray:
-    sigma = np.abs(float(sigma))
-    if sigma == 0:
-        sigma = 1e-12
-    return amplitude * np.exp(-((x - mu) ** 2) / (2 * sigma ** 2))
-
-
-def _fit_gaussian_mu_sigma(series: pd.Series, quantile: float = 0.99) -> tuple[float, float]:
-    """Return Gaussian (mu, sigma) using the same histogram-fit logic as the residual plots."""
-    arr = np.asarray(series, dtype=float)
-    arr = arr[np.isfinite(arr)]
-    if arr.size < 10:
-        return np.nan, np.nan
-
-    hist_data, bin_edges = np.histogram(arr, bins=50)
-    if hist_data.size == 0 or np.max(hist_data) <= 0:
-        return np.nan, np.nan
-    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-
-    try:
-        lower_q, upper_q = np.quantile(arr, [1.0 - quantile, quantile])
-        filt_data = arr[(arr >= lower_q) & (arr <= upper_q)]
-        if filt_data.size < 2:
-            filt_data = arr
-        sigma0 = float(np.nanstd(filt_data))
-        if not np.isfinite(sigma0) or sigma0 <= 0:
-            sigma0 = float(np.nanstd(arr))
-        if not np.isfinite(sigma0) or sigma0 <= 0:
-            return np.nan, np.nan
-        popt, _ = _curve_fit_checked(
-            _gaussian_model,
-            bin_centers,
-            hist_data,
-            p0=[float(np.nanmean(filt_data)), sigma0, float(np.max(hist_data))],
-            maxfev=10000,
-        )
-        mu = float(popt[0])
-        sigma = float(abs(popt[1]))
-    except Exception:
-        return np.nan, np.nan
-    if not np.isfinite(mu) or not np.isfinite(sigma) or sigma <= 0:
-        return np.nan, np.nan
-    return mu, sigma
-
-
-def _fit_gaussian_sigma(series: pd.Series, quantile: float = 0.99) -> float:
-    """Return Gaussian sigma using the same histogram-fit logic as the residual plots."""
-    _, sigma = _fit_gaussian_mu_sigma(series, quantile=quantile)
-    return sigma
-
-
-def compute_timtrack_gaussian_sigma_chi2(
-    sigma_source_df: pd.DataFrame,
-    target_df: pd.DataFrame,
-    *,
-    combo_tt: int = 1234,
-    quantile: float = 0.99,
-    output_col: str = "tim_th_chi_sigmafit_1234",
-) -> None:
-    """Build a 1234-only chi2 using Gaussian-fit residual sigmas from timtrack residual columns."""
-    sigma_tt_col = get_task4_tt_column(sigma_source_df)
-    target_tt_col = get_task4_tt_column(target_df)
-    if sigma_tt_col is None or target_tt_col is None:
-        target_df[output_col] = np.nan
-        return
-
-    residual_groups = (
-        ("ystr", "tim_res_ystr"),
-        ("tsum", "tim_res_tsum"),
-        ("tdif", "tim_res_tdif"),
-    )
-    sigma_source_tt = pd.to_numeric(sigma_source_df[sigma_tt_col], errors="coerce")
-    sigma_fit_df = sigma_source_df.loc[sigma_source_tt == float(combo_tt)]
-
-    mu_vector = []
-    sigma_vector = []
-    sigma_labels = []
-    for metric_name, prefix in residual_groups:
-        for plane in range(1, 5):
-            col = f"{prefix}_{plane}"
-            if col in sigma_fit_df.columns:
-                mu, sigma = _fit_gaussian_mu_sigma(sigma_fit_df[col], quantile=quantile)
-            else:
-                mu, sigma = np.nan, np.nan
-            mu_vector.append(mu)
-            sigma_vector.append(sigma)
-            sigma_labels.append(col)
-            global_variables[f"{col}_{combo_tt}_gauss_mu"] = mu
-            global_variables[f"{col}_{combo_tt}_gauss_sigma"] = sigma
-
-    mu_vector_arr = np.asarray(mu_vector, dtype=float)
-    sigma_vector_arr = np.asarray(sigma_vector, dtype=float)
-    target_df[output_col] = np.nan
-    valid_sigma_mask = np.isfinite(sigma_vector_arr) & (sigma_vector_arr > 0)
-    if not valid_sigma_mask.all():
-        missing_cols = [label for label, ok in zip(sigma_labels, valid_sigma_mask) if not ok]
-        print(
-            f"[timtrack_sigmafit_chi2] unable to build {output_col}; missing/invalid sigma for: "
-            f"{', '.join(missing_cols)}"
-        )
-        global_variables[f"{output_col}_valid_sigma_count"] = int(valid_sigma_mask.sum())
-        return
-
-    residual_cols = list(sigma_labels)
-    residual_matrix = np.column_stack([
-        pd.to_numeric(target_df[col], errors="coerce").to_numpy(dtype=float, copy=False)
-        for col in residual_cols
-    ])
-    target_tt = pd.to_numeric(target_df[target_tt_col], errors="coerce").to_numpy(dtype=float, copy=False)
-    valid_rows = (target_tt == float(combo_tt)) & np.isfinite(residual_matrix).all(axis=1)
-    if np.any(valid_rows):
-        scaled = (residual_matrix[valid_rows] - mu_vector_arr) / sigma_vector_arr
-        target_df.loc[valid_rows, output_col] = np.sum(scaled ** 2, axis=1)
-
-    mu_matrix = mu_vector_arr.reshape(3, 4)
-    sigma_matrix = sigma_vector_arr.reshape(3, 4)
-    global_variables[f"{output_col}_mu_matrix"] = np.array2string(mu_matrix, precision=6, suppress_small=False)
-    global_variables[f"{output_col}_sigma_matrix"] = np.array2string(sigma_matrix, precision=6, suppress_small=False)
-    print(
-        f"[timtrack_sigmafit_chi2] built {output_col} for tt={combo_tt} | "
-        f"valid_rows={int(valid_rows.sum())} | "
-        f"mus(ystr/tsum/tdif)xplane={np.array2string(mu_matrix, precision=4, suppress_small=False)} | "
-        f"sigmas(ystr/tsum/tdif)xplane={np.array2string(sigma_matrix, precision=4, suppress_small=False)}"
-    )
-    global_variables[f"{output_col}_valid_sigma_count"] = int(valid_sigma_mask.sum())
-    global_variables[f"{output_col}_filled_rows"] = int(valid_rows.sum())
-
 filter_metrics: dict[str, float] = {}
-
-def record_filter_metric(name: str, removed: float, total: float) -> None:
-    """Record percentage removed for a filter."""
-    pct = 0.0 if total == 0 else 100.0 * float(removed) / float(total)
-    filter_metrics[name] = round(pct, 4)
-    _log_filter_metrics_message(
-        f"[filter-metrics] {name}: removed {removed} of {total} ({pct:.2f}%)"
-    )
-
-def record_residual_sigmas(df: pd.DataFrame) -> None:
-    """Fit Gaussian sigmas for residual columns per track combination and plane."""
-    tt_col = "list_tt" if "list_tt" in df.columns else "processed_tt"
-    if tt_col not in df.columns:
-        return
-
-    processed = df[tt_col].astype(str)
-    for combo in TRACK_COMBINATIONS:
-        combo_str = str(combo)
-        combo_mask = processed == combo_str
-        combo_df = df.loc[combo_mask]
-        for plane in range(1, 5):
-            if str(plane) not in combo_str:
-                continue  # skip planes not present in the trigger combination
-            for metric in RESIDUAL_SERIES:
-                if metric.startswith("ext_") and len(combo_str) < 3:
-                    continue  # external residuals need at least 3 planes
-                col = f"{metric}_{plane}"
-                key = f"{col}_{combo_str}_sigma"
-                if col not in df.columns or combo_df.empty:
-                    continue
-                sigma = _fit_gaussian_sigma(combo_df[col])
-                if np.isnan(sigma):
-                    continue  # avoid recording meaningless NaNs
-                global_variables[key] = sigma
-
 reprocessing_values: dict[str, object] = {}
 qa_reprocessing_context = load_qa_reprocessing_context_for_file(
     station,
@@ -2844,9 +5723,6 @@ globals().update(
         globals(),
     )
 )
-
-
-
 
 # Note that the middle between start and end time could also be taken. This is for calibration storage.
 datetime_value = working_df['datetime'].iloc[0]
@@ -2944,10 +5820,6 @@ else:
     print("Error: No input file. Using default z_positions.")
     z_positions = np.array([0, 150, 300, 450])  # In mm
     z_source = "default_no_input_file"
-
-def _zpos_from_conf(row):
-    return np.array([row.get(f"P{i}", np.nan) for i in range(1, 5)])
-
 # If any z_positions is NaN or all zeros, find the closest non-zero configuration.
 if np.isnan(z_positions).any() or np.all(z_positions == 0):
     if used_input_file:
@@ -2996,14 +5868,12 @@ globals().update(
     )
 )
 
-
 raw_data_len = len(working_df)
 if raw_data_len == 0 and not self_trigger:
     print("No coincidence nor self-trigger events.")
     sys.exit(1)
 
 #%%
-
 
 _prof["s_data_read_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
@@ -3012,191 +5882,6 @@ print("----------------------------------------------------------------------")
 print("-------------- Detached angle and slowness fitting ----------------")
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
-
-# ---------------------------------------------------------------------------
-# 1. Geometrical line fit (orthogonal-distance regression) ------------------
-# ---------------------------------------------------------------------------
-
-def fit_3d_line(
-    x: np.ndarray,
-    y: np.ndarray,
-    z: np.ndarray,
-    sx: float,
-    sy: float,
-    sz: float,
-    plane_ids: Iterable[int],
-    tdiff_to_x: float,
-) -> Tuple[float, float, float, float, float,
-           Dict[int, float], Dict[int, float]]:
-    """
-    Returns
-    -------
-    x_z0, y_z0              : intercept with z = 0
-    theta, phi              : zenith (0 = down-coming) and azimuth  [rad]
-    chi2                    : χ² of the ODR
-    res_td_dict, res_y_dict : residuals per plane (ΔTdiff units, y units)
-    """
-    pts = np.column_stack((x, y, z))
-    c   = pts.mean(axis=0)
-    d   = np.linalg.svd(pts - c, full_matrices=False)[2][0]   # principal axis
-
-    if d[2] < 0:                                              # enforce d_z > 0
-        d = -d
-    d /= np.linalg.norm(d)
-
-    theta = np.arccos(d[2])
-    phi   = np.arctan2(d[1], d[0])
-
-    # z = 0 intercept
-    t0  = -c[2] / d[2] if d[2] != 0 else np.nan
-    xz0 = c[0] + t0 * d[0]
-    yz0 = c[1] + t0 * d[1]
-
-    # orthogonal residual vectors
-    proj = np.outer((pts - c) @ d, d)                         # (N,3)
-    res  = (pts - c) - proj
-
-    res_td = res[:, 0] / tdiff_to_x
-    res_y  = res[:, 1]
-
-    chi2 = np.einsum('ij,ij->', res, res) / (sx**2 + sy**2 + sz**2)
-    return (xz0, yz0, float(theta), float(phi), float(chi2), dict(zip(plane_ids, res_td)), dict(zip(plane_ids, res_y)))
-
-# ---------------------------------------------------------------------------
-# ---------------------------- Loop starts here -----------------------------
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# Vectorized replacement for the per-event detached fitting loop.
-# Groups events by active-plane bitmask; within each group a single batched
-# np.linalg.svd call replaces N individual calls. np.polyfit is replaced by
-# the closed-form OLS formula so it can be applied across the batch in one go.
-# Numerically identical to the original per-event loop.
-# ---------------------------------------------------------------------------
-def _detached_vectorized(
-    det_Q, det_Tdif, det_Y, det_Tsum,
-    z_positions, tdiff_to_x,
-    anc_sx, anc_sy, anc_sz, anc_sts,
-    n, nplan,
-    fit_res, slow_res,
-    ext_res_ystr, ext_res_tsum, ext_res_tdif,
-):
-    _sx2sy2sz2 = float(anc_sx**2 + anc_sy**2 + anc_sz**2)
-
-    def _batch_line_fit(x_b, y_b, z_sel):
-        """Batched SVD line fit. x_b, y_b: (n_g, n_pl); z_sel: (n_pl,)."""
-        n_g, n_pl = x_b.shape
-        z_br  = np.broadcast_to(z_sel, (n_g, n_pl))
-        pts   = np.stack([x_b, y_b, z_br], axis=2)        # (n_g, n_pl, 3)
-        c     = pts.mean(axis=1, keepdims=True)             # (n_g,  1,   3)
-        pts_c = pts - c
-        _, _, vt = np.linalg.svd(pts_c, full_matrices=False)
-        d = vt[:, 0, :].copy()                              # (n_g, 3)
-        d[d[:, 2] < 0] *= -1
-        d /= np.linalg.norm(d, axis=1, keepdims=True)
-        c3  = c[:, 0, :]
-        t0  = np.where(d[:, 2] != 0.0, -c3[:, 2] / d[:, 2], np.nan)
-        xz0 = c3[:, 0] + t0 * d[:, 0]
-        yz0 = c3[:, 1] + t0 * d[:, 1]
-        pdot = np.einsum('npi,ni->np', pts_c, d)            # (n_g, n_pl)
-        proj = pdot[:, :, np.newaxis] * d[:, np.newaxis, :] # (n_g, n_pl, 3)
-        res  = pts_c - proj
-        res_td = res[:, :, 0] / tdiff_to_x
-        res_y  = res[:, :, 1]
-        chi2   = np.einsum('npi,npi->n', res, res) / _sx2sy2sz2
-        return d, xz0, yz0, chi2, res_td, res_y
-
-    def _batch_slowness(xz0, yz0, d, z_sel, Tsum_g):
-        """Vectorized polyfit(s_rel, t_rel, 1) for a batch of events."""
-        n_g, n_pl = Tsum_g.shape
-        x_fit = xz0[:, np.newaxis] + d[:, 0:1] * z_sel / d[:, 2:3]
-        y_fit = yz0[:, np.newaxis] + d[:, 1:2] * z_sel / d[:, 2:3]
-        pos   = np.stack([x_fit, y_fit, np.broadcast_to(z_sel, (n_g, n_pl))], axis=2)
-        rdist = np.einsum('npi,ni->np', pos, d)             # (n_g, n_pl)
-        s_rel = rdist - rdist[:, 0:1]
-        t_rel = Tsum_g - Tsum_g[:, 0:1]
-        s_m   = s_rel.mean(axis=1); t_m = t_rel.mean(axis=1)
-        ss2   = np.sum(s_rel ** 2, axis=1)
-        st    = np.sum(s_rel * t_rel, axis=1)
-        denom = ss2 - n_pl * s_m ** 2
-        k     = np.where(np.abs(denom) > 0.0, (st - n_pl * s_m * t_m) / denom, 0.0)
-        b     = t_m - k * s_m
-        t_fit = k[:, np.newaxis] * s_rel + b[:, np.newaxis]
-        res   = t_rel - t_fit
-        chi2  = np.sum((res / anc_sts) ** 2, axis=1)
-        return k, b, chi2, res, rdist
-
-    q_pos   = det_Q > 0                                              # (n, nplan) bool
-    bitmask = (q_pos * (1 << np.arange(nplan))).sum(axis=1).astype(np.int32)
-
-    for bm in np.unique(bitmask):
-        if bm == 0:
-            continue
-        active_idx = np.array([p for p in range(nplan) if bm & (1 << p)], dtype=int)
-        n_pl       = len(active_idx)
-        if n_pl < 2:
-            continue
-        plane_ids = active_idx + 1                                    # 1-based
-        g_idx     = np.where(bitmask == bm)[0]
-        n_g       = len(g_idx)
-        z_sel     = z_positions[active_idx]                           # (n_pl,)
-        Tdif_g    = det_Tdif[np.ix_(g_idx, active_idx)]
-        Y_g       = det_Y   [np.ix_(g_idx, active_idx)]
-        Tsum_g    = det_Tsum[np.ix_(g_idx, active_idx)]
-        x_g       = tdiff_to_x * Tdif_g
-        y_g       = Y_g
-
-        # --- Primary fit ---
-        d, xz0, yz0, chi2, res_td, res_y = _batch_line_fit(x_g, y_g, z_sel)
-        theta = np.arccos(np.clip(d[:, 2], -1.0, 1.0))
-        phi   = np.arctan2(d[:, 1], d[:, 0])
-        fit_res['det_x']    [g_idx] = xz0
-        fit_res['det_y']    [g_idx] = yz0
-        fit_res['det_theta'][g_idx] = theta
-        fit_res['det_phi']  [g_idx] = phi
-        fit_res['det_chi2'] [g_idx] = chi2
-        for k_pl, pid in enumerate(plane_ids):
-            fit_res[f'det_res_tdif_{pid}'][g_idx] = res_td[:, k_pl]
-            fit_res[f'det_res_ystr_{pid}'][g_idx] = res_y [:, k_pl]
-
-        # --- Slowness ---
-        k_slow, b_slow, chi2_slow, res_slow, _ = _batch_slowness(xz0, yz0, d, z_sel, Tsum_g)
-        slow_res['det_s']         [g_idx] = k_slow
-        slow_res['det_s_ordinate'][g_idx] = b_slow
-        slow_res['chi2_tsum_fit'] [g_idx] = chi2_slow
-        for k_pl, pid in enumerate(plane_ids):
-            slow_res[f'det_res_tsum_{pid}'][g_idx] = res_slow[:, k_pl]
-
-        # --- Leave-one-out (requires ≥3 active planes) ---
-        if n_pl < 3:
-            continue
-        for k_exc in range(n_pl):
-            lo_k = [j for j in range(n_pl) if j != k_exc]
-            if len(lo_k) < 2:
-                continue
-            pid_exc = int(plane_ids[k_exc])
-            out_p   = pid_exc - 1                                     # 0-based output col
-            z_lo    = z_sel[lo_k]
-            x_lo    = x_g[:, lo_k]
-            y_lo    = y_g[:, lo_k]
-            ts_lo   = Tsum_g[:, lo_k]
-
-            d_lo, xz0_lo, yz0_lo, _, _, _ = _batch_line_fit(x_lo, y_lo, z_lo)
-
-            z_p    = float(z_sel[k_exc])
-            x_pred = xz0_lo + d_lo[:, 0] * z_p / d_lo[:, 2]
-            y_pred = yz0_lo + d_lo[:, 1] * z_p / d_lo[:, 2]
-
-            ext_res_tdif[g_idx, out_p] = (x_g[:, k_exc] - x_pred) / tdiff_to_x
-            ext_res_ystr[g_idx, out_p] = (y_g[:, k_exc] - y_pred)
-
-            # Tsum external residual
-            k_lo, b_lo, _, _, rdist_lo = _batch_slowness(xz0_lo, yz0_lo, d_lo, z_lo, ts_lo)
-            pos_p  = np.stack([x_pred, y_pred, np.full(n_g, z_p)], axis=1)
-            s_p    = np.einsum('ni,ni->n', pos_p, d_lo) - rdist_lo[:, 0]
-            t_p    = Tsum_g[:, k_exc] - ts_lo[:, 0]
-            ext_res_tsum[g_idx, out_p] = t_p - (k_lo * s_p + b_lo)
-
 n = len(working_df)
 
 # Angular definitions
@@ -3269,27 +5954,9 @@ else:
 # Put every value close to 0 to effectively 0 -------------------------------
 # ---------------------------------------------------------------------------
 
-# Filter controls used by final/legacy filtering blocks ---------------------
-final_filter_remove_small_default = _coerce_config_bool(
-    config.get("final_filter_remove_small", False),
-    default=False,
-)
-final_filter_remove_small_eps_default = _task4_config_float(
-    config,
-    "final_filter_remove_small_eps",
-    default=1e-7,
-)
-apply_legacy_final_filters = _coerce_config_bool(
-    config.get("final_filter_apply_legacy_final_filters", False),
-    default=False,
-)
-if apply_legacy_final_filters:
-    print("Warning: final_filter_apply_legacy_final_filters is deprecated and ignored; using consolidated final filtering block.")
-else:
-    print("Info: Legacy Task 4 in-place filtering disabled; using consolidated final filtering block.")
-eps = final_filter_remove_small_eps_default  # Threshold
-def is_small_nonzero(x):
-    return isinstance(x, (int, float)) and x != 0 and abs(x) < eps
+# Filter controls used by final filtering block -----------------------------
+print("Info: Task 4 consolidated final filtering uses event_combination_detector_* bounds.")
+eps = TASK4_FINAL_FILTER_REMOVE_SMALL_EPS
 
 if create_plots:
 
@@ -3319,97 +5986,6 @@ if create_plots:
     if show_plots:
         plt.show()
     plt.close()
-
-def plot_ts_err_with_hist(df, base_cols, time_col, title):
-    """Plot combined data: data TS+hist and error TS+hist (4 columns per variable)."""
-    global fig_idx
-    if df.empty:
-        return
-    n_vars = len(base_cols)
-    fig, axes = plt.subplots(
-        n_vars, 4, figsize=(18, 2.2 * n_vars),
-        gridspec_kw={"width_ratios": [3, 1, 3, 1]},
-        sharex="col"
-    )
-    if n_vars == 1:
-        axes = np.array([axes])
-    for idx, col in enumerate(base_cols):
-        ts_ax, hist_ax, ts_err_ax, hist_err_ax = axes[idx]
-        if col not in df.columns:
-            for ax in (ts_ax, hist_ax, ts_err_ax, hist_err_ax):
-                ax.set_visible(False)
-            continue
-        value_mask = df[col].notna() & np.isfinite(df[col].to_numpy(dtype=float, copy=False))
-        plot_df = df.loc[value_mask, [time_col, col]].copy()
-        series = plot_df[col]
-        if series.empty:
-            for ax in (ts_ax, hist_ax, ts_err_ax, hist_err_ax):
-                ax.set_visible(False)
-            continue
-        err_col = f"{col}_err"
-        err_series = None
-        yerr = None
-        if err_col in df.columns:
-            err_mask = df[err_col].notna() & np.isfinite(df[err_col].to_numpy(dtype=float, copy=False))
-            err_plot_df = df.loc[value_mask & err_mask, [time_col, col, err_col]].copy()
-            if not err_plot_df.empty:
-                err_series = err_plot_df[err_col]
-                yerr = err_series.abs()
-                ts_ax.errorbar(err_plot_df[time_col], err_plot_df[col], yerr=yerr, fmt=".", ms=1, alpha=0.85)
-            else:
-                ts_ax.plot(plot_df[time_col], plot_df[col], ".", ms=1, alpha=0.85)
-        else:
-            ts_ax.plot(plot_df[time_col], plot_df[col], ".", ms=1, alpha=0.85)
-        ts_ax.set_ylabel(col)
-        ts_ax.grid(True, alpha=0.3)
-        bins, hist_range = _safe_hist_params(series, max_bins=50)
-        if bins is not None:
-            hist_ax.hist(
-                series,
-                bins=bins,
-                range=hist_range,
-                orientation="horizontal",
-                color="C2",
-                alpha=0.8,
-            )
-        hist_ax.set_xlabel("count")
-        hist_ax.grid(True, alpha=0.2)
-        if err_series is not None and not err_series.empty:
-            ts_err_ax.plot(err_plot_df[time_col], err_series, ".", ms=1, alpha=0.8, label=f"{col}_err")
-            ts_err_ax.grid(True, alpha=0.3)
-            ts_err_ax.legend(fontsize="x-small")
-            err_bins, err_range = _safe_hist_params(err_series, max_bins=50)
-            if err_bins is not None:
-                hist_err_ax.hist(
-                    err_series,
-                    bins=err_bins,
-                    range=err_range,
-                    orientation="horizontal",
-                    color="C4",
-                    alpha=0.7,
-                )
-            hist_err_ax.set_autoscale_on(True)
-            hist_err_ax.autoscale_view()
-            hist_err_ax.set_xscale("log")
-            hist_err_ax.set_xlabel("count")
-            hist_err_ax.grid(True, alpha=0.2)
-        else:
-            ts_err_ax.set_visible(False)
-            hist_err_ax.set_visible(False)
-    axes[-1, 0].set_xlabel(time_col)
-    axes[-1, 2].set_xlabel(time_col)
-    plt.suptitle(title, fontsize=12)
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
-    if save_plots:
-        final_filename = f"{fig_idx}_{title.replace(' ', '_')}.png"
-        fig_idx += 1
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        save_plot_figure(save_fig_path, format="png")
-    if show_plots:
-        plt.show()
-    plt.close()
-
 # Deprecated legacy path intentionally does nothing now; all Task 4 row/value
 # filtering is centralized in apply_task4_final_filter().
 
@@ -3481,400 +6057,6 @@ if fixed_speed:
 else:
     print("Slowness not fixed.")
     npar = 6
-
-def fmgx(nvar, npar, vs, ss, zi): # G matrix for t measurements in X-axis
-    mg = np.zeros([nvar, npar])
-    XP = vs[1]; YP = vs[3]
-    if fixed_speed:
-        S0 = sc
-    else:
-        S0 = vs[5]
-    kz = math.sqrt(1 + XP*XP + YP*YP)
-    kzi = 1 / kz
-    mg[0,2] = 1
-    mg[0,3] = zi
-    mg[1,1] = kzi * S0 * XP * zi
-    mg[1,3] = kzi * S0 * YP * zi
-    mg[1,4] = 1
-    if fixed_speed == False: mg[1,5] = kz * zi
-    mg[2,0] = ss
-    mg[2,1] = ss * zi
-    return mg
-
-def fmwx(nvar, vsig): # Weigth matrix 
-    sy = vsig[0]; sts = vsig[1]; std = vsig[2]
-    mw = np.zeros([nvar, nvar])
-    mw[0,0] = 1/(sy*sy)
-    mw[1,1] = 1/(sts*sts)
-    mw[2,2] = 1/(std*std)
-    return mw
-
-def fvmx(nvar, vs, lenx, ss, zi): # Fitting model array with X-strips
-    vm = np.zeros(nvar)
-    X0 = vs[0]; XP = vs[1]; Y0 = vs[2]; YP = vs[3]; T0 = vs[4]
-    if fixed_speed:
-        S0 = sc
-    else:
-        S0 = vs[5]
-    kz = np.sqrt(1 + XP*XP + YP*YP)
-    xi = X0 + XP * zi
-    yi = Y0 + YP * zi
-    ti = T0 + kz * S0 * zi
-    th = 0.5 * lenx * ss   # tau half
-    # lxmn = -lenx/2
-    vm[0] = yi
-    vm[1] = th + ti
-    # vm[2] = ss * (xi-lxmn) - th
-    vm[2] = ss * xi
-    return vm
-
-def fmkx(nvar, npar, vs, vsig, ss, zi): # K matrix
-    mk  = np.zeros([npar,npar])
-    mg  = fmgx(nvar, npar, vs, ss, zi)
-    mgt = mg.transpose()
-    mw  = fmwx(nvar, vsig)
-    mk  = mgt @ mw @ mg
-    return mk
-
-def fvax(nvar, npar, vs, vdat, vsig, lenx, ss, zi): # va vector
-    va = np.zeros(npar)
-    mw = fmwx(nvar, vsig)
-    vm = fvmx(nvar, vs, lenx, ss, zi)
-    mg = fmgx(nvar, npar, vs, ss, zi)
-    vg = vm - mg @ vs
-    vdmg = vdat - vg
-    va = mg.transpose() @ mw @ vdmg
-    return va
-
-def fmahd(npar, vin1, vin2, merr): # Mahalanobis distance
-    merr_diag = np.diag(merr) if merr.ndim > 1 else merr
-    acc = 0.0
-    for i in range(npar):
-        d = vin1[i] - vin2[i]
-        m = merr_diag[i]
-        if m != 0.0:
-            acc += d * d / m
-    return math.sqrt(acc)
-
-def solve_only(matrix, rhs):
-    """Solve matrix @ x = rhs (fast path for code paths that do not need covariance)."""
-    try:
-        return np.linalg.solve(matrix, rhs)
-    except np.linalg.LinAlgError:
-        return np.linalg.pinv(matrix) @ rhs
-
-def solve_and_covdiag(matrix, rhs):
-    """Solve matrix @ x = rhs and return (x, diag(inv(matrix))) with one factorization.
-
-    Fast path computes inverse once and reuses it for both the linear solve and
-    covariance-diagonal extraction. Fallback uses pinv once.
-    """
-    try:
-        inv_matrix = np.linalg.inv(matrix)
-        sol = inv_matrix @ rhs
-        inv_diag = np.diag(inv_matrix)
-        return sol, inv_diag
-    except np.linalg.LinAlgError:
-        matrix_pinv = np.linalg.pinv(matrix)
-        return matrix_pinv @ rhs, np.diag(matrix_pinv)
-
-def _accumulate_mk_va(npar, vs, ydat, tsdat, tddat, zi, w_arr, ss, lenx, sc_val, fixed_speed_flag, mk, va):
-    """In-place TimTrack accumulator: adds one plane contribution into mk and va.
-
-    Avoids per-plane temporary (npar x npar) and (npar,) allocations from
-    return-based helpers in the main fitting hot loop.
-    """
-    XP = vs[1]
-    YP = vs[3]
-    S0 = sc_val if fixed_speed_flag else vs[5]
-    kz = math.sqrt(1.0 + XP * XP + YP * YP)
-    kzi = 1.0 / kz
-
-    w0 = w_arr[0]
-    w1 = w_arr[1]
-    w2 = w_arr[2]
-
-    zi2 = zi * zi
-    sszi = ss * zi
-    th = 0.5 * lenx * ss
-
-    # Non-zero entries of the 3 Jacobian rows (g0, g1, g2)
-    g0_2 = 1.0
-    g0_3 = zi
-
-    g1_1 = kzi * S0 * XP * zi
-    g1_3 = kzi * S0 * YP * zi
-    g1_4 = 1.0
-
-    g2_0 = ss
-    g2_1 = sszi
-
-    # vdmg terms simplify exactly for this linearised model
-    vd0 = ydat
-    vd1 = tsdat - th
-    vd2 = tddat
-
-    # g0 contribution (weight w0)
-    mk[2, 2] += w0 * g0_2 * g0_2
-    mk[2, 3] += w0 * g0_2 * g0_3
-    mk[3, 2] += w0 * g0_3 * g0_2
-    mk[3, 3] += w0 * g0_3 * g0_3
-    va[2] += w0 * g0_2 * vd0
-    va[3] += w0 * g0_3 * vd0
-
-    # g2 contribution (weight w2)
-    mk[0, 0] += w2 * g2_0 * g2_0
-    mk[0, 1] += w2 * g2_0 * g2_1
-    mk[1, 0] += w2 * g2_1 * g2_0
-    mk[1, 1] += w2 * g2_1 * g2_1
-    va[0] += w2 * g2_0 * vd2
-    va[1] += w2 * g2_1 * vd2
-
-    # g1 contribution (weight w1)
-    mk[1, 1] += w1 * g1_1 * g1_1
-    mk[1, 3] += w1 * g1_1 * g1_3
-    mk[3, 1] += w1 * g1_3 * g1_1
-    mk[1, 4] += w1 * g1_1 * g1_4
-    mk[4, 1] += w1 * g1_4 * g1_1
-    mk[3, 3] += w1 * g1_3 * g1_3
-    mk[3, 4] += w1 * g1_3 * g1_4
-    mk[4, 3] += w1 * g1_4 * g1_3
-    mk[4, 4] += w1 * g1_4 * g1_4
-    va[1] += w1 * g1_1 * vd1
-    va[3] += w1 * g1_3 * vd1
-    va[4] += w1 * g1_4 * vd1
-
-    if not fixed_speed_flag:
-        g1_5 = kz * zi
-        mk[1, 5] += w1 * g1_1 * g1_5
-        mk[5, 1] += w1 * g1_5 * g1_1
-        mk[3, 5] += w1 * g1_3 * g1_5
-        mk[5, 3] += w1 * g1_5 * g1_3
-        mk[4, 5] += w1 * g1_4 * g1_5
-        mk[5, 4] += w1 * g1_5 * g1_4
-        mk[5, 5] += w1 * g1_5 * g1_5
-        va[5] += w1 * g1_5 * vd1
-
-def _build_mk_va_base(
-    plane_idx_arr,
-    y_row,
-    td_row,
-    z_pos_arr,
-    w_arr,
-    ss,
-    mk_base,
-    va_base,
-):
-    """Build per-event constant TimTrack terms (independent of current vs)."""
-    mk_base.fill(0.0)
-    va_base.fill(0.0)
-
-    w0 = w_arr[0]
-    w2 = w_arr[2]
-    ss2 = ss * ss
-    w2_ss = w2 * ss
-    w2_ss2 = w2 * ss2
-
-    for plane_idx in plane_idx_arr:
-        zi = z_pos_arr[plane_idx]
-        ydat = y_row[plane_idx]
-        tddat = td_row[plane_idx]
-        sszi = ss * zi
-        zi2 = zi * zi
-
-        # g0 contribution (weight w0)
-        mk_base[2, 2] += w0
-        mk_base[2, 3] += w0 * zi
-        mk_base[3, 2] += w0 * zi
-        mk_base[3, 3] += w0 * zi2
-        va_base[2] += w0 * ydat
-        va_base[3] += w0 * zi * ydat
-
-        # g2 contribution (weight w2)
-        mk_base[0, 0] += w2_ss2
-        mk_base[0, 1] += w2_ss2 * zi
-        mk_base[1, 0] += w2_ss2 * zi
-        mk_base[1, 1] += w2 * sszi * sszi
-        va_base[0] += w2_ss * tddat
-        va_base[1] += w2 * sszi * tddat
-
-def _accumulate_mk_va_dynamic_g1(
-    vs,
-    plane_idx_arr,
-    ts_row,
-    z_pos_arr,
-    w1,
-    half_lenx_ss,
-    sc_val,
-    fixed_speed_flag,
-    mk,
-    va,
-):
-    """Add per-iteration dynamic g1 terms (depend on current vs)."""
-    XP = vs[1]
-    YP = vs[3]
-    S0 = sc_val if fixed_speed_flag else vs[5]
-    kz = math.sqrt(1.0 + XP * XP + YP * YP)
-    kzi = 1.0 / kz
-
-    for plane_idx in plane_idx_arr:
-        zi = z_pos_arr[plane_idx]
-        vd1 = ts_row[plane_idx] - half_lenx_ss
-
-        g1_1 = kzi * S0 * XP * zi
-        g1_3 = kzi * S0 * YP * zi
-
-        mk[1, 1] += w1 * g1_1 * g1_1
-        mk[1, 3] += w1 * g1_1 * g1_3
-        mk[3, 1] += w1 * g1_3 * g1_1
-        mk[1, 4] += w1 * g1_1
-        mk[4, 1] += w1 * g1_1
-        mk[3, 3] += w1 * g1_3 * g1_3
-        mk[3, 4] += w1 * g1_3
-        mk[4, 3] += w1 * g1_3
-        mk[4, 4] += w1
-        va[1] += w1 * g1_1 * vd1
-        va[3] += w1 * g1_3 * vd1
-        va[4] += w1 * vd1
-
-        if not fixed_speed_flag:
-            g1_5 = kz * zi
-            mk[1, 5] += w1 * g1_1 * g1_5
-            mk[5, 1] += w1 * g1_5 * g1_1
-            mk[3, 5] += w1 * g1_3 * g1_5
-            mk[5, 3] += w1 * g1_5 * g1_3
-            mk[4, 5] += w1 * g1_5
-            mk[5, 4] += w1 * g1_5
-            mk[5, 5] += w1 * g1_5 * g1_5
-            va[5] += w1 * g1_5 * vd1
-
-def _build_loo_single_step_system(
-    vs,
-    plane_idx_arr,
-    plane_idx_ref,
-    y_row,
-    ts_row,
-    td_row,
-    z_pos_arr,
-    w_arr,
-    ss,
-    half_lenx_ss,
-    sc_val,
-    fixed_speed_flag,
-    mk,
-    va,
-):
-    """Build LOO normal equations for one hidden plane in single-step mode.
-
-    This is equivalent to repeated _accumulate_mk_va calls with shifted z, but
-    avoids per-plane helper call overhead in the hottest residual-LOO path.
-    """
-    mk.fill(0.0)
-    va.fill(0.0)
-
-    XP = vs[1]
-    YP = vs[3]
-    S0 = sc_val if fixed_speed_flag else vs[5]
-    kz = math.sqrt(1.0 + XP * XP + YP * YP)
-    kzi = 1.0 / kz
-
-    a1 = kzi * S0 * XP
-    a3 = kzi * S0 * YP
-
-    w0 = w_arr[0]
-    w1 = w_arr[1]
-    w2 = w_arr[2]
-    w2_ss = w2 * ss
-    w2_ss2 = w2_ss * ss
-
-    z_ref = z_pos_arr[plane_idx_ref]
-
-    for plane_idx in plane_idx_arr:
-        if plane_idx == plane_idx_ref:
-            continue
-
-        zi = z_pos_arr[plane_idx] - z_ref
-        zi2 = zi * zi
-        sszi = ss * zi
-
-        ydat = y_row[plane_idx]
-        tsdat = ts_row[plane_idx]
-        tddat = td_row[plane_idx]
-        vd1 = tsdat - half_lenx_ss
-
-        # g0 contribution (weight w0)
-        mk[2, 2] += w0
-        mk[2, 3] += w0 * zi
-        mk[3, 2] += w0 * zi
-        mk[3, 3] += w0 * zi2
-        va[2] += w0 * ydat
-        va[3] += w0 * zi * ydat
-
-        # g2 contribution (weight w2)
-        mk[0, 0] += w2_ss2
-        mk[0, 1] += w2_ss2 * zi
-        mk[1, 0] += w2_ss2 * zi
-        mk[1, 1] += w2 * sszi * sszi
-        va[0] += w2_ss * tddat
-        va[1] += w2 * sszi * tddat
-
-        # g1 contribution (weight w1)
-        g1_1 = a1 * zi
-        g1_3 = a3 * zi
-        mk[1, 1] += w1 * g1_1 * g1_1
-        mk[1, 3] += w1 * g1_1 * g1_3
-        mk[3, 1] += w1 * g1_3 * g1_1
-        mk[1, 4] += w1 * g1_1
-        mk[4, 1] += w1 * g1_1
-        mk[3, 3] += w1 * g1_3 * g1_3
-        mk[3, 4] += w1 * g1_3
-        mk[4, 3] += w1 * g1_3
-        mk[4, 4] += w1
-        va[1] += w1 * g1_1 * vd1
-        va[3] += w1 * g1_3 * vd1
-        va[4] += w1 * vd1
-
-        if not fixed_speed_flag:
-            g1_5 = kz * zi
-            mk[1, 5] += w1 * g1_1 * g1_5
-            mk[5, 1] += w1 * g1_5 * g1_1
-            mk[3, 5] += w1 * g1_3 * g1_5
-            mk[5, 3] += w1 * g1_5 * g1_3
-            mk[4, 5] += w1 * g1_5
-            mk[5, 4] += w1 * g1_5
-            mk[5, 5] += w1 * g1_5 * g1_5
-            va[5] += w1 * g1_5 * vd1
-
-def _fres_zi0(vs, ydat, tsdat, tddat, half_lenx_ss, ss):
-    """Residuals at zi=0 for LOO hidden plane evaluation."""
-    x0 = vs[0]
-    y0 = vs[2]
-    t0 = vs[4]
-    return [y0 - ydat, (t0 + half_lenx_ss) - tsdat, (x0 * ss) - tddat]
-
-def fres(vs, vdat, lenx, ss, zi):  # Residuals array
-    X0 = vs[0]; XP = vs[1]; Y0 = vs[2]; YP = vs[3]; T0 = vs[4]
-    if fixed_speed:
-        S0 = sc
-    else:
-        S0 = vs[5]
-    kz = math.sqrt(1 + XP*XP + YP*YP)
-    xfit = X0 + XP * zi
-    yfit = Y0 + YP * zi
-    tsfit = T0 + S0 * kz * zi + 0.5 * lenx * ss
-    tdfit = ss * xfit
-    ydat  = vdat[0]
-    tsdat = vdat[1]
-    tddat = vdat[2]
-    return (yfit - ydat, tsfit - tsdat, tdfit - tddat)
-
-def extract_plane_data(pos, iplane):
-    zi  = z_positions[iplane - 1]
-    yst = _tt_Y[pos, iplane - 1]
-    ts  = _tt_Tsum[pos, iplane - 1]
-    td  = _tt_Tdif[pos, iplane - 1]
-    return [yst, ts, td], _tt_vsig, zi
-
 nvar = 3
 i = 0
 ntrk  = len(working_df)
@@ -3912,29 +6094,9 @@ _sc_val = sc
 _z_pos_arr = np.asarray(z_positions, dtype=float)
 _half_lenx_ss = 0.5 * lenx * ss
 
-def _cfg_int_or_default(key: str, default_value: int, *, min_value: int = 1) -> int:
-    raw = config.get(key, default_value)
-    try:
-        if raw is None or str(raw).strip() == "":
-            return int(default_value)
-        value = int(float(raw))
-    except (TypeError, ValueError):
-        return int(default_value)
-    return max(min_value, value)
-
-def _cfg_float_or_default(key: str, default_value: float, *, min_value: float = 0.0) -> float:
-    raw = config.get(key, default_value)
-    try:
-        if raw is None or str(raw).strip() == "":
-            return float(default_value)
-        value = float(raw)
-    except (TypeError, ValueError):
-        return float(default_value)
-    return max(min_value, value)
-
-tt_loo_every_n = _cfg_int_or_default("tt_loo_every_n", 1, min_value=1)
-tt_loo_iter_max = _cfg_int_or_default("tt_loo_iter_max", int(iter_max), min_value=1)
-tt_loo_cocut = _cfg_float_or_default("tt_loo_cocut", float(cocut), min_value=0.0)
+tt_loo_every_n = _cfg_int_or_default(config, "tt_loo_every_n", 1, min_value=1)
+tt_loo_iter_max = _cfg_int_or_default(config, "tt_loo_iter_max", int(iter_max), min_value=1)
+tt_loo_cocut = _cfg_float_or_default(config, "tt_loo_cocut", float(cocut), min_value=0.0)
 _tt_loo_mode_raw = str(config.get("tt_loo_mode", "single_step")).strip().lower()
 if _tt_loo_mode_raw not in ("single_step", "iterative"):
     print(f"WARNING: unrecognised tt_loo_mode='{_tt_loo_mode_raw}', falling back to 'single_step'")
@@ -4349,13 +6511,6 @@ for iteration in range(repeat + 1):
 
 # Set the label to integer -----------------------------------------------------------
 working_df["processed_tt"] = working_df["processed_tt"].astype(np.int32, copy=False)
-
-# Calculate angles -------------------------------------------------------------------
-def calculate_angles(xproj, yproj):
-    phi = np.arctan2(yproj, xproj)
-    theta = np.arccos(1 / np.sqrt(xproj**2 + yproj**2 + 1))
-    return theta, phi
-
 theta_vals, phi_vals = calculate_angles(working_df["tim_xp"], working_df["tim_yp"])
 
 # TimTrack-prefixed variables already exist; just ensure angles are set.
@@ -4905,7 +7060,6 @@ if timeseries_and_fits or _task4_make_hist_core_errs_combined or _task4_make_his
                         plt.show()
                     plt.close()
 
-
 _prof["s_timtrack_fitting_s"] = round(time.perf_counter() - _t_sec, 2)
 _prof["s_tt_intro_s"] = round(_tt_intro_s, 2)
 _prof["s_tt_main_fit_s"] = round(_tt_main_fit_s, 2)
@@ -5212,182 +7366,6 @@ if time_window_fitting:
         f"[PROFILE][TASK_4] time-window fitting section: {time.perf_counter() - time_window_fitting_start:.2f}s",
         force=True,
     )
-
-
-def apply_task4_final_filter(
-    df_input: pd.DataFrame,
-    *,
-    apply_changes: bool,
-) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, int | float]]:
-    input_rows = int(len(df_input))
-    if input_rows == 0:
-        return df_input.copy(), pd.DataFrame(), {
-            "input_rows": 0,
-            "rows_affected": 0,
-            "values_zeroed": 0,
-            "rows_failed_fit_tt_min": 0,
-            "rows_failed_nonzero_required": 0,
-        }
-
-    working = df_input.copy() if apply_changes else df_input
-    summary: dict[str, int | float] = {
-        "input_rows": input_rows,
-        "rows_affected": 0,
-        "values_zeroed": 0,
-        "rows_failed_fit_tt_min": 0,
-        "rows_failed_nonzero_required": 0,
-    }
-    final_mask = np.ones(input_rows, dtype=bool)
-    fail_reason_parts = np.empty(input_rows, dtype=object)
-    fail_reason_parts.fill("")
-
-    final_filter_remove_small = _coerce_config_bool(
-        config.get("final_filter_remove_small", False),
-        default=False,
-    )
-    final_filter_remove_small_eps = _task4_config_float(
-        config,
-        "final_filter_remove_small_eps",
-        default=1e-7,
-    )
-    if final_filter_remove_small:
-        small_mask = working.map(
-            lambda x: isinstance(x, (int, float)) and x != 0 and abs(x) < final_filter_remove_small_eps
-        )
-        nonzero_numeric_mask = working.map(lambda x: isinstance(x, (int, float)) and x != 0)
-        total_nonzero = int(nonzero_numeric_mask.sum().sum())
-        total_small = int(small_mask.sum().sum())
-        rows_with_small = int(small_mask.any(axis=1).sum())
-        summary["values_zeroed"] = total_small
-        summary["rows_with_small_values"] = rows_with_small
-        if apply_changes and total_small > 0:
-            working = working.mask(small_mask, 0)
-        record_filter_metric(
-            "small_values_zeroed_event_pct",
-            rows_with_small,
-            input_rows if input_rows else 0,
-        )
-        record_filter_metric(
-            "small_values_zeroed_value_pct",
-            total_small,
-            total_nonzero if total_nonzero else 0,
-        )
-    else:
-        record_filter_metric("small_values_zeroed_event_pct", 0, input_rows if input_rows else 0)
-        record_filter_metric("small_values_zeroed_value_pct", 0, input_rows if input_rows else 0)
-
-    fit_tt_min = int(config.get("final_filter_fit_tt_min", 10))
-    fit_tt_series = get_task4_tt_series(working, preferred=TASK4_PRIMARY_TT_COLUMN)
-    fit_tt_pass = fit_tt_series >= fit_tt_min
-    fit_tt_fail = ~fit_tt_pass.to_numpy(dtype=bool, copy=False)
-    summary["rows_failed_fit_tt_min"] = int(fit_tt_fail.sum())
-    final_mask &= ~fit_tt_fail
-    fail_reason_parts[fit_tt_fail] = np.where(
-        fail_reason_parts[fit_tt_fail] == "",
-        f"fit_tt<{fit_tt_min}",
-        fail_reason_parts[fit_tt_fail] + f";fit_tt<{fit_tt_min}",
-    )
-
-    required_nonzero_cols = _task4_parse_filter_columns(
-        config.get("final_filter_nonzero_cols", ["x", "y", "s", "t0", "theta", "phi"]),
-        default=("x", "y", "s", "t0", "theta", "phi"),
-    )
-    required_nonzero_cols = [col for col in required_nonzero_cols if col in working.columns]
-    if required_nonzero_cols:
-        nonzero_mask = np.ones(input_rows, dtype=bool)
-        zero_count_per_row = np.zeros(input_rows, dtype=int)
-        primary_zero_col = np.full(input_rows, "", dtype=object)
-        for col in required_nonzero_cols:
-            col_values = pd.to_numeric(working[col], errors="coerce").to_numpy(dtype=float, copy=False)
-            finite_mask = np.isfinite(col_values)
-            nonzero_col_mask = finite_mask & (col_values != 0.0)
-            nonzero_mask &= nonzero_col_mask
-            zero_or_invalid = ~nonzero_col_mask
-            zero_count_per_row += zero_or_invalid.astype(int)
-            primary_assign_mask = (primary_zero_col == "") & zero_or_invalid
-            primary_zero_col[primary_assign_mask] = col
-        nonzero_fail = ~nonzero_mask
-        summary["rows_failed_nonzero_required"] = int(nonzero_fail.sum())
-        summary["rows_failed_nonzero_single"] = int(np.count_nonzero(nonzero_fail & (zero_count_per_row == 1)))
-        summary["rows_failed_nonzero_multi"] = int(np.count_nonzero(nonzero_fail & (zero_count_per_row >= 2)))
-        final_mask &= ~nonzero_fail
-        fail_reason_parts[nonzero_fail] = np.where(
-            fail_reason_parts[nonzero_fail] == "",
-            "required_nonzero_violation",
-            fail_reason_parts[nonzero_fail] + ";required_nonzero_violation",
-        )
-        for col in required_nonzero_cols:
-            summary[f"rows_failed_primary_zero_{col}"] = int(
-                np.count_nonzero(nonzero_fail & (primary_zero_col == col))
-            )
-    else:
-        zero_count_per_row = np.zeros(input_rows, dtype=int)
-        primary_zero_col = np.full(input_rows, "", dtype=object)
-
-    def _numeric_column_or_nan(column_name: str) -> np.ndarray:
-        if column_name not in working.columns:
-            return np.full(input_rows, np.nan, dtype=float)
-        return pd.to_numeric(working[column_name], errors="coerce").to_numpy(dtype=float, copy=False)
-
-    def _apply_numeric_range_filter(
-        values: np.ndarray,
-        *,
-        left_limit: float | None,
-        right_limit: float | None,
-        summary_key: str,
-        reason_key: str,
-    ) -> None:
-        nonlocal final_mask
-        if left_limit is None and right_limit is None:
-            return
-        pass_mask = np.isfinite(values)
-        if left_limit is not None:
-            pass_mask &= values >= left_limit
-        if right_limit is not None:
-            pass_mask &= values <= right_limit
-        fail_mask = ~pass_mask
-        summary[f"rows_failed_{summary_key}"] = int(fail_mask.sum())
-        final_mask &= ~fail_mask
-        fail_reason_parts[fail_mask] = np.where(
-            fail_reason_parts[fail_mask] == "",
-            f"{reason_key}_out_of_range",
-            fail_reason_parts[fail_mask] + f";{reason_key}_out_of_range",
-        )
-
-    variable_specs = (
-        ("x", "final_filter_x_min", "final_filter_x_max"),
-        ("y", "final_filter_y_min", "final_filter_y_max"),
-        ("s", "final_filter_s_min", "final_filter_s_max"),
-        ("t0", "final_filter_t0_min", "final_filter_t0_max"),
-        ("theta", "final_filter_theta_min", "final_filter_theta_max"),
-        ("phi", "final_filter_phi_min", "final_filter_phi_max"),
-    )
-    for variable_name, left_key, right_key in variable_specs:
-        _apply_numeric_range_filter(
-            _numeric_column_or_nan(variable_name),
-            left_limit=_task4_parse_optional_float(config.get(left_key)),
-            right_limit=_task4_parse_optional_float(config.get(right_key)),
-            summary_key=f"{variable_name}_range",
-            reason_key=variable_name,
-        )
-
-    rows_affected = int((~final_mask).sum())
-    summary["rows_affected"] = rows_affected
-    summary["flagged_rows"] = rows_affected
-    summary["failed_pair_any"] = rows_affected
-    if not apply_changes:
-        return df_input, pd.DataFrame(), summary
-
-    filtered_df = working.loc[final_mask].copy()
-    rejected_df = working.loc[~final_mask].copy()
-    if not rejected_df.empty:
-        rejected_df["reject_stage"] = "final_filtering"
-        rejected_df["reject_reason"] = fail_reason_parts[~final_mask]
-        rejected_df["zero_count"] = zero_count_per_row[~final_mask]
-        rejected_df["primary_zero_col"] = primary_zero_col[~final_mask]
-    return filtered_df, rejected_df, summary
-
-
 # -----------------------------------------------------------------------------
 # Last filterings -------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -5469,10 +7447,7 @@ record_filter_metric(
     int(task4_final_filter_summary.get("rows_failed_nonzero_multi", 0)),
     baseline_events if baseline_events else 0,
 )
-required_nonzero_cols = _task4_parse_filter_columns(
-    config.get("final_filter_nonzero_cols", ["x", "y", "s", "t0", "theta", "phi"]),
-    default=("x", "y", "s", "t0", "theta", "phi"),
-)
+required_nonzero_cols = list(TASK4_EVENT_ATOMIC_COLUMNS)
 for col in required_nonzero_cols:
     rows_removed = int(task4_final_filter_summary.get(f"rows_failed_primary_zero_{col}", 0))
     record_filter_metric(
@@ -5481,11 +7456,6 @@ for col in required_nonzero_cols:
         baseline_events if baseline_events else 0,
     )
 
-if "fit_tt" in working_df.columns:
-    working_df.loc[:, "definitive_tt"] = pd.to_numeric(
-        working_df["fit_tt"],
-        errors="coerce",
-    ).fillna(0).astype(int)
 task4_plot_tt_column = get_task4_tt_column(working_df) or TASK4_PRIMARY_TT_COLUMN
 
 if save_rejected_rows and not task4_final_filter_rejected_df.empty:
@@ -5540,57 +7510,6 @@ if create_reject_plots and not task4_final_filter_rejected_df.empty:
     plot_list = original_plot_list
     if fig_idx_backup is not None:
         fig_idx = fig_idx_backup
-
-# -----------------------------------------------------------------------------
-# -------------- Correlate trigger types in different stages ------------------
-# -----------------------------------------------------------------------------
-
-def plot_tt_correlation(df, row_label, col_label, title, filename_suffix, fig_idx, base_dir, show_plots=False, save_plots=False, plot_list=None):
-
-    analysis_data = df[[row_label, col_label]]
-    counts = analysis_data.groupby([row_label, col_label]).size().unstack(fill_value=0)
-
-    row_order = sorted(analysis_data[row_label].unique(), reverse=True)
-    col_unique = analysis_data[col_label].unique()
-    col_order = list(row_order) + [x for x in col_unique if x not in row_order]
-    counts = counts.reindex(index=row_order, columns=col_order, fill_value=0)
-
-    fig, ax = plt.subplots(figsize=(10, 8))
-    ax.set_xticks(np.arange(len(counts.columns)))
-    ax.set_yticks(np.arange(len(counts.index)))
-    ax.set_xticklabels(counts.columns)
-    ax.set_yticklabels(counts.index)
-
-    ax.set_xlabel(col_label)
-    ax.set_ylabel(row_label)
-    ax.set_title(title)
-
-    im = ax.imshow(counts, cmap='plasma', origin='lower')
-    total = counts.values.sum()
-
-    for i in range(len(counts.index)):
-        for j in range(len(counts.columns)):
-            value = counts.iloc[i, j]
-            if value > 0:
-                pct = 100 * value / total
-                if pct > 1:
-                    ax.text(j, i, f"{pct:.1f}%",
-                            ha="center", va="center",
-                            color="black" if value > counts.values.max() * 0.5 else "white")
-
-    plt.tight_layout()
-    if save_plots:
-        final_filename = f'{fig_idx}_{filename_suffix}.png'
-        save_fig_path = os.path.join(base_dir, final_filename)
-        if plot_list is not None:
-            plot_list.append(save_fig_path)
-        save_plot_figure(save_fig_path, format='png')
-    if show_plots:
-        plt.show()
-    plt.close()
-
-    return fig_idx + 1
-
 if create_plots:
     fig_idx = plot_tt_correlation(
         df=working_df,
@@ -5646,7 +7565,7 @@ if create_plots or create_essential_plots:
     )
 
 print("----------------------------------------------------------------------")
-for tt_col in ("raw_tt", "clean_tt", "cal_tt", "list_tt", "tracking_tt", "definitive_tt"):
+for tt_col in ("raw_tt", "clean_tt", "cal_tt", "list_tt", "tracking_tt", "fit_tt"):
     if tt_col in working_df.columns:
         try:
             print(f"Unique {tt_col} values:", sorted(working_df[tt_col].unique()))
@@ -5796,7 +7715,7 @@ if create_plots or create_essential_plots:
     )
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     if save_plots:
-        final_filename = f'{fig_idx}_polar_theta_phi_definitive_tt_2D.png'
+        final_filename = f'{fig_idx}_polar_theta_phi_fit_tt_2D.png'
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
@@ -6082,1911 +8001,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("strip_hit_oc
         plt.close()
 
 _EFFICIENCY_VECTOR_AXIS_ORDER = ("x", "y", "theta", "phi")
-
-
-def _safe_cfg_int(value, default):
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return int(default)
-
-
-def _safe_cfg_float(value, default):
-    try:
-        out = float(value)
-    except (TypeError, ValueError):
-        return float(default)
-    return float(out) if np.isfinite(out) else float(default)
-
-
-def _safe_cfg_optional_float(value):
-    if value in (None, "", "null", "None"):
-        return None
-    try:
-        out = float(value)
-    except (TypeError, ValueError):
-        return None
-    return float(out) if np.isfinite(out) else None
-
-
-def _resolve_task4_efficiency_metadata_cfg(config_dict):
-    raw = config_dict.get("efficiency_metadata", {})
-    if not isinstance(raw, dict):
-        raw = {}
-    return {
-        "x_bin_count": max(1, _safe_cfg_int(raw.get("x_bin_count", 15), 15)),
-        "y_bin_count": max(1, _safe_cfg_int(raw.get("y_bin_count", 20), 20)),
-        "theta_bin_count": max(1, _safe_cfg_int(raw.get("theta_bin_count", 20), 20)),
-        "phi_bin_count": max(1, _safe_cfg_int(raw.get("phi_bin_count", 24), 24)),
-        "x_min_mm": raw.get("x_min_mm", None),
-        "x_max_mm": raw.get("x_max_mm", None),
-        "y_min_mm": raw.get("y_min_mm", None),
-        "y_max_mm": raw.get("y_max_mm", None),
-        "theta_min_deg": raw.get("theta_min_deg", None),
-        "theta_max_deg": raw.get("theta_max_deg", None),
-        "phi_min_deg": raw.get("phi_min_deg", None),
-        "phi_max_deg": raw.get("phi_max_deg", None),
-        "min_pool_events": max(1, _safe_cfg_int(raw.get("min_pool_events", 20), 20)),
-        "min_accepted_events": max(1, _safe_cfg_int(raw.get("min_accepted_events", 10), 10)),
-        "summary_fiducial_x_abs_max_mm": _safe_cfg_optional_float(
-            raw.get("summary_fiducial_x_abs_max_mm", None)
-        ),
-        "summary_fiducial_y_abs_max_mm": _safe_cfg_optional_float(
-            raw.get("summary_fiducial_y_abs_max_mm", None)
-        ),
-        "summary_fiducial_theta_max_deg": _safe_cfg_optional_float(
-            raw.get("summary_fiducial_theta_max_deg", None)
-        ),
-        "summary_fiducial_phi_abs_max_deg": _safe_cfg_optional_float(
-            raw.get("summary_fiducial_phi_abs_max_deg", None)
-        ),
-    }
-
-
-def _resolve_projection_ellipse_diagnostic_cfg(config_dict, default_half_range):
-    raw = config_dict.get("projection_ellipse_diagnostic", {})
-    if not isinstance(raw, dict):
-        raw = {}
-
-    default_half_range = float(default_half_range)
-    x_min = _safe_cfg_optional_float(raw.get("x_min", None))
-    x_max = _safe_cfg_optional_float(raw.get("x_max", None))
-    y_min = _safe_cfg_optional_float(raw.get("y_min", None))
-    y_max = _safe_cfg_optional_float(raw.get("y_max", None))
-    if x_min is None:
-        x_min = -default_half_range
-    if x_max is None:
-        x_max = default_half_range
-    if y_min is None:
-        y_min = -default_half_range
-    if y_max is None:
-        y_max = default_half_range
-    if x_max <= x_min:
-        x_min, x_max = -default_half_range, default_half_range
-    if y_max <= y_min:
-        y_min, y_max = -default_half_range, default_half_range
-
-    smoothing_sigma_bins = raw.get("smoothing_sigma_bins", 1.0)
-    try:
-        smoothing_sigma_bins = float(smoothing_sigma_bins)
-    except (TypeError, ValueError):
-        smoothing_sigma_bins = 1.0
-    if not np.isfinite(smoothing_sigma_bins) or smoothing_sigma_bins < 0.0:
-        smoothing_sigma_bins = 1.0
-
-    axis_quantile_min = _safe_cfg_optional_float(raw.get("axis_quantile_min", 0.01))
-    axis_quantile_max = _safe_cfg_optional_float(raw.get("axis_quantile_max", 0.99))
-    if axis_quantile_min is None:
-        axis_quantile_min = 0.01
-    if axis_quantile_max is None:
-        axis_quantile_max = 0.99
-
-    return {
-        "bin_count": max(24, _safe_cfg_int(raw.get("bin_count", 140), 140)),
-        "min_points": max(50, _safe_cfg_int(raw.get("min_points", 300), 300)),
-        "smoothing_sigma_bins": smoothing_sigma_bins,
-        "x_min": float(x_min),
-        "x_max": float(x_max),
-        "y_min": float(y_min),
-        "y_max": float(y_max),
-        "axis_quantile_min": min(max(float(axis_quantile_min), 0.0), 0.49),
-        "axis_quantile_max": max(min(float(axis_quantile_max), 1.0), 0.51),
-        "cmap": str(raw.get("cmap", "turbo")).strip() or "turbo",
-        "contour_fractions": _coerce_probability_tuple(
-            raw.get("contour_fractions", None),
-            default=(0.25, 0.5, 0.75),
-        ),
-        "focus_definitive_tt": _coerce_tt_label_tuple(
-            raw.get("focus_definitive_tt", None),
-            default=OFFENDER_FOCUS_TTS_CFG,
-        ),
-    }
-
-
-def _efficiency_center_field(axis_name):
-    return "center_deg" if axis_name == "theta" else "center_mm"
-
-
 _ROBUST_EFFICIENCY_PLATEAU_TOLERANCE = 0.05
-
-
-def _make_efficiency_curve(values, fired, bins):
-    vals = np.asarray(values, dtype=float)
-    fire = np.asarray(fired, dtype=float)
-    centers = 0.5 * (bins[:-1] + bins[1:])
-    num, _ = np.histogram(vals[fire > 0.5], bins=bins)
-    den, _ = np.histogram(vals, bins=bins)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        eff = np.where(den > 0, num / den, np.nan)
-        unc = np.where(
-            den > 0,
-            np.sqrt(np.maximum(eff * (1.0 - eff) / np.maximum(den, 1), 0.0)),
-            np.nan,
-        )
-    return {
-        "centers": centers.astype(float),
-        "eff": np.asarray(eff, dtype=float),
-        "unc": np.asarray(unc, dtype=float),
-        "den": np.asarray(den, dtype=float),
-    }
-
-
-def _histogram_bin_indices(values, bins):
-    vals = np.asarray(values, dtype=float)
-    out = np.full(vals.shape, -1, dtype=np.int32)
-    if vals.size == 0 or len(bins) < 2:
-        return out
-
-    valid = np.isfinite(vals) & (vals >= float(bins[0])) & (vals <= float(bins[-1]))
-    if not np.any(valid):
-        return out
-
-    out[valid] = np.digitize(vals[valid], bins[1:-1], right=False).astype(np.int32)
-    return out
-
-
-def _compute_efficiency_summary_bin_mask(centers, eff_vals, den_vals, axis_name, cfg_eff):
-    valid = np.isfinite(centers) & np.isfinite(eff_vals) & np.isfinite(den_vals) & (den_vals > 0)
-    if axis_name == "x":
-        limit = cfg_eff.get("summary_fiducial_x_abs_max_mm", None)
-        if limit is not None:
-            valid &= np.abs(centers) <= float(limit)
-    elif axis_name == "y":
-        limit = cfg_eff.get("summary_fiducial_y_abs_max_mm", None)
-        if limit is not None:
-            valid &= np.abs(centers) <= float(limit)
-    elif axis_name == "theta":
-        limit = cfg_eff.get("summary_fiducial_theta_max_deg", None)
-        if limit is not None:
-            valid &= centers <= float(limit)
-    elif axis_name == "phi":
-        limit = cfg_eff.get("summary_fiducial_phi_abs_max_deg", None)
-        if limit is not None:
-            valid &= np.abs(centers) <= float(limit)
-    return valid
-
-
-def _extract_efficiency_summary_arrays(axis_payload, axis_name, cfg_eff):
-    centers = np.asarray(axis_payload.get("centers", []), dtype=float)
-    eff_vals = np.asarray(axis_payload.get("eff", []), dtype=float)
-    unc_vals = np.asarray(axis_payload.get("unc", []), dtype=float)
-    den_vals = np.asarray(axis_payload.get("den", []), dtype=float)
-    valid = _compute_efficiency_summary_bin_mask(
-        centers,
-        eff_vals,
-        den_vals,
-        axis_name,
-        cfg_eff,
-    )
-    return centers, eff_vals, unc_vals, den_vals, valid
-
-
-def _compute_robust_x_center_eff(axis_payload, cfg_eff):
-    summary = _compute_efficiency_scalar_summary(axis_payload, "x", cfg_eff)
-    eff = summary.get("eff", np.nan)
-    return float(eff) if np.isfinite(eff) else np.nan
-
-
-def _intersect_required_indices(*indices):
-    if not indices or any(index is None for index in indices):
-        return None
-    intersection = pd.Index(indices[0])
-    for index in indices[1:]:
-        intersection = intersection.intersection(pd.Index(index), sort=False)
-    return intersection
-
-
-def _required_track_efficiency_hit_columns():
-    return tuple(
-        f"P{plane}_{suffix}"
-        for plane in range(1, 5)
-        for suffix in ("T_dif_final", "Y_final")
-    )
-
-
-def _extract_track_efficiency_hit_arrays(df_plot, tdiff_to_x):
-    x_hits = np.column_stack(
-        [
-            pd.to_numeric(df_plot[f"P{plane}_T_dif_final"], errors="coerce").to_numpy(dtype=float)
-            * float(tdiff_to_x)
-            for plane in range(1, 5)
-        ]
-    )
-    y_hits = np.column_stack(
-        [
-            pd.to_numeric(df_plot[f"P{plane}_Y_final"], errors="coerce").to_numpy(dtype=float)
-            for plane in range(1, 5)
-        ]
-    )
-    return x_hits, y_hits
-
-
-def _fit_three_plane_telescope_projection(x_hits, y_hits, z_arr, test_plane_zero_idx):
-    other_idx = [idx for idx in range(4) if idx != int(test_plane_zero_idx)]
-    z_known = np.asarray(z_arr[other_idx], dtype=float)
-    z_test = float(z_arr[int(test_plane_zero_idx)])
-    z_mean = float(np.mean(z_known))
-    z_delta = z_known - z_mean
-    z_denom = float(np.sum(z_delta * z_delta))
-
-    n_rows = int(x_hits.shape[0])
-    out = {
-        "x_pred": np.full(n_rows, np.nan, dtype=float),
-        "y_pred": np.full(n_rows, np.nan, dtype=float),
-        "theta_pred_deg": np.full(n_rows, np.nan, dtype=float),
-        "phi_pred_deg": np.full(n_rows, np.nan, dtype=float),
-        "valid": np.zeros(n_rows, dtype=bool),
-    }
-    if n_rows == 0 or not np.isfinite(z_denom) or z_denom <= 0.0:
-        return out
-
-    x_known = np.asarray(x_hits[:, other_idx], dtype=float)
-    y_known = np.asarray(y_hits[:, other_idx], dtype=float)
-    valid = np.isfinite(x_known).all(axis=1) & np.isfinite(y_known).all(axis=1)
-    if not np.any(valid):
-        return out
-
-    x_fit = x_known[valid]
-    y_fit = y_known[valid]
-    x_mean = np.mean(x_fit, axis=1)
-    y_mean = np.mean(y_fit, axis=1)
-    slope_x = np.sum((x_fit - x_mean[:, None]) * z_delta[None, :], axis=1) / z_denom
-    slope_y = np.sum((y_fit - y_mean[:, None]) * z_delta[None, :], axis=1) / z_denom
-    intercept_x = x_mean - slope_x * z_mean
-    intercept_y = y_mean - slope_y * z_mean
-
-    out["x_pred"][valid] = intercept_x + slope_x * z_test
-    out["y_pred"][valid] = intercept_y + slope_y * z_test
-    out["theta_pred_deg"][valid] = np.degrees(np.arctan(np.hypot(slope_x, slope_y)))
-    out["phi_pred_deg"][valid] = np.degrees(np.arctan2(slope_y, slope_x))
-    out["valid"] = valid
-    return out
-
-
-def _select_robust_plateau_event_indices(
-    axis_payload,
-    *,
-    cfg_eff,
-    axis_values,
-    bins,
-    accepted_indices,
-    axis_name="x",
-    tolerance,
-    center_eff=np.nan,
-    fired=None,
-    fired_only=False,
-):
-    centers = np.asarray(axis_payload.get("centers", []), dtype=float)
-    eff_vals = np.asarray(axis_payload.get("eff", []), dtype=float)
-    den_vals = np.asarray(axis_payload.get("den", []), dtype=float)
-    valid_bins = _compute_efficiency_summary_bin_mask(
-        centers,
-        eff_vals,
-        den_vals,
-        axis_name,
-        cfg_eff,
-    )
-    if not np.any(valid_bins):
-        return None
-
-    if eff_vals.shape[0] != len(bins) - 1:
-        return None
-
-    if not np.isfinite(center_eff):
-        center_eff = _compute_efficiency_scalar_summary(axis_payload, axis_name, cfg_eff).get("eff", np.nan)
-    if not np.isfinite(center_eff):
-        return None
-
-    plateau_bins = valid_bins & (np.abs(eff_vals - center_eff) <= float(tolerance))
-
-    accepted_index = pd.Index(accepted_indices)
-    bin_indices = _histogram_bin_indices(axis_values, bins)
-    if len(accepted_index) != len(bin_indices):
-        return None
-
-    selected = bin_indices >= 0
-    if fired_only:
-        if fired is None:
-            return None
-        fired_arr = np.asarray(fired, dtype=float)
-        if len(fired_arr) != len(bin_indices):
-            return None
-        selected &= fired_arr > 0.5
-    if np.any(selected):
-        in_plateau = np.zeros(selected.shape, dtype=bool)
-        in_plateau[selected] = plateau_bins[bin_indices[selected]]
-        selected &= in_plateau
-
-    return accepted_index[selected]
-
-
-def _select_efficiency_summary_event_indices(
-    axis_payload,
-    *,
-    cfg_eff,
-    axis_values,
-    bins,
-    accepted_indices,
-    axis_name="x",
-    fired=None,
-    fired_only=False,
-):
-    centers = np.asarray(axis_payload.get("centers", []), dtype=float)
-    eff_vals = np.asarray(axis_payload.get("eff", []), dtype=float)
-    den_vals = np.asarray(axis_payload.get("den", []), dtype=float)
-    valid_bins = _compute_efficiency_summary_bin_mask(
-        centers,
-        eff_vals,
-        den_vals,
-        axis_name,
-        cfg_eff,
-    )
-    if not np.any(valid_bins):
-        return None
-
-    if eff_vals.shape[0] != len(bins) - 1:
-        return None
-
-    accepted_index = pd.Index(accepted_indices)
-    bin_indices = _histogram_bin_indices(axis_values, bins)
-    if len(accepted_index) != len(bin_indices):
-        return None
-
-    selected = bin_indices >= 0
-    if fired_only:
-        if fired is None:
-            return None
-        fired_arr = np.asarray(fired, dtype=float)
-        if len(fired_arr) != len(bin_indices):
-            return None
-        selected &= fired_arr > 0.5
-    if np.any(selected):
-        in_summary = np.zeros(selected.shape, dtype=bool)
-        in_summary[selected] = valid_bins[bin_indices[selected]]
-        selected &= in_summary
-
-    return accepted_index[selected]
-
-
-def _compute_efficiency_scalar_summary(axis_payload, axis_name, cfg_eff):
-    centers, eff_vals, unc_vals, den_vals, valid = _extract_efficiency_summary_arrays(
-        axis_payload,
-        axis_name,
-        cfg_eff,
-    )
-
-    out = {
-        "eff": np.nan,
-        "unc": np.nan,
-        "n_denom": 0,
-        "n_bins_used": int(np.sum(valid)),
-        "selected_center": np.nan,
-    }
-    if not np.any(valid):
-        return out
-
-    if axis_name == "theta":
-        valid_idx = np.flatnonzero(valid)
-        # The theta scalar summary is defined by the bin closest to normal incidence,
-        # not by the maximum efficiency inside the fiducial theta band.
-        best_local = valid_idx[np.nanargmin(np.abs(centers[valid_idx]))]
-        out["eff"] = float(eff_vals[best_local])
-        out["unc"] = float(unc_vals[best_local]) if best_local < len(unc_vals) else np.nan
-        out["n_denom"] = int(den_vals[best_local]) if best_local < len(den_vals) else 0
-        out["selected_center"] = float(centers[best_local])
-        return out
-
-    den_region = den_vals[valid]
-    eff_region = eff_vals[valid]
-    denom = float(np.sum(den_region))
-    if not np.isfinite(denom) or denom <= 0.0:
-        return out
-    num = float(np.sum(den_region * eff_region))
-    eff_mean = num / denom
-    out["eff"] = float(eff_mean)
-    out["unc"] = float(np.sqrt(max(eff_mean * (1.0 - eff_mean) / denom, 0.0)))
-    out["n_denom"] = int(round(denom))
-    return out
-
-
-def _resolve_efficiency_edges(
-    *,
-    cfg_eff,
-    strip_half,
-    width_half,
-    theta_left_filter,
-    theta_right_filter,
-    phi_left_filter,
-    phi_right_filter,
-):
-    x_min = _safe_cfg_float(cfg_eff.get("x_min_mm", None), -float(strip_half))
-    x_max = _safe_cfg_float(cfg_eff.get("x_max_mm", None), float(strip_half))
-    y_min = _safe_cfg_float(cfg_eff.get("y_min_mm", None), -float(width_half))
-    y_max = _safe_cfg_float(cfg_eff.get("y_max_mm", None), float(width_half))
-    theta_min_deg = _safe_cfg_float(
-        cfg_eff.get("theta_min_deg", None),
-        float(np.degrees(theta_left_filter)),
-    )
-    theta_max_deg = _safe_cfg_float(
-        cfg_eff.get("theta_max_deg", None),
-        float(np.degrees(theta_right_filter)),
-    )
-    phi_min_deg = _safe_cfg_float(
-        cfg_eff.get("phi_min_deg", None),
-        float(np.degrees(phi_left_filter)),
-    )
-    phi_max_deg = _safe_cfg_float(
-        cfg_eff.get("phi_max_deg", None),
-        float(np.degrees(phi_right_filter)),
-    )
-
-    x_min = max(-float(strip_half), min(x_min, float(strip_half)))
-    x_max = max(-float(strip_half), min(x_max, float(strip_half)))
-    y_min = max(-float(width_half), min(y_min, float(width_half)))
-    y_max = max(-float(width_half), min(y_max, float(width_half)))
-    theta_min_deg = max(0.0, theta_min_deg)
-    theta_max_deg = max(theta_min_deg + 1e-6, min(theta_max_deg, 90.0))
-    phi_min_deg = max(-180.0, min(phi_min_deg, 180.0))
-    phi_max_deg = max(-180.0, min(phi_max_deg, 180.0))
-
-    if x_max <= x_min:
-        x_min, x_max = -float(strip_half), float(strip_half)
-    if y_max <= y_min:
-        y_min, y_max = -float(width_half), float(width_half)
-    if phi_max_deg <= phi_min_deg:
-        phi_min_deg = float(np.degrees(phi_left_filter))
-        phi_max_deg = float(np.degrees(phi_right_filter))
-        if phi_max_deg <= phi_min_deg:
-            phi_min_deg, phi_max_deg = -180.0, 180.0
-
-    return {
-        "x": np.linspace(x_min, x_max, int(cfg_eff["x_bin_count"]) + 1),
-        "y": np.linspace(y_min, y_max, int(cfg_eff["y_bin_count"]) + 1),
-        "theta": np.linspace(theta_min_deg, theta_max_deg, int(cfg_eff["theta_bin_count"]) + 1),
-        "phi": np.linspace(phi_min_deg, phi_max_deg, int(cfg_eff["phi_bin_count"]) + 1),
-    }
-
-
-def _compute_track_based_efficiency_payload(
-    df_plot,
-    *,
-    cfg_eff,
-    cfg_fiducial,
-    z_positions,
-    tdiff_to_x,
-    strip_half,
-    width_half,
-    theta_left_filter,
-    theta_right_filter,
-    phi_left_filter,
-    phi_right_filter,
-    y_pos_p13,
-    y_pos_p24,
-):
-    edges = _resolve_efficiency_edges(
-        cfg_eff=cfg_eff,
-        strip_half=strip_half,
-        width_half=width_half,
-        theta_left_filter=theta_left_filter,
-        theta_right_filter=theta_right_filter,
-        phi_left_filter=phi_left_filter,
-        phi_right_filter=phi_right_filter,
-    )
-    plane_pool_tt = {
-        1: [234, 1234],
-        2: [134, 1234],
-        3: [124, 1234],
-        4: [123, 1234],
-    }
-    payload = {
-        "available": False,
-        "reason": "",
-        "config": dict(cfg_eff),
-        "edges": edges,
-        "plane_results": {},
-        "trigger_source": "",
-        "pool_source": "",
-    }
-
-    trigger_source = "fit_tt"
-    payload["trigger_source"] = trigger_source
-    pool_source = trigger_source
-    payload["pool_source"] = pool_source
-
-    required = tuple(_required_track_efficiency_hit_columns()) + (trigger_source, pool_source)
-    missing = [col for col in required if col not in df_plot.columns]
-    if missing:
-        if trigger_source in missing:
-            payload["reason"] = "missing_fit_tt"
-        else:
-            payload["reason"] = f"missing_required_columns:{','.join(missing)}"
-        return payload
-
-    z_arr = np.asarray(z_positions, dtype=float)
-    x_hits_all, y_hits_all = _extract_track_efficiency_hit_arrays(df_plot, tdiff_to_x)
-    dtt_all = (
-        pd.to_numeric(df_plot[trigger_source], errors="coerce")
-        .fillna(0)
-        .to_numpy(dtype=np.int32)
-    )
-    pool_tt_all = (
-        pd.to_numeric(df_plot[pool_source], errors="coerce")
-        .fillna(0)
-        .to_numpy(dtype=np.int32)
-    )
-    charge_series, _ = _resolve_task4_total_event_charge_series(df_plot)
-    if charge_series is not None:
-        charge_all = charge_series.to_numpy(dtype=float, copy=False)
-    else:
-        charge_all = np.full(len(df_plot), np.nan, dtype=float)
-
-    any_plane_available = False
-    for plane in range(1, 5):
-        x_scalar_summary = _compute_efficiency_scalar_summary({}, "x", cfg_eff)
-        y_reference = y_pos_p13 if (plane - 1) % 2 == 0 else y_pos_p24
-        plane_result = {
-            "plane": int(plane),
-            "overall_eff": np.nan,
-            "n_denom": 0,
-            "y_reference": np.asarray(y_reference, dtype=float),
-            "eff_2d": np.full(
-                (len(edges["x"]) - 1, len(edges["y"]) - 1),
-                np.nan,
-                dtype=float,
-            ),
-            "x": _make_efficiency_curve(np.asarray([], dtype=float), np.asarray([], dtype=float), edges["x"]),
-            "y": _make_efficiency_curve(np.asarray([], dtype=float), np.asarray([], dtype=float), edges["y"]),
-            "theta": _make_efficiency_curve(
-                np.asarray([], dtype=float),
-                np.asarray([], dtype=float),
-                edges["theta"],
-            ),
-            "phi": _make_efficiency_curve(
-                np.asarray([], dtype=float),
-                np.asarray([], dtype=float),
-                edges["phi"],
-            ),
-            "eff_theta_phi": np.full(
-                (len(edges["theta"]) - 1, len(edges["phi"]) - 1),
-                np.nan,
-                dtype=float,
-            ),
-            "scalar_summary": {
-                "x": {
-                    "eff": np.nan,
-                    "unc": np.nan,
-                    "n_denom": 0,
-                    "n_bins_used": 0,
-                    "selected_center": np.nan,
-                },
-                "y": {
-                    "eff": np.nan,
-                    "unc": np.nan,
-                    "n_denom": 0,
-                    "n_bins_used": 0,
-                    "selected_center": np.nan,
-                },
-                "theta": {
-                    "eff": np.nan,
-                    "unc": np.nan,
-                    "n_denom": 0,
-                    "n_bins_used": 0,
-                    "selected_center": np.nan,
-                },
-                "phi": {
-                    "eff": np.nan,
-                    "unc": np.nan,
-                    "n_denom": 0,
-                    "n_bins_used": 0,
-                    "selected_center": np.nan,
-                },
-            },
-            "accepted_indices": None,
-            "robust_x_summary_accepted_indices": None,
-            "robust_x_summary_fired_indices": None,
-            "robust_x_plateau_accepted_indices": None,
-            "robust_x_plateau_fired_indices": None,
-            "robust_y_plateau_accepted_indices": None,
-            "robust_y_plateau_fired_indices": None,
-            "robust_phi_plateau_accepted_indices": None,
-            "robust_phi_plateau_fired_indices": None,
-            "robust_x_center_eff": np.nan,
-            "robust_xyphi_accepted_indices": None,
-            "robust_xyphi_fired_indices": None,
-            "robust_xyphi_eff": np.nan,
-        }
-
-        projection = _fit_three_plane_telescope_projection(
-            x_hits_all,
-            y_hits_all,
-            z_arr,
-            plane - 1,
-        )
-        # Denominator/numerator are both defined from fit_tt combinations:
-        # pool in {3-plane,1234}, fired in {1234}.
-        pool_mask = np.isin(pool_tt_all, plane_pool_tt[plane]) & projection["valid"]
-        if int(np.sum(pool_mask)) < int(cfg_eff["min_pool_events"]):
-            payload["plane_results"][plane] = plane_result
-            continue
-
-        x_pred = projection["x_pred"][pool_mask]
-        y_pred = projection["y_pred"][pool_mask]
-        theta_pred_deg = projection["theta_pred_deg"][pool_mask]
-        phi_pred_deg = projection["phi_pred_deg"][pool_mask]
-        charge_pred = charge_all[pool_mask]
-        fired = (dtt_all[pool_mask] == 1234).astype(float)
-
-        # x_left, x_right = _task4_resolve_region_bounds(
-        #     cfg_fiducial.get("x_left", None),
-        #     cfg_fiducial.get("x_right", None),
-        #     -float(strip_half),
-        #     float(strip_half),
-        # )
-        plane_x_cfg = cfg_fiducial.get("x_by_plane", {}).get(plane, {})
-        x_left, x_right = _task4_resolve_region_bounds(
-            plane_x_cfg.get("left", None),
-            plane_x_cfg.get("right", None),
-            -float(width_half),
-            float(width_half),
-        )
-        plane_y_cfg = cfg_fiducial.get("y_by_plane", {}).get(plane, {})
-        y_left, y_right = _task4_resolve_region_bounds(
-            plane_y_cfg.get("left", None),
-            plane_y_cfg.get("right", None),
-            -float(width_half),
-            float(width_half),
-        )
-
-        accepted_region = (
-            np.isfinite(x_pred)
-            & np.isfinite(y_pred)
-            & (x_pred >= x_left)
-            & (x_pred <= x_right)
-            & (y_pred >= y_left)
-            & (y_pred <= y_right)
-        )
-        charge_left = cfg_fiducial.get("charge_event_left", None)
-        charge_right = cfg_fiducial.get("charge_event_right", None)
-        if charge_left is not None or charge_right is not None:
-            charge_pass = np.isfinite(charge_pred)
-            if charge_left is not None:
-                charge_pass &= charge_pred >= float(charge_left)
-            if charge_right is not None:
-                charge_pass &= charge_pred <= float(charge_right)
-            accepted_region &= charge_pass
-
-        theta_left_deg = cfg_fiducial.get("theta_left_deg", None)
-        theta_right_deg = cfg_fiducial.get("theta_right_deg", None)
-        if theta_left_deg is not None or theta_right_deg is not None:
-            theta_pass = np.isfinite(theta_pred_deg)
-            if theta_left_deg is not None:
-                theta_pass &= theta_pred_deg >= float(theta_left_deg)
-            if theta_right_deg is not None:
-                theta_pass &= theta_pred_deg <= float(theta_right_deg)
-            accepted_region &= theta_pass
-
-        accepted_theta = accepted_region & np.isfinite(theta_pred_deg)
-        accepted_phi = accepted_region & np.isfinite(phi_pred_deg)
-        accepted_theta_phi = accepted_theta & np.isfinite(phi_pred_deg)
-
-        x_acc = x_pred[accepted_region]
-        y_acc = y_pred[accepted_region]
-        fired_acc = fired[accepted_region]
-        accepted_index = df_plot.index[pool_mask][accepted_region]
-        theta_acc = theta_pred_deg[accepted_theta]
-        fired_theta = fired[accepted_theta]
-        phi_acc = phi_pred_deg[accepted_phi]
-        fired_phi = fired[accepted_phi]
-        theta_map_acc = theta_pred_deg[accepted_theta_phi]
-        phi_map_acc = phi_pred_deg[accepted_theta_phi]
-        fired_theta_phi = fired[accepted_theta_phi]
-
-        plane_result["n_denom"] = int(len(fired_acc))
-        plane_result["accepted_indices"] = pd.Index(accepted_index)
-        if len(fired_acc) > 0:
-            plane_result["overall_eff"] = float(np.mean(fired_acc) * 100.0)
-
-        if len(fired_acc) >= int(cfg_eff["min_accepted_events"]):
-            num_2d, _, _ = np.histogram2d(
-                x_acc[fired_acc > 0.5],
-                y_acc[fired_acc > 0.5],
-                bins=[edges["x"], edges["y"]],
-            )
-            den_2d, _, _ = np.histogram2d(
-                x_acc,
-                y_acc,
-                bins=[edges["x"], edges["y"]],
-            )
-            with np.errstate(invalid="ignore", divide="ignore"):
-                plane_result["eff_2d"] = np.where(den_2d > 0, num_2d / den_2d, np.nan)
-
-            plane_result["x"] = _make_efficiency_curve(x_acc, fired_acc, edges["x"])
-            plane_result["y"] = _make_efficiency_curve(y_acc, fired_acc, edges["y"])
-            x_scalar_summary = _compute_efficiency_scalar_summary(
-                plane_result["x"],
-                "x",
-                cfg_eff,
-            )
-            plane_result["robust_x_center_eff"] = float(x_scalar_summary.get("eff", np.nan))
-            plane_result["robust_x_summary_accepted_indices"] = _select_efficiency_summary_event_indices(
-                plane_result["x"],
-                cfg_eff=cfg_eff,
-                axis_values=x_acc,
-                bins=edges["x"],
-                accepted_indices=accepted_index,
-                axis_name="x",
-            )
-            plane_result["robust_x_summary_fired_indices"] = _select_efficiency_summary_event_indices(
-                plane_result["x"],
-                cfg_eff=cfg_eff,
-                axis_values=x_acc,
-                bins=edges["x"],
-                accepted_indices=accepted_index,
-                axis_name="x",
-                fired=fired_acc,
-                fired_only=True,
-            )
-            plane_result["robust_x_plateau_accepted_indices"] = _select_robust_plateau_event_indices(
-                plane_result["x"],
-                cfg_eff=cfg_eff,
-                axis_values=x_acc,
-                bins=edges["x"],
-                accepted_indices=accepted_index,
-                axis_name="x",
-                tolerance=_ROBUST_EFFICIENCY_PLATEAU_TOLERANCE,
-                center_eff=plane_result["robust_x_center_eff"],
-            )
-            plane_result["robust_x_plateau_fired_indices"] = _select_robust_plateau_event_indices(
-                plane_result["x"],
-                cfg_eff=cfg_eff,
-                axis_values=x_acc,
-                bins=edges["x"],
-                accepted_indices=accepted_index,
-                axis_name="x",
-                tolerance=_ROBUST_EFFICIENCY_PLATEAU_TOLERANCE,
-                center_eff=plane_result["robust_x_center_eff"],
-                fired=fired_acc,
-                fired_only=True,
-            )
-            any_plane_available = True
-
-        if len(fired_theta) >= int(cfg_eff["min_accepted_events"]):
-            plane_result["theta"] = _make_efficiency_curve(
-                theta_acc,
-                fired_theta,
-                edges["theta"],
-            )
-            any_plane_available = True
-
-        if len(fired_phi) >= int(cfg_eff["min_accepted_events"]):
-            plane_result["phi"] = _make_efficiency_curve(
-                phi_acc,
-                fired_phi,
-                edges["phi"],
-            )
-            any_plane_available = True
-
-        if len(fired_theta_phi) >= int(cfg_eff["min_accepted_events"]):
-            num_theta_phi, _, _ = np.histogram2d(
-                theta_map_acc[fired_theta_phi > 0.5],
-                phi_map_acc[fired_theta_phi > 0.5],
-                bins=[edges["theta"], edges["phi"]],
-            )
-            den_theta_phi, _, _ = np.histogram2d(
-                theta_map_acc,
-                phi_map_acc,
-                bins=[edges["theta"], edges["phi"]],
-            )
-            with np.errstate(invalid="ignore", divide="ignore"):
-                plane_result["eff_theta_phi"] = np.where(
-                    den_theta_phi > 0,
-                    num_theta_phi / den_theta_phi,
-                    np.nan,
-                )
-            any_plane_available = True
-
-        y_scalar_summary = _compute_efficiency_scalar_summary(
-            plane_result.get("y", {}),
-            "y",
-            cfg_eff,
-        )
-        theta_scalar_summary = _compute_efficiency_scalar_summary(
-            plane_result.get("theta", {}),
-            "theta",
-            cfg_eff,
-        )
-        phi_scalar_summary = _compute_efficiency_scalar_summary(
-            plane_result.get("phi", {}),
-            "phi",
-            cfg_eff,
-        )
-        plane_result["scalar_summary"] = {
-            "x": x_scalar_summary,
-            "y": y_scalar_summary,
-            "theta": theta_scalar_summary,
-            "phi": phi_scalar_summary,
-        }
-        plane_result["robust_x_center_eff"] = float(
-            plane_result["scalar_summary"]["x"].get("eff", np.nan)
-        )
-        plane_result["robust_y_plateau_accepted_indices"] = _select_robust_plateau_event_indices(
-            plane_result.get("y", {}),
-            cfg_eff=cfg_eff,
-            axis_values=y_acc,
-            bins=edges["y"],
-            accepted_indices=accepted_index,
-            axis_name="y",
-            tolerance=_ROBUST_EFFICIENCY_PLATEAU_TOLERANCE,
-            center_eff=y_scalar_summary.get("eff", np.nan),
-        )
-        plane_result["robust_y_plateau_fired_indices"] = _select_robust_plateau_event_indices(
-            plane_result.get("y", {}),
-            cfg_eff=cfg_eff,
-            axis_values=y_acc,
-            bins=edges["y"],
-            accepted_indices=accepted_index,
-            axis_name="y",
-            tolerance=_ROBUST_EFFICIENCY_PLATEAU_TOLERANCE,
-            center_eff=y_scalar_summary.get("eff", np.nan),
-            fired=fired_acc,
-            fired_only=True,
-        )
-        plane_result["robust_phi_plateau_accepted_indices"] = _select_robust_plateau_event_indices(
-            plane_result.get("phi", {}),
-            cfg_eff=cfg_eff,
-            axis_values=phi_acc,
-            bins=edges["phi"],
-            accepted_indices=pd.Index(df_plot.index[pool_mask][accepted_phi]),
-            axis_name="phi",
-            tolerance=_ROBUST_EFFICIENCY_PLATEAU_TOLERANCE,
-            center_eff=phi_scalar_summary.get("eff", np.nan),
-        )
-        plane_result["robust_phi_plateau_fired_indices"] = _select_robust_plateau_event_indices(
-            plane_result.get("phi", {}),
-            cfg_eff=cfg_eff,
-            axis_values=phi_acc,
-            bins=edges["phi"],
-            accepted_indices=pd.Index(df_plot.index[pool_mask][accepted_phi]),
-            axis_name="phi",
-            tolerance=_ROBUST_EFFICIENCY_PLATEAU_TOLERANCE,
-            center_eff=phi_scalar_summary.get("eff", np.nan),
-            fired=fired_phi,
-            fired_only=True,
-        )
-        plane_result["robust_xyphi_accepted_indices"] = _intersect_required_indices(
-            plane_result.get("robust_x_plateau_accepted_indices", None),
-            plane_result.get("robust_y_plateau_accepted_indices", None),
-            plane_result.get("robust_phi_plateau_accepted_indices", None),
-        )
-        plane_result["robust_xyphi_fired_indices"] = _intersect_required_indices(
-            plane_result.get("robust_x_plateau_fired_indices", None),
-            plane_result.get("robust_y_plateau_fired_indices", None),
-            plane_result.get("robust_phi_plateau_fired_indices", None),
-        )
-        if plane_result["robust_xyphi_accepted_indices"] is not None:
-            robust_xyphi_n_denom = int(len(plane_result["robust_xyphi_accepted_indices"]))
-            robust_xyphi_fired_index = plane_result.get("robust_xyphi_fired_indices", None)
-            robust_xyphi_n_num = int(len(robust_xyphi_fired_index)) if robust_xyphi_fired_index is not None else 0
-            if robust_xyphi_n_denom > 0:
-                plane_result["robust_xyphi_eff"] = float(robust_xyphi_n_num / robust_xyphi_n_denom)
-
-        payload["plane_results"][plane] = plane_result
-
-    payload["available"] = bool(any_plane_available)
-    if not payload["available"] and not payload["reason"]:
-        payload["reason"] = "no_planes_with_minimum_statistics"
-    return payload
-
-
-def _flatten_track_based_efficiency_metadata(
-    payload,
-    *,
-    filename_base,
-    execution_timestamp,
-    param_hash,
-):
-    row = {
-        "filename_base": filename_base,
-        "execution_timestamp": execution_timestamp,
-        "param_hash": param_hash,
-        "efficiency_metadata_available": bool(isinstance(payload, dict) and payload.get("available", False)),
-        "efficiency_metadata_reason": (
-            str(payload.get("reason", "")) if isinstance(payload, dict) else "payload_missing"
-        ),
-    }
-    if not isinstance(payload, dict):
-        return row
-
-    cfg_eff = payload.get("config", {})
-    if isinstance(cfg_eff, dict):
-        for key in (
-            "x_bin_count",
-            "y_bin_count",
-            "theta_bin_count",
-            "phi_bin_count",
-            "min_pool_events",
-            "min_accepted_events",
-            "summary_fiducial_x_abs_max_mm",
-            "summary_fiducial_y_abs_max_mm",
-            "summary_fiducial_theta_max_deg",
-            "summary_fiducial_phi_abs_max_deg",
-            "phi_min_deg",
-            "phi_max_deg",
-        ):
-            row[f"efficiency_metadata_{key}"] = cfg_eff.get(key, "")
-
-    for plane in range(1, 5):
-        plane_result = payload.get("plane_results", {}).get(plane, {})
-        row[f"efficiency_vector_p{plane}_overall_eff_percent"] = plane_result.get("overall_eff", "")
-        row[f"efficiency_vector_p{plane}_n_denom"] = plane_result.get("n_denom", "")
-        scalar_summary = plane_result.get("scalar_summary", {})
-        for axis_name in _EFFICIENCY_VECTOR_AXIS_ORDER:
-            summary = scalar_summary.get(axis_name, {})
-            row[f"efficiency_scalar_p{plane}_{axis_name}_fiducial_eff"] = summary.get("eff", "")
-            row[f"efficiency_scalar_p{plane}_{axis_name}_fiducial_unc"] = summary.get("unc", "")
-            row[f"efficiency_scalar_p{plane}_{axis_name}_fiducial_n_denom"] = summary.get("n_denom", "")
-            row[f"efficiency_scalar_p{plane}_{axis_name}_fiducial_n_bins_used"] = summary.get("n_bins_used", "")
-            if axis_name == "theta":
-                row[f"efficiency_scalar_p{plane}_{axis_name}_fiducial_selected_center_deg"] = summary.get(
-                    "selected_center", ""
-                )
-
-        for axis_name in _EFFICIENCY_VECTOR_AXIS_ORDER:
-            axis_payload = plane_result.get(axis_name, {})
-            centers = np.asarray(axis_payload.get("centers", []), dtype=float)
-            eff_vals = np.asarray(axis_payload.get("eff", []), dtype=float)
-            unc_vals = np.asarray(axis_payload.get("unc", []), dtype=float)
-            center_field = _efficiency_center_field(axis_name)
-            n_bins = max(len(centers), len(eff_vals), len(unc_vals))
-            for idx in range(n_bins):
-                prefix = f"efficiency_vector_p{plane}_{axis_name}_bin_{idx:03d}"
-                center_val = centers[idx] if idx < len(centers) else np.nan
-                eff_val = eff_vals[idx] if idx < len(eff_vals) else np.nan
-                unc_val = unc_vals[idx] if idx < len(unc_vals) else np.nan
-                row[f"{prefix}_{center_field}"] = center_val
-                row[f"{prefix}_eff"] = eff_val
-                row[f"{prefix}_unc"] = unc_val
-    return row
-
-
-def _format_task4_efficiency_vector_title_line(payload) -> str:
-    if not isinstance(payload, dict):
-        return "Track-based efficiency vector (3-plane -> 4-plane): unavailable"
-
-    plane_results = payload.get("plane_results", {})
-    if not isinstance(plane_results, dict):
-        return "Track-based efficiency vector (3-plane -> 4-plane): unavailable"
-
-    fragments: list[str] = []
-    for plane in range(1, 5):
-        plane_result = plane_results.get(plane, {})
-        if not isinstance(plane_result, dict):
-            fragments.append(f"P{plane}=n/a")
-            continue
-        overall_eff = plane_result.get("overall_eff", np.nan)
-        n_denom = int(plane_result.get("n_denom", 0) or 0)
-        if np.isfinite(overall_eff) and n_denom > 0:
-            fragments.append(f"P{plane}={float(overall_eff):.1f}%")
-        else:
-            fragments.append(f"P{plane}=n/a")
-    return "Track-based efficiency vector (3-plane -> 4-plane): " + ", ".join(fragments)
-
-
-def _format_task4_simulated_efficiency_title_line(sim_efficiencies_percent) -> str:
-    if not sim_efficiencies_percent:
-        return "Simulation reference: unavailable"
-    fragments: list[str] = []
-    for plane in range(1, 5):
-        if plane - 1 < len(sim_efficiencies_percent) and np.isfinite(sim_efficiencies_percent[plane - 1]):
-            fragments.append(f"P{plane}={float(sim_efficiencies_percent[plane - 1]):.1f}%")
-        else:
-            fragments.append(f"P{plane}=n/a")
-    return "Simulation reference: " + ", ".join(fragments)
-
-
-def _format_task4_percent_label(value: object) -> str:
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        numeric = np.nan
-    if not np.isfinite(numeric):
-        return "n/a"
-    if abs(numeric) <= 1.0:
-        numeric *= 100.0
-    return f"{numeric:.1f}%"
-
-
-def _resolve_track_efficiency_four_plane_fiducial_index(
-    payload,
-    *,
-    fit_tt_1234_index: pd.Index | None = None,
-) -> pd.Index:
-    if not isinstance(payload, dict):
-        return pd.Index([])
-    plane_results = payload.get("plane_results", {})
-    if not isinstance(plane_results, dict):
-        return pd.Index([])
-
-    accepted_indices: list[pd.Index] = []
-    for plane in range(1, 5):
-        plane_result = plane_results.get(plane, {})
-        if not isinstance(plane_result, dict):
-            return pd.Index([])
-        accepted = plane_result.get("accepted_indices", None)
-        if accepted is None:
-            return pd.Index([])
-        accepted_indices.append(pd.Index(accepted))
-
-    if not accepted_indices:
-        return pd.Index([])
-
-    fiducial_index = accepted_indices[0]
-    for accepted_index in accepted_indices[1:]:
-        fiducial_index = fiducial_index.intersection(accepted_index, sort=False)
-
-    if fit_tt_1234_index is not None:
-        fiducial_index = fiducial_index.intersection(pd.Index(fit_tt_1234_index), sort=False)
-    return fiducial_index
-
-
-def _resolve_track_efficiency_representative(plane_result):
-    if not isinstance(plane_result, dict):
-        return (np.nan, "fid representative", "missing", None, None)
-
-    xyphi_eff = plane_result.get("robust_xyphi_eff", np.nan)
-    xyphi_accepted = plane_result.get("robust_xyphi_accepted_indices", None)
-    xyphi_fired = plane_result.get("robust_xyphi_fired_indices", None)
-    if np.isfinite(xyphi_eff):
-        return (
-            float(xyphi_eff),
-            "fid representative x/y/phi plateau",
-            "xyphi_plateau",
-            pd.Index(xyphi_accepted) if xyphi_accepted is not None else None,
-            pd.Index(xyphi_fired) if xyphi_fired is not None else None,
-        )
-
-    x_summary_eff = plane_result.get("robust_x_center_eff", np.nan)
-    x_summary_accepted = plane_result.get("robust_x_summary_accepted_indices", None)
-    x_summary_fired = plane_result.get("robust_x_summary_fired_indices", None)
-    if np.isfinite(x_summary_eff):
-        return (
-            float(x_summary_eff),
-            "fid representative x-summary",
-            "x_summary",
-            pd.Index(x_summary_accepted) if x_summary_accepted is not None else None,
-            pd.Index(x_summary_fired) if x_summary_fired is not None else None,
-        )
-
-    overall_eff_percent = plane_result.get("overall_eff", np.nan)
-    if np.isfinite(overall_eff_percent):
-        return (
-            float(overall_eff_percent) / 100.0,
-            "fid overall",
-            "overall",
-            None,
-            None,
-        )
-
-    return (np.nan, "fid representative", "missing", None, None)
-
-
-def _plot_track_efficiency_curve_panel(
-    axis,
-    *,
-    axis_payload,
-    axis_payload_full,
-    n_denom,
-    n_denom_full,
-    overall_eff,
-    overall_eff_full,
-    representative_eff,
-    representative_label,
-    sim_eff_percent,
-    plane_color,
-    xlabel,
-    xlim,
-    x_reference_values=(),
-    label_fontsize=8,
-    legend_fontsize=7,
-):
-    centers = np.asarray(axis_payload.get("centers", []), dtype=float)
-    eff_vals = np.asarray(axis_payload.get("eff", []), dtype=float)
-    unc_vals = np.asarray(axis_payload.get("unc", []), dtype=float)
-    den_vals = np.asarray(axis_payload.get("den", []), dtype=float)
-    valid = np.isfinite(eff_vals) & (den_vals > 0)
-
-    centers_full = np.asarray(axis_payload_full.get("centers", []), dtype=float)
-    eff_vals_full = np.asarray(axis_payload_full.get("eff", []), dtype=float)
-    unc_vals_full = np.asarray(axis_payload_full.get("unc", []), dtype=float)
-    den_vals_full = np.asarray(axis_payload_full.get("den", []), dtype=float)
-    valid_full = np.isfinite(eff_vals_full) & (den_vals_full > 0)
-
-    if np.any(valid_full):
-        axis.errorbar(
-            centers_full[valid_full],
-            eff_vals_full[valid_full],
-            yerr=unc_vals_full[valid_full],
-            fmt="o--",
-            ms=3.5,
-            color="0.45",
-            alpha=0.80,
-            label=(
-                f"no fid  (n={int(n_denom_full)}, "
-                f"{_format_task4_percent_label(overall_eff_full)})"
-            ),
-        )
-    if np.any(valid):
-        axis.errorbar(
-            centers[valid],
-            eff_vals[valid],
-            yerr=unc_vals[valid],
-            fmt="o-",
-            ms=4,
-            color=plane_color,
-            alpha=0.85,
-            label=f"fiducial  (n={int(n_denom)}, {_format_task4_percent_label(overall_eff)})",
-        )
-    if np.isfinite(representative_eff):
-        _representative_line = axis.axhline(
-            float(representative_eff),
-            color=plane_color,
-            lw=2.0,
-            ls=_TRACK_EFF_REPRESENTATIVE_LINESTYLE,
-            alpha=0.95,
-            zorder=4,
-            label=f"{representative_label}  {_format_task4_percent_label(representative_eff)}",
-        )
-        _representative_line.set_path_effects(
-            [
-                path_effects.Stroke(linewidth=4.2, foreground="white", alpha=0.95),
-                path_effects.Normal(),
-            ]
-        )
-    for x_reference in x_reference_values:
-        if np.isfinite(x_reference):
-            axis.axvline(float(x_reference), color="lightgray", lw=0.9, ls="--", alpha=0.8)
-    if np.isfinite(sim_eff_percent):
-        axis.axhline(
-            float(sim_eff_percent) / 100.0,
-            color="black",
-            lw=1.0,
-            ls=_TRACK_EFF_SIMULATION_LINESTYLE,
-            alpha=0.75,
-            zorder=3,
-            label=f"simulation  {_format_task4_percent_label(sim_eff_percent)}",
-        )
-    axis.set_ylim(0, 1.08)
-    axis.set_xlim(*xlim)
-    axis.set_xlabel(xlabel, fontsize=label_fontsize)
-    axis.set_ylabel("Efficiency", fontsize=label_fontsize)
-    axis.grid(True, alpha=0.3)
-    handles, labels = axis.get_legend_handles_labels()
-    if handles:
-        axis.legend(fontsize=legend_fontsize)
-
-
-def _format_robust_efficiency_trace_line(row) -> str:
-    def _fmt(value):
-        try:
-            out = float(value)
-        except (TypeError, ValueError):
-            out = np.nan
-        return f"{out:.4f}" if np.isfinite(out) else "nan"
-
-    fragments: list[str] = []
-    for plane in range(1, 5):
-        robust_eff = row.get(f"eff{plane}_robust", np.nan)
-        robust_xyphi_eff = row.get(f"eff{plane}_robust_xyphi", np.nan)
-        center_eff = row.get(f"eff{plane}_median_x", np.nan)
-        robust_n_denom = row.get(f"eff{plane}_robust_n_denom", np.nan)
-        plateau_eff = row.get(f"eff{plane}_plateau", np.nan)
-        overall_eff = row.get(f"eff{plane}_overall", np.nan)
-        n_bins = row.get(f"eff{plane}_n_valid_bins", 0)
-        n_plateau_bins = row.get(f"eff{plane}_n_plateau_bins", 0)
-        fragments.append(
-            f"P{plane}(robust={_fmt(robust_eff)}, "
-            f"xyphi={_fmt(robust_xyphi_eff)}, "
-            f"median_x={_fmt(center_eff)}, "
-            f"robust_n_denom={int(robust_n_denom) if np.isfinite(robust_n_denom) else 'nan'}, "
-            f"plateau={_fmt(plateau_eff)}, "
-            f"overall={_fmt(overall_eff)}, "
-            f"bins={int(n_bins or 0)}, plateau_bins={int(n_plateau_bins or 0)})"
-        )
-    return (
-        f"[ROBUST_EFF_TRACE] filename_base={row.get('filename_base', '')} "
-        + " ".join(fragments)
-    )
-
-
-def _build_robust_efficiency_row(
-    payload,
-    *,
-    df_events: pd.DataFrame,
-    denominator_seconds: float,
-    filename_base: str,
-    execution_timestamp: str,
-    param_hash: str,
-):
-    row = {
-        "filename_base": filename_base,
-        "execution_timestamp": execution_timestamp,
-        "param_hash": param_hash,
-        "robust_efficiency_trigger_source": (
-            str(payload.get("trigger_source", "")) if isinstance(payload, dict) else ""
-        ),
-    }
-
-    plane_results = payload.get("plane_results", {}) if isinstance(payload, dict) else {}
-    cfg_eff = payload.get("config", {}) if isinstance(payload, dict) else {}
-    plane_fiducial_accepted_indices: dict[int, pd.Index] = {}
-    plane_plateau_indices: dict[int, pd.Index] = {}
-    plane_plateau_accepted_indices: dict[int, pd.Index] = {}
-    for plane in range(1, 5):
-        plane_result = plane_results.get(plane, {}) if isinstance(plane_results, dict) else {}
-        axis_payload = plane_result.get("x", {}) if isinstance(plane_result, dict) else {}
-        accepted_indices = (
-            plane_result.get("accepted_indices", None)
-            if isinstance(plane_result, dict)
-            else None
-        )
-        if accepted_indices is not None:
-            plane_fiducial_accepted_indices[plane] = pd.Index(accepted_indices)
-        _, eff_vals, _, _, valid = _extract_efficiency_summary_arrays(
-            axis_payload,
-            "x",
-            cfg_eff,
-        )
-        center_eff = plane_result.get("robust_x_center_eff", np.nan)
-        center_eff = float(center_eff) if np.isfinite(center_eff) else _compute_robust_x_center_eff(
-            axis_payload,
-            cfg_eff,
-        )
-        (
-            representative_eff,
-            _representative_label,
-            representative_method,
-            representative_accepted_index,
-            representative_fired_index,
-        ) = _resolve_track_efficiency_representative(plane_result)
-        overall_eff_percent = plane_result.get("overall_eff", np.nan) if isinstance(plane_result, dict) else np.nan
-        overall_eff_fraction = (
-            float(overall_eff_percent) / 100.0
-            if np.isfinite(overall_eff_percent)
-            else np.nan
-        )
-        row[f"eff{plane}_n_valid_bins"] = int(np.sum(valid))
-        if np.any(valid) and np.isfinite(center_eff):
-            plateau_bins = valid & (
-                np.abs(eff_vals - center_eff) <= _ROBUST_EFFICIENCY_PLATEAU_TOLERANCE
-            )
-            row[f"eff{plane}_n_plateau_bins"] = int(np.sum(plateau_bins))
-        else:
-            row[f"eff{plane}_n_plateau_bins"] = 0
-        row[f"eff{plane}_robust_method"] = representative_method
-        row[f"eff{plane}_robust"] = representative_eff
-        row[f"eff{plane}_robust_xyphi"] = plane_result.get("robust_xyphi_eff", np.nan)
-        row[f"eff{plane}_median_x"] = center_eff
-        row[f"eff{plane}_overall"] = overall_eff_fraction
-        row[f"eff{plane}"] = representative_eff if np.isfinite(representative_eff) else overall_eff_fraction
-
-        robust_xyphi_accepted = (
-            plane_result.get("robust_xyphi_accepted_indices", None) if isinstance(plane_result, dict) else None
-        )
-        if robust_xyphi_accepted is not None:
-            row[f"eff{plane}_robust_xyphi_n_denom"] = int(len(pd.Index(robust_xyphi_accepted)))
-        else:
-            row[f"eff{plane}_robust_xyphi_n_denom"] = np.nan
-
-        robust_xyphi_fired = (
-            plane_result.get("robust_xyphi_fired_indices", None) if isinstance(plane_result, dict) else None
-        )
-        if robust_xyphi_fired is not None:
-            row[f"eff{plane}_robust_xyphi_n_num"] = int(len(pd.Index(robust_xyphi_fired)))
-        else:
-            row[f"eff{plane}_robust_xyphi_n_num"] = np.nan
-
-        if representative_accepted_index is not None:
-            row[f"eff{plane}_robust_n_denom"] = int(len(representative_accepted_index))
-        else:
-            robust_scalar_summary = plane_result.get("scalar_summary", {}).get("x", {})
-            robust_n_denom = robust_scalar_summary.get("n_denom", np.nan)
-            row[f"eff{plane}_robust_n_denom"] = (
-                int(robust_n_denom) if np.isfinite(robust_n_denom) else np.nan
-            )
-
-        if representative_fired_index is not None:
-            row[f"eff{plane}_robust_n_num"] = int(len(representative_fired_index))
-        else:
-            if np.isfinite(representative_eff) and np.isfinite(row[f"eff{plane}_robust_n_denom"]):
-                row[f"eff{plane}_robust_n_num"] = int(
-                    round(float(representative_eff) * float(row[f"eff{plane}_robust_n_denom"]))
-                )
-            else:
-                row[f"eff{plane}_robust_n_num"] = np.nan
-
-        plateau_accepted = (
-            plane_result.get("robust_x_plateau_accepted_indices", None)
-            if isinstance(plane_result, dict)
-            else None
-        )
-        if plateau_accepted is not None:
-            plateau_accepted_index = pd.Index(plateau_accepted)
-            plane_plateau_accepted_indices[plane] = plateau_accepted_index
-            row[f"eff{plane}_plateau_n_denom"] = int(len(plateau_accepted_index))
-        else:
-            row[f"eff{plane}_plateau_n_denom"] = np.nan
-
-        plateau_fired = (
-            plane_result.get("robust_x_plateau_fired_indices", None)
-            if isinstance(plane_result, dict)
-            else None
-        )
-        if plateau_fired is None:
-            row[f"eff{plane}_plateau_n_num"] = np.nan
-            row[f"eff{plane}_plateau"] = overall_eff_fraction
-            row[f"eff{plane}"] = overall_eff_fraction
-            continue
-        plateau_fired_index = pd.Index(plateau_fired)
-        plane_plateau_indices[plane] = plateau_fired_index
-        row[f"eff{plane}_plateau_n_num"] = int(len(plateau_fired_index))
-
-        plateau_eff = np.nan
-        if plane in plane_plateau_accepted_indices and len(plane_plateau_accepted_indices[plane]) > 0:
-            plateau_eff = float(len(plateau_fired_index) / len(plane_plateau_accepted_indices[plane]))
-        row[f"eff{plane}_plateau"] = plateau_eff
-
-    fit_tt_1234_index = None
-    if "fit_tt" in df_events.columns:
-        tt_values = pd.to_numeric(df_events["fit_tt"], errors="coerce").to_numpy(dtype=float)
-        fit_tt_1234_index = pd.Index(df_events.index[tt_values == 1234.0])
-        n_events_1234 = int(len(fit_tt_1234_index))
-    else:
-        n_events_1234 = None
-
-    total_events = int(len(df_events))
-    denom = float(denominator_seconds) if np.isfinite(denominator_seconds) else 0.0
-    row["count_rate_denominator_seconds"] = int(round(denom)) if denom > 0.0 else 0
-    row["four_plane_count"] = int(n_events_1234) if n_events_1234 is not None else np.nan
-    row["total_count"] = int(total_events)
-    if n_events_1234 is not None and denom > 0.0:
-        row["rate_1234_hz"] = float(n_events_1234 / denom)
-    else:
-        row["rate_1234_hz"] = np.nan
-
-    robust_union_index = None
-    robust_intersection_index = None
-    if fit_tt_1234_index is not None and plane_fiducial_accepted_indices:
-        robust_indices = [
-            accepted_index.intersection(fit_tt_1234_index, sort=False)
-            for accepted_index in plane_fiducial_accepted_indices.values()
-        ]
-        robust_union_index = robust_indices[0]
-        robust_intersection_index = robust_indices[0]
-        for robust_index in robust_indices[1:]:
-            robust_union_index = robust_union_index.union(robust_index, sort=False)
-            robust_intersection_index = robust_intersection_index.intersection(robust_index, sort=False)
-
-    if robust_union_index is not None:
-        row["four_plane_robust_count_union"] = int(len(robust_union_index))
-        row["four_plane_robust_hz_union"] = float(len(robust_union_index) / denom) if denom > 0.0 else np.nan
-    else:
-        row["four_plane_robust_count_union"] = np.nan
-        row["four_plane_robust_hz_union"] = np.nan
-
-    if robust_intersection_index is not None:
-        row["four_plane_robust_count_intersection"] = int(len(robust_intersection_index))
-        row["four_plane_robust_hz_intersection"] = (
-            float(len(robust_intersection_index) / denom)
-            if denom > 0.0
-            else np.nan
-        )
-    else:
-        row["four_plane_robust_count_intersection"] = np.nan
-        row["four_plane_robust_hz_intersection"] = np.nan
-
-    if fit_tt_1234_index is not None and len(plane_fiducial_accepted_indices) == 4 and robust_intersection_index is not None:
-        n_events_four_plane_robust = int(len(robust_intersection_index))
-        row["four_plane_robust_count"] = n_events_four_plane_robust
-        row["four_plane_robust_hz"] = float(n_events_four_plane_robust / denom) if denom > 0.0 else np.nan
-    else:
-        row["four_plane_robust_count"] = np.nan
-        row["four_plane_robust_hz"] = np.nan
-
-    if denom > 0.0:
-        row["rate_total_hz"] = float(total_events / denom)
-    else:
-        row["rate_total_hz"] = np.nan
-
-    if n_events_1234 is not None and int(n_events_1234) > 0:
-        union_count = row.get("four_plane_robust_count_union", np.nan)
-        intersection_count = row.get("four_plane_robust_count_intersection", np.nan)
-        default_count = row.get("four_plane_robust_count", np.nan)
-        row["four_plane_robust_efficiency_union"] = (
-            float(union_count) / float(n_events_1234)
-            if np.isfinite(union_count)
-            else np.nan
-        )
-        row["four_plane_robust_efficiency_intersection"] = (
-            float(intersection_count) / float(n_events_1234)
-            if np.isfinite(intersection_count)
-            else np.nan
-        )
-        row["four_plane_robust_efficiency"] = (
-            float(default_count) / float(n_events_1234)
-            if np.isfinite(default_count)
-            else np.nan
-        )
-    else:
-        row["four_plane_robust_efficiency_union"] = np.nan
-        row["four_plane_robust_efficiency_intersection"] = np.nan
-        row["four_plane_robust_efficiency"] = np.nan
-    return row
-
-
-def _extract_projection_arrays(df_input: pd.DataFrame) -> tuple[np.ndarray | None, np.ndarray | None, str]:
-    if {"tim_xp", "tim_yp"}.issubset(df_input.columns):
-        return (
-            pd.to_numeric(df_input["tim_xp"], errors="coerce").to_numpy(dtype=float),
-            pd.to_numeric(df_input["tim_yp"], errors="coerce").to_numpy(dtype=float),
-            "tim_xp_tim_yp",
-        )
-
-    if {"xp", "yp"}.issubset(df_input.columns):
-        return (
-            pd.to_numeric(df_input["xp"], errors="coerce").to_numpy(dtype=float),
-            pd.to_numeric(df_input["yp"], errors="coerce").to_numpy(dtype=float),
-            "xp_yp",
-        )
-
-    if {"theta", "phi"}.issubset(df_input.columns):
-        theta_vals = pd.to_numeric(df_input["theta"], errors="coerce").to_numpy(dtype=float)
-        phi_vals = pd.to_numeric(df_input["phi"], errors="coerce").to_numpy(dtype=float)
-        tan_theta_vals = np.tan(theta_vals)
-        return (
-            tan_theta_vals * np.cos(phi_vals),
-            tan_theta_vals * np.sin(phi_vals),
-            "theta_phi_backcalc",
-        )
-
-    return None, None, "missing"
-
-
-def _ellipse_scale_for_peak_fraction(peak_fraction: float) -> float:
-    try:
-        value = float(peak_fraction)
-    except (TypeError, ValueError):
-        return float("nan")
-    if not np.isfinite(value) or not (0.0 < value < 1.0):
-        return float("nan")
-    return float(np.sqrt(max(0.0, -2.0 * np.log(value))))
-
-
-def _fit_elliptical_gaussian_to_density(
-    density: np.ndarray,
-    x_centers: np.ndarray,
-    y_centers: np.ndarray,
-) -> dict[str, object] | None:
-    density = np.asarray(density, dtype=float)
-    if density.ndim != 2 or density.size == 0:
-        return None
-
-    weights = np.where(np.isfinite(density) & (density > 0.0), density, 0.0)
-    total_weight = float(weights.sum())
-    if total_weight <= 0.0:
-        return None
-
-    xx, yy = np.meshgrid(np.asarray(x_centers, dtype=float), np.asarray(y_centers, dtype=float), indexing="ij")
-    x_flat = xx.ravel()
-    y_flat = yy.ravel()
-    w_flat = weights.ravel()
-    positive = w_flat > 0.0
-    if int(np.count_nonzero(positive)) < 6:
-        return None
-
-    x_vals = x_flat[positive]
-    y_vals = y_flat[positive]
-    w_vals = w_flat[positive]
-
-    center_x = float(np.average(x_vals, weights=w_vals))
-    center_y = float(np.average(y_vals, weights=w_vals))
-    dx = x_vals - center_x
-    dy = y_vals - center_y
-    cov_xx = float(np.average(dx * dx, weights=w_vals))
-    cov_xy = float(np.average(dx * dy, weights=w_vals))
-    cov_yy = float(np.average(dy * dy, weights=w_vals))
-    cov = np.array([[cov_xx, cov_xy], [cov_xy, cov_yy]], dtype=float)
-    if not np.all(np.isfinite(cov)):
-        return None
-
-    eigvals, eigvecs = np.linalg.eigh(cov)
-    order = np.argsort(eigvals)[::-1]
-    eigvals = np.asarray(eigvals[order], dtype=float)
-    eigvecs = np.asarray(eigvecs[:, order], dtype=float)
-    eigvals = np.clip(eigvals, 0.0, None)
-    if eigvals.size < 2 or eigvals[1] <= 0.0:
-        return None
-
-    sigma_major = float(np.sqrt(eigvals[0]))
-    sigma_minor = float(np.sqrt(eigvals[1]))
-    if not (np.isfinite(sigma_major) and np.isfinite(sigma_minor) and sigma_minor > 0.0):
-        return None
-
-    major_vector = eigvecs[:, 0]
-    minor_vector = eigvecs[:, 1]
-    rotation_deg = float(np.degrees(np.arctan2(major_vector[1], major_vector[0])))
-    while rotation_deg > 90.0:
-        rotation_deg -= 180.0
-    while rotation_deg <= -90.0:
-        rotation_deg += 180.0
-
-    return {
-        "center_x": center_x,
-        "center_y": center_y,
-        "cov_xx": cov_xx,
-        "cov_yy": cov_yy,
-        "sigma_x": float(np.sqrt(max(cov_xx, 0.0))),
-        "sigma_y": float(np.sqrt(max(cov_yy, 0.0))),
-        "sigma_major": sigma_major,
-        "sigma_minor": sigma_minor,
-        "major_vector": major_vector.astype(float),
-        "minor_vector": minor_vector.astype(float),
-        "rotation_deg": rotation_deg,
-        "covariance": cov,
-    }
-
-
-def _build_projection_ellipse_diagnostic_payload(
-    df_input: pd.DataFrame,
-    cfg: dict[str, object],
-) -> dict[str, object]:
-    tt_col = get_task4_tt_column(df_input, preferred=TASK4_PRIMARY_TT_COLUMN)
-    if tt_col is None:
-        return {
-            "available": False,
-            "reason": "missing_fit_tt",
-            "config": cfg,
-            "projection_source": "missing",
-            "tt_results": {},
-        }
-
-    xproj_all, yproj_all, projection_source = _extract_projection_arrays(df_input)
-    if xproj_all is None or yproj_all is None:
-        return {
-            "available": False,
-            "reason": "missing_projection_columns",
-            "config": cfg,
-            "projection_source": projection_source,
-            "tt_results": {},
-        }
-
-    tt_all = pd.to_numeric(df_input[tt_col], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
-    x_min = float(cfg["x_min"])
-    x_max = float(cfg["x_max"])
-    y_min = float(cfg["y_min"])
-    y_max = float(cfg["y_max"])
-    axis_quantile_min = float(cfg["axis_quantile_min"])
-    axis_quantile_max = float(cfg["axis_quantile_max"])
-    if axis_quantile_max <= axis_quantile_min:
-        axis_quantile_min = 0.01
-        axis_quantile_max = 0.99
-    bin_count = int(cfg["bin_count"])
-    fwhm_scale = _ellipse_scale_for_peak_fraction(0.5)
-
-    tt_results: dict[str, dict[str, object]] = {}
-    available_any = False
-    for tt_label in tuple(cfg.get("focus_definitive_tt", ())):
-        tt_int = int(normalize_tt_label(tt_label, default="0") or 0)
-        tt_mask = tt_all == tt_int
-        x_tt = np.asarray(xproj_all[tt_mask], dtype=float)
-        y_tt = np.asarray(yproj_all[tt_mask], dtype=float)
-        valid = (
-            np.isfinite(x_tt)
-            & np.isfinite(y_tt)
-            & (x_tt >= x_min)
-            & (x_tt <= x_max)
-            & (y_tt >= y_min)
-            & (y_tt <= y_max)
-        )
-        x_sel = x_tt[valid]
-        y_sel = y_tt[valid]
-
-        result: dict[str, object] = {
-            "available": False,
-            "reason": "insufficient_points",
-            "tt_label": tt_label,
-            "n_points": int(x_sel.size),
-            "projection_source": projection_source,
-        }
-        if x_sel.size < int(cfg["min_points"]):
-            tt_results[str(tt_label)] = result
-            continue
-
-        x_q_lo, x_q_hi = np.quantile(x_sel, [axis_quantile_min, axis_quantile_max])
-        y_q_lo, y_q_hi = np.quantile(y_sel, [axis_quantile_min, axis_quantile_max])
-        x_mid = 0.5 * float(x_q_lo + x_q_hi)
-        y_mid = 0.5 * float(y_q_lo + y_q_hi)
-        half_span = 0.5 * max(float(x_q_hi - x_q_lo), float(y_q_hi - y_q_lo))
-        min_half_span = 0.025 * max(float(x_max - x_min), float(y_max - y_min))
-        half_span = max(half_span, min_half_span)
-        plot_x_min = max(float(x_min), x_mid - half_span)
-        plot_x_max = min(float(x_max), x_mid + half_span)
-        plot_y_min = max(float(y_min), y_mid - half_span)
-        plot_y_max = min(float(y_max), y_mid + half_span)
-        x_edges = np.linspace(plot_x_min, plot_x_max, bin_count + 1)
-        y_edges = np.linspace(plot_y_min, plot_y_max, bin_count + 1)
-        x_centers = 0.5 * (x_edges[:-1] + x_edges[1:])
-        y_centers = 0.5 * (y_edges[:-1] + y_edges[1:])
-
-        hist, _, _ = np.histogram2d(x_sel, y_sel, bins=[x_edges, y_edges])
-        density = np.asarray(hist, dtype=float)
-        sigma_bins = float(cfg["smoothing_sigma_bins"])
-        if sigma_bins > 0.0:
-            density = gaussian_filter(density, sigma=sigma_bins, mode="nearest")
-
-        peak_density = float(np.nanmax(density)) if density.size > 0 else 0.0
-        if not np.isfinite(peak_density) or peak_density <= 0.0:
-            result["reason"] = "zero_density"
-            tt_results[str(tt_label)] = result
-            continue
-
-        ellipse_model = _fit_elliptical_gaussian_to_density(density, x_centers, y_centers)
-        if ellipse_model is None:
-            result["reason"] = "ellipse_fit_failed"
-            tt_results[str(tt_label)] = result
-            continue
-
-        sigma_major = float(ellipse_model["sigma_major"])
-        sigma_minor = float(ellipse_model["sigma_minor"])
-        major_vector = np.asarray(ellipse_model["major_vector"], dtype=float)
-        minor_vector = np.asarray(ellipse_model["minor_vector"], dtype=float)
-        fwhm_semiaxis_major = sigma_major * fwhm_scale
-        fwhm_semiaxis_minor = sigma_minor * fwhm_scale
-        fwhm_halfwidth_x = float(
-            np.sqrt(
-                (fwhm_semiaxis_major * major_vector[0]) ** 2
-                + (fwhm_semiaxis_minor * minor_vector[0]) ** 2
-            )
-        )
-        fwhm_halfwidth_y = float(
-            np.sqrt(
-                (fwhm_semiaxis_major * major_vector[1]) ** 2
-                + (fwhm_semiaxis_minor * minor_vector[1]) ** 2
-            )
-        )
-        fwhm_axis_ratio = (
-            float(fwhm_semiaxis_major / fwhm_semiaxis_minor)
-            if fwhm_semiaxis_minor > 0.0
-            else float("nan")
-        )
-        fwhm_halfwidth_x_over_y = (
-            float(fwhm_halfwidth_x / fwhm_halfwidth_y)
-            if fwhm_halfwidth_y > 0.0
-            else float("nan")
-        )
-
-        result.update(
-            {
-                "available": True,
-                "reason": "ok",
-                "peak_density": peak_density,
-                "density": density,
-                "normalized_density": density / peak_density,
-                "x_edges": x_edges,
-                "y_edges": y_edges,
-                "x_centers": x_centers,
-                "y_centers": y_centers,
-                "contour_fractions": np.asarray(cfg["contour_fractions"], dtype=float),
-                "ellipse_model": ellipse_model,
-                "plot_x_min": plot_x_min,
-                "plot_x_max": plot_x_max,
-                "plot_y_min": plot_y_min,
-                "plot_y_max": plot_y_max,
-                "fwhm_semiaxis_major": float(fwhm_semiaxis_major),
-                "fwhm_semiaxis_minor": float(fwhm_semiaxis_minor),
-                "fwhm_axis_ratio_major_over_minor": fwhm_axis_ratio,
-                "fwhm_halfwidth_xproj": fwhm_halfwidth_x,
-                "fwhm_halfwidth_yproj": fwhm_halfwidth_y,
-                "fwhm_halfwidth_x_over_y": fwhm_halfwidth_x_over_y,
-            }
-        )
-        tt_results[str(tt_label)] = result
-        available_any = True
-
-    return {
-        "available": available_any,
-        "reason": "ok" if available_any else "no_valid_tt_payloads",
-        "config": cfg,
-        "projection_source": projection_source,
-        "tt_results": tt_results,
-    }
-
-
-def _append_projection_ellipse_metadata(payload: dict[str, object]) -> None:
-    cfg = payload.get("config", {})
-    tt_results = payload.get("tt_results", {})
-    if not isinstance(cfg, dict):
-        cfg = {}
-    if not isinstance(tt_results, dict):
-        tt_results = {}
-
-    global_variables["timtrack_projection_ellipse_available"] = bool(payload.get("available", False))
-    global_variables["timtrack_projection_ellipse_reason"] = str(payload.get("reason", ""))
-    global_variables["timtrack_projection_ellipse_projection_source"] = str(
-        payload.get("projection_source", "missing")
-    )
-    global_variables["timtrack_projection_ellipse_bin_count"] = int(cfg.get("bin_count", 0) or 0)
-    global_variables["timtrack_projection_ellipse_min_points"] = int(cfg.get("min_points", 0) or 0)
-    global_variables["timtrack_projection_ellipse_smoothing_sigma_bins"] = float(
-        cfg.get("smoothing_sigma_bins", np.nan)
-    )
-    global_variables["timtrack_projection_ellipse_axis_quantile_min"] = float(
-        cfg.get("axis_quantile_min", np.nan)
-    )
-    global_variables["timtrack_projection_ellipse_axis_quantile_max"] = float(
-        cfg.get("axis_quantile_max", np.nan)
-    )
-    global_variables["timtrack_projection_ellipse_cmap"] = str(cfg.get("cmap", ""))
-    global_variables["timtrack_projection_ellipse_contour_fractions"] = [
-        float(value) for value in tuple(cfg.get("contour_fractions", ()))
-    ]
-
-    for tt_label in tuple(cfg.get("focus_definitive_tt", ())):
-        result = tt_results.get(str(tt_label), {})
-        prefix = f"timtrack_projection_ellipse_tt_{tt_label}"
-        available = bool(isinstance(result, dict) and result.get("available", False))
-        global_variables[f"{prefix}_available"] = available
-        global_variables[f"{prefix}_reason"] = (
-            str(result.get("reason", "")) if isinstance(result, dict) else "missing"
-        )
-        global_variables[f"{prefix}_n_points"] = int(result.get("n_points", 0) or 0)
-        global_variables[f"{prefix}_peak_density"] = (
-            float(result.get("peak_density", np.nan)) if available else np.nan
-        )
-        if not available:
-            for suffix in (
-                "center_xproj",
-                "center_yproj",
-                "plot_x_min",
-                "plot_x_max",
-                "plot_y_min",
-                "plot_y_max",
-                "xproj_scaling_factor_to_match_y",
-                "rotation_deg",
-                "sigma_x",
-                "sigma_y",
-                "fwhm_semiaxis_major",
-                "fwhm_semiaxis_minor",
-                "fwhm_axis_ratio_major_over_minor",
-                "fwhm_halfwidth_xproj",
-                "fwhm_halfwidth_yproj",
-                "fwhm_halfwidth_x_over_y",
-            ):
-                global_variables[f"{prefix}_{suffix}"] = np.nan
-            continue
-
-        ellipse_model = result.get("ellipse_model", {})
-        if not isinstance(ellipse_model, dict):
-            ellipse_model = {}
-        global_variables[f"{prefix}_center_xproj"] = float(ellipse_model.get("center_x", np.nan))
-        global_variables[f"{prefix}_center_yproj"] = float(ellipse_model.get("center_y", np.nan))
-        global_variables[f"{prefix}_plot_x_min"] = float(result.get("plot_x_min", np.nan))
-        global_variables[f"{prefix}_plot_x_max"] = float(result.get("plot_x_max", np.nan))
-        global_variables[f"{prefix}_plot_y_min"] = float(result.get("plot_y_min", np.nan))
-        global_variables[f"{prefix}_plot_y_max"] = float(result.get("plot_y_max", np.nan))
-        _scaling_factor = (
-            float(result.get("fwhm_halfwidth_yproj", np.nan)) / float(result.get("fwhm_halfwidth_xproj", np.nan))
-            if np.isfinite(float(result.get("fwhm_halfwidth_xproj", np.nan)))
-            and float(result.get("fwhm_halfwidth_xproj", np.nan)) > 0.0
-            and np.isfinite(float(result.get("fwhm_halfwidth_yproj", np.nan)))
-            else np.nan
-        )
-        global_variables[f"{prefix}_xproj_scaling_factor_to_match_y"] = _scaling_factor
-        global_variables[f"{prefix}_rotation_deg"] = float(ellipse_model.get("rotation_deg", np.nan))
-        global_variables[f"{prefix}_sigma_x"] = float(ellipse_model.get("sigma_x", np.nan))
-        global_variables[f"{prefix}_sigma_y"] = float(ellipse_model.get("sigma_y", np.nan))
-        global_variables[f"{prefix}_fwhm_semiaxis_major"] = float(
-            result.get("fwhm_semiaxis_major", np.nan)
-        )
-        global_variables[f"{prefix}_fwhm_semiaxis_minor"] = float(
-            result.get("fwhm_semiaxis_minor", np.nan)
-        )
-        global_variables[f"{prefix}_fwhm_axis_ratio_major_over_minor"] = float(
-            result.get("fwhm_axis_ratio_major_over_minor", np.nan)
-        )
-        global_variables[f"{prefix}_fwhm_halfwidth_xproj"] = float(
-            result.get("fwhm_halfwidth_xproj", np.nan)
-        )
-        global_variables[f"{prefix}_fwhm_halfwidth_yproj"] = float(
-            result.get("fwhm_halfwidth_yproj", np.nan)
-        )
-        global_variables[f"{prefix}_fwhm_halfwidth_x_over_y"] = float(
-            result.get("fwhm_halfwidth_x_over_y", np.nan)
-        )
-
-
-def _select_projection_scaling_reference(
-    payload: dict[str, object],
-) -> tuple[str | None, dict[str, object] | None]:
-    tt_results = payload.get("tt_results", {})
-    if not isinstance(tt_results, dict):
-        return None, None
-
-    best_label: str | None = None
-    best_result: dict[str, object] | None = None
-    best_n = -1
-    for tt_label, result in tt_results.items():
-        if not isinstance(result, dict) or not bool(result.get("available", False)):
-            continue
-        n_points = int(result.get("n_points", 0) or 0)
-        if n_points > best_n:
-            best_label = str(tt_label)
-            best_result = result
-            best_n = n_points
-    return best_label, best_result
-
-
-def _summarize_projection_scaling(payload: dict[str, object]) -> dict[str, object]:
-    tt_results = payload.get("tt_results", {})
-    if not isinstance(tt_results, dict):
-        return {
-            "global_factor": np.nan,
-            "global_method": "weighted_mean_by_n_points",
-            "n_contributing_tts": 0,
-            "total_weight": 0.0,
-        }
-
-    factors: list[float] = []
-    weights: list[float] = []
-    for result in tt_results.values():
-        if not isinstance(result, dict) or not bool(result.get("available", False)):
-            continue
-        x_half = float(result.get("fwhm_halfwidth_xproj", np.nan))
-        y_half = float(result.get("fwhm_halfwidth_yproj", np.nan))
-        n_points = int(result.get("n_points", 0) or 0)
-        if not (np.isfinite(x_half) and x_half > 0.0 and np.isfinite(y_half) and n_points > 0):
-            continue
-        factors.append(float(y_half / x_half))
-        weights.append(float(n_points))
-
-    if not factors:
-        return {
-            "global_factor": np.nan,
-            "global_method": "weighted_mean_by_n_points",
-            "n_contributing_tts": 0,
-            "total_weight": 0.0,
-        }
-
-    factor_arr = np.asarray(factors, dtype=float)
-    weight_arr = np.asarray(weights, dtype=float)
-    global_factor = float(np.average(factor_arr, weights=weight_arr))
-    return {
-        "global_factor": global_factor,
-        "global_method": "weighted_mean_by_n_points",
-        "n_contributing_tts": int(len(factor_arr)),
-        "total_weight": float(np.sum(weight_arr)),
-    }
-
-
 efficiency_metadata_cfg = _resolve_task4_efficiency_metadata_cfg(config)
 track_efficiency_fiducial_cfg = _resolve_task4_track_efficiency_fiducial_cfg(config)
 track_efficiency_fullplane_cfg = _resolve_task4_track_efficiency_fiducial_cfg({})
@@ -8382,7 +8397,7 @@ if (
                 color="0.82",
                 bbox={"boxstyle": "round", "facecolor": "0.12", "edgecolor": "0.4", "alpha": 0.9},
             )
-            _ax.set_title(f"definitive_tt = {_tt_label}", fontsize=10)
+            _ax.set_title(f"fit_tt = {_tt_label}", fontsize=10)
             _ax.set_facecolor("0.05")
             _ax.set_aspect("equal", adjustable="box")
             continue
@@ -8445,7 +8460,7 @@ if (
         _ax.set_xlim(float(_result.get("plot_x_min", projection_ellipse_cfg["x_min"])), float(_result.get("plot_x_max", projection_ellipse_cfg["x_max"])))
         _ax.set_ylim(float(_result.get("plot_y_min", projection_ellipse_cfg["y_min"])), float(_result.get("plot_y_max", projection_ellipse_cfg["y_max"])))
         _ax.set_aspect("equal", adjustable="box")
-        _ax.set_title(f"definitive_tt = {_tt_label}", fontsize=10)
+        _ax.set_title(f"fit_tt = {_tt_label}", fontsize=10)
         _ax.text(
             0.02,
             0.98,
@@ -8493,7 +8508,7 @@ if (
         frameon=False,
     )
     _projection_fig.suptitle(
-        "TimTrack projection contours with ellipse fit by definitive_tt\n"
+        "TimTrack projection contours with ellipse fit by fit_tt\n"
         "Solid contours = smoothed xp/yp density at fixed peak fractions; dashed ellipses = matched elliptical-Gaussian family\n"
         f"{task4_efficiency_vector_title_line}",
         fontsize=11,
@@ -8674,7 +8689,7 @@ if (
 
             _scaled_axes[0][0].legend(fontsize=8, loc="upper right")
             _scaled_fig.suptitle(
-                "Original vs xproj-scaled projection/angle distributions by definitive_tt\n"
+                "Original vs xproj-scaled projection/angle distributions by fit_tt\n"
                 f"One row per plane combination; one global xproj scale is applied to all rows: {_global_scale_factor:.3f} "
                 f"({projection_scaling_summary.get('global_method', 'weighted_mean_by_n_points')})\n"
                 f"{task4_efficiency_vector_title_line}",
@@ -9236,373 +9251,6 @@ _OFFENDER_FOCUS_TTS = OFFENDER_FOCUS_TTS_CFG
 _OFFENDER_EXACT_COUNT_CAP = 5
 _OFFENDER_ZERO_COLOR = "#1f77b4"
 _OFFENDER_NONZERO_COLOR = "#d62728"
-
-
-def _build_offender_tt_labels(values: pd.Series) -> np.ndarray:
-    return np.asarray(
-        [normalize_tt_label(value, default="0") for value in values],
-        dtype=object,
-    )
-
-
-def _resolve_offender_focus_tts(tt_labels: np.ndarray) -> tuple[str, ...]:
-    available = [tt_label for tt_label in _OFFENDER_FOCUS_TTS if np.any(tt_labels == tt_label)]
-    if available:
-        return tuple(available)
-    fallback = sorted(
-        {
-            str(tt_label)
-            for tt_label in tt_labels
-            if str(tt_label) not in ("", "0", "nan", "None")
-        },
-        key=lambda tt_label: (len(tt_label), tt_label),
-    )
-    return tuple(fallback[: min(5, len(fallback))])
-
-
-def _make_offender_hist_bins(
-    values: np.ndarray,
-    fallback: tuple[float, float],
-    *,
-    nbins: int = 55,
-    clip_percentiles: tuple[float, float] = (0.5, 99.5),
-    force_zero_left: bool = False,
-) -> np.ndarray:
-    arr = np.asarray(values, dtype=float)
-    arr = arr[np.isfinite(arr)]
-    if arr.size == 0:
-        left, right = fallback
-    else:
-        left = float(np.nanpercentile(arr, clip_percentiles[0]))
-        right = float(np.nanpercentile(arr, clip_percentiles[1]))
-        if force_zero_left:
-            left = 0.0
-        if not np.isfinite(left) or not np.isfinite(right):
-            left, right = fallback
-    if not np.isfinite(left) or not np.isfinite(right):
-        left, right = fallback
-    if right <= left:
-        span = float(abs(fallback[1] - fallback[0])) if np.isfinite(fallback[1] - fallback[0]) else 1.0
-        if span <= 0:
-            span = 1.0
-        right = left + span
-    return np.linspace(left, right, nbins)
-
-
-def _resolve_total_offender_counts(df_input: pd.DataFrame) -> tuple[np.ndarray | None, str]:
-    if "total_problematic_offender_count" in df_input.columns:
-        counts = pd.to_numeric(
-            df_input["total_problematic_offender_count"],
-            errors="coerce",
-        ).to_numpy(dtype=float)
-        counts = np.clip(counts, 0.0, None)
-        return counts, "total_problematic_offender_count"
-
-    component_columns = [
-        column_name
-        for column_name in (
-            "task1_problematic_channel_count",
-            "task2_problematic_strip_count",
-            "task3_problematic_plane_count",
-        )
-        if column_name in df_input.columns
-    ]
-    if not component_columns:
-        return None, ""
-
-    total_counts = np.zeros(len(df_input), dtype=float)
-    finite_any = np.zeros(len(df_input), dtype=bool)
-    for column_name in component_columns:
-        raw_values = pd.to_numeric(df_input[column_name], errors="coerce").to_numpy(dtype=float)
-        finite = np.isfinite(raw_values)
-        finite_any |= finite
-        safe_values = np.where(finite, raw_values, 0.0)
-        total_counts += np.clip(safe_values, 0.0, None)
-
-    total_counts[~finite_any] = np.nan
-    source = " + ".join(component_columns)
-    return total_counts, source
-
-
-def _plot_offender_cumulative_hist_panel(
-    ax: plt.Axes,
-    observable_values: np.ndarray,
-    offender_counts: np.ndarray,
-    thresholds: Iterable[int],
-    bins: np.ndarray,
-    *,
-    x_label: str,
-    panel_title: str = "",
-    show_legend: bool = False,
-) -> None:
-    observable = np.asarray(observable_values, dtype=float)
-    counts = np.asarray(offender_counts, dtype=float)
-    valid = np.isfinite(observable) & np.isfinite(counts)
-
-    threshold_values = sorted({max(0, int(value)) for value in thresholds})
-    if not threshold_values:
-        threshold_values = [0]
-    colors = plt.cm.viridis(np.linspace(0.10, 0.92, len(threshold_values)))
-
-    plotted = False
-    selected_at_max = 0
-    for idx, threshold in enumerate(threshold_values):
-        selected = valid & (counts <= float(threshold))
-        values = observable[selected]
-        if values.size == 0:
-            continue
-        ax.hist(
-            values,
-            bins=bins,
-            density=True,
-            histtype="step",
-            lw=1.45,
-            color=colors[idx],
-            label=f"<= {threshold} (n={values.size:,})",
-        )
-        ax.axvline(float(np.median(values)), color=colors[idx], lw=0.9, ls="--", alpha=0.65)
-        plotted = True
-        if threshold == threshold_values[-1]:
-            selected_at_max = int(values.size)
-
-    if not plotted:
-        ax.text(
-            0.5,
-            0.5,
-            "No data",
-            transform=ax.transAxes,
-            ha="center",
-            va="center",
-            fontsize=8,
-            color="0.45",
-        )
-
-    total_count = int(np.count_nonzero(valid))
-    summary_lines = [f"n={total_count:,}"]
-    if total_count > 0:
-        summary_lines.append(
-            f"<= {threshold_values[-1]}: {100.0 * float(selected_at_max) / float(total_count):.1f}%"
-        )
-    ax.text(
-        0.02,
-        0.98,
-        "\n".join(summary_lines),
-        transform=ax.transAxes,
-        va="top",
-        ha="left",
-        fontsize=7,
-        bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.75, "edgecolor": "0.8"},
-    )
-
-    if panel_title:
-        ax.set_title(panel_title, fontsize=9)
-    ax.set_xlim(float(bins[0]), float(bins[-1]))
-    ax.set_xlabel(x_label, fontsize=8)
-    ax.set_ylabel("density", fontsize=8)
-    ax.grid(True, alpha=0.25)
-    ax.tick_params(labelsize=7)
-    if show_legend:
-        ax.legend(fontsize=7, loc="upper right")
-
-
-def _plot_offender_hist_panel(
-    ax: plt.Axes,
-    zero_values: np.ndarray,
-    nonzero_values: np.ndarray,
-    bins: np.ndarray,
-    *,
-    x_label: str,
-    panel_title: str = "",
-    show_legend: bool = False,
-) -> None:
-    zero_values = np.asarray(zero_values, dtype=float)
-    nonzero_values = np.asarray(nonzero_values, dtype=float)
-    zero_values = zero_values[np.isfinite(zero_values)]
-    nonzero_values = nonzero_values[np.isfinite(nonzero_values)]
-
-    plotted = False
-    for values, color, label in (
-        (zero_values, _OFFENDER_ZERO_COLOR, "0 offenders"),
-        (nonzero_values, _OFFENDER_NONZERO_COLOR, ">0 offenders"),
-    ):
-        if values.size == 0:
-            continue
-        ax.hist(
-            values,
-            bins=bins,
-            density=True,
-            histtype="stepfilled",
-            alpha=0.16,
-            color=color,
-        )
-        ax.hist(
-            values,
-            bins=bins,
-            density=True,
-            histtype="step",
-            lw=1.6,
-            color=color,
-            label=f"{label} (n={values.size:,})",
-        )
-        ax.axvline(float(np.median(values)), color=color, lw=1.0, ls="--", alpha=0.75)
-        plotted = True
-
-    if not plotted:
-        ax.text(
-            0.5,
-            0.5,
-            "No data",
-            transform=ax.transAxes,
-            ha="center",
-            va="center",
-            fontsize=8,
-            color="0.45",
-        )
-
-    total_count = int(zero_values.size + nonzero_values.size)
-    nonzero_fraction = (
-        100.0 * float(nonzero_values.size) / float(total_count)
-        if total_count > 0
-        else float("nan")
-    )
-    summary_lines = [f"n={total_count:,}"]
-    if total_count > 0:
-        summary_lines.append(f">0={nonzero_fraction:.1f}%")
-    if zero_values.size > 0:
-        summary_lines.append(f"m0={float(np.median(zero_values)):.2f}")
-    if nonzero_values.size > 0:
-        summary_lines.append(f"m>0={float(np.median(nonzero_values)):.2f}")
-    ax.text(
-        0.02,
-        0.98,
-        "\n".join(summary_lines),
-        transform=ax.transAxes,
-        va="top",
-        ha="left",
-        fontsize=7,
-        bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.75, "edgecolor": "0.8"},
-    )
-
-    if panel_title:
-        ax.set_title(panel_title, fontsize=9)
-    ax.set_xlim(float(bins[0]), float(bins[-1]))
-    ax.set_xlabel(x_label, fontsize=8)
-    ax.set_ylabel("density", fontsize=8)
-    ax.grid(True, alpha=0.25)
-    ax.tick_params(labelsize=7)
-    if show_legend:
-        ax.legend(fontsize=7, loc="upper right")
-
-
-def _build_offender_zigzag_payload(
-    df_input: pd.DataFrame,
-    tt_labels: np.ndarray,
-) -> dict[str, dict[str, np.ndarray]]:
-    required = (
-        "x",
-        "y",
-        "theta",
-        "phi",
-        "P1_T_dif_final",
-        "P2_T_dif_final",
-        "P3_T_dif_final",
-        "P4_T_dif_final",
-        "P1_Y_final",
-        "P2_Y_final",
-        "P3_Y_final",
-        "P4_Y_final",
-    )
-    if not all(column_name in df_input.columns for column_name in required):
-        return {}
-
-    path_x_all = np.column_stack(
-        [
-            pd.to_numeric(df_input[f"P{plane}_T_dif_final"], errors="coerce").to_numpy(dtype=float)
-            for plane in range(1, 5)
-        ]
-    ) * float(tdiff_to_x)
-    path_y_all = np.column_stack(
-        [
-            pd.to_numeric(df_input[f"P{plane}_Y_final"], errors="coerce").to_numpy(dtype=float)
-            for plane in range(1, 5)
-        ]
-    )
-    x0_all = pd.to_numeric(df_input["x"], errors="coerce").to_numpy(dtype=float)
-    y0_all = pd.to_numeric(df_input["y"], errors="coerce").to_numpy(dtype=float)
-    theta_all = pd.to_numeric(df_input["theta"], errors="coerce").to_numpy(dtype=float)
-    phi_all = pd.to_numeric(df_input["phi"], errors="coerce").to_numpy(dtype=float)
-    tan_theta_all = np.tan(theta_all)
-    xp_all = tan_theta_all * np.cos(phi_all)
-    yp_all = tan_theta_all * np.sin(phi_all)
-    z_all = np.asarray(z_positions, dtype=float)
-
-    payload: dict[str, dict[str, np.ndarray]] = {}
-    for tt_label in _resolve_offender_focus_tts(tt_labels):
-        active_planes = [int(char) for char in str(tt_label) if char in "1234"]
-        if len(active_planes) < 3:
-            continue
-        active_idx = np.asarray([plane - 1 for plane in active_planes], dtype=int)
-        active_z = z_all[active_idx]
-        z_order = np.argsort(active_z)
-        active_idx = active_idx[z_order]
-        active_z = active_z[z_order]
-
-        path_x = path_x_all[:, active_idx]
-        path_y = path_y_all[:, active_idx]
-        path_dx = np.diff(path_x, axis=1)
-        path_dy = np.diff(path_y, axis=1)
-        path_dz = np.diff(active_z).astype(float)
-        measured_path_all = np.sum(
-            np.sqrt(path_dx ** 2 + path_dy ** 2 + path_dz[None, :] ** 2),
-            axis=1,
-        )
-
-        z_first = float(active_z[0])
-        z_last = float(active_z[-1])
-        fit_x_first_all = x0_all + xp_all * z_first
-        fit_y_first_all = y0_all + yp_all * z_first
-        fit_x_last_all = x0_all + xp_all * z_last
-        fit_y_last_all = y0_all + yp_all * z_last
-        fit_length_all = np.sqrt(
-            (fit_x_last_all - fit_x_first_all) ** 2
-            + (fit_y_last_all - fit_y_first_all) ** 2
-            + (z_last - z_first) ** 2
-        )
-
-        valid_mask = (
-            (tt_labels == tt_label)
-            & np.isfinite(path_x).all(axis=1)
-            & np.isfinite(path_y).all(axis=1)
-            & np.isfinite(x0_all)
-            & np.isfinite(y0_all)
-            & np.isfinite(theta_all)
-            & np.isfinite(phi_all)
-            & np.isfinite(xp_all)
-            & np.isfinite(yp_all)
-            & np.isfinite(measured_path_all)
-            & np.isfinite(fit_length_all)
-            & (measured_path_all > 0)
-        )
-        if int(np.count_nonzero(valid_mask)) < 5:
-            continue
-
-        theta_selected = theta_all[valid_mask]
-        measured_path = measured_path_all[valid_mask]
-        fit_length = fit_length_all[valid_mask]
-        zigzag_ratio = fit_length / (measured_path + 1e-9)
-        zigzag_excess = np.clip(measured_path - fit_length, 0.0, None)
-        projected_excess = zigzag_excess * np.clip(np.cos(theta_selected), 1e-6, None)
-        payload[tt_label] = {
-            "row_mask": valid_mask,
-            "theta_deg": np.degrees(theta_selected),
-            "zigzag_ratio": zigzag_ratio,
-            "projected_excess": projected_excess,
-            "measured_path": measured_path,
-            "fit_length": fit_length,
-        }
-    return payload
-
-
 if (create_essential_plots or create_plots) and task4_plot_enabled("chi2_offender_populations"):
     _offender_required = ("tim_th_chi",)
     _offender_missing = [
@@ -9742,7 +9390,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("chi2_offende
         plt.close(_offender_fig)
 
 if (create_essential_plots or create_plots) and task4_plot_enabled("offender_angle_populations"):
-    _offender_angle_required = ("definitive_tt", "theta", "phi")
+    _offender_angle_required = (task4_plot_tt_column, "theta", "phi")
     _offender_angle_missing = [
         _col_name for _col_name in _offender_angle_required if _col_name not in df_plot_ancillary.columns
     ]
@@ -9757,10 +9405,10 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("offender_ang
             + ", ".join(_offender_angle_missing)
         )
     else:
-        _offender_tt_labels = _build_offender_tt_labels(df_plot_ancillary["definitive_tt"])
+        _offender_tt_labels = _build_offender_tt_labels(df_plot_ancillary[task4_plot_tt_column])
         _offender_focus_tts = _resolve_offender_focus_tts(_offender_tt_labels)
         if not _offender_focus_tts:
-            print("[offender_angle_populations] no definitive_tt combinations available, skipping.")
+            print("[offender_angle_populations] no fit_tt combinations available, skipping.")
         else:
             _offender_theta_deg = np.degrees(
                 pd.to_numeric(df_plot_ancillary["theta"], errors="coerce").to_numpy(dtype=float)
@@ -9797,7 +9445,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("offender_ang
                 sharey="row",
             )
             _angle_fig.suptitle(
-                "Total offender cumulative populations by definitive_tt\n"
+                "Total offender cumulative populations by fit_tt\n"
                 + "Each column keeps the same plane combination and compares cumulative thresholds "
                 + "(0, <=1, <=2, ... total offenders)\n"
                 + f"Total source: {_offender_total_source}\n"
@@ -9841,7 +9489,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("offender_ang
             plt.close(_angle_fig)
 
 if (create_essential_plots or create_plots) and task4_plot_enabled("offender_kinematics_populations"):
-    _offender_kin_required = ("definitive_tt", "x", "y", "charge_event", "s")
+    _offender_kin_required = (task4_plot_tt_column, "x", "y", "charge_event", "s")
     _offender_kin_missing = [
         _col_name
         for _col_name in _offender_kin_required + tuple(_col for _col, _, _ in _OFFENDER_PLOT_DEFS)
@@ -9853,10 +9501,10 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("offender_kin
             + ", ".join(_offender_kin_missing)
         )
     else:
-        _offender_tt_labels = _build_offender_tt_labels(df_plot_ancillary["definitive_tt"])
+        _offender_tt_labels = _build_offender_tt_labels(df_plot_ancillary[task4_plot_tt_column])
         _offender_focus_tts = _resolve_offender_focus_tts(_offender_tt_labels)
         if not _offender_focus_tts:
-            print("[offender_kinematics_populations] no definitive_tt combinations available, skipping.")
+            print("[offender_kinematics_populations] no fit_tt combinations available, skipping.")
         else:
             _offender_focus_mask = np.isin(_offender_tt_labels, _offender_focus_tts)
             _offender_x = pd.to_numeric(df_plot_ancillary["x"], errors="coerce").to_numpy(dtype=float)
@@ -9916,7 +9564,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("offender_kin
                     sharey="row",
                 )
                 _kin_fig.suptitle(
-                    f"{_offender_label}: reconstructed observables by definitive_tt\n"
+                    f"{_offender_label}: reconstructed observables by fit_tt\n"
                     "Same plane combinations are compared separately to expose offender-driven shifts\n"
                     + task4_efficiency_vector_title_line,
                     fontsize=10,
@@ -9951,7 +9599,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("offender_kin
                 plt.close(_kin_fig)
 
 if (create_essential_plots or create_plots) and task4_plot_enabled("offender_tt_balance"):
-    _offender_balance_required = ("definitive_tt", "tim_th_chi")
+    _offender_balance_required = (task4_plot_tt_column, "tim_th_chi")
     _offender_balance_missing = [
         _col_name
         for _col_name in _offender_balance_required + tuple(_col for _col, _, _ in _OFFENDER_PLOT_DEFS)
@@ -9963,10 +9611,10 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("offender_tt_
             + ", ".join(_offender_balance_missing)
         )
     else:
-        _offender_tt_labels = _build_offender_tt_labels(df_plot_ancillary["definitive_tt"])
+        _offender_tt_labels = _build_offender_tt_labels(df_plot_ancillary[task4_plot_tt_column])
         _offender_focus_tts = _resolve_offender_focus_tts(_offender_tt_labels)
         if not _offender_focus_tts:
-            print("[offender_tt_balance] no definitive_tt combinations available, skipping.")
+            print("[offender_tt_balance] no fit_tt combinations available, skipping.")
         else:
             _offender_x_positions = np.arange(len(_offender_focus_tts), dtype=float)
             _offender_chi_log = np.log1p(
@@ -9987,7 +9635,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("offender_tt_
                 squeeze=False,
             )
             _balance_fig.suptitle(
-                "Upstream offender composition by definitive_tt\n"
+                "Upstream offender composition by fit_tt\n"
                 "Top: exact offender-count fractions capped at 5+   |   Bottom: median "
                 + r"$\log(1+\mathrm{tim\_th\_chi})$"
                 + " for 0 offenders versus >0 offenders\n"
@@ -10112,7 +9760,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("offender_tt_
             plt.close(_balance_fig)
 
 if (create_essential_plots or create_plots) and task4_plot_enabled("offender_zigzag_populations"):
-    _offender_zigzag_required = ("definitive_tt", "task1_problematic_channel_count")
+    _offender_zigzag_required = (task4_plot_tt_column, "task1_problematic_channel_count")
     _offender_zigzag_missing = [
         _col_name
         for _col_name in _offender_zigzag_required
@@ -10124,7 +9772,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("offender_zig
             + ", ".join(_offender_zigzag_missing)
         )
     else:
-        _offender_tt_labels = _build_offender_tt_labels(df_plot_ancillary["definitive_tt"])
+        _offender_tt_labels = _build_offender_tt_labels(df_plot_ancillary[task4_plot_tt_column])
         _offender_zigzag_payload = _build_offender_zigzag_payload(df_plot_ancillary, _offender_tt_labels)
         _offender_zigzag_tts = tuple(
             tt_label
@@ -10132,7 +9780,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("offender_zig
             if tt_label in _offender_zigzag_payload
         )
         if not _offender_zigzag_tts:
-            print("[offender_zigzag_populations] no valid zig-zag payloads for configured definitive_tt values, skipping.")
+            print("[offender_zigzag_populations] no valid zig-zag payloads for configured fit_tt values, skipping.")
         else:
             _task1_offender_counts_all = pd.to_numeric(
                 df_plot_ancillary["task1_problematic_channel_count"],
@@ -10206,7 +9854,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("offender_zig
                 sharex="col",
             )
             _zigzag_fig.suptitle(
-                "Task 1 cumulative offender thresholds versus zig-zag geometry by definitive_tt\n"
+                "Task 1 cumulative offender thresholds versus zig-zag geometry by fit_tt\n"
                 "Each point uses the population with task1_problematic_channel_count <= N, so the comparison keeps the same plane combination\n"
                 + task4_efficiency_vector_title_line,
                 fontsize=10,
@@ -10312,7 +9960,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("offender_zig
 if (create_essential_plots or create_plots) and task4_plot_enabled("chi2_charge_populations"):
     _chi2pop_need = ("tim_th_chi", "charge_event",
                      "charge_1", "charge_2", "charge_3", "charge_4",
-                     "definitive_tt")
+                     task4_plot_tt_column)
     _chi2pop_have = all(c in df_plot_ancillary.columns for c in _chi2pop_need)
     if not _chi2pop_have:
         print("[chi2_charge_populations] required columns not found, skipping.")
@@ -10329,7 +9977,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("chi2_charge_
             df_plot_ancillary["tim_th_chi"].values.astype(float), 0.0, None
         ))
         _qev_all    = df_plot_ancillary["charge_event"].values.astype(float)
-        _def_tt_arr = df_plot_ancillary["definitive_tt"].values.astype(float)
+        _def_tt_arr = df_plot_ancillary[task4_plot_tt_column].values.astype(float)
 
         _q_min_by_tp  = {}
         _q_asym_by_tp = {}
@@ -10494,7 +10142,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("chi2_charge_
 # ---------------------------------------------------------------------------
 if (create_essential_plots or create_plots) and task4_plot_enabled("chi2_residuals_populations"):
     _chi2res_required = (
-        "definitive_tt",
+        task4_plot_tt_column,
         "charge_event",
         "tim_th_chi",
         "tim_ext_res_ystr_1", "tim_ext_res_ystr_2", "tim_ext_res_ystr_3", "tim_ext_res_ystr_4",
@@ -10505,7 +10153,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("chi2_residua
     if not _chi2res_have:
         print("[chi2_residuals_populations] required columns not found, skipping.")
     else:
-        _chi2res_def_tt = df_plot_ancillary["definitive_tt"].values.astype(float)
+        _chi2res_def_tt = df_plot_ancillary[task4_plot_tt_column].values.astype(float)
         _chi2res_charge_event_all = df_plot_ancillary["charge_event"].values.astype(float)
         _chi2res_tim_th_chi_all = np.clip(
             df_plot_ancillary["tim_th_chi"].values.astype(float), 0.0, None
@@ -10792,7 +10440,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("chi2_residua
             )
             _chi2res_fig_planes.suptitle(
                 "chi2_residuals_populations — 4-fold LOO per-plane decomposition\n"
-                "No plane-combination mixing: definitive_tt = 1234 only  |  "
+                "No plane-combination mixing: fit_tt = 1234 only  |  "
                 r"Main panel: charge$_p$ vs $\log(1+\mathrm{LOO}\ \chi^2_p)$  |  "
                 "Top: charge marginal  |  Right: LOO marginal",
                 fontsize=10,
@@ -12041,7 +11689,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("event_displa
     _evd3_td_cols = [f"P{p}_T_dif_final" for p in range(1, 5)]
     _evd3_q_cols  = [f"P{p}_Q_sum_final" for p in range(1, 5)]
     _evd3_have       = all(c in df_plot_ancillary.columns for c in _evd3_y_cols + _evd3_td_cols + _evd3_q_cols)
-    _evd3_have_track = all(c in df_plot_ancillary.columns for c in ("x", "y", "xp", "yp", "definitive_tt"))
+    _evd3_have_track = all(c in df_plot_ancillary.columns for c in ("x", "y", "xp", "yp", task4_plot_tt_column))
     if _evd3_have and _evd3_have_track:
         _evd3_combos = {
             123: [1, 2, 3],
@@ -12065,10 +11713,10 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("event_displa
 
         for _evd3_tt, _evd3_active in _evd3_combos.items():
             _evd3_missing  = [p for p in range(1, 5) if p not in _evd3_active][0]
-            _evd3_pool     = df_plot_ancillary[df_plot_ancillary["definitive_tt"] == _evd3_tt]
+            _evd3_pool     = df_plot_ancillary[df_plot_ancillary[task4_plot_tt_column] == _evd3_tt]
             _n_evd3        = min(16, len(_evd3_pool))
             if _n_evd3 == 0:
-                print(f"[event_display_sample_3fold] no events for definitive_tt={_evd3_tt}, skipping.")
+                print(f"[event_display_sample_3fold] no events for fit_tt={_evd3_tt}, skipping.")
                 continue
             _rng3   = np.random.default_rng(42)
             _idx3   = _rng3.choice(len(_evd3_pool), size=_n_evd3, replace=False)
@@ -12180,7 +11828,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("event_displa
 if (create_essential_plots or create_plots) and task4_plot_enabled("chi2_charge_populations_3fold"):
     _c3pop_need = ("tim_th_chi", "charge_event",
                    "charge_1", "charge_2", "charge_3", "charge_4",
-                   "definitive_tt")
+                   task4_plot_tt_column)
     _c3pop_have = all(c in df_plot_ancillary.columns for c in _c3pop_need)
     if not _c3pop_have:
         print("[chi2_charge_populations_3fold] required columns not found, skipping.")
@@ -12190,7 +11838,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("chi2_charge_
         _c3_missing = {tt: [p for p in range(1, 5) if p not in _c3_active[tt]][0]
                        for tt in _c3_combos}
 
-        _c3_def_tt_arr   = df_plot_ancillary["definitive_tt"].values.astype(float)
+        _c3_def_tt_arr   = df_plot_ancillary[task4_plot_tt_column].values.astype(float)
         _c3_chi2_log_all = np.log1p(np.clip(
             df_plot_ancillary["tim_th_chi"].values.astype(float), 0.0, None
         ))
@@ -12372,7 +12020,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("chi2_charge_
 # ---------------------------------------------------------------------------
 if (create_essential_plots or create_plots) and task4_plot_enabled("chi2_residuals_populations_3fold"):
     _r3_required_base = (
-        "definitive_tt", "charge_event", "tim_th_chi",
+        task4_plot_tt_column, "charge_event", "tim_th_chi",
         "tim_res_ystr_1", "tim_res_ystr_2", "tim_res_ystr_3", "tim_res_ystr_4",
         "tim_res_tdif_1", "tim_res_tdif_2", "tim_res_tdif_3", "tim_res_tdif_4",
         "charge_1", "charge_2", "charge_3", "charge_4",
@@ -12396,7 +12044,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("chi2_residua
         _r3_colors  = ["steelblue", "seagreen", "darkorange", "mediumpurple"]
         _r3_cmaps   = ["Blues", "Greens", "Oranges", "Purples"]
 
-        _r3_def_tt    = df_plot_ancillary["definitive_tt"].values.astype(float)
+        _r3_def_tt    = df_plot_ancillary[task4_plot_tt_column].values.astype(float)
         _r3_qev       = df_plot_ancillary["charge_event"].values.astype(float)
         _r3_chi_all   = np.clip(df_plot_ancillary["tim_th_chi"].values.astype(float), 0.0, None)
         _r3_log_chi   = np.log1p(_r3_chi_all)
@@ -12853,7 +12501,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("adj_dis_comp
         _ad_col in df_plot_ancillary.columns
         and "tim_th_chi" in df_plot_ancillary.columns
         and "charge_event" in df_plot_ancillary.columns
-        and "definitive_tt" in df_plot_ancillary.columns
+        and task4_plot_tt_column in df_plot_ancillary.columns
     )
     if not _ad_have:
         print("[adj_dis_comparison] adj_dis or required columns not found, skipping.")
@@ -12868,7 +12516,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("adj_dis_comp
             df_plot_ancillary["tim_th_chi"].values.astype(float), 0.0, None
         ))
         _ad_qev_all    = df_plot_ancillary["charge_event"].values.astype(float)
-        _ad_def_tt_all = df_plot_ancillary["definitive_tt"].values.astype(float)
+        _ad_def_tt_all = df_plot_ancillary[task4_plot_tt_column].values.astype(float)
 
         # Min charge across all planes with data (per event)
         _ad_qp_cols = [f"charge_{p}" for p in range(1, 5) if f"charge_{p}" in df_plot_ancillary.columns]
@@ -12998,7 +12646,7 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("adj_dis_comp
                 squeeze=False,
             )
             _ad_fig3.suptitle(
-                "Adj / Dis comparison broken down by definitive_tt\n"
+                "Adj / Dis comparison broken down by fit_tt\n"
                 r"Columns: $\chi^2$ histogram  |  charge histogram  |  min-charge histogram",
                 fontsize=10,
             )
@@ -13066,7 +12714,7 @@ if create_plots and task4_plot_enabled("polar_theta_phi_tracking_tt_2d"):
     phi_min, phi_max     = phi_left_filter, phi_right_filter        # adjust as needed
     
     vmax_global = (
-        df_filtered.groupby('definitive_tt')[['theta', 'phi']]
+        df_filtered.groupby(task4_plot_tt_column)[['theta', 'phi']]
         .apply(
             lambda df: np.histogram2d(
                 df['theta'],
@@ -13333,16 +12981,16 @@ if (
     # ]
     
     df_cases_1 = [
-        ([("definitive_tt", 12, 12)], "1-2 cases"),
-        ([("definitive_tt", 23, 23)], "2-3 cases"),
-        ([("definitive_tt", 34, 34)], "3-4 cases"),
-        ([("definitive_tt", 123, 123)], "1-2-3 cases"),
-        ([("definitive_tt", 234, 234)], "2-3-4 cases"),
-        ([("definitive_tt", 1234, 1234)], "1-2-3-4 cases"),
-        ([("definitive_tt", 13, 13)], "1-3 cases"),
-        ([("definitive_tt", 14, 14)], "1-4 cases"),
-        ([("definitive_tt", 124, 124)], "1-2-4 cases"),
-        ([("definitive_tt", 134, 134)], "1-3-4 cases"),
+        ([(task4_plot_tt_column, 12, 12)], "1-2 cases"),
+        ([(task4_plot_tt_column, 23, 23)], "2-3 cases"),
+        ([(task4_plot_tt_column, 34, 34)], "3-4 cases"),
+        ([(task4_plot_tt_column, 123, 123)], "1-2-3 cases"),
+        ([(task4_plot_tt_column, 234, 234)], "2-3-4 cases"),
+        ([(task4_plot_tt_column, 1234, 1234)], "1-2-3-4 cases"),
+        ([(task4_plot_tt_column, 13, 13)], "1-3 cases"),
+        ([(task4_plot_tt_column, 14, 14)], "1-4 cases"),
+        ([(task4_plot_tt_column, 124, 124)], "1-2-4 cases"),
+        ([(task4_plot_tt_column, 134, 134)], "1-3-4 cases"),
     ]
     
 
@@ -13357,49 +13005,49 @@ if (
     ]
 
     df_cases_2 = [
-        ([("definitive_tt", 1234, 1234)], "1-2-3-4 cases"),
-        ([("definitive_tt", 123, 123)], "1-2-3 cases"),
-        ([("definitive_tt", 234, 234)], "2-3-4 cases"),
-        ([("definitive_tt", 124, 124)], "1-2-4 cases"),
-        ([("definitive_tt", 134, 134)], "1-3-4 cases"),
+        ([(task4_plot_tt_column, 1234, 1234)], "1-2-3-4 cases"),
+        ([(task4_plot_tt_column, 123, 123)], "1-2-3 cases"),
+        ([(task4_plot_tt_column, 234, 234)], "2-3-4 cases"),
+        ([(task4_plot_tt_column, 124, 124)], "1-2-4 cases"),
+        ([(task4_plot_tt_column, 134, 134)], "1-3-4 cases"),
     ]
     
     df_cases_3 = [
-        ([("definitive_tt", 12, 12), ("iterations", 2, 2)], "1-2 cases, iterations = 2"),
-        ([("definitive_tt", 12, 12), ("iterations", 3, 3)], "1-2 cases, iterations = 3"),
-        ([("definitive_tt", 12, 12), ("iterations", 4, 4)], "1-2 cases, iterations = 4"),
-        ([("definitive_tt", 12, 12), ("iterations", 5, 5)], "1-2 cases, iterations = 5"),
-        ([("definitive_tt", 12, 12), ("iterations", 6, iter_max)], f"1-2 cases, iterations = 6 to {iter_max}"),
+        ([(task4_plot_tt_column, 12, 12), ("iterations", 2, 2)], "1-2 cases, iterations = 2"),
+        ([(task4_plot_tt_column, 12, 12), ("iterations", 3, 3)], "1-2 cases, iterations = 3"),
+        ([(task4_plot_tt_column, 12, 12), ("iterations", 4, 4)], "1-2 cases, iterations = 4"),
+        ([(task4_plot_tt_column, 12, 12), ("iterations", 5, 5)], "1-2 cases, iterations = 5"),
+        ([(task4_plot_tt_column, 12, 12), ("iterations", 6, iter_max)], f"1-2 cases, iterations = 6 to {iter_max}"),
         
-        ([("definitive_tt", 23, 23), ("iterations", 2, 2)], "2-3 cases, iterations = 2"),
-        ([("definitive_tt", 23, 23), ("iterations", 3, 3)], "2-3 cases, iterations = 3"),
-        ([("definitive_tt", 23, 23), ("iterations", 4, 4)], "2-3 cases, iterations = 4"),
-        ([("definitive_tt", 23, 23), ("iterations", 5, 5)], "2-3 cases, iterations = 5"),
-        ([("definitive_tt", 23, 23), ("iterations", 6, iter_max)], f"2-3 cases, iterations = 6 to {iter_max}"),
+        ([(task4_plot_tt_column, 23, 23), ("iterations", 2, 2)], "2-3 cases, iterations = 2"),
+        ([(task4_plot_tt_column, 23, 23), ("iterations", 3, 3)], "2-3 cases, iterations = 3"),
+        ([(task4_plot_tt_column, 23, 23), ("iterations", 4, 4)], "2-3 cases, iterations = 4"),
+        ([(task4_plot_tt_column, 23, 23), ("iterations", 5, 5)], "2-3 cases, iterations = 5"),
+        ([(task4_plot_tt_column, 23, 23), ("iterations", 6, iter_max)], f"2-3 cases, iterations = 6 to {iter_max}"),
         
-        ([("definitive_tt", 34, 34), ("iterations", 2, 2)], "3-4 cases, iterations = 2"),
-        ([("definitive_tt", 34, 34), ("iterations", 3, 3)], "3-4 cases, iterations = 3"),
-        ([("definitive_tt", 34, 34), ("iterations", 4, 4)], "3-4 cases, iterations = 4"),
-        ([("definitive_tt", 34, 34), ("iterations", 5, 5)], "3-4 cases, iterations = 5"),
-        ([("definitive_tt", 34, 34), ("iterations", 6, iter_max)], f"3-4 cases, iterations = 6 to {iter_max}"),
+        ([(task4_plot_tt_column, 34, 34), ("iterations", 2, 2)], "3-4 cases, iterations = 2"),
+        ([(task4_plot_tt_column, 34, 34), ("iterations", 3, 3)], "3-4 cases, iterations = 3"),
+        ([(task4_plot_tt_column, 34, 34), ("iterations", 4, 4)], "3-4 cases, iterations = 4"),
+        ([(task4_plot_tt_column, 34, 34), ("iterations", 5, 5)], "3-4 cases, iterations = 5"),
+        ([(task4_plot_tt_column, 34, 34), ("iterations", 6, iter_max)], f"3-4 cases, iterations = 6 to {iter_max}"),
         
-        ([("definitive_tt", 123, 123), ("iterations", 2, 2)], "1-2-3 cases, iterations = 2"),
-        ([("definitive_tt", 123, 123), ("iterations", 3, 3)], "1-2-3 cases, iterations = 3"),
-        ([("definitive_tt", 123, 123), ("iterations", 4, 4)], "1-2-3 cases, iterations = 4"),
-        ([("definitive_tt", 123, 123), ("iterations", 5, 5)], "1-2-3 cases, iterations = 5"),
-        ([("definitive_tt", 123, 123), ("iterations", 6, iter_max)], f"1-2-3 cases, iterations = 6 to {iter_max}"),
+        ([(task4_plot_tt_column, 123, 123), ("iterations", 2, 2)], "1-2-3 cases, iterations = 2"),
+        ([(task4_plot_tt_column, 123, 123), ("iterations", 3, 3)], "1-2-3 cases, iterations = 3"),
+        ([(task4_plot_tt_column, 123, 123), ("iterations", 4, 4)], "1-2-3 cases, iterations = 4"),
+        ([(task4_plot_tt_column, 123, 123), ("iterations", 5, 5)], "1-2-3 cases, iterations = 5"),
+        ([(task4_plot_tt_column, 123, 123), ("iterations", 6, iter_max)], f"1-2-3 cases, iterations = 6 to {iter_max}"),
         
-        ([("definitive_tt", 234, 234), ("iterations", 2, 2)], "2-3-4 cases, iterations = 2"),
-        ([("definitive_tt", 234, 234), ("iterations", 3, 3)], "2-3-4 cases, iterations = 3"),
-        ([("definitive_tt", 234, 234), ("iterations", 4, 4)], "2-3-4 cases, iterations = 4"),
-        ([("definitive_tt", 234, 234), ("iterations", 5, 5)], "2-3-4 cases, iterations = 5"),
-        ([("definitive_tt", 234, 234), ("iterations", 6, iter_max)], f"2-3-4 cases, iterations = 6 to {iter_max}"),
+        ([(task4_plot_tt_column, 234, 234), ("iterations", 2, 2)], "2-3-4 cases, iterations = 2"),
+        ([(task4_plot_tt_column, 234, 234), ("iterations", 3, 3)], "2-3-4 cases, iterations = 3"),
+        ([(task4_plot_tt_column, 234, 234), ("iterations", 4, 4)], "2-3-4 cases, iterations = 4"),
+        ([(task4_plot_tt_column, 234, 234), ("iterations", 5, 5)], "2-3-4 cases, iterations = 5"),
+        ([(task4_plot_tt_column, 234, 234), ("iterations", 6, iter_max)], f"2-3-4 cases, iterations = 6 to {iter_max}"),
         
-        ([("definitive_tt", 1234, 1234), ("iterations", 2, 2)], "1-2-3-4 cases, iterations = 2"),
-        ([("definitive_tt", 1234, 1234), ("iterations", 3, 3)], "1-2-3-4 cases, iterations = 3"),
-        ([("definitive_tt", 1234, 1234), ("iterations", 4, 4)], "1-2-3-4 cases, iterations = 4"),
-        ([("definitive_tt", 1234, 1234), ("iterations", 5, 5)], "1-2-3-4 cases, iterations = 5"),
-        ([("definitive_tt", 1234, 1234), ("iterations", 6, iter_max)], f"1-2-3-4 cases, iterations = 6 to {iter_max}"),
+        ([(task4_plot_tt_column, 1234, 1234), ("iterations", 2, 2)], "1-2-3-4 cases, iterations = 2"),
+        ([(task4_plot_tt_column, 1234, 1234), ("iterations", 3, 3)], "1-2-3-4 cases, iterations = 3"),
+        ([(task4_plot_tt_column, 1234, 1234), ("iterations", 4, 4)], "1-2-3-4 cases, iterations = 4"),
+        ([(task4_plot_tt_column, 1234, 1234), ("iterations", 5, 5)], "1-2-3-4 cases, iterations = 5"),
+        ([(task4_plot_tt_column, 1234, 1234), ("iterations", 6, iter_max)], f"1-2-3-4 cases, iterations = 6 to {iter_max}"),
     ]
     
     # df_cases_1 = [
@@ -13691,7 +13339,6 @@ if (
             plot_list
         )
 
-
         columns_of_interest = ['tim_th_chi_sigmafit_1234'] + relevant_charges
         if (create_essential_plots or create_plots) and task4_plot_enabled("timtrack_results_scatter_combination_projections"):
             fig_idx = plot_hexbin_matrix(
@@ -13861,7 +13508,6 @@ if create_plots:
 
 del df_plot_ancillary
 gc.collect()
-
 
 if create_plots:
 
@@ -14122,32 +13768,6 @@ if self_trigger:
 # ------------------------------------------------------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
-# Update pipeline status CSV with list events metadata
-# -----------------------------------------------------------------------------
-def _pipeline_strip_suffix(name: str) -> str:
-    for suffix in ('.txt', '.csv', '.dat', '.hld.tar.gz', '.hld-tar-gz', '.hld'):
-        if name.endswith(suffix):
-            return name[: -len(suffix)]
-    return name
-
-def _pipeline_compute_start_timestamp(base: str) -> str:
-    digits = base[-11:]
-    if len(digits) == 11 and digits.isdigit():
-        yy = int(digits[:2])
-        doy = int(digits[2:5])
-        hh = int(digits[5:7])
-        mm = int(digits[7:9])
-        ss = int(digits[9:11])
-        year = 2000 + yy
-        try:
-            dt = datetime(year, 1, 1) + timedelta(days=doy - 1, hours=hh, minutes=mm, seconds=ss)
-            return dt.strftime('%Y-%m-%d_%H.%M.%S')
-        except ValueError:
-            return ''
-    return ''
-
-
-# -----------------------------------------------------------------------------
 # Create and save the PDF -----------------------------------------------------
 # -----------------------------------------------------------------------------
 
@@ -14173,7 +13793,7 @@ if (
     ]
     _task4_charge_plot_values = _task4_charge_plot_values[_task4_charge_plot_values >= 0.0]
 
-    _task4_definitive_tt_series = pd.to_numeric(
+    _task4_fit_tt_series = pd.to_numeric(
         working_df.get(task4_plot_tt_column, pd.Series(np.nan, index=working_df.index)),
         errors="coerce",
     )
@@ -14211,7 +13831,7 @@ if (
         if _task4_tt_value is None:
             _task4_subset = _task4_charge_plot_values
         else:
-            _task4_tt_mask = _task4_definitive_tt_series == _task4_tt_value
+            _task4_tt_mask = _task4_fit_tt_series == _task4_tt_value
             _task4_subset = _task4_charge_series.loc[_task4_tt_mask]
             _task4_subset = pd.to_numeric(_task4_subset, errors="coerce")
             _task4_subset = _task4_subset[
@@ -14472,25 +14092,6 @@ for metric_name, (det_col, tim_col) in comparison_pairs.items():
 global_variables["fit_compare_mean_error"] = (
     float(np.mean(median_relerr_values)) if median_relerr_values else np.nan
 )
-
-# Simulated-data truth comparison in slowness basis.
-# Classic relative error: (s_cal - s_c) / s_c, with s_c = 1/c.
-# Median excludes zero slowness entries (placeholders/non-fits).
-def _store_slowness_relerr_to_sc(metadata_key: str, slowness_col: str) -> None:
-    if not is_simulated_file or slowness_col not in working_df.columns:
-        global_variables[metadata_key] = np.nan
-        return
-
-    slowness_arr = pd.to_numeric(working_df[slowness_col], errors="coerce").to_numpy(dtype=float)
-    valid_slowness = slowness_arr[np.isfinite(slowness_arr) & (slowness_arr != 0.0)]
-    if valid_slowness.size == 0:
-        global_variables[metadata_key] = np.nan
-        return
-
-    relerr_arr = (valid_slowness - sc) / sc
-    relerr_arr = relerr_arr[np.isfinite(relerr_arr)]
-    global_variables[metadata_key] = float(np.median(relerr_arr)) if relerr_arr.size > 0 else np.nan
-
 if run_detached_fit:
     _store_slowness_relerr_to_sc("fit_compare_median_relerr_detached_s_to_1_over_c", "det_s")
 else:
@@ -14503,7 +14104,7 @@ else:
 
 tt_columns_desired = [
     'event_id', 'datetime', 'raw_tt', 'clean_tt', 'cal_tt',
-    'list_tt', 'tracking_tt', 'extension_tt', 'definitive_tt', 'fit_tt'
+    'list_tt', 'tracking_tt', 'extension_tt', 'fit_tt'
 ]
 tt_columns_present = [col for col in tt_columns_desired if col in working_df.columns]
 param_hash_cols = ["param_hash"] if "param_hash" in working_df.columns else []
@@ -14605,18 +14206,6 @@ if VERBOSE:
     print("Columns before saving list->fit parquet:")
     for col in working_df.columns:
         print(f" - {col}")
-
-
-def round_array_to_significant_digits(values: np.ndarray, significant_digits: int = 4) -> np.ndarray:
-    rounded = values.astype(float, copy=True)
-    finite_nonzero = np.isfinite(rounded) & (rounded != 0)
-    if np.any(finite_nonzero):
-        magnitudes = np.floor(np.log10(np.abs(rounded[finite_nonzero]))).astype(int)
-        scales = np.power(10.0, significant_digits - 1 - magnitudes)
-        rounded[finite_nonzero] = np.round(rounded[finite_nonzero] * scales) / scales
-    return rounded
-
-
 print("Rounding the final dataframe values.")
 for col in working_df.select_dtypes(include=[np.floating]).columns:
     original_dtype = working_df[col].dtype
@@ -14879,7 +14468,6 @@ metadata_specific_csv_path = save_metadata(
             and column_name != "count_rate_denominator_seconds"
         )
         or is_trigger_type_metadata_column(column_name, trigger_type_prefixes)
-        or column_name.startswith("definitive_tt_")
     ),
 )
 print(f"Metadata (specific) CSV updated at: {metadata_specific_csv_path}")

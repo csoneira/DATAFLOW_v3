@@ -51,7 +51,6 @@ def plot_threshold_summary(
     qfront_offsets: list[list[float]] | None = None,
     qback_offsets: list[list[float]] | None = None,
     sample_path: Path | None = None,
-    source_df: pd.DataFrame | None = None,
 ) -> None:
     if qfront_offsets is None:
         qfront_offsets = [[0.0] * 4 for _ in range(4)]
@@ -96,9 +95,6 @@ def plot_threshold_summary(
         fig.tight_layout()
         pdf.savefig(fig, dpi=150)
         plt.close(fig)
-
-        if source_df is not None and not source_df.empty:
-            plot_charge_unit_comparison(source_df, df, pdf, threshold)
 
         plot_step8_cluster_topology(df, pdf)
 
@@ -602,25 +598,6 @@ def plot_tt_xy_histograms(df: pd.DataFrame, pdf: PdfPages) -> None:
     plt.close(fig)
 
 
-def collect_charge_columns(df: pd.DataFrame) -> tuple[list[str], list[str]]:
-    qfront_cols = [c for c in df.columns if c.startswith("Q_front_")]
-    qback_cols = [c for c in df.columns if c.startswith("Q_back_")]
-    return qfront_cols, qback_cols
-
-
-def plane_total_charge(df: pd.DataFrame, plane_idx: int) -> np.ndarray:
-    cols = [
-        c
-        for c in df.columns
-        if c.startswith(f"Q_front_{plane_idx}_s") or c.startswith(f"Q_back_{plane_idx}_s")
-    ]
-    if not cols:
-        return np.array([], dtype=float)
-    vals = df[cols].to_numpy(dtype=float).sum(axis=1)
-    vals = vals[np.isfinite(vals) & (vals > 0)]
-    return vals
-
-
 def plane_strip_activity_mask(df: pd.DataFrame, plane_idx: int) -> np.ndarray:
     masks: list[np.ndarray] = []
     for strip_idx in range(1, 5):
@@ -705,80 +682,6 @@ def plot_step8_cluster_topology(df: pd.DataFrame, pdf: PdfPages) -> None:
     plt.close(fig_pat)
 
 
-def plot_charge_unit_comparison(
-    source_df: pd.DataFrame,
-    fee_df: pd.DataFrame,
-    pdf: PdfPages,
-    threshold_ns: float,
-) -> None:
-    source_qf, source_qb = collect_charge_columns(source_df)
-    fee_qf, fee_qb = collect_charge_columns(fee_df)
-
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    source_vals = []
-    if source_qf:
-        source_vals.append(source_df[source_qf].to_numpy(dtype=float).ravel())
-    if source_qb:
-        source_vals.append(source_df[source_qb].to_numpy(dtype=float).ravel())
-    source_all = np.concatenate(source_vals) if source_vals else np.array([], dtype=float)
-    source_all = source_all[np.isfinite(source_all) & (source_all > 0)]
-    if source_all.size > 0:
-        axes[0].hist(source_all, bins=100, color="tab:green", alpha=0.8)
-    axes[0].set_title("STEP 7 endpoint charge before FEE")
-    axes[0].set_xlabel("Charge [fC]")
-    axes[0].set_ylabel("Counts")
-
-    fee_vals = []
-    if fee_qf:
-        fee_vals.append(fee_df[fee_qf].to_numpy(dtype=float).ravel())
-    if fee_qb:
-        fee_vals.append(fee_df[fee_qb].to_numpy(dtype=float).ravel())
-    fee_all = np.concatenate(fee_vals) if fee_vals else np.array([], dtype=float)
-    fee_all = fee_all[np.isfinite(fee_all) & (fee_all > 0)]
-    if fee_all.size > 0:
-        axes[1].hist(fee_all, bins=100, color="tab:blue", alpha=0.8)
-    axes[1].axvline(threshold_ns, color="red", linestyle="--", linewidth=1.0)
-    axes[1].set_title("STEP 8 endpoint charge after FEE")
-    axes[1].set_xlabel("Width-equivalent charge [ns]")
-    axes[1].set_ylabel("Counts")
-
-    fig.suptitle("Same-sample charge view before and after FEE conversion")
-    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.95))
-    pdf.savefig(fig, dpi=150)
-    plt.close(fig)
-
-    fig_fc, axes_fc = plt.subplots(2, 2, figsize=(11, 8), sharey=True)
-    for plane_idx, ax in enumerate(axes_fc.flatten(), start=1):
-        vals = plane_total_charge(source_df, plane_idx)
-        if vals.size == 0:
-            ax.axis("off")
-            continue
-        ax.hist(vals, bins=100, color="tab:green", alpha=0.8)
-        ax.set_title(f"Plane {plane_idx} total endpoint charge before FEE")
-        ax.set_xlabel("Plane charge [fC]")
-        ax.set_ylabel("Counts")
-    fig_fc.suptitle("STEP 7 plane-charge totals in original fC units")
-    fig_fc.tight_layout(rect=(0.0, 0.0, 1.0, 0.95))
-    pdf.savefig(fig_fc, dpi=150)
-    plt.close(fig_fc)
-
-    fig_ns, axes_ns = plt.subplots(2, 2, figsize=(11, 8), sharey=True)
-    for plane_idx, ax in enumerate(axes_ns.flatten(), start=1):
-        vals = plane_total_charge(fee_df, plane_idx)
-        if vals.size == 0:
-            ax.axis("off")
-            continue
-        ax.hist(vals, bins=100, color="tab:blue", alpha=0.8)
-        ax.axvline(threshold_ns, color="red", linestyle="--", linewidth=1.0)
-        ax.set_title(f"Plane {plane_idx} total endpoint charge after FEE")
-        ax.set_xlabel("Plane charge [ns]")
-        ax.set_ylabel("Counts")
-    fig_ns.suptitle("STEP 8 plane-charge totals in FEE ns units")
-    fig_ns.tight_layout(rect=(0.0, 0.0, 1.0, 0.95))
-    pdf.savefig(fig_ns, dpi=150)
-    plt.close(fig_ns)
-
-
 def find_step_manifest_for_sample(sample_path: Path, step: int) -> Path | None:
     manifest_name = f"step_{step}_chunks.chunks.json"
     if sample_path.name == manifest_name:
@@ -804,29 +707,6 @@ def load_step8_config(sample_path: Path) -> dict:
     metadata = j.get("metadata", {}) if isinstance(j, dict) else {}
     cfg = metadata.get("config", {}) if isinstance(metadata, dict) else {}
     return cfg if isinstance(cfg, dict) else {}
-
-
-def load_step_source_df(sample_path: Path, source_step: int) -> pd.DataFrame | None:
-    manifest = find_step_manifest_for_sample(sample_path, step=8)
-    if manifest is None or not manifest.exists():
-        return None
-    try:
-        j = json.loads(manifest.read_text())
-    except Exception:
-        return None
-    metadata = j.get("metadata", {}) if isinstance(j, dict) else {}
-    source_dataset = metadata.get("source_dataset") if isinstance(metadata, dict) else None
-    if not source_dataset:
-        return None
-    source_path = Path(str(source_dataset))
-    if not source_path.is_absolute():
-        source_path = (manifest.parent / source_path).resolve()
-    if source_step == 7 and source_path.exists():
-        try:
-            return load_df(source_path)
-        except Exception:
-            return None
-    return None
 
 
 def find_any_chunk_for_step(step: int) -> Path | None:
@@ -861,9 +741,6 @@ def main() -> None:
         return
     print(f"Using sample: {sample}")
     df = load_df(sample)
-    source_df = load_step_source_df(sample, source_step=7)
-    if source_df is not None:
-        print("Loaded matching STEP 7 source dataset for original-fC charge plots.")
     cfg = load_step8_config(sample)
     thresh = float(cfg.get("charge_threshold", cfg.get("threshold", 0.0)))
     qfront_offsets = cfg.get("qfront_offsets", [[0.0] * 4 for _ in range(4)])
@@ -879,7 +756,6 @@ def main() -> None:
         qfront_offsets=qfront_offsets,
         qback_offsets=qback_offsets,
         sample_path=sample,
-        source_df=source_df,
     )
     print(f"Saved {out_path}")
 

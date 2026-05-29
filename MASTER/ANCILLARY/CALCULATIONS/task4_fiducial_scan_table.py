@@ -49,11 +49,6 @@ if REPO_ROOT is None:
 if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
-from MASTER.common.config_loader import (  # noqa: E402
-    load_declared_parameter_names,
-    load_parameter_overrides,
-    update_config_with_parameters,
-)
 from MASTER.common.path_config import get_master_config_root  # noqa: E402
 from MASTER.common.reprocessing_utils import (  # noqa: E402
     canonical_processing_basename,
@@ -68,6 +63,7 @@ from MASTER.common.step1_shared import (  # noqa: E402
     apply_step1_master_overrides,
     apply_step1_task_parameter_overrides,
     build_events_per_second_metadata,
+    load_step1_filter_parameter_state,
     y_pos,
 )
 
@@ -1609,11 +1605,17 @@ def load_task4_effective_config(station: str) -> dict[str, object]:
     )
 
     use_filter_parameter_config = bool(config.get("use_filter_parameter_config", True))
-    filter_parameter_declared_keys: set[str] = set()
-    filter_parameter_overrides: dict[str, object] = {}
-    if use_filter_parameter_config and filter_parameter_config_file_path.exists():
-        filter_parameter_declared_keys = load_declared_parameter_names(filter_parameter_config_file_path)
-        filter_parameter_overrides = load_parameter_overrides(filter_parameter_config_file_path, station)
+    (
+        filter_parameter_declared_keys,
+        filter_parameter_overrides,
+        filter_parameter_config_loaded,
+    ) = load_step1_filter_parameter_state(
+        filter_parameter_config_file_path,
+        station,
+        enabled=use_filter_parameter_config,
+        warn_if_missing=True,
+        log_fn=lambda *args, **kwargs: None,
+    )
 
     config = apply_step1_task_parameter_overrides(
         config_obj=config,
@@ -1621,7 +1623,6 @@ def load_task4_effective_config(station: str) -> dict[str, object]:
         task_parameter_path=str(parameter_config_file_path),
         fallback_parameter_path=str(fallback_parameter_config_file_path),
         task_number=4,
-        update_fn=update_config_with_parameters,
         log_fn=lambda *args, **kwargs: None,
         exclude_keys=filter_parameter_declared_keys,
     )
@@ -1630,7 +1631,7 @@ def load_task4_effective_config(station: str) -> dict[str, object]:
         master_config_root=config_root,
         log_fn=lambda *args, **kwargs: None,
     )
-    if use_filter_parameter_config and filter_parameter_config_file_path.exists():
+    if filter_parameter_config_loaded:
         config.update(filter_parameter_overrides)
     return config
 

@@ -5,7 +5,7 @@ Script: MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_8/step_8_uncalibrated_to_threshold.
 Purpose: Step 8: apply front-end thresholding and charge-to-time conversion (uncalibration/decalibration).
 Owner: DATAFLOW_v3 contributors
 Sign-off: csoneira <csoneira@ucm.es>
-Last Updated: 2026-03-02
+Last Updated: 2026-05-08
 Runtime: python3
 Usage: python3 MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_8/step_8_uncalibrated_to_threshold.py [options]
 Inputs: CLI args, config files, environment variables, and/or upstream files.
@@ -64,6 +64,7 @@ from MASTER.common.tot_charge_calibration import (
 def apply_fee(
     df: pd.DataFrame,
     t_fee_sigma_ns: float,
+    q_fee_sigma_ns: float,
     charge_conversion_model: str,
     q_to_time_factor: float,
     charge_calibration: TotChargeCalibration | None,
@@ -101,6 +102,8 @@ def apply_fee(
                         if charge_conversion_model == "tot_curve_inverse" and charge_calibration is not None
                         else vals[mask] * q_to_time_factor
                     )
+                    if q_fee_sigma_ns > 0:
+                        converted = converted + rng.normal(0.0, q_fee_sigma_ns, mask.sum())
                     vals[mask] = converted
                 out[qf_col] = vals
             if qb_col in out.columns:
@@ -112,6 +115,8 @@ def apply_fee(
                         if charge_conversion_model == "tot_curve_inverse" and charge_calibration is not None
                         else vals[mask] * q_to_time_factor
                     )
+                    if q_fee_sigma_ns > 0:
+                        converted = converted + rng.normal(0.0, q_fee_sigma_ns, mask.sum())
                     vals[mask] = converted
                 out[qb_col] = vals
     return out
@@ -337,6 +342,7 @@ def main() -> None:
     plot_sample_rows = cfg.get("plot_sample_rows")
     threshold = float(cfg.get("charge_threshold", 0.01))
     t_fee_sigma_ns = float(cfg.get("t_fee_sigma_ns", 0.01))
+    q_fee_sigma_ns = float(cfg.get("q_fee_sigma_ns", 0.0))
     q_to_time_factor = float(cfg.get("q_to_time_factor", 1.0e-5))
     charge_conversion_model = str(
         cfg.get("charge_conversion_model", "linear_q_to_time_factor")
@@ -368,6 +374,7 @@ def main() -> None:
     print(f"Output dir: {output_dir}")
     print(f"charge_threshold: {threshold}")
     print(f"charge_conversion_model: {charge_conversion_model}")
+    print(f"q_fee_sigma_ns: {q_fee_sigma_ns}")
     print(f"q_to_time_factor: {q_to_time_factor}")
     if calibration_path is not None:
         print(f"tot_to_charge_calibration_path: {calibration_path}")
@@ -487,6 +494,7 @@ def main() -> None:
                 out_chunk = apply_fee(
                     chunk,
                     t_fee_sigma_ns,
+                    q_fee_sigma_ns,
                     charge_conversion_model,
                     q_to_time_factor,
                     charge_calibration,
@@ -522,6 +530,7 @@ def main() -> None:
         out = apply_fee(
             df,
             t_fee_sigma_ns,
+            q_fee_sigma_ns,
             charge_conversion_model,
             q_to_time_factor,
             charge_calibration,

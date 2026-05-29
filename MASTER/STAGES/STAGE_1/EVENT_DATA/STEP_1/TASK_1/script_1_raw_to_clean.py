@@ -29,15 +29,11 @@ tracks execution metadata, and emits run-level summaries consumed by the rest
 of the Stage 1 event workflow.
 """
 # Standard Library
-import argparse
 import atexit
 from array import array
 import builtins
-import csv
-from datetime import datetime, timedelta
+from datetime import datetime
 import gc
-import hashlib
-import math
 import os
 from pathlib import Path
 import random
@@ -46,44 +42,25 @@ import shutil
 import sys
 import time
 import warnings
-from collections import defaultdict
-from functools import reduce
-from itertools import combinations
-from typing import Dict, Iterable, List, Mapping, Tuple
+from typing import Iterable, Mapping
 
 # Scientific Computing
 import numpy as np
 import pandas as pd
-import scipy.linalg as linalg
 from scipy.constants import c
-from scipy.interpolate import CubicSpline
-from scipy.ndimage import gaussian_filter1d
-from scipy.optimize import brentq, curve_fit, minimize_scalar
-from scipy.special import erf
-from scipy.stats import norm, poisson, linregress, median_abs_deviation, skew
-
-# Machine Learning
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import r2_score
+from scipy.stats import norm
 
 # Plotting
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-from matplotlib import gridspec
 from matplotlib.backends.backend_pdf import PdfPages
-from matplotlib.gridspec import GridSpec
 from mpl_toolkits.mplot3d import Axes3D
 import seaborn as sns
 
 # Image Processing
 from PIL import Image
-
-# Progress Bar
-from tqdm import tqdm
-
-import yaml
 
 # Resolve repo root for local imports
 CURRENT_PATH = Path(__file__).resolve()
@@ -97,11 +74,6 @@ if REPO_ROOT is None:
 if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
-from MASTER.common.config_loader import (
-    load_declared_parameter_names,
-    load_parameter_overrides,
-    update_config_with_parameters,
-)
 from MASTER.common.debug_plots import plot_debug_histograms
 from MASTER.common.execution_logger import set_station, start_timer
 from MASTER.common.file_selection import (
@@ -113,7 +85,6 @@ from MASTER.common.file_selection import (
 )
 from MASTER.common.input_file_config import select_input_file_configuration
 from MASTER.common.path_config import (
-    get_master_config_root,
     get_repo_root,
     resolve_home_path_from_config,
 )
@@ -148,8 +119,6 @@ from MASTER.common.step1_activation import (
 from MASTER.common.step1_shared import (
     add_normalized_count_metadata,
     add_trigger_type_total_offender_threshold_metadata,
-    apply_step1_master_overrides,
-    apply_step1_task_parameter_overrides,
     build_events_per_second_metadata,
     build_step1_cli_parser,
     build_step1_filtered_print,
@@ -159,18 +128,29 @@ from MASTER.common.step1_shared import (
     is_trigger_type_file_column,
     is_trigger_type_metadata_column,
     is_specific_metadata_excluded_column,
-    load_itineraries_from_file,
+    load_step1_task_config_bundle,
+    load_step1_task_plot_catalog,
     normalize_tt_label,
     prune_redundant_count_metadata,
+    resolve_step1_effective_task_config,
     save_metadata,
     select_exact_minimum_vertex_cover,
     set_global_rate_from_tt_rates,
-    load_step1_task_plot_catalog,
     resolve_step1_plot_options,
     step1_logging_enabled,
     step1_task_plot_enabled,
     validate_step1_input_file_args,
     y_pos,
+)
+from analysis_functions import (
+    _as_bool,
+    _iter_priority_vectors,
+    _normalize_z_vector,
+    _z_vector_matches_priority,
+)
+from plotting_functions import (
+    _task1_capped_plot_range,
+    _task1_population_color,
 )
 
 task_number = 1
@@ -205,13 +185,6 @@ TASK1_PLOT_ALIASES: tuple[str, ...] = (
 )
 task1_plot_status_by_alias: dict[str, str] = {}
 
-
-def task1_plot_enabled(alias: str) -> bool:
-    if not task1_plot_status_by_alias:
-        return True
-    return step1_task_plot_enabled(alias, task1_plot_status_by_alias, plot_mode)
-
-
 def apply_task1_plot_catalog_modes() -> None:
     global create_plots, create_essential_plots, create_debug_plots, save_plots, create_pdf
     if not task1_plot_status_by_alias:
@@ -221,7 +194,6 @@ def apply_task1_plot_catalog_modes() -> None:
     create_debug_plots = create_debug_plots and task1_plot_enabled("debug_suite")
     save_plots = bool(create_plots or create_essential_plots or create_debug_plots)
     create_pdf = save_plots
-
 
 def _coerce_config_bool(value: object, default: bool = False) -> bool:
     """Interpret common config boolean encodings without changing existing defaults."""
@@ -237,13 +209,11 @@ def _coerce_config_bool(value: object, default: bool = False) -> bool:
             return False
     return bool(value)
 
-
 def _coerce_config_value(value: object, cast_fn, default):
     try:
         return cast_fn(value)
     except (TypeError, ValueError):
         return default
-
 
 def _task1_load_channel_combination_relation_limits(
     config_dict: dict,
@@ -285,18 +255,6 @@ def _task1_load_channel_combination_relation_limits(
         }
     return relation_limits
 
-CLI_PARSER = build_step1_cli_parser("Run Stage 1 STEP_1 TASK_1 (RAW->CLEAN).", STATION_CHOICES)
-CLI_ARGS = CLI_PARSER.parse_args()
-validate_step1_input_file_args(CLI_PARSER, CLI_ARGS)
-
-VERBOSE = bool(os.environ.get("DATAFLOW_VERBOSE")) or CLI_ARGS.verbose
-print = build_step1_filtered_print(
-    verbose=VERBOSE,
-    debug_mode_getter=lambda: bool(globals().get("debug_mode", False)),
-    raw_print=builtins.print,
-)
-FILTER_METRICS_LOGGING_ENABLED = step1_logging_enabled("filter_metrics")[0]
-
 
 def _log_filter_metrics_message(message: str) -> None:
     if FILTER_METRICS_LOGGING_ENABLED:
@@ -310,11 +268,6 @@ def safe_move(source_path: str, dest_path: str) -> str:
         print(f"Error moving '{source_path}' to '{dest_path}': {exc}")
         raise
 
-MAX_OPEN_FIGURES = 16
-_OPEN_FIGURE_IDS: list[int] = []
-_ORIGINAL_PLT_FIGURE = plt.figure
-_ORIGINAL_PLT_SUBPLOTS = plt.subplots
-_ORIGINAL_PLT_CLOSE = plt.close
 
 def _track_figure(fig: mpl.figure.Figure) -> mpl.figure.Figure:
     fig_number = getattr(fig, "number", None)
@@ -347,15 +300,6 @@ def _guarded_close(*args, **kwargs):
     elif isinstance(target, int) and target in _OPEN_FIGURE_IDS:
         _OPEN_FIGURE_IDS.remove(target)
     return result
-
-plt.figure = _guarded_figure
-plt.subplots = _guarded_subplots
-plt.close = _guarded_close
-
-_direct_pdf_pages: PdfPages | None = None
-_direct_pdf_page_count = 0
-_direct_pdf_target_path: str | None = None
-_direct_pdf_temp_path: str | None = None
 
 
 def _build_temp_pdf_path(target_path: str) -> str:
@@ -402,7 +346,6 @@ def close_direct_pdf_writer() -> None:
     _direct_pdf_target_path = None
     _direct_pdf_temp_path = None
 
-
 def finalize_saved_plots_to_pdf() -> None:
     if not create_pdf:
         return
@@ -443,39 +386,2149 @@ def finalize_saved_plots_to_pdf() -> None:
             print(f"Figure directory not empty, skipping removal: {figure_directory}")
 
 
+def _exit_without_status_row(message: str) -> None:
+    print(message)
+    if status_execution_date is not None:
+        deleted = delete_status_row(
+            early_status_csv_path,
+            filename_base=status_filename_base,
+            execution_date=status_execution_date,
+        )
+        if not deleted:
+            print(
+                "Warning: unable to delete startup status row "
+                f"{status_filename_base} ({status_execution_date})."
+            )
+    sys.exit(0)
+
+
+def _debug_plot_filter_group(
+    df: pd.DataFrame,
+    columns: Iterable[str],
+    thresholds: Iterable[float] | float | None,
+    label: str,
+    *,
+    tag: str = "tunable",
+    max_cols_per_fig: int = 16,
+) -> None:
+    """Emit debug histograms for a filter group with threshold lines."""
+    global debug_fig_idx
+    if not create_debug_plots:
+        return
+
+    cols = [col for col in columns if col in df.columns]
+    if not cols:
+        return
+
+    if thresholds is None:
+        threshold_values: list[float] = []
+    elif isinstance(thresholds, (list, tuple, np.ndarray)):
+        threshold_values = [float(v) for v in thresholds if v is not None]
+    else:
+        threshold_values = [float(thresholds)]
+
+    debug_thresholds = {col: threshold_values for col in cols}
+    debug_fig_idx = plot_debug_histograms(
+        df,
+        cols,
+        debug_thresholds,
+        title=f"Task 1 pre-filter: {label} [{tag}] (station {station})",
+        out_dir=debug_plot_directory,
+        fig_idx=debug_fig_idx,
+        max_cols_per_fig=max_cols_per_fig,
+    )
+
+
+def get_tt_color(tt_value: object) -> tuple[float, float, float, float]:
+    """Return a stable color for a trigger-type label across all Task 1 plots."""
+    return TT_COLOR_MAP.get(normalize_tt_label(tt_value), TT_COLOR_DEFAULT)
+
+def ensure_global_count_keys(prefixes: Iterable[str]) -> None:
+    for prefix in prefixes:
+        for tt_value in TT_COUNT_VALUES:
+            global_variables.setdefault(f"{prefix}_{tt_value}_count", 0)
+
+def refresh_global_count_metadata(df: pd.DataFrame, column_names: Iterable[str]) -> None:
+    prefixes = tuple(f"{column_name}_" for column_name in column_names)
+    for key in list(global_variables):
+        if key.endswith("_count") and any(key.startswith(prefix) for prefix in prefixes):
+            global_variables.pop(key, None)
+    for column_name in column_names:
+        if column_name not in df.columns:
+            continue
+        value_counts = df[column_name].value_counts()
+        for tt_value, count in value_counts.items():
+            tt_label = normalize_tt_label(tt_value)
+            global_variables[f"{column_name}_{tt_label}_count"] = int(count)
+
+
+def _compute_channel_contagion_inputs(
+    df: pd.DataFrame,
+) -> tuple[list[str], np.ndarray] | None:
+    """Return channel labels and active-mask matrix (rows=events, cols=channels)."""
+    ch_labels: list[str] = []
+    ch_cols: list[str] = []
+    for _p, _s, _sd in TASK1_CHANNEL_PATTERN_ORDER:
+        col = f"Q{_p}_{_sd}_{_s}"
+        if col in df.columns:
+            ch_labels.append(f"P{_p}S{_s}{_sd}")
+            ch_cols.append(col)
+    if not ch_cols:
+        return None
+    vals = df.loc[:, ch_cols].fillna(0).to_numpy(dtype=np.float32, copy=False)
+    active = vals != 0
+    return ch_labels, active
+
+def _compute_channel_conditional_matrix_from_active(active: np.ndarray) -> np.ndarray:
+    """Compute P(ch_j active | ch_i active) from boolean activity matrix."""
+    co = active.T.astype(np.int64) @ active.astype(np.int64)
+    diag = np.diag(co).astype(float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        cond = np.divide(
+            co.astype(float),
+            diag[:, None],
+            out=np.full_like(co, np.nan, dtype=float),
+            where=diag[:, None] > 0,
+        )
+    return cond
+
+def _compute_channel_conditional_matrix(df: pd.DataFrame) -> tuple[list[str], np.ndarray] | None:
+    """Compute full-table conditional channel activation matrix."""
+    inputs = _compute_channel_contagion_inputs(df)
+    if inputs is None:
+        return None
+    ch_labels, active = inputs
+    return ch_labels, _compute_channel_conditional_matrix_from_active(active)
+
+def _compute_channel_conditional_matrix_for_tt(
+    df: pd.DataFrame,
+    tt_column: str,
+    tt_value: int,
+) -> tuple[list[str], np.ndarray] | None:
+    """Compute conditional channel activation matrix for a specific TT value."""
+    if tt_column not in df.columns:
+        return None
+    inputs = _compute_channel_contagion_inputs(df)
+    if inputs is None:
+        return None
+    ch_labels, active = inputs
+    tt_s = pd.to_numeric(df[tt_column], errors="coerce").fillna(0).astype(int)
+    mask_tt = (tt_s == int(tt_value)).to_numpy(dtype=bool)
+    if not np.any(mask_tt):
+        return None
+    return ch_labels, _compute_channel_conditional_matrix_from_active(active[mask_tt])
+
+def _summarize_channel_conditional_matrix(cond: np.ndarray) -> tuple[float, float, float]:
+    """Return mean/max off-diagonal and mean off-diagonal inter-plane values."""
+    n_ch = int(cond.shape[0])
+    if n_ch <= 1:
+        return (float("nan"), float("nan"), float("nan"))
+
+    idx = np.arange(n_ch)
+    offdiag_mask = idx[:, None] != idx[None, :]
+    offdiag_vals = cond[offdiag_mask]
+    offdiag_finite = offdiag_vals[np.isfinite(offdiag_vals)]
+    mean_offdiag = float(np.mean(offdiag_finite)) if offdiag_finite.size else float("nan")
+    max_offdiag = float(np.max(offdiag_finite)) if offdiag_finite.size else float("nan")
+
+    plane_ids = idx // 8
+    interplane_mask = offdiag_mask & (plane_ids[:, None] != plane_ids[None, :])
+    inter_vals = cond[interplane_mask]
+    inter_finite = inter_vals[np.isfinite(inter_vals)]
+    mean_interplane = float(np.mean(inter_finite)) if inter_finite.size else float("nan")
+    return (mean_offdiag, max_offdiag, mean_interplane)
+
+def _store_channel_contagion_metrics_variant(
+    variant: str,
+    matrix_data: tuple[list[str], np.ndarray] | None,
+) -> None:
+    """Store global/by-TT channel contagion summary metrics for a variant."""
+    key_mean = f"mean_off_diagonal_{variant}"
+    key_max = f"max_off_diagonal_{variant}"
+    key_inter = f"mean_off_diagonal_interplane_{variant}"
+    if matrix_data is None:
+        channel_contagion_metrics[key_mean] = float("nan")
+        channel_contagion_metrics[key_max] = float("nan")
+        channel_contagion_metrics[key_inter] = float("nan")
+        return
+    _, cond = matrix_data
+    mean_offdiag, max_offdiag, mean_interplane = _summarize_channel_conditional_matrix(cond)
+    channel_contagion_metrics[key_mean] = mean_offdiag
+    channel_contagion_metrics[key_max] = max_offdiag
+    channel_contagion_metrics[key_inter] = mean_interplane
+
+def _plot_channel_contamination_global(
+    df: pd.DataFrame,
+    stage_label: str,
+    fig_idx_val: int,
+    base_dir: str,
+    save: bool,
+    show: bool,
+    plist: list[str],
+) -> int:
+    """Plot a single 32×32 channel contamination heatmap."""
+    matrix_data = _compute_channel_conditional_matrix(df)
+    if matrix_data is None:
+        return fig_idx_val
+    ch_labels, cond = matrix_data
+    fig, ax = plt.subplots(figsize=(13, 11))
+    sns.heatmap(cond, vmin=0.0, vmax=1.0, cmap="viridis",
+                xticklabels=ch_labels, yticklabels=ch_labels, ax=ax,
+                cbar_kws={"label": "P(ch j active | ch i active)"})
+    ax.set_title(f"Task 1 {stage_label} — 32-channel contamination matrix")
+    ax.set_xlabel("Channel j")
+    ax.set_ylabel("Channel i")
+    ax.tick_params(axis="x", labelrotation=90, labelsize=7)
+    ax.tick_params(axis="y", labelrotation=0, labelsize=7)
+    fig.tight_layout()
+    if save:
+        fname = f"{fig_idx_val}_{stage_label.lower().replace(' ', '_')}_channel_contamination_matrix_32.png"
+        fig_idx_val += 1
+        spath = os.path.join(base_dir, fname)
+        plist.append(spath)
+        save_plot_figure(spath, fig=fig, format="png", dpi=150)
+    if show:
+        plt.show()
+    plt.close(fig)
+    return fig_idx_val
+
+def _plot_channel_contagion_by_tt(
+    df: pd.DataFrame,
+    tt_column: str,
+    stage_label: str,
+    fig_idx_val: int,
+    base_dir: str,
+    save: bool,
+    show: bool,
+    plist: list[str],
+    min_events: int = 30,
+    max_tt_panels: int = 6,
+) -> int:
+    """Plot 32-channel contagion matrices split by TT."""
+    required_tts: tuple[int, int] = (124, 134)
+    inputs = _compute_channel_contagion_inputs(df)
+    if inputs is None or tt_column not in df.columns:
+        return fig_idx_val
+    ch_labels_global, active = inputs
+    n_ch = len(ch_labels_global)
+    ch_labels = [lbl.replace("S", "") for lbl in ch_labels_global]
+    tt_s = pd.to_numeric(df[tt_column], errors="coerce").fillna(0).astype(int)
+    tt_cts = tt_s.value_counts()
+    required_present = [tt for tt in required_tts if int(tt_cts.get(tt, 0)) > 0]
+    optional_pool = [
+        tt for tt, cnt in tt_cts.items()
+        if tt >= 10 and cnt >= min_events and tt not in required_tts
+    ]
+    # Keep required TTs visible even when panel count is capped.
+    sel_tts = required_present + optional_pool
+    sel_tts = sel_tts[:max(max_tt_panels, len(required_present))]
+    if not sel_tts:
+        return fig_idx_val
+    ncols_tt = len(sel_tts)
+    fig_w = max(7, 6.0 * ncols_tt)
+    fig, axes = plt.subplots(1, ncols_tt, figsize=(fig_w, 7.0 + 0.15 * n_ch), squeeze=False)
+    _im = None
+    for ci, tv in enumerate(sel_tts):
+        ax = axes[0, ci]
+        mtt = (tt_s == tv).to_numpy(dtype=bool)
+        ntt = int(np.sum(mtt))
+        cond = _compute_channel_conditional_matrix_from_active(active[mtt])
+        _im = ax.imshow(cond, cmap="viridis", vmin=0, aspect="equal")
+        ax.set_xticks(range(n_ch))
+        ax.set_xticklabels(ch_labels, fontsize=4, rotation=90)
+        ax.set_yticks(range(n_ch))
+        ax.set_yticklabels(ch_labels, fontsize=4)
+        for bnd in range(8, n_ch, 8):
+            ax.axhline(bnd - 0.5, color="grey", linewidth=0.7, alpha=0.6)
+            ax.axvline(bnd - 0.5, color="grey", linewidth=0.7, alpha=0.6)
+        ax.set_title(f"TT {tv} (N={ntt})", fontsize=10)
+    if _im is not None:
+        fig.colorbar(_im, ax=axes[0, -1], label="P(ch j | ch i)", shrink=0.75, pad=0.02)
+    fig.suptitle(
+        f"Task 1 {stage_label} — channel contagion by TT\n"
+        "P(channel j active | channel i active)",
+        fontsize=13,
+    )
+    fig.tight_layout(rect=[0, 0, 0.97, 0.93])
+    if save:
+        fname = f"{fig_idx_val}_{stage_label.lower().replace(' ', '_')}_channel_contagion_by_tt.png"
+        fig_idx_val += 1
+        spath = os.path.join(base_dir, fname)
+        plist.append(spath)
+        save_plot_figure(spath, fig=fig, format="png", dpi=150)
+    if show:
+        plt.show()
+    plt.close(fig)
+    return fig_idx_val
+
+
+def record_activity_metric(name: str, affected: float, total: float, label: str = "affected") -> None:
+    """Record a generic percentage metric."""
+    pct = 0.0 if total == 0 else 100.0 * float(affected) / float(total)
+    filter_metrics[name] = round(pct, 4)
+    _log_filter_metrics_message(
+        f"[filter-metrics] {name}: {label} {affected} of {total} ({pct:.2f}%)"
+    )
+
+def record_filter_metric(name: str, removed: float, total: float) -> None:
+    """Record percentage removed for a filter."""
+    record_activity_metric(name, removed, total, label="removed")
+
+def collect_task1_channel_qt_map(df_input: pd.DataFrame) -> dict[tuple[int, str, int], dict[str, str]]:
+    """Return the per-channel Q/T column mapping for Task 1."""
+    channel_map: dict[tuple[int, str, int], dict[str, str]] = {}
+    for plane in range(1, 5):
+        for side in ("F", "B"):
+            for strip in range(1, 5):
+                q_col = f"Q{plane}_{side}_{strip}"
+                t_col = f"T{plane}_{side}_{strip}"
+                if q_col in df_input.columns and t_col in df_input.columns:
+                    channel_map[(plane, side, strip)] = {"Q": q_col, "T": t_col}
+    return channel_map
+
+
+def _task1_channel_order_key(channel_key: tuple[int, str, int]) -> tuple[int, int, int]:
+    plane, side, strip = channel_key
+    side_rank = 0 if side == "F" else 1
+    return plane, side_rank, strip
+
+def _task1_channel_offender_metric_key(channel_key: tuple[int, str, int]) -> str:
+    plane, side, strip = channel_key
+    return f"plane_combination_filter_offender_count_P{plane}{side}{strip}"
+
+def _task1_channel_noise_limit_metric_key(channel_key: tuple[int, str, int]) -> str:
+    plane, side, strip = channel_key
+    return f"plane_combination_noise_limit_P{plane}{side}{strip}"
+
+def _task1_selected_offender_cardinality_metric_key(selected_count: int) -> str:
+    return f"plane_combination_filter_rows_with_{selected_count}_selected_offenders"
+
+def _task1_selected_offender_cardinality_rate_metric_key(selected_count: int) -> str:
+    return f"{_task1_selected_offender_cardinality_metric_key(selected_count)}_rate_hz"
+
+def _task1_selected_offender_cardinality_percent_metric_key(selected_count: int) -> str:
+    return f"{_task1_selected_offender_cardinality_metric_key(selected_count)}_pct"
+
+def _task1_noise_control_efficiency_metric_key(plane: int, selected_count_threshold: int) -> str:
+    return (
+        f"plane_combination_filter_eff_p{plane}_selected_offenders_le_"
+        f"{selected_count_threshold}"
+    )
+
+def _task1_noise_control_efficiency_metric_names(
+    selected_count_thresholds: Iterable[int],
+) -> tuple[str, ...]:
+    return tuple(
+        _task1_noise_control_efficiency_metric_key(plane, selected_count_threshold)
+        for selected_count_threshold in selected_count_thresholds
+        for plane in sorted(TASK1_THREE_TO_FOUR_MISSING_TRIGGER_BY_PLANE)
+    )
+
+
+def _task1_channel_label(channel_key: tuple[int, str, int]) -> str:
+    plane, side, strip = channel_key
+    return f"P{plane}S{strip}{side}"
+
+def _task1_channel_relation_type(
+    channel_a: tuple[int, str, int],
+    channel_b: tuple[int, str, int],
+) -> str:
+    if channel_a == channel_b:
+        return "self"
+    if channel_a[0] == channel_b[0] and channel_a[2] == channel_b[2]:
+        return "same_strip"
+    if channel_a[0] == channel_b[0]:
+        return "same_plane"
+    return "any"
+
+def _iter_task1_channel_relation_pairs(
+    channel_map: dict[tuple[int, str, int], dict[str, str]],
+) -> Iterable[tuple[tuple[int, str, int], tuple[int, str, int], str]]:
+    ordered_channels = sorted(channel_map, key=_task1_channel_order_key)
+    for idx, channel_a in enumerate(ordered_channels):
+        yield channel_a, channel_a, "self"
+        for channel_b in ordered_channels[idx + 1 :]:
+            yield channel_a, channel_b, _task1_channel_relation_type(channel_a, channel_b)
+
+def _empty_task1_removed_channel_values_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        columns=[
+            "row_index",
+            "channel",
+            "plane",
+            "side",
+            "strip",
+            "Q",
+            "T",
+            "pass_label",
+            "Q_zeroed",
+            "T_zeroed",
+        ]
+    )
+
+def _task1_build_removed_channel_values_frame(
+    df_input: pd.DataFrame,
+    channel_key: tuple[int, str, int],
+    q_values: pd.Series,
+    t_values: pd.Series,
+    fail_mask: np.ndarray | pd.Series,
+    pass_label: str,
+) -> pd.DataFrame:
+    aligned_mask = pd.Series(fail_mask, index=df_input.index, dtype=bool).reindex(df_input.index, fill_value=False)
+    if not aligned_mask.any():
+        return _empty_task1_removed_channel_values_frame()
+
+    plane, side, strip = channel_key
+    rows = pd.DataFrame(
+        {
+            "row_index": df_input.index[aligned_mask].to_numpy(),
+            "channel": _task1_channel_label(channel_key),
+            "plane": plane,
+            "side": side,
+            "strip": strip,
+            "Q": pd.to_numeric(q_values.loc[aligned_mask], errors="coerce").to_numpy(dtype=float),
+            "T": pd.to_numeric(t_values.loc[aligned_mask], errors="coerce").to_numpy(dtype=float),
+            "pass_label": pass_label,
+        }
+    )
+    return rows.reset_index(drop=True)
+
+def collect_task1_zeroed_channel_values(
+    reference_df: pd.DataFrame,
+    current_df: pd.DataFrame,
+    *,
+    pass_label: str,
+) -> pd.DataFrame:
+    if reference_df.empty or current_df.empty:
+        return _empty_task1_removed_channel_values_frame()
+
+    channel_map = collect_task1_channel_qt_map(reference_df)
+    if not channel_map:
+        return _empty_task1_removed_channel_values_frame()
+
+    aligned_reference = reference_df.reindex(current_df.index, copy=False)
+    current_index = current_df.index.to_numpy(copy=False)
+    payload_frames: list[pd.DataFrame] = []
+    for channel_key, cols in channel_map.items():
+        if cols["Q"] not in current_df.columns or cols["T"] not in current_df.columns:
+            continue
+        ref_q = pd.to_numeric(aligned_reference[cols["Q"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        ref_t = pd.to_numeric(aligned_reference[cols["T"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        cur_q = pd.to_numeric(current_df[cols["Q"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        cur_t = pd.to_numeric(current_df[cols["T"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        q_zeroed = (ref_q != 0) & (cur_q == 0)
+        t_zeroed = (ref_t != 0) & (cur_t == 0)
+        zeroed_mask = q_zeroed | t_zeroed
+        if not np.any(zeroed_mask):
+            continue
+
+        plane, side, strip = channel_key
+        payload_frames.append(
+            pd.DataFrame(
+                {
+                    "row_index": current_index[zeroed_mask],
+                    "channel": _task1_channel_label(channel_key),
+                    "plane": plane,
+                    "side": side,
+                    "strip": strip,
+                    "Q": ref_q[zeroed_mask],
+                    "T": ref_t[zeroed_mask],
+                    "pass_label": pass_label,
+                    "Q_zeroed": q_zeroed[zeroed_mask],
+                    "T_zeroed": t_zeroed[zeroed_mask],
+                }
+            )
+        )
+
+    if not payload_frames:
+        return _empty_task1_removed_channel_values_frame()
+    return pd.concat(payload_frames, ignore_index=True)
+
+def apply_task1_channel_qt_mismatch_filter(
+    df_input: pd.DataFrame,
+    *,
+    snapshot_originals=None,
+) -> dict[str, object]:
+    task1_channel_pairs: list[tuple[str, str]] = []
+    for plane in range(1, 5):
+        for side in ("F", "B"):
+            for strip in range(1, 5):
+                q_col = f"Q{plane}_{side}_{strip}"
+                t_col = f"T{plane}_{side}_{strip}"
+                if q_col in df_input.columns and t_col in df_input.columns:
+                    task1_channel_pairs.append((q_col, t_col))
+
+    row_mismatch_mask = pd.Series(False, index=df_input.index)
+    q_only_row_mask = pd.Series(False, index=df_input.index)
+    t_only_row_mask = pd.Series(False, index=df_input.index)
+    front_row_mask = pd.Series(False, index=df_input.index)
+    back_row_mask = pd.Series(False, index=df_input.index)
+    channel_qt_mismatch_channels = 0
+    channel_qt_values_zeroed = 0
+
+    if task1_channel_pairs and not df_input.empty:
+        for q_col, t_col in task1_channel_pairs:
+            q_values = pd.to_numeric(df_input[q_col], errors="coerce").fillna(0)
+            t_values = pd.to_numeric(df_input[t_col], errors="coerce").fillna(0)
+            q_only_mask = (q_values != 0) & (t_values == 0)
+            t_only_mask = (q_values == 0) & (t_values != 0)
+            mismatch_mask = q_only_mask | t_only_mask
+            if not mismatch_mask.any():
+                continue
+            if snapshot_originals is not None:
+                snapshot_originals(df_input, [q_col, t_col])
+            row_mismatch_mask |= mismatch_mask
+            q_only_row_mask |= q_only_mask
+            t_only_row_mask |= t_only_mask
+            if "_F_" in q_col:
+                front_row_mask |= mismatch_mask
+            elif "_B_" in q_col:
+                back_row_mask |= mismatch_mask
+            channel_qt_mismatch_channels += int(mismatch_mask.sum())
+            channel_qt_values_zeroed += int((q_values[mismatch_mask] != 0).sum())
+            channel_qt_values_zeroed += int((t_values[mismatch_mask] != 0).sum())
+            df_input.loc[mismatch_mask, [q_col, t_col]] = 0
+
+    return {
+        "task1_channel_pairs": task1_channel_pairs,
+        "row_mismatch_mask": row_mismatch_mask,
+        "q_only_row_mask": q_only_row_mask,
+        "t_only_row_mask": t_only_row_mask,
+        "front_row_mask": front_row_mask,
+        "back_row_mask": back_row_mask,
+        "rows_affected": int(row_mismatch_mask.sum()),
+        "values_zeroed": int(channel_qt_values_zeroed),
+        "q_only_rows": int(q_only_row_mask.sum()),
+        "t_only_rows": int(t_only_row_mask.sum()),
+        "front_rows": int(front_row_mask.sum()),
+        "back_rows": int(back_row_mask.sum()),
+        "mismatch_channels": int(channel_qt_mismatch_channels),
+    }
+
+
+def _task1_parse_combo_label(
+    combo_label: str,
+) -> tuple[tuple[int, str, int], tuple[int, str, int]] | None:
+    match = _TASK1_COMBO_LABEL_PATTERN.match(str(combo_label))
+    if match is None:
+        return None
+    return (
+        (
+            int(match.group("plane_a")),
+            match.group("side_a"),
+            int(match.group("strip_a")),
+        ),
+        (
+            int(match.group("plane_b")),
+            match.group("side_b"),
+            int(match.group("strip_b")),
+        ),
+    )
+
+def apply_task1_plane_combination_filter(
+    df_input: pd.DataFrame,
+    *,
+    relation_limits_by_type: Mapping[str, Mapping[str, float]],
+    snapshot_originals=None,
+    apply_changes: bool = True,
+    removed_value_pass_label: str | None = None,
+) -> dict[str, object]:
+    """
+    Apply the Task 1 channel-combination filter directly from channel Q/T values.
+
+    The filter is evaluated in one pass over four mutually-exclusive relation classes:
+    ``self`` (channel with itself), ``same_strip`` (front/back of the same strip),
+    ``same_plane`` (different strips within the same plane), and ``any`` (different
+    planes). Each relation class has its own Q_sum, Q_dif, T_sum, and T_dif bounds.
+
+    Failed self-relations become mandatory offending channels. Failed non-self
+    relations are solved per event with the exact minimum-cardinality channel set
+    that covers all failed edges.
+    """
+    channel_map = collect_task1_channel_qt_map(df_input)
+    if not channel_map:
+        return {
+            "input_rows": len(df_input),
+            "tracked_channel_count": len(channel_map),
+            "valid_pair_observations": 0,
+            "failed_pair_any": 0,
+            "failed_pair_q_sum": 0,
+            "failed_pair_q_dif": 0,
+            "failed_pair_t_sum": 0,
+            "failed_pair_t_dif": 0,
+            "rows_affected": 0,
+            "values_zeroed": 0,
+            "flagged_rows": 0,
+            "selected_offender_channels": 0,
+            "rows_with_multiple_offenders": 0,
+            "max_failed_pairs_in_row": 0,
+            "max_selected_offenders_in_row": 0,
+            "valid_pair_observations_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "failed_pair_any_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "failed_pair_q_sum_low_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "failed_pair_q_sum_high_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "failed_pair_q_dif_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "failed_pair_t_sum_low_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "failed_pair_t_sum_high_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "failed_pair_t_dif_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "rows_failed_q_sum_low": 0,
+            "rows_failed_q_sum_high": 0,
+            "rows_failed_q_dif": 0,
+            "rows_failed_t_sum_low": 0,
+            "rows_failed_t_sum_high": 0,
+            "rows_failed_t_dif": 0,
+            "rows_failed_q_sum_low_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "rows_failed_q_sum_high_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "rows_failed_q_dif_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "rows_failed_t_sum_low_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "rows_failed_t_sum_high_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "rows_failed_t_dif_by_relation": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "rows_with_relation_failures": {
+                relation_type: 0
+                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+            },
+            "selected_offender_cardinality_counts": {
+                selected_count: 0
+                for selected_count in TASK1_SELECTED_OFFENDER_CARDINALITY_VALUES
+            },
+            "selected_offender_counts": {
+                channel_key: 0 for channel_key in TASK1_CHANNEL_KEYS
+            },
+            "selected_offender_count_by_row": pd.Series(0, index=df_input.index, dtype=int),
+            "resolution_exact_by_row": pd.Series(True, index=df_input.index, dtype=bool),
+            "removed_channel_values": _empty_task1_removed_channel_values_frame(),
+        }
+
+    n_rows = len(df_input)
+    summary = {
+        "input_rows": n_rows,
+        "tracked_channel_count": len(channel_map),
+        "valid_pair_observations": 0,
+        "failed_pair_any": 0,
+        "failed_pair_q_sum": 0,
+        "failed_pair_q_sum_low": 0,
+        "failed_pair_q_sum_high": 0,
+        "failed_pair_q_dif": 0,
+        "failed_pair_t_sum": 0,
+        "failed_pair_t_sum_low": 0,
+        "failed_pair_t_sum_high": 0,
+        "failed_pair_t_dif": 0,
+        "rows_affected": 0,
+        "values_zeroed": 0,
+        "flagged_rows": 0,
+        "selected_offender_channels": 0,
+        "rows_with_multiple_offenders": 0,
+        "max_failed_pairs_in_row": 0,
+        "max_selected_offenders_in_row": 0,
+        "valid_pair_observations_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "failed_pair_any_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "failed_pair_q_sum_low_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "failed_pair_q_sum_high_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "failed_pair_q_dif_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "failed_pair_t_sum_low_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "failed_pair_t_sum_high_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "failed_pair_t_dif_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "rows_failed_q_sum_low": 0,
+        "rows_failed_q_sum_high": 0,
+        "rows_failed_q_dif": 0,
+        "rows_failed_t_sum_low": 0,
+        "rows_failed_t_sum_high": 0,
+        "rows_failed_t_dif": 0,
+        "rows_failed_q_sum_low_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "rows_failed_q_sum_high_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "rows_failed_q_dif_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "rows_failed_t_sum_low_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "rows_failed_t_sum_high_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "rows_failed_t_dif_by_relation": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "rows_with_relation_failures": {
+            relation_type: 0
+            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+        },
+        "selected_offender_cardinality_counts": {
+            selected_count: 0
+            for selected_count in TASK1_SELECTED_OFFENDER_CARDINALITY_VALUES
+        },
+    }
+    row_failed_edges: dict[int, list[tuple[tuple[int, str, int], tuple[int, str, int], float]]] = {}
+    row_forced_channels: dict[int, set[tuple[int, str, int]]] = {}
+    row_failure_relations: dict[int, set[str]] = {}
+    relation_metric_failed_rows = {
+        relation_type: {
+            component_key: set()
+            for component_key, _ in TASK1_CHANNEL_COMBINATION_COMPONENT_LABELS
+        }
+        for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
+    }
+    metric_failed_rows = {
+        component_key: set()
+        for component_key, _ in TASK1_CHANNEL_COMBINATION_COMPONENT_LABELS
+    }
+    channel_fail_masks = {
+        channel_key: np.zeros(n_rows, dtype=bool)
+        for channel_key in channel_map
+    }
+    offender_hit_counts = {
+        channel_key: 0
+        for channel_key in TASK1_CHANNEL_KEYS
+    }
+    selected_offender_count_by_row = np.zeros(n_rows, dtype=int)
+    resolution_exact_by_row = np.ones(n_rows, dtype=bool)
+    removed_value_frames: list[pd.DataFrame] = []
+
+    for channel_a, channel_b, relation_type in _iter_task1_channel_relation_pairs(channel_map):
+        relation_limits = relation_limits_by_type.get(relation_type) or relation_limits_by_type.get("any") or {}
+        q_sum_left = float(relation_limits.get("q_sum_left", 0.0))
+        q_sum_right = float(relation_limits.get("q_sum_right", 0.0))
+        q_dif_threshold = float(relation_limits.get("q_dif_threshold", 0.0))
+        t_sum_left = float(relation_limits.get("t_sum_left", 0.0))
+        t_sum_right = float(relation_limits.get("t_sum_right", 0.0))
+        t_dif_threshold = float(relation_limits.get("t_dif_threshold", 0.0))
+        cols_a = channel_map[channel_a]
+        cols_b = channel_map[channel_b]
+        q_a = pd.to_numeric(df_input[cols_a["Q"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        q_b = pd.to_numeric(df_input[cols_b["Q"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_a = pd.to_numeric(df_input[cols_a["T"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_b = pd.to_numeric(df_input[cols_b["T"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+
+        if relation_type == "self":
+            valid_mask = np.isfinite(q_a) & np.isfinite(t_a)
+            pair_q_sum = q_a.copy()
+            pair_q_dif = np.zeros_like(q_a, dtype=float)
+            pair_t_sum = t_a.copy()
+            pair_t_dif = np.zeros_like(t_a, dtype=float)
+        else:
+            valid_mask = (
+                np.isfinite(q_a)
+                & np.isfinite(q_b)
+                & np.isfinite(t_a)
+                & np.isfinite(t_b)
+                & (q_a != 0)
+                & (q_b != 0)
+                & (t_a != 0)
+                & (t_b != 0)
+            )
+            pair_q_sum = 0.5 * (q_a + q_b)
+            pair_q_dif = 0.5 * (q_a - q_b)
+            pair_t_sum = 0.5 * (t_a + t_b)
+            pair_t_dif = 0.5 * (t_a - t_b)
+        if not np.any(valid_mask):
+            continue
+
+        valid_count = int(np.count_nonzero(valid_mask))
+        summary["valid_pair_observations"] += valid_count
+        summary["valid_pair_observations_by_relation"][relation_type] += valid_count
+
+        q_metric_valid_mask = valid_mask & np.isfinite(pair_q_sum) & (pair_q_sum != 0)
+        t_metric_valid_mask = valid_mask & np.isfinite(pair_t_sum) & (pair_t_sum != 0)
+        q_dif_valid_mask = valid_mask & np.isfinite(pair_q_dif)
+        t_dif_valid_mask = valid_mask & np.isfinite(pair_t_dif)
+        if relation_type != "self":
+            q_dif_valid_mask &= (pair_q_sum != 0)
+            t_dif_valid_mask &= (pair_t_sum != 0)
+
+        fail_q_sum_low = q_metric_valid_mask & (pair_q_sum < float(q_sum_left))
+        fail_q_sum_high = q_metric_valid_mask & (pair_q_sum > float(q_sum_right))
+        fail_q_sum = fail_q_sum_low | fail_q_sum_high
+        fail_q_dif = q_dif_valid_mask & (np.abs(pair_q_dif) > abs(float(q_dif_threshold)))
+        fail_t_sum_low = t_metric_valid_mask & (pair_t_sum < float(t_sum_left))
+        fail_t_sum_high = t_metric_valid_mask & (pair_t_sum > float(t_sum_right))
+        fail_t_sum = fail_t_sum_low | fail_t_sum_high
+        fail_t_dif = t_dif_valid_mask & (np.abs(pair_t_dif) > abs(float(t_dif_threshold)))
+        fail_any = fail_q_sum | fail_q_dif | fail_t_sum | fail_t_dif
+
+        summary["failed_pair_q_sum"] += int(np.count_nonzero(fail_q_sum))
+        summary["failed_pair_q_sum_low"] += int(np.count_nonzero(fail_q_sum_low))
+        summary["failed_pair_q_sum_high"] += int(np.count_nonzero(fail_q_sum_high))
+        summary["failed_pair_q_dif"] += int(np.count_nonzero(fail_q_dif))
+        summary["failed_pair_t_sum"] += int(np.count_nonzero(fail_t_sum))
+        summary["failed_pair_t_sum_low"] += int(np.count_nonzero(fail_t_sum_low))
+        summary["failed_pair_t_sum_high"] += int(np.count_nonzero(fail_t_sum_high))
+        summary["failed_pair_t_dif"] += int(np.count_nonzero(fail_t_dif))
+        summary["failed_pair_any"] += int(np.count_nonzero(fail_any))
+        summary["failed_pair_any_by_relation"][relation_type] += int(np.count_nonzero(fail_any))
+        summary["failed_pair_q_sum_low_by_relation"][relation_type] += int(np.count_nonzero(fail_q_sum_low))
+        summary["failed_pair_q_sum_high_by_relation"][relation_type] += int(np.count_nonzero(fail_q_sum_high))
+        summary["failed_pair_q_dif_by_relation"][relation_type] += int(np.count_nonzero(fail_q_dif))
+        summary["failed_pair_t_sum_low_by_relation"][relation_type] += int(np.count_nonzero(fail_t_sum_low))
+        summary["failed_pair_t_sum_high_by_relation"][relation_type] += int(np.count_nonzero(fail_t_sum_high))
+        summary["failed_pair_t_dif_by_relation"][relation_type] += int(np.count_nonzero(fail_t_dif))
+
+        for component_key, fail_mask in (
+            ("q_sum_low", fail_q_sum_low),
+            ("q_sum_high", fail_q_sum_high),
+            ("q_dif", fail_q_dif),
+            ("t_sum_low", fail_t_sum_low),
+            ("t_sum_high", fail_t_sum_high),
+            ("t_dif", fail_t_dif),
+        ):
+            failed_rows = np.flatnonzero(fail_mask)
+            if failed_rows.size == 0:
+                continue
+            relation_metric_failed_rows[relation_type][component_key].update(
+                int(row_pos) for row_pos in failed_rows
+            )
+            metric_failed_rows[component_key].update(int(row_pos) for row_pos in failed_rows)
+
+        if np.any(fail_any):
+            q_sum_width = max(abs(float(q_sum_right) - float(q_sum_left)), 1e-9)
+            t_sum_width = max(abs(float(t_sum_right) - float(t_sum_left)), 1e-9)
+            q_dif_scale = max(abs(float(q_dif_threshold)), 1e-9)
+            t_dif_scale = max(abs(float(t_dif_threshold)), 1e-9)
+            q_sum_excess = np.maximum.reduce(
+                [
+                    np.zeros_like(pair_q_sum, dtype=float),
+                    float(q_sum_left) - pair_q_sum,
+                    pair_q_sum - float(q_sum_right),
+                ]
+            ) / q_sum_width
+            q_dif_excess = np.maximum(np.abs(pair_q_dif) - abs(float(q_dif_threshold)), 0.0) / q_dif_scale
+            t_sum_excess = np.maximum.reduce(
+                [
+                    np.zeros_like(pair_t_sum, dtype=float),
+                    float(t_sum_left) - pair_t_sum,
+                    pair_t_sum - float(t_sum_right),
+                ]
+            ) / t_sum_width
+            t_dif_excess = np.maximum(np.abs(pair_t_dif) - abs(float(t_dif_threshold)), 0.0) / t_dif_scale
+            pair_severity = q_sum_excess + q_dif_excess + t_sum_excess + t_dif_excess
+            pair_severity = np.where(fail_any, pair_severity, 0.0)
+            pair_severity = np.where(fail_any & (pair_severity <= 0), 1.0, pair_severity)
+            for row_pos in np.flatnonzero(fail_any):
+                row_pos_int = int(row_pos)
+                row_failure_relations.setdefault(row_pos_int, set()).add(relation_type)
+                if relation_type == "self":
+                    row_forced_channels.setdefault(row_pos_int, set()).add(channel_a)
+                else:
+                    row_failed_edges.setdefault(row_pos_int, []).append(
+                        (channel_a, channel_b, float(pair_severity[row_pos]))
+                    )
+
+    flagged_row_positions = sorted(set(row_failed_edges) | set(row_forced_channels))
+    summary["flagged_rows"] = len(flagged_row_positions)
+    for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES:
+        summary["rows_with_relation_failures"][relation_type] = sum(
+            1
+            for relation_set in row_failure_relations.values()
+            if relation_type in relation_set
+        )
+        for component_key, _ in TASK1_CHANNEL_COMBINATION_COMPONENT_LABELS:
+            summary[f"rows_failed_{component_key}_by_relation"][relation_type] = len(
+                relation_metric_failed_rows[relation_type][component_key]
+            )
+
+    for component_key, _ in TASK1_CHANNEL_COMBINATION_COMPONENT_LABELS:
+        summary[f"rows_failed_{component_key}"] = len(metric_failed_rows[component_key])
+
+    for row_pos in flagged_row_positions:
+        forced_channels = sorted(
+            row_forced_channels.get(row_pos, set()),
+            key=_task1_channel_order_key,
+        )
+        edge_list = row_failed_edges.get(row_pos, [])
+        uncovered_edges = [
+            (channel_a, channel_b, severity)
+            for channel_a, channel_b, severity in edge_list
+            if channel_a not in forced_channels and channel_b not in forced_channels
+        ]
+        selected_channels = forced_channels + select_exact_minimum_vertex_cover(
+            uncovered_edges,
+            _task1_channel_order_key,
+        )
+        selected_channel_set = set(selected_channels)
+        unresolved_edges = [
+            (channel_a, channel_b, severity)
+            for channel_a, channel_b, severity in edge_list
+            if channel_a not in selected_channel_set and channel_b not in selected_channel_set
+        ]
+        resolution_exact_by_row[row_pos] = len(unresolved_edges) == 0
+
+        summary["max_failed_pairs_in_row"] = max(
+            summary["max_failed_pairs_in_row"],
+            len(edge_list) + len(forced_channels),
+        )
+        summary["max_selected_offenders_in_row"] = max(
+            summary["max_selected_offenders_in_row"],
+            len(selected_channels),
+        )
+        summary["selected_offender_channels"] += len(selected_channels)
+        if len(selected_channels) > 1:
+            summary["rows_with_multiple_offenders"] += 1
+        summary["selected_offender_cardinality_counts"][len(selected_channels)] = (
+            int(summary["selected_offender_cardinality_counts"].get(len(selected_channels), 0)) + 1
+        )
+        selected_offender_count_by_row[row_pos] = len(selected_channels)
+        for channel_key in selected_channels:
+            channel_fail_masks[channel_key][row_pos] = True
+            offender_hit_counts[channel_key] += 1
+
+    changed_columns: list[str] = []
+    any_row_affected = np.zeros(n_rows, dtype=bool)
+    for channel_key, fail_mask in channel_fail_masks.items():
+        if not np.any(fail_mask):
+            continue
+        cols = channel_map[channel_key]
+        q_values = pd.to_numeric(df_input[cols["Q"]], errors="coerce").fillna(0)
+        t_values = pd.to_numeric(df_input[cols["T"]], errors="coerce").fillna(0)
+        summary["values_zeroed"] += int((q_values[fail_mask] != 0).sum())
+        summary["values_zeroed"] += int((t_values[fail_mask] != 0).sum())
+        any_row_affected |= fail_mask
+        changed_columns.extend((cols["Q"], cols["T"]))
+        if removed_value_pass_label is not None:
+            removed_value_frames.append(
+                _task1_build_removed_channel_values_frame(
+                    df_input,
+                    channel_key,
+                    q_values,
+                    t_values,
+                    fail_mask,
+                    removed_value_pass_label,
+                )
+            )
+
+    summary["rows_affected"] = int(np.count_nonzero(any_row_affected))
+    if apply_changes and changed_columns and snapshot_originals is not None:
+        snapshot_originals(df_input, list(dict.fromkeys(changed_columns)))
+
+    if apply_changes:
+        for channel_key, fail_mask in channel_fail_masks.items():
+            if not np.any(fail_mask):
+                continue
+            cols = channel_map[channel_key]
+            df_input.loc[fail_mask, [cols["Q"], cols["T"]]] = 0
+
+    top_offenders = sorted(
+        (
+            (channel_key, count)
+            for channel_key, count in offender_hit_counts.items()
+            if count > 0
+        ),
+        key=lambda item: (-item[1], *_task1_channel_order_key(item[0])),
+    )[:8]
+    if top_offenders:
+        top_offenders_str = ", ".join(
+            f"P{plane}{side}{strip}:{count}"
+            for (plane, side, strip), count in top_offenders
+        )
+        print(
+            "[channel-combination-offenders] "
+            f"flagged_rows={summary['flagged_rows']} "
+            f"selected_offenders={summary['selected_offender_channels']} "
+            f"multi_offender_rows={summary['rows_with_multiple_offenders']} "
+            f"max_failed_pairs_in_row={summary['max_failed_pairs_in_row']} "
+            f"top={top_offenders_str}"
+        )
+
+    summary["selected_offender_counts"] = {
+        channel_key: int(offender_hit_counts.get(channel_key, 0))
+        for channel_key in TASK1_CHANNEL_KEYS
+    }
+    summary["selected_offender_count_by_row"] = pd.Series(
+        selected_offender_count_by_row,
+        index=df_input.index,
+        dtype=int,
+    )
+    summary["resolution_exact_by_row"] = pd.Series(
+        resolution_exact_by_row,
+        index=df_input.index,
+        dtype=bool,
+    )
+    summary["rows_with_inexact_resolution"] = int(np.count_nonzero(~resolution_exact_by_row))
+    summary["removed_channel_values"] = (
+        pd.concat(removed_value_frames, ignore_index=True)
+        if removed_value_frames
+        else _empty_task1_removed_channel_values_frame()
+    )
+    return summary
+
+
+def _task1_filter_tt_series(df_input: pd.DataFrame) -> pd.Series:
+    for candidate in ("raw_tt", "clean_tt"):
+        if candidate in df_input.columns:
+            return df_input[candidate].apply(normalize_tt_label).astype(str)
+    return pd.Series(["0"] * len(df_input), index=df_input.index, dtype=str)
+
+def collect_task1_channel_combination_histogram_payload(
+    df_input: pd.DataFrame,
+    tt_series: pd.Series,
+) -> pd.DataFrame:
+    payload_rows: list[pd.DataFrame] = []
+    channel_map = collect_task1_channel_qt_map(df_input)
+    if not channel_map:
+        return pd.DataFrame(
+            columns=[
+                "row_index",
+                "tt",
+                "combo",
+                "relation_type",
+                "same_strip",
+                "q_sum",
+                "q_dif",
+                "t_sum",
+                "t_dif",
+            ]
+        )
+
+    tt_series = tt_series.reindex(df_input.index).fillna("0").astype(str)
+    for channel_a, channel_b, relation_type in _iter_task1_channel_relation_pairs(channel_map):
+        cols_a = channel_map[channel_a]
+        cols_b = channel_map[channel_b]
+        q_a = pd.to_numeric(df_input[cols_a["Q"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        q_b = pd.to_numeric(df_input[cols_b["Q"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_a = pd.to_numeric(df_input[cols_a["T"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+        t_b = pd.to_numeric(df_input[cols_b["T"]], errors="coerce").fillna(0).to_numpy(dtype=float)
+
+        if relation_type == "self":
+            valid_mask = (
+                np.isfinite(q_a)
+                & np.isfinite(t_a)
+                & (q_a != 0)
+                & (t_a != 0)
+            )
+            q_sum = q_a
+            q_dif = np.zeros_like(q_a, dtype=float)
+            t_sum = t_a
+            t_dif = np.zeros_like(t_a, dtype=float)
+        else:
+            valid_mask = (
+                np.isfinite(q_a)
+                & np.isfinite(q_b)
+                & np.isfinite(t_a)
+                & np.isfinite(t_b)
+                & (q_a != 0)
+                & (q_b != 0)
+                & (t_a != 0)
+                & (t_b != 0)
+            )
+            q_sum = 0.5 * (q_a + q_b)
+            q_dif = 0.5 * (q_a - q_b)
+            t_sum = 0.5 * (t_a + t_b)
+            t_dif = 0.5 * (t_a - t_b)
+        if not np.any(valid_mask):
+            continue
+
+        valid_index = df_input.index[valid_mask]
+        payload_rows.append(
+            pd.DataFrame(
+                {
+                    "row_index": valid_index.to_numpy(),
+                    "tt": tt_series.loc[valid_index].to_numpy(dtype=str),
+                    "combo": f"P{channel_a[0]}S{channel_a[2]}{channel_a[1]}-P{channel_b[0]}S{channel_b[2]}{channel_b[1]}",
+                    "relation_type": relation_type,
+                    "same_strip": relation_type == "same_strip",
+                    "q_sum": q_sum[valid_mask],
+                    "q_dif": q_dif[valid_mask],
+                    "t_sum": t_sum[valid_mask],
+                    "t_dif": t_dif[valid_mask],
+                }
+            )
+        )
+
+    if not payload_rows:
+        return pd.DataFrame(
+            columns=[
+                "row_index",
+                "tt",
+                "combo",
+                "relation_type",
+                "same_strip",
+                "q_sum",
+                "q_dif",
+                "t_sum",
+                "t_dif",
+            ]
+        )
+    return pd.concat(payload_rows, ignore_index=True)
+
+def subtract_task1_channel_combination_payload(
+    left_payload: pd.DataFrame,
+    right_payload: pd.DataFrame,
+) -> pd.DataFrame:
+    if left_payload.empty:
+        return left_payload.copy()
+    if right_payload.empty or not {"row_index", "combo"}.issubset(left_payload.columns) or not {"row_index", "combo"}.issubset(right_payload.columns):
+        return left_payload.copy()
+
+    reduced_right = right_payload.loc[:, ["row_index", "combo"]].drop_duplicates()
+    removed_payload = left_payload.merge(
+        reduced_right,
+        on=["row_index", "combo"],
+        how="left",
+        indicator=True,
+    )
+    return removed_payload.loc[removed_payload["_merge"] == "left_only"].drop(columns="_merge")
+
+def plot_task1_channel_combination_filter_by_tt(
+    original_payload: pd.DataFrame,
+    before_payload: pd.DataFrame,
+    after_payload: pd.DataFrame,
+    basename_no_ext_value: str,
+    fig_idx_value: int,
+    *,
+    show_plots: bool,
+    save_plots: bool,
+    plot_list: list[str] | None,
+    limits_by_relation: dict[str, dict[str, tuple[float | None, float | None]]],
+    q_left_limits_by_channel: dict[tuple[int, str, int], float] | None,
+    top_n_by_relation: dict[str, int | None],
+    include_same_strip_pairs: bool,
+) -> int:
+    observable_names = [observable for observable, _ in TASK1_CHANNEL_COMBINATION_OBSERVABLES]
+    observable_labels = {observable: label for observable, label in TASK1_CHANNEL_COMBINATION_OBSERVABLES}
+    scatter_max_points = 5000
+    removed_scatter_marker_size = max(8, int(round(0.6 * removed_marker_size)))
+    prefilter_scatter_size = max(3, int(round(0.25 * removed_marker_size)))
+    noise_limit_line_kwargs = {
+        "color": "red",
+        "linestyle": "--",
+        "linewidth": 1.4,
+        "alpha": 0.85,
+        "zorder": 6,
+    }
+    noise_limit_boundary_kwargs = {
+        "color": "red",
+        "linestyle": "--",
+        "linewidth": 1.2,
+        "alpha": 0.65,
+        "zorder": 6,
+    }
+    rng = np.random.default_rng(0)
+    q_left_limits_by_channel = q_left_limits_by_channel or {}
+
+    original_payload = original_payload.copy()
+    before_payload = before_payload.copy()
+    after_payload = after_payload.copy()
+    tt_labels = []
+    for payload in (original_payload, before_payload, after_payload):
+        if "tt" in payload.columns:
+            tt_labels.extend(payload["tt"].astype(str).tolist())
+    ordered_tts = [tt_label for tt_label in TT_COLOR_LABELS if tt_label != "0" and tt_label in set(tt_labels)]
+    relation_label_map = {
+        "self": "self",
+        "same_strip": "same strip",
+        "same_plane": "same plane",
+        "any": "any",
+    }
+
+    for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES:
+        relation_limits = limits_by_relation.get(relation_type, {})
+        relation_top_n = top_n_by_relation.get(relation_type)
+        for tt_label in ordered_tts:
+            original_tt_all = original_payload.loc[
+                (original_payload.get("tt", pd.Series(dtype=str)).astype(str) == tt_label)
+                & (original_payload.get("relation_type", pd.Series(dtype=str)).astype(str) == relation_type)
+            ].copy()
+            before_tt_all = before_payload.loc[
+                (before_payload.get("tt", pd.Series(dtype=str)).astype(str) == tt_label)
+                & (before_payload.get("relation_type", pd.Series(dtype=str)).astype(str) == relation_type)
+            ].copy()
+            after_tt_all = after_payload.loc[
+                (after_payload.get("tt", pd.Series(dtype=str)).astype(str) == tt_label)
+                & (after_payload.get("relation_type", pd.Series(dtype=str)).astype(str) == relation_type)
+            ].copy()
+            if original_tt_all.empty and before_tt_all.empty and after_tt_all.empty:
+                continue
+
+            reference_counts = before_tt_all.groupby("combo").size().sort_values(ascending=False)
+            if reference_counts.empty:
+                reference_counts = original_tt_all.groupby("combo").size().sort_values(ascending=False)
+            if reference_counts.empty:
+                reference_counts = after_tt_all.groupby("combo").size().sort_values(ascending=False)
+            combo_labels = (
+                reference_counts.index.tolist()
+                if relation_top_n is None
+                else reference_counts.head(int(relation_top_n)).index.tolist()
+            )
+            if not combo_labels:
+                continue
+
+            original_tt_full = original_tt_all.loc[original_tt_all["combo"].isin(combo_labels)].copy()
+            before_tt_full = before_tt_all.loc[before_tt_all["combo"].isin(combo_labels)].copy()
+            after_tt_full = after_tt_all.loc[after_tt_all["combo"].isin(combo_labels)].copy()
+            if original_tt_full.empty and before_tt_full.empty and after_tt_full.empty:
+                continue
+
+            prefilter_removed_tt_full = subtract_task1_channel_combination_payload(
+                original_tt_full,
+                before_tt_full,
+            )
+            removed_tt_full = subtract_task1_channel_combination_payload(
+                before_tt_full,
+                after_tt_full,
+            )
+
+            def _sample_scatter_payload(payload: pd.DataFrame) -> pd.DataFrame:
+                if len(payload) <= scatter_max_points:
+                    return payload.copy()
+                return payload.iloc[
+                    rng.choice(len(payload), size=scatter_max_points, replace=False)
+                ].copy()
+
+            after_tt = _sample_scatter_payload(after_tt_full)
+            prefilter_removed_tt = _sample_scatter_payload(prefilter_removed_tt_full)
+            removed_tt = _sample_scatter_payload(removed_tt_full)
+
+            combo_color_map = {label: _task1_population_color(label) for label in combo_labels}
+            combo_q_boundaries: dict[str, dict[str, object]] = {}
+            for combo_label in combo_labels:
+                parsed_combo = _task1_parse_combo_label(combo_label)
+                if parsed_combo is None:
+                    continue
+                channel_a, channel_b = parsed_combo
+                q_left_a = q_left_limits_by_channel.get(channel_a)
+                q_left_b = q_left_limits_by_channel.get(channel_b)
+                combo_q_boundaries[combo_label] = {
+                    "channel_a": channel_a,
+                    "channel_b": channel_b,
+                    "q_left_a": q_left_a,
+                    "q_left_b": q_left_b,
+                    "q_sum_left": (
+                        0.5 * (float(q_left_a) + float(q_left_b))
+                        if q_left_a is not None and q_left_b is not None
+                        else None
+                    ),
+                }
+            after_combo_data = {
+                label: {
+                    observable: pd.to_numeric(
+                        after_tt_full.loc[after_tt_full["combo"] == label, observable],
+                        errors="coerce",
+                    ).to_numpy(dtype=float)
+                    for observable in observable_names
+                }
+                for label in combo_labels
+            }
+            removed_combo_data = {
+                label: {
+                    observable: pd.to_numeric(
+                        removed_tt_full.loc[removed_tt_full["combo"] == label, observable],
+                        errors="coerce",
+                    ).to_numpy(dtype=float)
+                    for observable in observable_names
+                }
+                for label in combo_labels
+            }
+            after_scatter_combo_data = {
+                label: {
+                    observable: pd.to_numeric(
+                        after_tt.loc[after_tt["combo"] == label, observable],
+                        errors="coerce",
+                    ).to_numpy(dtype=float)
+                    for observable in observable_names
+                }
+                for label in combo_labels
+            }
+            removed_scatter_combo_data = {
+                label: {
+                    observable: pd.to_numeric(
+                        removed_tt.loc[removed_tt["combo"] == label, observable],
+                        errors="coerce",
+                    ).to_numpy(dtype=float)
+                    for observable in observable_names
+                }
+                for label in combo_labels
+            }
+            n_obs = len(observable_names)
+            fig, axes = plt.subplots(n_obs, n_obs, figsize=(2.3 * n_obs, 2.3 * n_obs), constrained_layout=True)
+            any_panel_data = False
+
+            axis_ranges: dict[str, tuple[float, float]] = {}
+            for observable in observable_names:
+                full_values = pd.to_numeric(
+                    original_tt_full.get(observable, pd.Series(dtype=float)),
+                    errors="coerce",
+                ).dropna().to_numpy(dtype=float)
+                axis_ranges[observable] = _task1_capped_plot_range(
+                    full_values,
+                    relation_limits.get(observable, (None, None)),
+                )
+
+            for row_idx, y_name in enumerate(observable_names):
+                for col_idx, x_name in enumerate(observable_names):
+                    ax = axes[row_idx, col_idx]
+                    if col_idx > row_idx:
+                        ax.set_axis_off()
+                        continue
+
+                    if row_idx == col_idx:
+                        before_values = pd.to_numeric(
+                            before_tt_full.get(x_name, pd.Series(dtype=float)),
+                            errors="coerce",
+                        ).dropna().to_numpy(dtype=float)
+                        after_values = pd.to_numeric(
+                            after_tt_full.get(x_name, pd.Series(dtype=float)),
+                            errors="coerce",
+                        ).dropna().to_numpy(dtype=float)
+                        prefilter_removed_values = pd.to_numeric(
+                            prefilter_removed_tt_full.get(x_name, pd.Series(dtype=float)),
+                            errors="coerce",
+                        ).dropna().to_numpy(dtype=float)
+                        prefilter_removed_values = prefilter_removed_values[np.isfinite(prefilter_removed_values)]
+                        if (
+                            before_values.size == 0
+                            and after_values.size == 0
+                            and prefilter_removed_values.size == 0
+                        ):
+                            ax.set_axis_off()
+                            continue
+                        any_panel_data = True
+                        x_low, x_high = axis_ranges[x_name]
+                        bins = np.linspace(x_low, x_high, 60)
+                        if prefilter_removed_values.size:
+                            ax.hist(
+                                prefilter_removed_values,
+                                bins=bins,
+                                histtype="step",
+                                linestyle="--",
+                                linewidth=1.0,
+                                alpha=0.55,
+                                color="lightgrey",
+                            )
+                        for combo_label in combo_labels:
+                            combo_before = removed_combo_data[combo_label][x_name]
+                            combo_after = after_combo_data[combo_label][x_name]
+                            combo_before = combo_before[np.isfinite(combo_before)]
+                            combo_after = combo_after[np.isfinite(combo_after)]
+                            if combo_before.size:
+                                ax.hist(
+                                    combo_before,
+                                    bins=bins,
+                                    histtype="step",
+                                    linestyle="--",
+                                    linewidth=0.95,
+                                    alpha=0.55,
+                                    color=combo_color_map[combo_label],
+                                )
+                            if combo_after.size:
+                                ax.hist(
+                                    combo_after,
+                                    bins=bins,
+                                    histtype="step",
+                                    linestyle="-",
+                                    linewidth=1.35,
+                                    alpha=0.95,
+                                    color=combo_color_map[combo_label],
+                                )
+                        lower_limit, upper_limit = relation_limits.get(x_name, (None, None))
+                        if lower_limit is not None:
+                            ax.axvline(float(lower_limit), color="lightgrey", linestyle="--", linewidth=1.1)
+                        if upper_limit is not None:
+                            ax.axvline(float(upper_limit), color="lightgrey", linestyle="--", linewidth=1.1)
+                        if x_name == "q_sum":
+                            for combo_label in combo_labels:
+                                q_sum_noise_left = combo_q_boundaries.get(combo_label, {}).get("q_sum_left")
+                                if q_sum_noise_left is None or not np.isfinite(q_sum_noise_left):
+                                    continue
+                                ax.axvline(
+                                    float(q_sum_noise_left),
+                                    **noise_limit_line_kwargs,
+                                )
+                        ax.set_xlim(x_low, x_high)
+                        ax.set_yscale("log", nonpositive="clip")
+                        ax.set_title(observable_labels[x_name], fontsize=9)
+                    else:
+                        after_x = pd.to_numeric(
+                            after_tt.get(x_name, pd.Series(dtype=float)),
+                            errors="coerce",
+                        ).to_numpy(dtype=float)
+                        after_y = pd.to_numeric(
+                            after_tt.get(y_name, pd.Series(dtype=float)),
+                            errors="coerce",
+                        ).to_numpy(dtype=float)
+                        prefilter_removed_x = pd.to_numeric(
+                            prefilter_removed_tt.get(x_name, pd.Series(dtype=float)),
+                            errors="coerce",
+                        ).to_numpy(dtype=float)
+                        prefilter_removed_y = pd.to_numeric(
+                            prefilter_removed_tt.get(y_name, pd.Series(dtype=float)),
+                            errors="coerce",
+                        ).to_numpy(dtype=float)
+                        removed_x = pd.to_numeric(
+                            removed_tt.get(x_name, pd.Series(dtype=float)),
+                            errors="coerce",
+                        ).to_numpy(dtype=float)
+                        removed_y = pd.to_numeric(
+                            removed_tt.get(y_name, pd.Series(dtype=float)),
+                            errors="coerce",
+                        ).to_numpy(dtype=float)
+                        after_mask = np.isfinite(after_x) & np.isfinite(after_y)
+                        prefilter_removed_mask = np.isfinite(prefilter_removed_x) & np.isfinite(prefilter_removed_y)
+                        removed_mask = np.isfinite(removed_x) & np.isfinite(removed_y)
+                        if not np.any(prefilter_removed_mask) and not np.any(removed_mask) and not np.any(after_mask):
+                            ax.set_axis_off()
+                            continue
+                        any_panel_data = True
+                        if np.any(prefilter_removed_mask):
+                            ax.scatter(
+                                prefilter_removed_x[prefilter_removed_mask],
+                                prefilter_removed_y[prefilter_removed_mask],
+                                s=prefilter_scatter_size,
+                                alpha=0.08,
+                                color="grey",
+                                edgecolors="none",
+                                rasterized=True,
+                            )
+                        for combo_label in combo_labels:
+                            combo_after_x = after_scatter_combo_data[combo_label][x_name]
+                            combo_after_y = after_scatter_combo_data[combo_label][y_name]
+                            combo_removed_x = removed_scatter_combo_data[combo_label][x_name]
+                            combo_removed_y = removed_scatter_combo_data[combo_label][y_name]
+                            combo_after_mask = np.isfinite(combo_after_x) & np.isfinite(combo_after_y)
+                            combo_removed_mask = np.isfinite(combo_removed_x) & np.isfinite(combo_removed_y)
+                            if np.any(combo_after_mask):
+                                ax.scatter(
+                                    combo_after_x[combo_after_mask],
+                                    combo_after_y[combo_after_mask],
+                                    s=6,
+                                    alpha=0.16,
+                                    color=combo_color_map[combo_label],
+                                    edgecolors="none",
+                                    rasterized=True,
+                                )
+                            if np.any(combo_removed_mask):
+                                ax.scatter(
+                                    combo_removed_x[combo_removed_mask],
+                                    combo_removed_y[combo_removed_mask],
+                                    s=removed_scatter_marker_size,
+                                    marker=removed_marker,
+                                    alpha=removed_marker_alpha,
+                                    linewidths=1.0,
+                                    color=combo_color_map[combo_label],
+                                    rasterized=True,
+                                )
+                        x_low, x_high = axis_ranges[x_name]
+                        y_low, y_high = axis_ranges[y_name]
+                        ax.set_xlim(x_low, x_high)
+                        ax.set_ylim(y_low, y_high)
+                        x_limits = relation_limits.get(x_name, (None, None))
+                        y_limits = relation_limits.get(y_name, (None, None))
+                        if x_limits[0] is not None:
+                            ax.axvline(float(x_limits[0]), color="lightgrey", linestyle="--", linewidth=0.9)
+                        if x_limits[1] is not None:
+                            ax.axvline(float(x_limits[1]), color="lightgrey", linestyle="--", linewidth=0.9)
+                        if y_limits[0] is not None:
+                            ax.axhline(float(y_limits[0]), color="lightgrey", linestyle="--", linewidth=0.9)
+                        if y_limits[1] is not None:
+                            ax.axhline(float(y_limits[1]), color="lightgrey", linestyle="--", linewidth=0.9)
+                        if x_name == "q_sum":
+                            for combo_label in combo_labels:
+                                q_sum_noise_left = combo_q_boundaries.get(combo_label, {}).get("q_sum_left")
+                                if q_sum_noise_left is None or not np.isfinite(q_sum_noise_left):
+                                    continue
+                                ax.axvline(
+                                    float(q_sum_noise_left),
+                                    **noise_limit_line_kwargs,
+                                )
+                        if y_name == "q_sum":
+                            for combo_label in combo_labels:
+                                q_sum_noise_left = combo_q_boundaries.get(combo_label, {}).get("q_sum_left")
+                                if q_sum_noise_left is None or not np.isfinite(q_sum_noise_left):
+                                    continue
+                                ax.axhline(
+                                    float(q_sum_noise_left),
+                                    **noise_limit_line_kwargs,
+                                )
+                        if x_name == "q_sum" and y_name == "q_dif":
+                            q_sum_values = np.linspace(x_low, x_high, 200)
+                            for combo_label in combo_labels:
+                                combo_boundary = combo_q_boundaries.get(combo_label, {})
+                                q_left_a = combo_boundary.get("q_left_a")
+                                q_left_b = combo_boundary.get("q_left_b")
+                                if q_left_a is not None and np.isfinite(q_left_a):
+                                    ax.plot(
+                                        q_sum_values,
+                                        float(q_left_a) - q_sum_values,
+                                        **noise_limit_boundary_kwargs,
+                                    )
+                                if q_left_b is not None and np.isfinite(q_left_b):
+                                    ax.plot(
+                                        q_sum_values,
+                                        q_sum_values - float(q_left_b),
+                                        **noise_limit_boundary_kwargs,
+                                    )
+
+                    if row_idx == n_obs - 1:
+                        ax.set_xlabel(observable_labels[x_name], fontsize=8)
+                    else:
+                        ax.set_xticklabels([])
+                    if col_idx == 0 and row_idx != col_idx:
+                        ax.set_ylabel(observable_labels[y_name], fontsize=8)
+                    elif col_idx != 0:
+                        ax.set_yticklabels([])
+                    if row_idx == col_idx:
+                        ax.set_ylabel("Counts", fontsize=8)
+                    ax.tick_params(labelsize=6)
+
+            if not any_panel_data:
+                plt.close(fig)
+                continue
+
+            has_noise_limit_boundaries = any(
+                combo_q_boundaries.get(label, {}).get("q_sum_left") is not None
+                or combo_q_boundaries.get(label, {}).get("q_left_a") is not None
+                or combo_q_boundaries.get(label, {}).get("q_left_b") is not None
+                for label in combo_labels
+            )
+            style_handles = [
+                mpl.lines.Line2D([0], [0], color="lightgrey", linestyle="--", linewidth=1.0, label="Removed Before Combination"),
+                mpl.lines.Line2D([0], [0], color="black", linestyle="--", linewidth=1.0, label="Removed By Combination"),
+                mpl.lines.Line2D([0], [0], color="black", linestyle="-", linewidth=1.4, label="Retained"),
+                mpl.lines.Line2D(
+                    [0],
+                    [0],
+                    color="black",
+                    marker=removed_marker,
+                    linestyle="None",
+                    markersize=6,
+                    markerfacecolor="none",
+                    label="Combination Rejection",
+                ),
+            ]
+            if has_noise_limit_boundaries:
+                style_handles.append(
+                    mpl.lines.Line2D(
+                        [0],
+                        [0],
+                        color="red",
+                        linestyle="--",
+                        linewidth=1.4,
+                        label="Noise Charge Limit",
+                    )
+                )
+            combo_handles = [
+                mpl.lines.Line2D([0], [0], color=combo_color_map[label], linestyle="-", linewidth=1.6, label=label)
+                for label in combo_labels
+            ]
+            fig.legend(
+                handles=style_handles + combo_handles,
+                loc="upper center",
+                bbox_to_anchor=(0.5, 0.995),
+                ncol=min(6, max(2, len(combo_handles) + 2)),
+                fontsize=6,
+                frameon=False,
+                handlelength=1.8,
+                columnspacing=0.8,
+            )
+            combo_mode_label = "all pairs" if relation_top_n is None else f"top {int(relation_top_n)} pairs"
+            fig.suptitle(
+                f"Task 1 channel-combination filter by TT {tt_label}\n"
+                f"{basename_no_ext_value} · {relation_label_map.get(relation_type, relation_type)} · {combo_mode_label}",
+                fontsize=11,
+                y=0.94,
+            )
+            if save_plots:
+                final_filename = (
+                    f"{fig_idx_value}_channel_combination_filter_by_tt_"
+                    f"{relation_type}_TT_{tt_label}.png"
+                )
+                fig_idx_value += 1
+                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                if plot_list is not None:
+                    plot_list.append(save_fig_path)
+                save_plot_figure(save_fig_path, fig=fig, format="png", dpi=150)
+            if show_plots:
+                plt.show()
+            plt.close(fig)
+
+    return fig_idx_value
+
+def build_task1_channel_pattern_series(df: pd.DataFrame) -> pd.Series:
+    """Encode per-event front/back channel occupancy as a deterministic 32-bit string."""
+    pattern_arrays: list[np.ndarray] = []
+    for plane, strip, side in TASK1_CHANNEL_PATTERN_ORDER:
+        col_name = f"Q{plane}_{side}_{strip}"
+        if col_name in df.columns:
+            values = df[col_name].fillna(0).to_numpy(copy=False)
+            bits = np.where(values != 0, "1", "0")
+        else:
+            print(f"Warning: missing channel column '{col_name}' while building TASK_1 patterns.")
+            bits = np.full(len(df), "0", dtype="<U1")
+        pattern_arrays.append(bits)
+
+    if not pattern_arrays:
+        return pd.Series(dtype="object", index=df.index)
+
+    full_pattern = pattern_arrays[0].copy()
+    for bits in pattern_arrays[1:]:
+        full_pattern = np.char.add(full_pattern, bits)
+    return pd.Series(full_pattern, index=df.index, dtype="object")
+
+def store_pattern_rates(metadata: dict[str, object], patterns: pd.Series, prefix: str, df: pd.DataFrame) -> None:
+    phase_meta = build_events_per_second_metadata(df)
+    try:
+        denominator = float(phase_meta.get("events_per_second_total_seconds", 0) or 0)
+    except (TypeError, ValueError):
+        denominator = 0.0
+
+    counts = patterns.value_counts()
+    for pattern, count in counts.items():
+        rate_hz = round(float(count) / denominator, 6) if denominator > 0 else 0.0
+        metadata[f"{prefix}_{pattern}_rate_hz"] = rate_hz
+
+
+def load_reprocessing_parameters_for_file(station_id: str, task_id: str, basename: str) -> pd.DataFrame:
+    """Return matching reprocessing parameters for *basename* or an empty frame."""
+    station_str = str(station_id).zfill(2)
+    table_path = REFERENCE_TABLES_DIR / f"reprocess_files_station_{station_str}_task_{task_id}.csv"
+    if not table_path.exists():
+        return pd.DataFrame()
+    try:
+        table_df = pd.read_csv(table_path)
+    except Exception as exc:
+        print(f"Warning: unable to read reprocessing table {table_path}: {exc}")
+        return pd.DataFrame()
+    if "filename_base" not in table_df.columns:
+        return pd.DataFrame()
+    matches = table_df[table_df["filename_base"] == basename]
+    return matches.reset_index(drop=True)
+
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Function definition ---------------------------------------------------------
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+
+def summary(vector):
+    global coincidence_window_cal_ns
+    quantile_left = CRT_gaussian_fit_quantile * 100
+    quantile_right = 100 - CRT_gaussian_fit_quantile * 100
+    
+    vector = np.array(vector)  # Convert list to NumPy array
+    cond = (vector > -coincidence_window_cal_ns) & (vector < coincidence_window_cal_ns)  # This should result in a boolean array
+    vector = vector[cond]
+    
+    if len(vector) < 100:
+        return np.nan
+    try:
+        percentile_left = np.percentile(vector, quantile_left)
+        percentile_right = np.percentile(vector, quantile_right)
+    except IndexError:
+        print("Gave issue with:")
+        print(vector)
+        return np.nan
+    vector = [x for x in vector if percentile_left <= x <= percentile_right]
+    if len(vector) == 0:
+        return np.nan
+    mu, std = norm.fit(vector)
+    return mu
+
+
+def process_file(source_path, dest_path):
+    print("Source path:", source_path)
+    print("Destination path:", dest_path)
+    
+    if source_path == dest_path:
+        return True
+    
+    if os.path.exists(dest_path):
+        print(f"File already exists at destination (removing...)")
+        os.remove(dest_path)
+        # return False
+    
+    print("**********************************************************************")
+    print(f"Moving\n'{source_path}'\nto\n'{dest_path}'...")
+    print("**********************************************************************")
+    
+    safe_move(source_path, dest_path)
+    now = time.time()
+    os.utime(dest_path, (now, now))
+    return True
+
+def _load_task_1_z_priority_settings(config_obj: dict) -> dict[str, object]:
+    settings: dict[str, object] = {
+        "enabled": False,
+        "simulated_only": True,
+        "match_mode": "absolute",
+        "source_csv": SIM_PARAMS_DEFAULT,
+        "priority_abs": set(),
+        "priority_norm": set(),
+    }
+
+    node = config_obj.get("task_1_z_position_priority")
+    if not isinstance(node, dict):
+        return settings
+
+    settings["enabled"] = _as_bool(node.get("enabled"), False)
+    settings["simulated_only"] = _as_bool(node.get("simulated_only"), True)
+
+    match_mode = str(node.get("match_mode", "absolute")).strip().lower()
+    if match_mode not in {"absolute", "normalized", "both"}:
+        match_mode = "absolute"
+    settings["match_mode"] = match_mode
+
+    source_csv = node.get("source_csv")
+    if source_csv:
+        settings["source_csv"] = Path(os.path.expanduser(str(source_csv)))
+
+    vectors = _iter_priority_vectors(node.get("vectors_mm"))
+    settings["priority_abs"] = {tuple(round(value, 6) for value in vector) for vector in vectors}
+    settings["priority_norm"] = {_normalize_z_vector(vector) for vector in vectors}
+
+    if settings["enabled"] and not settings["priority_abs"]:
+        print(
+            "Warning: task_1_z_position_priority.enabled is true but vectors_mm is empty. "
+            "Disabling z-priority for this run.",
+            force=True,
+        )
+        settings["enabled"] = False
+
+    return settings
+
+def _load_simulated_z_lookup(
+    csv_path: Path,
+) -> dict[str, tuple[float, float, float, float]]:
+    lookup: dict[str, tuple[float, float, float, float]] = {}
+    if not csv_path.exists():
+        print(
+            f"Warning: z-priority lookup CSV not found: {csv_path}. "
+            "Falling back to regular newest-file selection.",
+            force=True,
+        )
+        return lookup
+
+    required_cols = ["file_name", "z_plane_1", "z_plane_2", "z_plane_3", "z_plane_4"]
+    try:
+        sim_df = pd.read_csv(csv_path, usecols=required_cols)
+    except Exception as exc:
+        print(
+            f"Warning: failed to load z-priority lookup CSV {csv_path}: {exc}. "
+            "Falling back to regular newest-file selection.",
+            force=True,
+        )
+        return lookup
+
+    for file_name, z1, z2, z3, z4 in sim_df.itertuples(index=False, name=None):
+        file_key = str(file_name).strip().lower()
+        if not file_key:
+            continue
+        try:
+            z_vector = (float(z1), float(z2), float(z3), float(z4))
+        except (TypeError, ValueError):
+            continue
+        if not all(np.isfinite(value) for value in z_vector):
+            continue
+        lookup[file_key] = z_vector
+
+    return lookup
+
+def _select_latest_candidate_with_z_priority(
+    files: Iterable[str],
+    station: str,
+    settings: dict[str, object],
+    z_lookup: dict[str, tuple[float, float, float, float]],
+    source_label: str,
+    *,
+    fallback_to_latest: bool = True,
+) -> str | None:
+    candidates = [name for name in files if isinstance(name, str) and name]
+    if not candidates:
+        return None
+
+    if not settings.get("enabled", False):
+        return select_latest_candidate(candidates, station) if fallback_to_latest else None
+
+    prioritized: list[str] = []
+    for name in candidates:
+        key = name.lower()
+        if settings.get("simulated_only", True) and not key.startswith("mi00"):
+            continue
+        z_vector = z_lookup.get(key)
+        if z_vector is None:
+            continue
+        if _z_vector_matches_priority(z_vector, settings):
+            prioritized.append(name)
+
+    if prioritized:
+        selected = max(prioritized, key=lambda name: newest_order_key(name, station))
+        selected_z = z_lookup.get(selected.lower())
+        print(
+            f"[Z_PRIORITY] Selected prioritized file from {source_label}: {selected} "
+            f"z={list(selected_z) if selected_z else 'NA'}",
+            force=True,
+        )
+        return selected
+
+    return select_latest_candidate(candidates, station) if fallback_to_latest else None
+
+
+def _preferred_non_qa_or_all(
+    file_names: list[str],
+    preferred_non_qa_file_names: list[str],
+) -> list[str]:
+    if prioritize_other_than_qa_files and preferred_non_qa_file_names:
+        return preferred_non_qa_file_names
+    return file_names
+
+
+# Function to process each line
+def process_line(line):
+    line = ZERO_TOKEN_PATTERN.sub('0', line)  # Replace '0000.0000' with '0'
+    line = LEADING_ZERO_PATTERN.sub(r'\1', line)  # Remove leading zeros
+    line = MULTI_SPACE_PATTERN.sub(',', line.strip())  # Replace multiple spaces with a comma
+    line = XYEAR_PATTERN.sub(r'X\n\1', line)  # Replace XYYYY with X\nYYYY
+    line = NEG_GAP_PATTERN.sub(r'\1 -\2', line)  # Ensure X-Y is properly spaced
+    return line
+
+# Function to check for malformed numbers (e.g., '-120.144.0')
+def contains_malformed_numbers(line):
+    return bool(MALFORMED_NUMBER_PATTERN.search(line))  # Detects multiple decimal points
+
+# Function to validate year, month, and day
+def is_valid_date(values):
+    try:
+        year, month, day = int(values[0]), int(values[1]), int(values[2])
+        if year not in VALID_YEARS:  # Check valid years
+            return False
+        if not (1 <= month <= 12):  # Check valid month
+            return False
+        if not (1 <= day <= 31):  # Check valid day
+            return False
+        return True
+    except ValueError:  # In case of non-numeric values
+        return False
+
+def _normalize_line_for_numpy(line: str) -> str:
+    """Normalize raw text just enough for fast numeric parsing."""
+    normalized = line.strip()
+    normalized = ZERO_TOKEN_PATTERN.sub("0", normalized)
+    normalized = LEADING_ZERO_PATTERN.sub(r"\1", normalized)
+    if "X20" in normalized:
+        normalized = XYEAR_PATTERN.sub(r"X \1", normalized)
+    if "-" in normalized:
+        normalized = NEG_GAP_PATTERN.sub(r"\1 -\2", normalized)
+    return normalized
+
+def _parse_raw_line_fast(line: str, expected_columns: int) -> np.ndarray | None:
+    """Fast path for the common whitespace-only numeric rows."""
+    stripped = line.strip()
+    values = np.fromstring(stripped, sep=" ", dtype=np.float64)
+    if values.size == expected_columns and is_valid_date(values[:3]):
+        return values
+    normalized = _normalize_line_for_numpy(stripped)
+    values = np.fromstring(normalized, sep=" ", dtype=np.float64)
+    if values.size == expected_columns and is_valid_date(values[:3]):
+        return values
+    return None
+
+def _build_task1_input_dataframe(
+    source_path: str,
+    rejected_path: str,
+    expected_columns: int,
+    limit_rows: int | None = None,
+) -> tuple[pd.DataFrame, int, int]:
+    """Parse the raw .dat file in one pass and build the typed input dataframe."""
+    read_lines = 0
+    written_lines = 0
+    stored_rows = 0
+    flat_values = array("d")
+    event_ids: list[int] = []
+
+    with open(source_path, "r") as infile, open(rejected_path, "w") as rejectfile:
+        for i, line in enumerate(infile, start=1):
+            if line.lstrip().startswith("#"):
+                continue
+            read_lines += 1
+
+            parsed_values = _parse_raw_line_fast(line, expected_columns)
+            if parsed_values is None:
+                cleaned_line = process_line(line)
+                cleaned_values = cleaned_line.split(",")
+
+                if len(cleaned_values) < 3 or not is_valid_date(cleaned_values[:3]):
+                    rejectfile.write(f"Line {i} (Invalid date): {line.strip()}\n")
+                    continue
+
+                if contains_malformed_numbers(line):
+                    rejectfile.write(f"Line {i} (Malformed number): {line.strip()}\n")
+                    continue
+
+                if len(cleaned_values) != expected_columns:
+                    rejectfile.write(f"Line {i} (Wrong column count): {line.strip()}\n")
+                    continue
+
+                parsed_values = np.fromstring(
+                    cleaned_line.replace(",", " "),
+                    sep=" ",
+                    dtype=np.float64,
+                )
+                if parsed_values.size != expected_columns:
+                    rejectfile.write(f"Line {i} (Wrong column count): {line.strip()}\n")
+                    continue
+
+            written_lines += 1
+            if limit_rows is None or stored_rows < limit_rows:
+                flat_values.extend(parsed_values)
+                event_ids.append(i)
+                stored_rows += 1
+
+    if stored_rows == 0:
+        return pd.DataFrame(), read_lines, written_lines
+
+    raw_matrix = np.frombuffer(flat_values, dtype=np.float64).reshape(stored_rows, expected_columns)
+    datetime_components = {
+        "year": np.rint(raw_matrix[:, 0]).astype(np.int16, copy=False),
+        "month": np.rint(raw_matrix[:, 1]).astype(np.int8, copy=False),
+        "day": np.rint(raw_matrix[:, 2]).astype(np.int8, copy=False),
+        "hour": np.rint(raw_matrix[:, 3]).astype(np.int8, copy=False),
+        "minute": np.rint(raw_matrix[:, 4]).astype(np.int8, copy=False),
+        "second": np.rint(raw_matrix[:, 5]).astype(np.int8, copy=False),
+    }
+    datetime_series = pd.to_datetime(datetime_components)
+
+    value_columns = [f"column_{i}" for i in range(6, expected_columns)]
+    value_data = raw_matrix[:, 6:].astype(np.float32, copy=False)
+    read_df = pd.DataFrame(value_data, columns=value_columns, copy=False)
+    # Stable per-file event identity: raw file line number before any Task 1 filtering.
+    read_df.insert(0, "event_id", np.asarray(event_ids, dtype=np.int64))
+    read_df.insert(0, "datetime", datetime_series)
+    read_df["column_6"] = np.rint(raw_matrix[:, 6]).astype(np.int8, copy=False)
+    return read_df, read_lines, written_lines
+
+
+def _zpos_from_conf(row):
+    return np.array([row.get(f"P{i}", np.nan) for i in range(1, 5)])
+
+
+def snapshot_original_columns_once(
+    frame: pd.DataFrame,
+    column_names: Iterable[str],
+) -> None:
+    """Store a column once, before its first in-place mutation, to keep original values."""
+    if not track_removed_rows or frame is not working_df:
+        return
+    for col in column_names:
+        if col in frame.columns and col not in original_columns_store:
+            original_columns_store[col] = frame[col].copy()
+
+def _restore_original_values(rows: pd.DataFrame) -> pd.DataFrame:
+    if not track_removed_rows or rows.empty:
+        return rows
+    restored_rows = rows.copy()
+    for col, original_series in original_columns_store.items():
+        if col in restored_rows.columns:
+            restored_rows.loc[:, col] = original_series.reindex(restored_rows.index)
+    return restored_rows
+
+def append_removed_rows(rows: pd.DataFrame) -> None:
+    """Append fully removed rows with original index and pre-modification values preserved."""
+    global removed_rows_df
+    if not track_removed_rows or rows.empty:
+        return
+    rows_to_add = _restore_original_values(rows)
+    if not removed_rows_df.empty:
+        rows_to_add = rows_to_add.loc[~rows_to_add.index.isin(removed_rows_df.index)]
+        if rows_to_add.empty:
+            return
+    removed_rows_df = pd.concat([removed_rows_df, rows_to_add], ignore_index=False, sort=False)
+
+def append_removed_rows_from_mask(frame: pd.DataFrame, removed_mask: pd.Series) -> None:
+    if not track_removed_rows or frame.empty:
+        return
+    aligned_mask = removed_mask.reindex(frame.index, fill_value=False)
+    if aligned_mask.any():
+        append_removed_rows(frame.loc[aligned_mask].copy())
+
+def build_original_columns_frame() -> pd.DataFrame:
+    if not track_removed_rows:
+        return pd.DataFrame(index=tracking_base_index)
+    if not original_columns_store:
+        return pd.DataFrame(index=tracking_base_index)
+    return pd.DataFrame(
+        {col: series.reindex(tracking_base_index) for col, series in original_columns_store.items()},
+        index=tracking_base_index,
+    )
+
+def build_task1_channel_filter_stage_frames(
+    df_input: pd.DataFrame,
+    *,
+    original_reference_df: pd.DataFrame | None,
+    relation_limits_by_type: Mapping[str, Mapping[str, float]],
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    if df_input.empty:
+        empty_df = df_input.iloc[0:0].copy()
+        return empty_df, empty_df, empty_df
+
+    if original_reference_df is None or original_reference_df.empty:
+        original_df = df_input.copy()
+    else:
+        original_df = original_reference_df.reindex(df_input.index).copy()
+        for col in df_input.columns:
+            if col not in original_df.columns:
+                original_df[col] = df_input[col]
+
+    pre_combination_df = df_input.copy()
+    final_df = pre_combination_df.copy()
+    apply_task1_plane_combination_filter(
+        final_df,
+        relation_limits_by_type=relation_limits_by_type,
+    )
+    return original_df, pre_combination_df, final_df
+
+
+# ----------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------
+# Trigger type helpers -------------------------------------------------------------
+# ----------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------
+
+def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:
+    """Compute trigger type based on planes with non-zero charge."""
+    tt_str = pd.Series("", index=df.index, dtype="object")
+    for plane in range(1, 5):
+        if columns_map:
+            charge_columns = [col for col in columns_map.get(plane, []) if col in df.columns]
+        else:
+            charge_columns = [
+                col
+                for col in [
+                    f"Q{plane}_F_1",
+                    f"Q{plane}_F_2",
+                    f"Q{plane}_F_3",
+                    f"Q{plane}_F_4",
+                    f"Q{plane}_B_1",
+                    f"Q{plane}_B_2",
+                    f"Q{plane}_B_3",
+                    f"Q{plane}_B_4",
+                ]
+                if col in df.columns
+            ]
+        if charge_columns:
+            has_charge = df.loc[:, charge_columns].ne(0).any(axis=1)
+            tt_str = tt_str.where(~has_charge, tt_str + str(plane))
+    df.loc[:, column_name] = tt_str.replace("", "0").astype(int)
+    return df
+
+
+def task1_plot_enabled(alias: str) -> bool:
+    if not task1_plot_status_by_alias:
+        return True
+    return step1_task_plot_enabled(alias, task1_plot_status_by_alias, plot_mode)
+CLI_PARSER = build_step1_cli_parser("Run Stage 1 STEP_1 TASK_1 (RAW->CLEAN).", STATION_CHOICES)
+CLI_ARGS = CLI_PARSER.parse_args()
+validate_step1_input_file_args(CLI_PARSER, CLI_ARGS)
+
+VERBOSE = bool(os.environ.get("DATAFLOW_VERBOSE")) or CLI_ARGS.verbose
+print = build_step1_filtered_print(
+    verbose=VERBOSE,
+    debug_mode_getter=lambda: bool(globals().get("debug_mode", False)),
+    raw_print=builtins.print,
+)
+FILTER_METRICS_LOGGING_ENABLED = step1_logging_enabled("filter_metrics")[0]
+MAX_OPEN_FIGURES = 16
+_OPEN_FIGURE_IDS: list[int] = []
+_ORIGINAL_PLT_FIGURE = plt.figure
+_ORIGINAL_PLT_SUBPLOTS = plt.subplots
+_ORIGINAL_PLT_CLOSE = plt.close
+plt.figure = _guarded_figure
+plt.subplots = _guarded_subplots
+plt.close = _guarded_close
+
+_direct_pdf_pages: PdfPages | None = None
+_direct_pdf_page_count = 0
+_direct_pdf_target_path: str | None = None
+_direct_pdf_temp_path: str | None = None
 atexit.register(close_direct_pdf_writer)
 
 # Warning Filters
 warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
 
 start_timer(__file__)
-config_root = get_master_config_root()
-config_file_path = config_root / "STAGE_1" / "EVENT_DATA" / "STEP_1" / "TASK_1" / "config_task_1.yaml"
-plot_catalog_file_path = (
-    config_root / "STAGE_1" / "EVENT_DATA" / "STEP_1" / "TASK_1" / "config_plots_task_1.yaml"
+task_config_bundle = load_step1_task_config_bundle(
+    task_number,
+    include_filter_parameter_config=True,
+    log_fn=print,
 )
-parameter_config_file_path = (
-    config_root / "STAGE_1" / "EVENT_DATA" / "STEP_1" / "TASK_1" / "config_parameters_task_1.csv"
-)
-filter_parameter_config_file_path = (
-    config_root
-    / "STAGE_1"
-    / "EVENT_DATA"
-    / "STEP_1"
-    / "TASK_1"
-    / "config_filter_parameters_task_1.csv"
-)
-fallback_parameter_config_file_path = (
-    config_root / "STAGE_1" / "EVENT_DATA" / "STEP_1" / "config_parameters.csv"
-)
-print(f"Using config file: {config_file_path}")
-print(f"Using plot catalog file: {plot_catalog_file_path}")
-with config_file_path.open("r", encoding="utf-8") as config_file:
-    config = yaml.safe_load(config_file)
-filter_parameter_config_file_path = filter_parameter_config_file_path.with_name(
-    str(config.get("filter_parameter_config_csv", filter_parameter_config_file_path.name))
-)
-print(f"Using filter parameter config file: {filter_parameter_config_file_path}")
+config_root = task_config_bundle["config_root"]
+config_file_path = task_config_bundle["config_file_path"]
+plot_catalog_file_path = task_config_bundle["plot_catalog_file_path"]
+parameter_config_file_path = task_config_bundle["parameter_config_file_path"]
+plot_parameter_config_file_path = task_config_bundle["plot_parameter_config_file_path"]
+filter_parameter_config_file_path = task_config_bundle["filter_parameter_config_file_path"]
+fallback_parameter_config_file_path = task_config_bundle["fallback_parameter_config_file_path"]
+config = task_config_bundle["config"]
 task1_plot_status_by_alias = load_step1_task_plot_catalog(
     plot_catalog_file_path,
     TASK1_PLOT_ALIASES,
@@ -504,30 +2557,17 @@ if CLI_ARGS.station is None:
 station = str(CLI_ARGS.station)
 set_station(station)
 
-filter_parameter_declared_keys: set[str] = set()
-filter_parameter_overrides: dict[str, object] = {}
-if filter_parameter_config_file_path.exists():
-    filter_parameter_declared_keys = load_declared_parameter_names(filter_parameter_config_file_path)
-    filter_parameter_overrides = load_parameter_overrides(filter_parameter_config_file_path, station)
-
-config = apply_step1_task_parameter_overrides(
-    config_obj=config,
+config = resolve_step1_effective_task_config(
+    config,
     station_id=station,
-    task_parameter_path=str(parameter_config_file_path),
-    fallback_parameter_path=str(fallback_parameter_config_file_path),
     task_number=task_number,
-    update_fn=update_config_with_parameters,
-    log_fn=print,
-    exclude_keys=filter_parameter_declared_keys,
-)
-config = apply_step1_master_overrides(
-    config_obj=config,
-    master_config_root=config_root,
+    config_root=config_root,
+    parameter_config_file_path=parameter_config_file_path,
+    fallback_parameter_config_file_path=fallback_parameter_config_file_path,
+    plot_parameter_config_file_path=plot_parameter_config_file_path,
+    filter_parameter_config_file_path=filter_parameter_config_file_path,
     log_fn=print,
 )
-if filter_parameter_config_file_path.exists():
-    config.update(filter_parameter_overrides)
-    print(f"Info: Loaded filter parameters from {filter_parameter_config_file_path}")
 process_only_qa_retry_files = bool(config.get("process_only_qa_retry_files", False))
 prioritize_other_than_qa_files = bool(config.get("prioritize_other_than_qa_files", True))
 if process_only_qa_retry_files:
@@ -593,23 +2633,6 @@ status_execution_date = initialize_status_row(
     filename_base=status_filename_base,
     completion_fraction=0.0,
 )
-
-
-def _exit_without_status_row(message: str) -> None:
-    print(message)
-    if status_execution_date is not None:
-        deleted = delete_status_row(
-            early_status_csv_path,
-            filename_base=status_filename_base,
-            execution_date=status_execution_date,
-        )
-        if not deleted:
-            print(
-                "Warning: unable to delete startup status row "
-                f"{status_filename_base} ({status_execution_date})."
-            )
-    sys.exit(0)
-
 base_directory = str(repo_root / "STATIONS" / f"MINGO0{station}" / "STAGE_1" / "EVENT_DATA")
 raw_to_list_working_directory = os.path.join(base_directory, f"STEP_1/TASK_{task_number}")
 
@@ -676,43 +2699,6 @@ debug_plot_directory = os.path.join(
     f"FIGURES_EXEC_ON_{date_execution}",
 )
 debug_fig_idx = 1
-
-def _debug_plot_filter_group(
-    df: pd.DataFrame,
-    columns: Iterable[str],
-    thresholds: Iterable[float] | float | None,
-    label: str,
-    *,
-    tag: str = "tunable",
-    max_cols_per_fig: int = 16,
-) -> None:
-    """Emit debug histograms for a filter group with threshold lines."""
-    global debug_fig_idx
-    if not create_debug_plots:
-        return
-
-    cols = [col for col in columns if col in df.columns]
-    if not cols:
-        return
-
-    if thresholds is None:
-        threshold_values: list[float] = []
-    elif isinstance(thresholds, (list, tuple, np.ndarray)):
-        threshold_values = [float(v) for v in thresholds if v is not None]
-    else:
-        threshold_values = [float(thresholds)]
-
-    debug_thresholds = {col: threshold_values for col in cols}
-    debug_fig_idx = plot_debug_histograms(
-        df,
-        cols,
-        debug_thresholds,
-        title=f"Task 1 pre-filter: {label} [{tag}] (station {station})",
-        out_dir=debug_plot_directory,
-        fig_idx=debug_fig_idx,
-        max_cols_per_fig=max_cols_per_fig,
-    )
-
 # Create ALL directories if they don't already exist
 # Create ALL directories if they don't already exist
 for directory in base_directories.values():
@@ -1379,245 +3365,12 @@ for tt_label in TT_COLOR_LABELS:
 
 # Fallback default color
 TT_COLOR_DEFAULT = (0.45, 0.45, 0.45, 1.0)
-
-
-def get_tt_color(tt_value: object) -> tuple[float, float, float, float]:
-    """Return a stable color for a trigger-type label across all Task 1 plots."""
-    return TT_COLOR_MAP.get(normalize_tt_label(tt_value), TT_COLOR_DEFAULT)
-
-def ensure_global_count_keys(prefixes: Iterable[str]) -> None:
-    for prefix in prefixes:
-        for tt_value in TT_COUNT_VALUES:
-            global_variables.setdefault(f"{prefix}_{tt_value}_count", 0)
-
-
-def refresh_global_count_metadata(df: pd.DataFrame, column_names: Iterable[str]) -> None:
-    prefixes = tuple(f"{column_name}_" for column_name in column_names)
-    for key in list(global_variables):
-        if key.endswith("_count") and any(key.startswith(prefix) for prefix in prefixes):
-            global_variables.pop(key, None)
-    for column_name in column_names:
-        if column_name not in df.columns:
-            continue
-        value_counts = df[column_name].value_counts()
-        for tt_value, count in value_counts.items():
-            tt_label = normalize_tt_label(tt_value)
-            global_variables[f"{column_name}_{tt_label}_count"] = int(count)
-
 TASK1_CHANNEL_PATTERN_ORDER: tuple[tuple[int, int, str], ...] = tuple(
     (plane, strip, side)
     for plane in range(1, 5)
     for strip in range(1, 5)
     for side in ("F", "B")
 )
-
-
-def _compute_channel_contagion_inputs(
-    df: pd.DataFrame,
-) -> tuple[list[str], np.ndarray] | None:
-    """Return channel labels and active-mask matrix (rows=events, cols=channels)."""
-    ch_labels: list[str] = []
-    ch_cols: list[str] = []
-    for _p, _s, _sd in TASK1_CHANNEL_PATTERN_ORDER:
-        col = f"Q{_p}_{_sd}_{_s}"
-        if col in df.columns:
-            ch_labels.append(f"P{_p}S{_s}{_sd}")
-            ch_cols.append(col)
-    if not ch_cols:
-        return None
-    vals = df.loc[:, ch_cols].fillna(0).to_numpy(dtype=np.float32, copy=False)
-    active = vals != 0
-    return ch_labels, active
-
-
-def _compute_channel_conditional_matrix_from_active(active: np.ndarray) -> np.ndarray:
-    """Compute P(ch_j active | ch_i active) from boolean activity matrix."""
-    co = active.T.astype(np.int64) @ active.astype(np.int64)
-    diag = np.diag(co).astype(float)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        cond = np.divide(
-            co.astype(float),
-            diag[:, None],
-            out=np.full_like(co, np.nan, dtype=float),
-            where=diag[:, None] > 0,
-        )
-    return cond
-
-
-def _compute_channel_conditional_matrix(df: pd.DataFrame) -> tuple[list[str], np.ndarray] | None:
-    """Compute full-table conditional channel activation matrix."""
-    inputs = _compute_channel_contagion_inputs(df)
-    if inputs is None:
-        return None
-    ch_labels, active = inputs
-    return ch_labels, _compute_channel_conditional_matrix_from_active(active)
-
-
-def _compute_channel_conditional_matrix_for_tt(
-    df: pd.DataFrame,
-    tt_column: str,
-    tt_value: int,
-) -> tuple[list[str], np.ndarray] | None:
-    """Compute conditional channel activation matrix for a specific TT value."""
-    if tt_column not in df.columns:
-        return None
-    inputs = _compute_channel_contagion_inputs(df)
-    if inputs is None:
-        return None
-    ch_labels, active = inputs
-    tt_s = pd.to_numeric(df[tt_column], errors="coerce").fillna(0).astype(int)
-    mask_tt = (tt_s == int(tt_value)).to_numpy(dtype=bool)
-    if not np.any(mask_tt):
-        return None
-    return ch_labels, _compute_channel_conditional_matrix_from_active(active[mask_tt])
-
-
-def _summarize_channel_conditional_matrix(cond: np.ndarray) -> tuple[float, float, float]:
-    """Return mean/max off-diagonal and mean off-diagonal inter-plane values."""
-    n_ch = int(cond.shape[0])
-    if n_ch <= 1:
-        return (float("nan"), float("nan"), float("nan"))
-
-    idx = np.arange(n_ch)
-    offdiag_mask = idx[:, None] != idx[None, :]
-    offdiag_vals = cond[offdiag_mask]
-    offdiag_finite = offdiag_vals[np.isfinite(offdiag_vals)]
-    mean_offdiag = float(np.mean(offdiag_finite)) if offdiag_finite.size else float("nan")
-    max_offdiag = float(np.max(offdiag_finite)) if offdiag_finite.size else float("nan")
-
-    plane_ids = idx // 8
-    interplane_mask = offdiag_mask & (plane_ids[:, None] != plane_ids[None, :])
-    inter_vals = cond[interplane_mask]
-    inter_finite = inter_vals[np.isfinite(inter_vals)]
-    mean_interplane = float(np.mean(inter_finite)) if inter_finite.size else float("nan")
-    return (mean_offdiag, max_offdiag, mean_interplane)
-
-
-def _store_channel_contagion_metrics_variant(
-    variant: str,
-    matrix_data: tuple[list[str], np.ndarray] | None,
-) -> None:
-    """Store global/by-TT channel contagion summary metrics for a variant."""
-    key_mean = f"mean_off_diagonal_{variant}"
-    key_max = f"max_off_diagonal_{variant}"
-    key_inter = f"mean_off_diagonal_interplane_{variant}"
-    if matrix_data is None:
-        channel_contagion_metrics[key_mean] = float("nan")
-        channel_contagion_metrics[key_max] = float("nan")
-        channel_contagion_metrics[key_inter] = float("nan")
-        return
-    _, cond = matrix_data
-    mean_offdiag, max_offdiag, mean_interplane = _summarize_channel_conditional_matrix(cond)
-    channel_contagion_metrics[key_mean] = mean_offdiag
-    channel_contagion_metrics[key_max] = max_offdiag
-    channel_contagion_metrics[key_inter] = mean_interplane
-
-def _plot_channel_contamination_global(
-    df: pd.DataFrame,
-    stage_label: str,
-    fig_idx_val: int,
-    base_dir: str,
-    save: bool,
-    show: bool,
-    plist: list[str],
-) -> int:
-    """Plot a single 32×32 channel contamination heatmap."""
-    matrix_data = _compute_channel_conditional_matrix(df)
-    if matrix_data is None:
-        return fig_idx_val
-    ch_labels, cond = matrix_data
-    fig, ax = plt.subplots(figsize=(13, 11))
-    sns.heatmap(cond, vmin=0.0, vmax=1.0, cmap="viridis",
-                xticklabels=ch_labels, yticklabels=ch_labels, ax=ax,
-                cbar_kws={"label": "P(ch j active | ch i active)"})
-    ax.set_title(f"Task 1 {stage_label} — 32-channel contamination matrix")
-    ax.set_xlabel("Channel j")
-    ax.set_ylabel("Channel i")
-    ax.tick_params(axis="x", labelrotation=90, labelsize=7)
-    ax.tick_params(axis="y", labelrotation=0, labelsize=7)
-    fig.tight_layout()
-    if save:
-        fname = f"{fig_idx_val}_{stage_label.lower().replace(' ', '_')}_channel_contamination_matrix_32.png"
-        fig_idx_val += 1
-        spath = os.path.join(base_dir, fname)
-        plist.append(spath)
-        save_plot_figure(spath, fig=fig, format="png", dpi=150)
-    if show:
-        plt.show()
-    plt.close(fig)
-    return fig_idx_val
-
-
-def _plot_channel_contagion_by_tt(
-    df: pd.DataFrame,
-    tt_column: str,
-    stage_label: str,
-    fig_idx_val: int,
-    base_dir: str,
-    save: bool,
-    show: bool,
-    plist: list[str],
-    min_events: int = 30,
-    max_tt_panels: int = 6,
-) -> int:
-    """Plot 32-channel contagion matrices split by TT."""
-    required_tts: tuple[int, int] = (124, 134)
-    inputs = _compute_channel_contagion_inputs(df)
-    if inputs is None or tt_column not in df.columns:
-        return fig_idx_val
-    ch_labels_global, active = inputs
-    n_ch = len(ch_labels_global)
-    ch_labels = [lbl.replace("S", "") for lbl in ch_labels_global]
-    tt_s = pd.to_numeric(df[tt_column], errors="coerce").fillna(0).astype(int)
-    tt_cts = tt_s.value_counts()
-    required_present = [tt for tt in required_tts if int(tt_cts.get(tt, 0)) > 0]
-    optional_pool = [
-        tt for tt, cnt in tt_cts.items()
-        if tt >= 10 and cnt >= min_events and tt not in required_tts
-    ]
-    # Keep required TTs visible even when panel count is capped.
-    sel_tts = required_present + optional_pool
-    sel_tts = sel_tts[:max(max_tt_panels, len(required_present))]
-    if not sel_tts:
-        return fig_idx_val
-    ncols_tt = len(sel_tts)
-    fig_w = max(7, 6.0 * ncols_tt)
-    fig, axes = plt.subplots(1, ncols_tt, figsize=(fig_w, 7.0 + 0.15 * n_ch), squeeze=False)
-    _im = None
-    for ci, tv in enumerate(sel_tts):
-        ax = axes[0, ci]
-        mtt = (tt_s == tv).to_numpy(dtype=bool)
-        ntt = int(np.sum(mtt))
-        cond = _compute_channel_conditional_matrix_from_active(active[mtt])
-        _im = ax.imshow(cond, cmap="viridis", vmin=0, aspect="equal")
-        ax.set_xticks(range(n_ch))
-        ax.set_xticklabels(ch_labels, fontsize=4, rotation=90)
-        ax.set_yticks(range(n_ch))
-        ax.set_yticklabels(ch_labels, fontsize=4)
-        for bnd in range(8, n_ch, 8):
-            ax.axhline(bnd - 0.5, color="grey", linewidth=0.7, alpha=0.6)
-            ax.axvline(bnd - 0.5, color="grey", linewidth=0.7, alpha=0.6)
-        ax.set_title(f"TT {tv} (N={ntt})", fontsize=10)
-    if _im is not None:
-        fig.colorbar(_im, ax=axes[0, -1], label="P(ch j | ch i)", shrink=0.75, pad=0.02)
-    fig.suptitle(
-        f"Task 1 {stage_label} — channel contagion by TT\n"
-        "P(channel j active | channel i active)",
-        fontsize=13,
-    )
-    fig.tight_layout(rect=[0, 0, 0.97, 0.93])
-    if save:
-        fname = f"{fig_idx_val}_{stage_label.lower().replace(' ', '_')}_channel_contagion_by_tt.png"
-        fig_idx_val += 1
-        spath = os.path.join(base_dir, fname)
-        plist.append(spath)
-        save_plot_figure(spath, fig=fig, format="png", dpi=150)
-    if show:
-        plt.show()
-    plt.close(fig)
-    return fig_idx_val
-
-
 TASK1_SELECTED_OFFENDER_CARDINALITY_VALUES: tuple[int, ...] = tuple(range(0, 33))
 TASK1_THREE_TO_FOUR_MISSING_TRIGGER_BY_PLANE: dict[int, int] = {
     1: 234,
@@ -1675,86 +3428,12 @@ FILTER_METADATA_ALLOWED_COLUMNS = {
 }
 
 filter_metrics: dict[str, float] = {}
-
-def record_activity_metric(name: str, affected: float, total: float, label: str = "affected") -> None:
-    """Record a generic percentage metric."""
-    pct = 0.0 if total == 0 else 100.0 * float(affected) / float(total)
-    filter_metrics[name] = round(pct, 4)
-    _log_filter_metrics_message(
-        f"[filter-metrics] {name}: {label} {affected} of {total} ({pct:.2f}%)"
-    )
-
-def record_filter_metric(name: str, removed: float, total: float) -> None:
-    """Record percentage removed for a filter."""
-    record_activity_metric(name, removed, total, label="removed")
-
-
-def collect_task1_channel_qt_map(df_input: pd.DataFrame) -> dict[tuple[int, str, int], dict[str, str]]:
-    """Return the per-channel Q/T column mapping for Task 1."""
-    channel_map: dict[tuple[int, str, int], dict[str, str]] = {}
-    for plane in range(1, 5):
-        for side in ("F", "B"):
-            for strip in range(1, 5):
-                q_col = f"Q{plane}_{side}_{strip}"
-                t_col = f"T{plane}_{side}_{strip}"
-                if q_col in df_input.columns and t_col in df_input.columns:
-                    channel_map[(plane, side, strip)] = {"Q": q_col, "T": t_col}
-    return channel_map
-
-
 TASK1_CHANNEL_KEYS: tuple[tuple[int, str, int], ...] = tuple(
     (plane, side, strip)
     for plane in range(1, 5)
     for side in ("F", "B")
     for strip in range(1, 5)
 )
-
-
-def _task1_channel_order_key(channel_key: tuple[int, str, int]) -> tuple[int, int, int]:
-    plane, side, strip = channel_key
-    side_rank = 0 if side == "F" else 1
-    return plane, side_rank, strip
-
-
-def _task1_channel_offender_metric_key(channel_key: tuple[int, str, int]) -> str:
-    plane, side, strip = channel_key
-    return f"plane_combination_filter_offender_count_P{plane}{side}{strip}"
-
-
-def _task1_channel_noise_limit_metric_key(channel_key: tuple[int, str, int]) -> str:
-    plane, side, strip = channel_key
-    return f"plane_combination_noise_limit_P{plane}{side}{strip}"
-
-
-def _task1_selected_offender_cardinality_metric_key(selected_count: int) -> str:
-    return f"plane_combination_filter_rows_with_{selected_count}_selected_offenders"
-
-
-def _task1_selected_offender_cardinality_rate_metric_key(selected_count: int) -> str:
-    return f"{_task1_selected_offender_cardinality_metric_key(selected_count)}_rate_hz"
-
-
-def _task1_selected_offender_cardinality_percent_metric_key(selected_count: int) -> str:
-    return f"{_task1_selected_offender_cardinality_metric_key(selected_count)}_pct"
-
-
-def _task1_noise_control_efficiency_metric_key(plane: int, selected_count_threshold: int) -> str:
-    return (
-        f"plane_combination_filter_eff_p{plane}_selected_offenders_le_"
-        f"{selected_count_threshold}"
-    )
-
-
-def _task1_noise_control_efficiency_metric_names(
-    selected_count_thresholds: Iterable[int],
-) -> tuple[str, ...]:
-    return tuple(
-        _task1_noise_control_efficiency_metric_key(plane, selected_count_threshold)
-        for selected_count_threshold in selected_count_thresholds
-        for plane in sorted(TASK1_THREE_TO_FOUR_MISSING_TRIGGER_BY_PLANE)
-    )
-
-
 task1_noise_control_efficiency_max_selected_offenders = min(
     TASK1_SELECTED_OFFENDER_CARDINALITY_VALUES[-1],
     max(
@@ -1769,1936 +3448,16 @@ task1_noise_control_efficiency_max_selected_offenders = min(
 task1_noise_control_efficiency_selected_offender_values: tuple[int, ...] = tuple(
     range(task1_noise_control_efficiency_max_selected_offenders + 1)
 )
-
-
-def _task1_channel_label(channel_key: tuple[int, str, int]) -> str:
-    plane, side, strip = channel_key
-    return f"P{plane}S{strip}{side}"
-
-
-def _task1_channel_relation_type(
-    channel_a: tuple[int, str, int],
-    channel_b: tuple[int, str, int],
-) -> str:
-    if channel_a == channel_b:
-        return "self"
-    if channel_a[0] == channel_b[0] and channel_a[2] == channel_b[2]:
-        return "same_strip"
-    if channel_a[0] == channel_b[0]:
-        return "same_plane"
-    return "any"
-
-
-def _iter_task1_channel_relation_pairs(
-    channel_map: dict[tuple[int, str, int], dict[str, str]],
-) -> Iterable[tuple[tuple[int, str, int], tuple[int, str, int], str]]:
-    ordered_channels = sorted(channel_map, key=_task1_channel_order_key)
-    for idx, channel_a in enumerate(ordered_channels):
-        yield channel_a, channel_a, "self"
-        for channel_b in ordered_channels[idx + 1 :]:
-            yield channel_a, channel_b, _task1_channel_relation_type(channel_a, channel_b)
-
-
-def _task1_default_q_left_for_channel(channel_key: tuple[int, str, int]) -> float:
-    _ = channel_key
-    self_relation_limits = task1_channel_combination_limits_by_relation.get("self", {})
-    return float(self_relation_limits.get("q_sum_left", channel_combination_q_sum_left))
-
-
-def _empty_task1_removed_channel_values_frame() -> pd.DataFrame:
-    return pd.DataFrame(
-        columns=[
-            "row_index",
-            "channel",
-            "plane",
-            "side",
-            "strip",
-            "Q",
-            "T",
-            "pass_label",
-            "Q_zeroed",
-            "T_zeroed",
-        ]
-    )
-
-
-def _task1_build_removed_channel_values_frame(
-    df_input: pd.DataFrame,
-    channel_key: tuple[int, str, int],
-    q_values: pd.Series,
-    t_values: pd.Series,
-    fail_mask: np.ndarray | pd.Series,
-    pass_label: str,
-) -> pd.DataFrame:
-    aligned_mask = pd.Series(fail_mask, index=df_input.index, dtype=bool).reindex(df_input.index, fill_value=False)
-    if not aligned_mask.any():
-        return _empty_task1_removed_channel_values_frame()
-
-    plane, side, strip = channel_key
-    rows = pd.DataFrame(
-        {
-            "row_index": df_input.index[aligned_mask].to_numpy(),
-            "channel": _task1_channel_label(channel_key),
-            "plane": plane,
-            "side": side,
-            "strip": strip,
-            "Q": pd.to_numeric(q_values.loc[aligned_mask], errors="coerce").to_numpy(dtype=float),
-            "T": pd.to_numeric(t_values.loc[aligned_mask], errors="coerce").to_numpy(dtype=float),
-            "pass_label": pass_label,
-        }
-    )
-    return rows.reset_index(drop=True)
-
-
-def collect_task1_zeroed_channel_values(
-    reference_df: pd.DataFrame,
-    current_df: pd.DataFrame,
-    *,
-    pass_label: str,
-) -> pd.DataFrame:
-    if reference_df.empty or current_df.empty:
-        return _empty_task1_removed_channel_values_frame()
-
-    channel_map = collect_task1_channel_qt_map(reference_df)
-    if not channel_map:
-        return _empty_task1_removed_channel_values_frame()
-
-    aligned_reference = reference_df.reindex(current_df.index, copy=False)
-    current_index = current_df.index.to_numpy(copy=False)
-    payload_frames: list[pd.DataFrame] = []
-    for channel_key, cols in channel_map.items():
-        if cols["Q"] not in current_df.columns or cols["T"] not in current_df.columns:
-            continue
-        ref_q = pd.to_numeric(aligned_reference[cols["Q"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        ref_t = pd.to_numeric(aligned_reference[cols["T"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        cur_q = pd.to_numeric(current_df[cols["Q"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        cur_t = pd.to_numeric(current_df[cols["T"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        q_zeroed = (ref_q != 0) & (cur_q == 0)
-        t_zeroed = (ref_t != 0) & (cur_t == 0)
-        zeroed_mask = q_zeroed | t_zeroed
-        if not np.any(zeroed_mask):
-            continue
-
-        plane, side, strip = channel_key
-        payload_frames.append(
-            pd.DataFrame(
-                {
-                    "row_index": current_index[zeroed_mask],
-                    "channel": _task1_channel_label(channel_key),
-                    "plane": plane,
-                    "side": side,
-                    "strip": strip,
-                    "Q": ref_q[zeroed_mask],
-                    "T": ref_t[zeroed_mask],
-                    "pass_label": pass_label,
-                    "Q_zeroed": q_zeroed[zeroed_mask],
-                    "T_zeroed": t_zeroed[zeroed_mask],
-                }
-            )
-        )
-
-    if not payload_frames:
-        return _empty_task1_removed_channel_values_frame()
-    return pd.concat(payload_frames, ignore_index=True)
-
-
-def _task1_estimate_channel_noise_limit(
-    channel_key: tuple[int, str, int],
-    q_all: np.ndarray,
-    q_removed: np.ndarray,
-) -> float | None:
-    q_all = q_all[np.isfinite(q_all) & (q_all > 0)]
-    q_removed = q_removed[np.isfinite(q_removed) & (q_removed > 0)]
-    if (
-        q_all.size < channel_noise_limit_min_total_values
-        or q_removed.size < channel_noise_limit_min_removed_values
-    ):
-        return None
-
-    log_q_all = np.log10(q_all)
-    low = float(np.nanmin(log_q_all))
-    high = float(np.nanmax(log_q_all))
-    if not np.isfinite(low) or not np.isfinite(high) or high <= low:
-        return None
-
-    n_bins = min(channel_noise_limit_hist_bins, max(24, int(np.sqrt(log_q_all.size))))
-    hist, edges = np.histogram(log_q_all, bins=n_bins, range=(low, high))
-    if hist.sum() == 0 or np.count_nonzero(hist) < 2:
-        return None
-
-    mids = 0.5 * (edges[:-1] + edges[1:])
-    probs = hist.astype(float) / float(hist.sum())
-    omega = np.cumsum(probs)
-    mu = np.cumsum(probs * mids)
-    mu_total = float(mu[-1])
-    sigma_b2 = np.full_like(mids, -np.inf, dtype=float)
-    valid = (omega > 0) & (omega < 1)
-    sigma_b2[valid] = ((mu_total * omega[valid] - mu[valid]) ** 2) / (
-        omega[valid] * (1.0 - omega[valid])
-    )
-    if not np.isfinite(sigma_b2).any():
-        return None
-
-    threshold_idx = int(np.nanargmax(sigma_b2))
-    threshold_log_q = float(edges[threshold_idx + 1])
-
-    left_mask = log_q_all <= threshold_log_q
-    right_mask = log_q_all > threshold_log_q
-    if (
-        int(np.count_nonzero(left_mask)) < channel_noise_limit_min_class_count
-        or int(np.count_nonzero(right_mask)) < channel_noise_limit_min_class_count
-    ):
-        return None
-
-    log_q_removed = np.log10(q_removed)
-    removed_left_fraction = float(np.mean(log_q_removed <= threshold_log_q))
-    if removed_left_fraction < channel_noise_limit_min_removed_left_fraction:
-        return None
-
-    class_separation = float(np.mean(log_q_all[right_mask]) - np.mean(log_q_all[left_mask]))
-    if not np.isfinite(class_separation) or class_separation < channel_noise_limit_min_log_separation:
-        return None
-
-    learned_limit = float(10 ** threshold_log_q)
-    return max(learned_limit, _task1_default_q_left_for_channel(channel_key))
-
-
-def derive_task1_channel_noise_limits(
-    df_input: pd.DataFrame,
-    removed_channel_values: pd.DataFrame,
-) -> dict[tuple[int, str, int], float]:
-    if removed_channel_values.empty:
-        return {}
-
-    learned_limits: dict[tuple[int, str, int], float] = {}
-    channel_map = collect_task1_channel_qt_map(df_input)
-    grouped = removed_channel_values.groupby(["plane", "side", "strip"], sort=False)
-    for (plane, side, strip), group in grouped:
-        channel_key = (int(plane), str(side), int(strip))
-        if channel_key not in channel_map:
-            continue
-        cols = channel_map[channel_key]
-        q_all = pd.to_numeric(df_input[cols["Q"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        q_removed = pd.to_numeric(group.get("Q"), errors="coerce").dropna().to_numpy(dtype=float)
-        learned_limit = _task1_estimate_channel_noise_limit(channel_key, q_all, q_removed)
-        if learned_limit is not None and np.isfinite(learned_limit):
-            learned_limits[channel_key] = float(learned_limit)
-    return learned_limits
-
-
-def build_task1_effective_q_left_limits(
-    learned_limits: dict[tuple[int, str, int], float],
-) -> dict[tuple[int, str, int], float]:
-    return {
-        channel_key: float(learned_limits.get(channel_key, _task1_default_q_left_for_channel(channel_key)))
-        for channel_key in TASK1_CHANNEL_KEYS
-    }
-
-
-def apply_task1_channel_noise_limit_filter(
-    df_input: pd.DataFrame,
-    *,
-    learned_q_limits: dict[tuple[int, str, int], float],
-    snapshot_originals=None,
-    removed_value_pass_label: str | None = None,
-) -> dict[str, object]:
-    channel_map = collect_task1_channel_qt_map(df_input)
-    if len(channel_map) < 1 or not learned_q_limits:
-        return {
-            "tracked_channel_count": len(channel_map),
-            "channels_with_learned_limits": 0,
-            "rows_affected": 0,
-            "values_zeroed": 0,
-            "removed_channel_values": _empty_task1_removed_channel_values_frame(),
-        }
-
-    n_rows = len(df_input)
-    any_row_affected = np.zeros(n_rows, dtype=bool)
-    changed_columns: list[str] = []
-    removed_value_frames: list[pd.DataFrame] = []
-    values_zeroed = 0
-    channels_with_learned_limits = 0
-
-    channel_fail_masks: dict[tuple[int, str, int], np.ndarray] = {}
-    for channel_key in sorted(learned_q_limits, key=_task1_channel_order_key):
-        if channel_key not in channel_map:
-            continue
-        limit_value = learned_q_limits.get(channel_key)
-        if limit_value is None or not np.isfinite(limit_value):
-            continue
-
-        cols = channel_map[channel_key]
-        q_values = pd.to_numeric(df_input[cols["Q"]], errors="coerce").fillna(0)
-        t_values = pd.to_numeric(df_input[cols["T"]], errors="coerce").fillna(0)
-        q_array = q_values.to_numpy(dtype=float)
-        fail_mask = (q_array != 0) & (q_array <= float(limit_value))
-        if not np.any(fail_mask):
-            continue
-
-        channels_with_learned_limits += 1
-        channel_fail_masks[channel_key] = fail_mask
-        any_row_affected |= fail_mask
-        changed_columns.extend((cols["Q"], cols["T"]))
-        values_zeroed += int((q_values[fail_mask] != 0).sum())
-        values_zeroed += int((t_values[fail_mask] != 0).sum())
-        if removed_value_pass_label is not None:
-            removed_value_frames.append(
-                _task1_build_removed_channel_values_frame(
-                    df_input,
-                    channel_key,
-                    q_values,
-                    t_values,
-                    fail_mask,
-                    removed_value_pass_label,
-                )
-            )
-
-    if changed_columns and snapshot_originals is not None:
-        snapshot_originals(df_input, list(dict.fromkeys(changed_columns)))
-
-    for channel_key, fail_mask in channel_fail_masks.items():
-        cols = channel_map[channel_key]
-        df_input.loc[fail_mask, [cols["Q"], cols["T"]]] = 0
-
-    removed_values_df = (
-        pd.concat(removed_value_frames, ignore_index=True)
-        if removed_value_frames
-        else _empty_task1_removed_channel_values_frame()
-    )
-    return {
-        "tracked_channel_count": len(channel_map),
-        "channels_with_learned_limits": channels_with_learned_limits,
-        "rows_affected": int(np.count_nonzero(any_row_affected)),
-        "values_zeroed": int(values_zeroed),
-        "removed_channel_values": removed_values_df,
-    }
-
-
-def apply_task1_channel_qt_mismatch_filter(
-    df_input: pd.DataFrame,
-    *,
-    snapshot_originals=None,
-) -> dict[str, object]:
-    task1_channel_pairs: list[tuple[str, str]] = []
-    for plane in range(1, 5):
-        for side in ("F", "B"):
-            for strip in range(1, 5):
-                q_col = f"Q{plane}_{side}_{strip}"
-                t_col = f"T{plane}_{side}_{strip}"
-                if q_col in df_input.columns and t_col in df_input.columns:
-                    task1_channel_pairs.append((q_col, t_col))
-
-    row_mismatch_mask = pd.Series(False, index=df_input.index)
-    q_only_row_mask = pd.Series(False, index=df_input.index)
-    t_only_row_mask = pd.Series(False, index=df_input.index)
-    front_row_mask = pd.Series(False, index=df_input.index)
-    back_row_mask = pd.Series(False, index=df_input.index)
-    channel_qt_mismatch_channels = 0
-    channel_qt_values_zeroed = 0
-
-    if task1_channel_pairs and not df_input.empty:
-        for q_col, t_col in task1_channel_pairs:
-            q_values = pd.to_numeric(df_input[q_col], errors="coerce").fillna(0)
-            t_values = pd.to_numeric(df_input[t_col], errors="coerce").fillna(0)
-            q_only_mask = (q_values != 0) & (t_values == 0)
-            t_only_mask = (q_values == 0) & (t_values != 0)
-            mismatch_mask = q_only_mask | t_only_mask
-            if not mismatch_mask.any():
-                continue
-            if snapshot_originals is not None:
-                snapshot_originals(df_input, [q_col, t_col])
-            row_mismatch_mask |= mismatch_mask
-            q_only_row_mask |= q_only_mask
-            t_only_row_mask |= t_only_mask
-            if "_F_" in q_col:
-                front_row_mask |= mismatch_mask
-            elif "_B_" in q_col:
-                back_row_mask |= mismatch_mask
-            channel_qt_mismatch_channels += int(mismatch_mask.sum())
-            channel_qt_values_zeroed += int((q_values[mismatch_mask] != 0).sum())
-            channel_qt_values_zeroed += int((t_values[mismatch_mask] != 0).sum())
-            df_input.loc[mismatch_mask, [q_col, t_col]] = 0
-
-    return {
-        "task1_channel_pairs": task1_channel_pairs,
-        "row_mismatch_mask": row_mismatch_mask,
-        "rows_affected": int(row_mismatch_mask.sum()),
-        "values_zeroed": int(channel_qt_values_zeroed),
-        "q_only_rows": int(q_only_row_mask.sum()),
-        "t_only_rows": int(t_only_row_mask.sum()),
-        "front_rows": int(front_row_mask.sum()),
-        "back_rows": int(back_row_mask.sum()),
-        "mismatch_channels": int(channel_qt_mismatch_channels),
-    }
-
-
 _TASK1_COMBO_LABEL_PATTERN = re.compile(
     r"^P(?P<plane_a>\d+)S(?P<strip_a>\d+)(?P<side_a>[FB])-P(?P<plane_b>\d+)S(?P<strip_b>\d+)(?P<side_b>[FB])$"
 )
-
-
-def _task1_parse_combo_label(
-    combo_label: str,
-) -> tuple[tuple[int, str, int], tuple[int, str, int]] | None:
-    match = _TASK1_COMBO_LABEL_PATTERN.match(str(combo_label))
-    if match is None:
-        return None
-    return (
-        (
-            int(match.group("plane_a")),
-            match.group("side_a"),
-            int(match.group("strip_a")),
-        ),
-        (
-            int(match.group("plane_b")),
-            match.group("side_b"),
-            int(match.group("strip_b")),
-        ),
-    )
-
-
-def apply_task1_plane_combination_filter(
-    df_input: pd.DataFrame,
-    *,
-    relation_limits_by_type: Mapping[str, Mapping[str, float]],
-    snapshot_originals=None,
-    apply_changes: bool = True,
-    removed_value_pass_label: str | None = None,
-) -> dict[str, object]:
-    """
-    Apply the Task 1 channel-combination filter directly from channel Q/T values.
-
-    The filter is evaluated in one pass over four mutually-exclusive relation classes:
-    ``self`` (channel with itself), ``same_strip`` (front/back of the same strip),
-    ``same_plane`` (different strips within the same plane), and ``any`` (different
-    planes). Each relation class has its own Q_sum, Q_dif, T_sum, and T_dif bounds.
-
-    Failed self-relations become mandatory offending channels. Failed non-self
-    relations are solved per event with the exact minimum-cardinality channel set
-    that covers all failed edges.
-    """
-    channel_map = collect_task1_channel_qt_map(df_input)
-    if not channel_map:
-        return {
-            "input_rows": len(df_input),
-            "tracked_channel_count": len(channel_map),
-            "valid_pair_observations": 0,
-            "failed_pair_any": 0,
-            "failed_pair_q_sum": 0,
-            "failed_pair_q_dif": 0,
-            "failed_pair_t_sum": 0,
-            "failed_pair_t_dif": 0,
-            "rows_affected": 0,
-            "values_zeroed": 0,
-            "flagged_rows": 0,
-            "selected_offender_channels": 0,
-            "rows_with_multiple_offenders": 0,
-            "max_failed_pairs_in_row": 0,
-            "max_selected_offenders_in_row": 0,
-            "valid_pair_observations_by_relation": {
-                relation_type: 0
-                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-            },
-            "failed_pair_any_by_relation": {
-                relation_type: 0
-                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-            },
-            "failed_pair_q_sum_low_by_relation": {
-                relation_type: 0
-                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-            },
-            "failed_pair_q_sum_high_by_relation": {
-                relation_type: 0
-                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-            },
-            "failed_pair_q_dif_by_relation": {
-                relation_type: 0
-                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-            },
-            "failed_pair_t_sum_low_by_relation": {
-                relation_type: 0
-                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-            },
-            "failed_pair_t_sum_high_by_relation": {
-                relation_type: 0
-                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-            },
-            "failed_pair_t_dif_by_relation": {
-                relation_type: 0
-                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-            },
-            "rows_failed_q_sum_low": 0,
-            "rows_failed_q_sum_high": 0,
-            "rows_failed_q_dif": 0,
-            "rows_failed_t_sum_low": 0,
-            "rows_failed_t_sum_high": 0,
-            "rows_failed_t_dif": 0,
-            "rows_failed_q_sum_low_by_relation": {
-                relation_type: 0
-                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-            },
-            "rows_failed_q_sum_high_by_relation": {
-                relation_type: 0
-                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-            },
-            "rows_failed_q_dif_by_relation": {
-                relation_type: 0
-                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-            },
-            "rows_failed_t_sum_low_by_relation": {
-                relation_type: 0
-                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-            },
-            "rows_failed_t_sum_high_by_relation": {
-                relation_type: 0
-                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-            },
-            "rows_failed_t_dif_by_relation": {
-                relation_type: 0
-                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-            },
-            "rows_with_relation_failures": {
-                relation_type: 0
-                for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-            },
-            "selected_offender_cardinality_counts": {
-                selected_count: 0
-                for selected_count in TASK1_SELECTED_OFFENDER_CARDINALITY_VALUES
-            },
-            "selected_offender_counts": {
-                channel_key: 0 for channel_key in TASK1_CHANNEL_KEYS
-            },
-            "selected_offender_count_by_row": pd.Series(0, index=df_input.index, dtype=int),
-            "resolution_exact_by_row": pd.Series(True, index=df_input.index, dtype=bool),
-            "removed_channel_values": _empty_task1_removed_channel_values_frame(),
-        }
-
-    n_rows = len(df_input)
-    summary = {
-        "input_rows": n_rows,
-        "tracked_channel_count": len(channel_map),
-        "valid_pair_observations": 0,
-        "failed_pair_any": 0,
-        "failed_pair_q_sum": 0,
-        "failed_pair_q_sum_low": 0,
-        "failed_pair_q_sum_high": 0,
-        "failed_pair_q_dif": 0,
-        "failed_pair_t_sum": 0,
-        "failed_pair_t_sum_low": 0,
-        "failed_pair_t_sum_high": 0,
-        "failed_pair_t_dif": 0,
-        "rows_affected": 0,
-        "values_zeroed": 0,
-        "flagged_rows": 0,
-        "selected_offender_channels": 0,
-        "rows_with_multiple_offenders": 0,
-        "max_failed_pairs_in_row": 0,
-        "max_selected_offenders_in_row": 0,
-        "valid_pair_observations_by_relation": {
-            relation_type: 0
-            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-        },
-        "failed_pair_any_by_relation": {
-            relation_type: 0
-            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-        },
-        "failed_pair_q_sum_low_by_relation": {
-            relation_type: 0
-            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-        },
-        "failed_pair_q_sum_high_by_relation": {
-            relation_type: 0
-            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-        },
-        "failed_pair_q_dif_by_relation": {
-            relation_type: 0
-            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-        },
-        "failed_pair_t_sum_low_by_relation": {
-            relation_type: 0
-            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-        },
-        "failed_pair_t_sum_high_by_relation": {
-            relation_type: 0
-            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-        },
-        "failed_pair_t_dif_by_relation": {
-            relation_type: 0
-            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-        },
-        "rows_failed_q_sum_low": 0,
-        "rows_failed_q_sum_high": 0,
-        "rows_failed_q_dif": 0,
-        "rows_failed_t_sum_low": 0,
-        "rows_failed_t_sum_high": 0,
-        "rows_failed_t_dif": 0,
-        "rows_failed_q_sum_low_by_relation": {
-            relation_type: 0
-            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-        },
-        "rows_failed_q_sum_high_by_relation": {
-            relation_type: 0
-            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-        },
-        "rows_failed_q_dif_by_relation": {
-            relation_type: 0
-            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-        },
-        "rows_failed_t_sum_low_by_relation": {
-            relation_type: 0
-            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-        },
-        "rows_failed_t_sum_high_by_relation": {
-            relation_type: 0
-            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-        },
-        "rows_failed_t_dif_by_relation": {
-            relation_type: 0
-            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-        },
-        "rows_with_relation_failures": {
-            relation_type: 0
-            for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-        },
-        "selected_offender_cardinality_counts": {
-            selected_count: 0
-            for selected_count in TASK1_SELECTED_OFFENDER_CARDINALITY_VALUES
-        },
-    }
-    row_failed_edges: dict[int, list[tuple[tuple[int, str, int], tuple[int, str, int], float]]] = {}
-    row_forced_channels: dict[int, set[tuple[int, str, int]]] = {}
-    row_failure_relations: dict[int, set[str]] = {}
-    relation_metric_failed_rows = {
-        relation_type: {
-            component_key: set()
-            for component_key, _ in TASK1_CHANNEL_COMBINATION_COMPONENT_LABELS
-        }
-        for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES
-    }
-    metric_failed_rows = {
-        component_key: set()
-        for component_key, _ in TASK1_CHANNEL_COMBINATION_COMPONENT_LABELS
-    }
-    channel_fail_masks = {
-        channel_key: np.zeros(n_rows, dtype=bool)
-        for channel_key in channel_map
-    }
-    offender_hit_counts = {
-        channel_key: 0
-        for channel_key in TASK1_CHANNEL_KEYS
-    }
-    selected_offender_count_by_row = np.zeros(n_rows, dtype=int)
-    resolution_exact_by_row = np.ones(n_rows, dtype=bool)
-    removed_value_frames: list[pd.DataFrame] = []
-
-    for channel_a, channel_b, relation_type in _iter_task1_channel_relation_pairs(channel_map):
-        relation_limits = relation_limits_by_type.get(relation_type) or relation_limits_by_type.get("any") or {}
-        q_sum_left = float(relation_limits.get("q_sum_left", 0.0))
-        q_sum_right = float(relation_limits.get("q_sum_right", 0.0))
-        q_dif_threshold = float(relation_limits.get("q_dif_threshold", 0.0))
-        t_sum_left = float(relation_limits.get("t_sum_left", 0.0))
-        t_sum_right = float(relation_limits.get("t_sum_right", 0.0))
-        t_dif_threshold = float(relation_limits.get("t_dif_threshold", 0.0))
-        cols_a = channel_map[channel_a]
-        cols_b = channel_map[channel_b]
-        q_a = pd.to_numeric(df_input[cols_a["Q"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        q_b = pd.to_numeric(df_input[cols_b["Q"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        t_a = pd.to_numeric(df_input[cols_a["T"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        t_b = pd.to_numeric(df_input[cols_b["T"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-
-        if relation_type == "self":
-            valid_mask = np.isfinite(q_a) & np.isfinite(t_a)
-            pair_q_sum = q_a.copy()
-            pair_q_dif = np.zeros_like(q_a, dtype=float)
-            pair_t_sum = t_a.copy()
-            pair_t_dif = np.zeros_like(t_a, dtype=float)
-        else:
-            valid_mask = (
-                np.isfinite(q_a)
-                & np.isfinite(q_b)
-                & np.isfinite(t_a)
-                & np.isfinite(t_b)
-                & (q_a != 0)
-                & (q_b != 0)
-                & (t_a != 0)
-                & (t_b != 0)
-            )
-            pair_q_sum = 0.5 * (q_a + q_b)
-            pair_q_dif = 0.5 * (q_a - q_b)
-            pair_t_sum = 0.5 * (t_a + t_b)
-            pair_t_dif = 0.5 * (t_a - t_b)
-        if not np.any(valid_mask):
-            continue
-
-        valid_count = int(np.count_nonzero(valid_mask))
-        summary["valid_pair_observations"] += valid_count
-        summary["valid_pair_observations_by_relation"][relation_type] += valid_count
-
-        q_metric_valid_mask = valid_mask & np.isfinite(pair_q_sum) & (pair_q_sum != 0)
-        t_metric_valid_mask = valid_mask & np.isfinite(pair_t_sum) & (pair_t_sum != 0)
-        q_dif_valid_mask = valid_mask & np.isfinite(pair_q_dif)
-        t_dif_valid_mask = valid_mask & np.isfinite(pair_t_dif)
-        if relation_type != "self":
-            q_dif_valid_mask &= (pair_q_sum != 0)
-            t_dif_valid_mask &= (pair_t_sum != 0)
-
-        fail_q_sum_low = q_metric_valid_mask & (pair_q_sum < float(q_sum_left))
-        fail_q_sum_high = q_metric_valid_mask & (pair_q_sum > float(q_sum_right))
-        fail_q_sum = fail_q_sum_low | fail_q_sum_high
-        fail_q_dif = q_dif_valid_mask & (np.abs(pair_q_dif) > abs(float(q_dif_threshold)))
-        fail_t_sum_low = t_metric_valid_mask & (pair_t_sum < float(t_sum_left))
-        fail_t_sum_high = t_metric_valid_mask & (pair_t_sum > float(t_sum_right))
-        fail_t_sum = fail_t_sum_low | fail_t_sum_high
-        fail_t_dif = t_dif_valid_mask & (np.abs(pair_t_dif) > abs(float(t_dif_threshold)))
-        fail_any = fail_q_sum | fail_q_dif | fail_t_sum | fail_t_dif
-
-        summary["failed_pair_q_sum"] += int(np.count_nonzero(fail_q_sum))
-        summary["failed_pair_q_sum_low"] += int(np.count_nonzero(fail_q_sum_low))
-        summary["failed_pair_q_sum_high"] += int(np.count_nonzero(fail_q_sum_high))
-        summary["failed_pair_q_dif"] += int(np.count_nonzero(fail_q_dif))
-        summary["failed_pair_t_sum"] += int(np.count_nonzero(fail_t_sum))
-        summary["failed_pair_t_sum_low"] += int(np.count_nonzero(fail_t_sum_low))
-        summary["failed_pair_t_sum_high"] += int(np.count_nonzero(fail_t_sum_high))
-        summary["failed_pair_t_dif"] += int(np.count_nonzero(fail_t_dif))
-        summary["failed_pair_any"] += int(np.count_nonzero(fail_any))
-        summary["failed_pair_any_by_relation"][relation_type] += int(np.count_nonzero(fail_any))
-        summary["failed_pair_q_sum_low_by_relation"][relation_type] += int(np.count_nonzero(fail_q_sum_low))
-        summary["failed_pair_q_sum_high_by_relation"][relation_type] += int(np.count_nonzero(fail_q_sum_high))
-        summary["failed_pair_q_dif_by_relation"][relation_type] += int(np.count_nonzero(fail_q_dif))
-        summary["failed_pair_t_sum_low_by_relation"][relation_type] += int(np.count_nonzero(fail_t_sum_low))
-        summary["failed_pair_t_sum_high_by_relation"][relation_type] += int(np.count_nonzero(fail_t_sum_high))
-        summary["failed_pair_t_dif_by_relation"][relation_type] += int(np.count_nonzero(fail_t_dif))
-
-        for component_key, fail_mask in (
-            ("q_sum_low", fail_q_sum_low),
-            ("q_sum_high", fail_q_sum_high),
-            ("q_dif", fail_q_dif),
-            ("t_sum_low", fail_t_sum_low),
-            ("t_sum_high", fail_t_sum_high),
-            ("t_dif", fail_t_dif),
-        ):
-            failed_rows = np.flatnonzero(fail_mask)
-            if failed_rows.size == 0:
-                continue
-            relation_metric_failed_rows[relation_type][component_key].update(
-                int(row_pos) for row_pos in failed_rows
-            )
-            metric_failed_rows[component_key].update(int(row_pos) for row_pos in failed_rows)
-
-        if np.any(fail_any):
-            q_sum_width = max(abs(float(q_sum_right) - float(q_sum_left)), 1e-9)
-            t_sum_width = max(abs(float(t_sum_right) - float(t_sum_left)), 1e-9)
-            q_dif_scale = max(abs(float(q_dif_threshold)), 1e-9)
-            t_dif_scale = max(abs(float(t_dif_threshold)), 1e-9)
-            q_sum_excess = np.maximum.reduce(
-                [
-                    np.zeros_like(pair_q_sum, dtype=float),
-                    float(q_sum_left) - pair_q_sum,
-                    pair_q_sum - float(q_sum_right),
-                ]
-            ) / q_sum_width
-            q_dif_excess = np.maximum(np.abs(pair_q_dif) - abs(float(q_dif_threshold)), 0.0) / q_dif_scale
-            t_sum_excess = np.maximum.reduce(
-                [
-                    np.zeros_like(pair_t_sum, dtype=float),
-                    float(t_sum_left) - pair_t_sum,
-                    pair_t_sum - float(t_sum_right),
-                ]
-            ) / t_sum_width
-            t_dif_excess = np.maximum(np.abs(pair_t_dif) - abs(float(t_dif_threshold)), 0.0) / t_dif_scale
-            pair_severity = q_sum_excess + q_dif_excess + t_sum_excess + t_dif_excess
-            pair_severity = np.where(fail_any, pair_severity, 0.0)
-            pair_severity = np.where(fail_any & (pair_severity <= 0), 1.0, pair_severity)
-            for row_pos in np.flatnonzero(fail_any):
-                row_pos_int = int(row_pos)
-                row_failure_relations.setdefault(row_pos_int, set()).add(relation_type)
-                if relation_type == "self":
-                    row_forced_channels.setdefault(row_pos_int, set()).add(channel_a)
-                else:
-                    row_failed_edges.setdefault(row_pos_int, []).append(
-                        (channel_a, channel_b, float(pair_severity[row_pos]))
-                    )
-
-    flagged_row_positions = sorted(set(row_failed_edges) | set(row_forced_channels))
-    summary["flagged_rows"] = len(flagged_row_positions)
-    for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES:
-        summary["rows_with_relation_failures"][relation_type] = sum(
-            1
-            for relation_set in row_failure_relations.values()
-            if relation_type in relation_set
-        )
-        for component_key, _ in TASK1_CHANNEL_COMBINATION_COMPONENT_LABELS:
-            summary[f"rows_failed_{component_key}_by_relation"][relation_type] = len(
-                relation_metric_failed_rows[relation_type][component_key]
-            )
-
-    for component_key, _ in TASK1_CHANNEL_COMBINATION_COMPONENT_LABELS:
-        summary[f"rows_failed_{component_key}"] = len(metric_failed_rows[component_key])
-
-    for row_pos in flagged_row_positions:
-        forced_channels = sorted(
-            row_forced_channels.get(row_pos, set()),
-            key=_task1_channel_order_key,
-        )
-        edge_list = row_failed_edges.get(row_pos, [])
-        uncovered_edges = [
-            (channel_a, channel_b, severity)
-            for channel_a, channel_b, severity in edge_list
-            if channel_a not in forced_channels and channel_b not in forced_channels
-        ]
-        selected_channels = forced_channels + select_exact_minimum_vertex_cover(
-            uncovered_edges,
-            _task1_channel_order_key,
-        )
-        selected_channel_set = set(selected_channels)
-        unresolved_edges = [
-            (channel_a, channel_b, severity)
-            for channel_a, channel_b, severity in edge_list
-            if channel_a not in selected_channel_set and channel_b not in selected_channel_set
-        ]
-        resolution_exact_by_row[row_pos] = len(unresolved_edges) == 0
-
-        summary["max_failed_pairs_in_row"] = max(
-            summary["max_failed_pairs_in_row"],
-            len(edge_list) + len(forced_channels),
-        )
-        summary["max_selected_offenders_in_row"] = max(
-            summary["max_selected_offenders_in_row"],
-            len(selected_channels),
-        )
-        summary["selected_offender_channels"] += len(selected_channels)
-        if len(selected_channels) > 1:
-            summary["rows_with_multiple_offenders"] += 1
-        summary["selected_offender_cardinality_counts"][len(selected_channels)] = (
-            int(summary["selected_offender_cardinality_counts"].get(len(selected_channels), 0)) + 1
-        )
-        selected_offender_count_by_row[row_pos] = len(selected_channels)
-        for channel_key in selected_channels:
-            channel_fail_masks[channel_key][row_pos] = True
-            offender_hit_counts[channel_key] += 1
-
-    changed_columns: list[str] = []
-    any_row_affected = np.zeros(n_rows, dtype=bool)
-    for channel_key, fail_mask in channel_fail_masks.items():
-        if not np.any(fail_mask):
-            continue
-        cols = channel_map[channel_key]
-        q_values = pd.to_numeric(df_input[cols["Q"]], errors="coerce").fillna(0)
-        t_values = pd.to_numeric(df_input[cols["T"]], errors="coerce").fillna(0)
-        summary["values_zeroed"] += int((q_values[fail_mask] != 0).sum())
-        summary["values_zeroed"] += int((t_values[fail_mask] != 0).sum())
-        any_row_affected |= fail_mask
-        changed_columns.extend((cols["Q"], cols["T"]))
-        if removed_value_pass_label is not None:
-            removed_value_frames.append(
-                _task1_build_removed_channel_values_frame(
-                    df_input,
-                    channel_key,
-                    q_values,
-                    t_values,
-                    fail_mask,
-                    removed_value_pass_label,
-                )
-            )
-
-    summary["rows_affected"] = int(np.count_nonzero(any_row_affected))
-    if apply_changes and changed_columns and snapshot_originals is not None:
-        snapshot_originals(df_input, list(dict.fromkeys(changed_columns)))
-
-    if apply_changes:
-        for channel_key, fail_mask in channel_fail_masks.items():
-            if not np.any(fail_mask):
-                continue
-            cols = channel_map[channel_key]
-            df_input.loc[fail_mask, [cols["Q"], cols["T"]]] = 0
-
-    top_offenders = sorted(
-        (
-            (channel_key, count)
-            for channel_key, count in offender_hit_counts.items()
-            if count > 0
-        ),
-        key=lambda item: (-item[1], *_task1_channel_order_key(item[0])),
-    )[:8]
-    if top_offenders:
-        top_offenders_str = ", ".join(
-            f"P{plane}{side}{strip}:{count}"
-            for (plane, side, strip), count in top_offenders
-        )
-        print(
-            "[channel-combination-offenders] "
-            f"flagged_rows={summary['flagged_rows']} "
-            f"selected_offenders={summary['selected_offender_channels']} "
-            f"multi_offender_rows={summary['rows_with_multiple_offenders']} "
-            f"max_failed_pairs_in_row={summary['max_failed_pairs_in_row']} "
-            f"top={top_offenders_str}"
-        )
-
-    summary["selected_offender_counts"] = {
-        channel_key: int(offender_hit_counts.get(channel_key, 0))
-        for channel_key in TASK1_CHANNEL_KEYS
-    }
-    summary["selected_offender_count_by_row"] = pd.Series(
-        selected_offender_count_by_row,
-        index=df_input.index,
-        dtype=int,
-    )
-    summary["resolution_exact_by_row"] = pd.Series(
-        resolution_exact_by_row,
-        index=df_input.index,
-        dtype=bool,
-    )
-    summary["rows_with_inexact_resolution"] = int(np.count_nonzero(~resolution_exact_by_row))
-    summary["removed_channel_values"] = (
-        pd.concat(removed_value_frames, ignore_index=True)
-        if removed_value_frames
-        else _empty_task1_removed_channel_values_frame()
-    )
-    return summary
-
-
 TASK1_CHANNEL_COMBINATION_OBSERVABLES: tuple[tuple[str, str], ...] = (
     ("q_sum", "Q semisum"),
     ("q_dif", "Q semidifference"),
     ("t_sum", "T semisum"),
     ("t_dif", "T semidifference"),
 )
-
-
-def _task1_filter_tt_series(df_input: pd.DataFrame) -> pd.Series:
-    for candidate in ("raw_tt", "clean_tt"):
-        if candidate in df_input.columns:
-            return df_input[candidate].apply(normalize_tt_label).astype(str)
-    return pd.Series(["0"] * len(df_input), index=df_input.index, dtype=str)
-
-
-def _task1_population_color(label: str) -> tuple[float, float, float, float]:
-    digest = hashlib.md5(label.encode("utf-8")).digest()
-    color_pos = int.from_bytes(digest[:4], "big") / float(2**32 - 1)
-    return plt.get_cmap("turbo")(0.08 + 0.84 * color_pos)
-
-
-def _task1_hist_range(
-    before_values: np.ndarray,
-    after_values: np.ndarray,
-    limits: tuple[float | None, float | None],
-) -> tuple[float, float]:
-    finite_values = np.concatenate(
-        [
-            before_values[np.isfinite(before_values)],
-            after_values[np.isfinite(after_values)],
-        ]
-    )
-    lower_limit, upper_limit = limits
-    if finite_values.size:
-        low = float(np.nanpercentile(finite_values, 1))
-        high = float(np.nanpercentile(finite_values, 99))
-        if not np.isfinite(low) or not np.isfinite(high):
-            low = float(np.nanmin(finite_values))
-            high = float(np.nanmax(finite_values))
-    else:
-        low, high = -1.0, 1.0
-    if lower_limit is not None:
-        low = min(low, float(lower_limit))
-    if upper_limit is not None:
-        high = max(high, float(upper_limit))
-    if not np.isfinite(low) or not np.isfinite(high) or low == high:
-        center = float(low if np.isfinite(low) else 0.0)
-        low, high = center - 1.0, center + 1.0
-    span = high - low
-    padding = 0.08 * span if span > 0 else 1.0
-    return low - padding, high + padding
-
-
-def _task1_full_data_range(
-    values: np.ndarray,
-    limits: tuple[float | None, float | None],
-) -> tuple[float, float]:
-    finite_values = values[np.isfinite(values)]
-    lower_limit, upper_limit = limits
-    if finite_values.size:
-        low = float(np.nanmin(finite_values))
-        high = float(np.nanmax(finite_values))
-    else:
-        low, high = -1.0, 1.0
-    if lower_limit is not None:
-        low = min(low, float(lower_limit))
-    if upper_limit is not None:
-        high = max(high, float(upper_limit))
-    if not np.isfinite(low) or not np.isfinite(high) or low == high:
-        center = float(low if np.isfinite(low) else 0.0)
-        low, high = center - 1.0, center + 1.0
-    span = high - low
-    padding = 0.05 * span if span > 0 else max(1.0, 0.05 * max(abs(low), abs(high), 1.0))
-    return low - padding, high + padding
-
-
-def _task1_capped_plot_range(
-    values: np.ndarray,
-    limits: tuple[float | None, float | None],
-    *,
-    boundary_expansion_factor: float = 1.5,
-) -> tuple[float, float]:
-    finite_values = values[np.isfinite(values)]
-    lower_limit, upper_limit = limits
-    lower_limit = float(lower_limit) if lower_limit is not None and np.isfinite(lower_limit) else None
-    upper_limit = float(upper_limit) if upper_limit is not None and np.isfinite(upper_limit) else None
-
-    if finite_values.size:
-        data_low = float(np.nanmin(finite_values))
-        data_high = float(np.nanmax(finite_values))
-    else:
-        data_low, data_high = np.nan, np.nan
-
-    if lower_limit is not None and upper_limit is not None and upper_limit > lower_limit:
-        center = 0.5 * (lower_limit + upper_limit)
-        half_span = 0.5 * (upper_limit - lower_limit)
-        cap_low = center - boundary_expansion_factor * half_span
-        cap_high = center + boundary_expansion_factor * half_span
-    else:
-        return _task1_full_data_range(values, limits)
-
-    low = lower_limit
-    high = upper_limit
-    if np.isfinite(data_low):
-        low = min(low, data_low)
-    if np.isfinite(data_high):
-        high = max(high, data_high)
-
-    low = max(low, cap_low)
-    high = min(high, cap_high)
-
-    if not np.isfinite(low) or not np.isfinite(high) or low >= high:
-        low, high = cap_low, cap_high
-
-    span = high - low
-    padding = 0.04 * span if span > 0 else max(0.5, 0.04 * max(abs(low), abs(high), 1.0))
-    return low - padding, high + padding
-
-
-def collect_task1_channel_combination_histogram_payload(
-    df_input: pd.DataFrame,
-    tt_series: pd.Series,
-) -> pd.DataFrame:
-    payload_rows: list[pd.DataFrame] = []
-    channel_map = collect_task1_channel_qt_map(df_input)
-    if not channel_map:
-        return pd.DataFrame(
-            columns=[
-                "row_index",
-                "tt",
-                "combo",
-                "relation_type",
-                "same_strip",
-                "q_sum",
-                "q_dif",
-                "t_sum",
-                "t_dif",
-            ]
-        )
-
-    tt_series = tt_series.reindex(df_input.index).fillna("0").astype(str)
-    for channel_a, channel_b, relation_type in _iter_task1_channel_relation_pairs(channel_map):
-        cols_a = channel_map[channel_a]
-        cols_b = channel_map[channel_b]
-        q_a = pd.to_numeric(df_input[cols_a["Q"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        q_b = pd.to_numeric(df_input[cols_b["Q"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        t_a = pd.to_numeric(df_input[cols_a["T"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-        t_b = pd.to_numeric(df_input[cols_b["T"]], errors="coerce").fillna(0).to_numpy(dtype=float)
-
-        if relation_type == "self":
-            valid_mask = (
-                np.isfinite(q_a)
-                & np.isfinite(t_a)
-                & (q_a != 0)
-                & (t_a != 0)
-            )
-            q_sum = q_a
-            q_dif = np.zeros_like(q_a, dtype=float)
-            t_sum = t_a
-            t_dif = np.zeros_like(t_a, dtype=float)
-        else:
-            valid_mask = (
-                np.isfinite(q_a)
-                & np.isfinite(q_b)
-                & np.isfinite(t_a)
-                & np.isfinite(t_b)
-                & (q_a != 0)
-                & (q_b != 0)
-                & (t_a != 0)
-                & (t_b != 0)
-            )
-            q_sum = 0.5 * (q_a + q_b)
-            q_dif = 0.5 * (q_a - q_b)
-            t_sum = 0.5 * (t_a + t_b)
-            t_dif = 0.5 * (t_a - t_b)
-        if not np.any(valid_mask):
-            continue
-
-        valid_index = df_input.index[valid_mask]
-        payload_rows.append(
-            pd.DataFrame(
-                {
-                    "row_index": valid_index.to_numpy(),
-                    "tt": tt_series.loc[valid_index].to_numpy(dtype=str),
-                    "combo": f"P{channel_a[0]}S{channel_a[2]}{channel_a[1]}-P{channel_b[0]}S{channel_b[2]}{channel_b[1]}",
-                    "relation_type": relation_type,
-                    "same_strip": relation_type == "same_strip",
-                    "q_sum": q_sum[valid_mask],
-                    "q_dif": q_dif[valid_mask],
-                    "t_sum": t_sum[valid_mask],
-                    "t_dif": t_dif[valid_mask],
-                }
-            )
-        )
-
-    if not payload_rows:
-        return pd.DataFrame(
-            columns=[
-                "row_index",
-                "tt",
-                "combo",
-                "relation_type",
-                "same_strip",
-                "q_sum",
-                "q_dif",
-                "t_sum",
-                "t_dif",
-            ]
-        )
-    return pd.concat(payload_rows, ignore_index=True)
-
-
-def subtract_task1_channel_combination_payload(
-    left_payload: pd.DataFrame,
-    right_payload: pd.DataFrame,
-) -> pd.DataFrame:
-    if left_payload.empty:
-        return left_payload.copy()
-    if right_payload.empty or not {"row_index", "combo"}.issubset(left_payload.columns) or not {"row_index", "combo"}.issubset(right_payload.columns):
-        return left_payload.copy()
-
-    reduced_right = right_payload.loc[:, ["row_index", "combo"]].drop_duplicates()
-    removed_payload = left_payload.merge(
-        reduced_right,
-        on=["row_index", "combo"],
-        how="left",
-        indicator=True,
-    )
-    return removed_payload.loc[removed_payload["_merge"] == "left_only"].drop(columns="_merge")
-
-
-def plot_task1_channel_combination_filter_by_tt(
-    original_payload: pd.DataFrame,
-    before_payload: pd.DataFrame,
-    after_payload: pd.DataFrame,
-    basename_no_ext_value: str,
-    fig_idx_value: int,
-    *,
-    show_plots: bool,
-    save_plots: bool,
-    plot_list: list[str] | None,
-    limits_by_relation: dict[str, dict[str, tuple[float | None, float | None]]],
-    q_left_limits_by_channel: dict[tuple[int, str, int], float] | None,
-    top_n_by_relation: dict[str, int | None],
-    include_same_strip_pairs: bool,
-) -> int:
-    observable_names = [observable for observable, _ in TASK1_CHANNEL_COMBINATION_OBSERVABLES]
-    observable_labels = {observable: label for observable, label in TASK1_CHANNEL_COMBINATION_OBSERVABLES}
-    scatter_max_points = 5000
-    removed_scatter_marker_size = max(8, int(round(0.6 * removed_marker_size)))
-    prefilter_scatter_size = max(3, int(round(0.25 * removed_marker_size)))
-    noise_limit_line_kwargs = {
-        "color": "red",
-        "linestyle": "--",
-        "linewidth": 1.4,
-        "alpha": 0.85,
-        "zorder": 6,
-    }
-    noise_limit_boundary_kwargs = {
-        "color": "red",
-        "linestyle": "--",
-        "linewidth": 1.2,
-        "alpha": 0.65,
-        "zorder": 6,
-    }
-    rng = np.random.default_rng(0)
-    q_left_limits_by_channel = q_left_limits_by_channel or {}
-
-    original_payload = original_payload.copy()
-    before_payload = before_payload.copy()
-    after_payload = after_payload.copy()
-    tt_labels = []
-    for payload in (original_payload, before_payload, after_payload):
-        if "tt" in payload.columns:
-            tt_labels.extend(payload["tt"].astype(str).tolist())
-    ordered_tts = [tt_label for tt_label in TT_COLOR_LABELS if tt_label != "0" and tt_label in set(tt_labels)]
-    relation_label_map = {
-        "self": "self",
-        "same_strip": "same strip",
-        "same_plane": "same plane",
-        "any": "any",
-    }
-
-    for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES:
-        relation_limits = limits_by_relation.get(relation_type, {})
-        relation_top_n = top_n_by_relation.get(relation_type)
-        for tt_label in ordered_tts:
-            original_tt_all = original_payload.loc[
-                (original_payload.get("tt", pd.Series(dtype=str)).astype(str) == tt_label)
-                & (original_payload.get("relation_type", pd.Series(dtype=str)).astype(str) == relation_type)
-            ].copy()
-            before_tt_all = before_payload.loc[
-                (before_payload.get("tt", pd.Series(dtype=str)).astype(str) == tt_label)
-                & (before_payload.get("relation_type", pd.Series(dtype=str)).astype(str) == relation_type)
-            ].copy()
-            after_tt_all = after_payload.loc[
-                (after_payload.get("tt", pd.Series(dtype=str)).astype(str) == tt_label)
-                & (after_payload.get("relation_type", pd.Series(dtype=str)).astype(str) == relation_type)
-            ].copy()
-            if original_tt_all.empty and before_tt_all.empty and after_tt_all.empty:
-                continue
-
-            reference_counts = before_tt_all.groupby("combo").size().sort_values(ascending=False)
-            if reference_counts.empty:
-                reference_counts = original_tt_all.groupby("combo").size().sort_values(ascending=False)
-            if reference_counts.empty:
-                reference_counts = after_tt_all.groupby("combo").size().sort_values(ascending=False)
-            combo_labels = (
-                reference_counts.index.tolist()
-                if relation_top_n is None
-                else reference_counts.head(int(relation_top_n)).index.tolist()
-            )
-            if not combo_labels:
-                continue
-
-            original_tt_full = original_tt_all.loc[original_tt_all["combo"].isin(combo_labels)].copy()
-            before_tt_full = before_tt_all.loc[before_tt_all["combo"].isin(combo_labels)].copy()
-            after_tt_full = after_tt_all.loc[after_tt_all["combo"].isin(combo_labels)].copy()
-            if original_tt_full.empty and before_tt_full.empty and after_tt_full.empty:
-                continue
-
-            prefilter_removed_tt_full = subtract_task1_channel_combination_payload(
-                original_tt_full,
-                before_tt_full,
-            )
-            removed_tt_full = subtract_task1_channel_combination_payload(
-                before_tt_full,
-                after_tt_full,
-            )
-
-            def _sample_scatter_payload(payload: pd.DataFrame) -> pd.DataFrame:
-                if len(payload) <= scatter_max_points:
-                    return payload.copy()
-                return payload.iloc[
-                    rng.choice(len(payload), size=scatter_max_points, replace=False)
-                ].copy()
-
-            after_tt = _sample_scatter_payload(after_tt_full)
-            prefilter_removed_tt = _sample_scatter_payload(prefilter_removed_tt_full)
-            removed_tt = _sample_scatter_payload(removed_tt_full)
-
-            combo_color_map = {label: _task1_population_color(label) for label in combo_labels}
-            combo_q_boundaries: dict[str, dict[str, object]] = {}
-            for combo_label in combo_labels:
-                parsed_combo = _task1_parse_combo_label(combo_label)
-                if parsed_combo is None:
-                    continue
-                channel_a, channel_b = parsed_combo
-                q_left_a = q_left_limits_by_channel.get(channel_a)
-                q_left_b = q_left_limits_by_channel.get(channel_b)
-                combo_q_boundaries[combo_label] = {
-                    "channel_a": channel_a,
-                    "channel_b": channel_b,
-                    "q_left_a": q_left_a,
-                    "q_left_b": q_left_b,
-                    "q_sum_left": (
-                        0.5 * (float(q_left_a) + float(q_left_b))
-                        if q_left_a is not None and q_left_b is not None
-                        else None
-                    ),
-                }
-            after_combo_data = {
-                label: {
-                    observable: pd.to_numeric(
-                        after_tt_full.loc[after_tt_full["combo"] == label, observable],
-                        errors="coerce",
-                    ).to_numpy(dtype=float)
-                    for observable in observable_names
-                }
-                for label in combo_labels
-            }
-            removed_combo_data = {
-                label: {
-                    observable: pd.to_numeric(
-                        removed_tt_full.loc[removed_tt_full["combo"] == label, observable],
-                        errors="coerce",
-                    ).to_numpy(dtype=float)
-                    for observable in observable_names
-                }
-                for label in combo_labels
-            }
-            after_scatter_combo_data = {
-                label: {
-                    observable: pd.to_numeric(
-                        after_tt.loc[after_tt["combo"] == label, observable],
-                        errors="coerce",
-                    ).to_numpy(dtype=float)
-                    for observable in observable_names
-                }
-                for label in combo_labels
-            }
-            removed_scatter_combo_data = {
-                label: {
-                    observable: pd.to_numeric(
-                        removed_tt.loc[removed_tt["combo"] == label, observable],
-                        errors="coerce",
-                    ).to_numpy(dtype=float)
-                    for observable in observable_names
-                }
-                for label in combo_labels
-            }
-            n_obs = len(observable_names)
-            fig, axes = plt.subplots(n_obs, n_obs, figsize=(2.3 * n_obs, 2.3 * n_obs), constrained_layout=True)
-            any_panel_data = False
-
-            axis_ranges: dict[str, tuple[float, float]] = {}
-            for observable in observable_names:
-                full_values = pd.to_numeric(
-                    original_tt_full.get(observable, pd.Series(dtype=float)),
-                    errors="coerce",
-                ).dropna().to_numpy(dtype=float)
-                axis_ranges[observable] = _task1_capped_plot_range(
-                    full_values,
-                    relation_limits.get(observable, (None, None)),
-                )
-
-            for row_idx, y_name in enumerate(observable_names):
-                for col_idx, x_name in enumerate(observable_names):
-                    ax = axes[row_idx, col_idx]
-                    if col_idx > row_idx:
-                        ax.set_axis_off()
-                        continue
-
-                    if row_idx == col_idx:
-                        before_values = pd.to_numeric(
-                            before_tt_full.get(x_name, pd.Series(dtype=float)),
-                            errors="coerce",
-                        ).dropna().to_numpy(dtype=float)
-                        after_values = pd.to_numeric(
-                            after_tt_full.get(x_name, pd.Series(dtype=float)),
-                            errors="coerce",
-                        ).dropna().to_numpy(dtype=float)
-                        prefilter_removed_values = pd.to_numeric(
-                            prefilter_removed_tt_full.get(x_name, pd.Series(dtype=float)),
-                            errors="coerce",
-                        ).dropna().to_numpy(dtype=float)
-                        prefilter_removed_values = prefilter_removed_values[np.isfinite(prefilter_removed_values)]
-                        if (
-                            before_values.size == 0
-                            and after_values.size == 0
-                            and prefilter_removed_values.size == 0
-                        ):
-                            ax.set_axis_off()
-                            continue
-                        any_panel_data = True
-                        x_low, x_high = axis_ranges[x_name]
-                        bins = np.linspace(x_low, x_high, 60)
-                        if prefilter_removed_values.size:
-                            ax.hist(
-                                prefilter_removed_values,
-                                bins=bins,
-                                histtype="step",
-                                linestyle="--",
-                                linewidth=1.0,
-                                alpha=0.55,
-                                color="lightgrey",
-                            )
-                        for combo_label in combo_labels:
-                            combo_before = removed_combo_data[combo_label][x_name]
-                            combo_after = after_combo_data[combo_label][x_name]
-                            combo_before = combo_before[np.isfinite(combo_before)]
-                            combo_after = combo_after[np.isfinite(combo_after)]
-                            if combo_before.size:
-                                ax.hist(
-                                    combo_before,
-                                    bins=bins,
-                                    histtype="step",
-                                    linestyle="--",
-                                    linewidth=0.95,
-                                    alpha=0.55,
-                                    color=combo_color_map[combo_label],
-                                )
-                            if combo_after.size:
-                                ax.hist(
-                                    combo_after,
-                                    bins=bins,
-                                    histtype="step",
-                                    linestyle="-",
-                                    linewidth=1.35,
-                                    alpha=0.95,
-                                    color=combo_color_map[combo_label],
-                                )
-                        lower_limit, upper_limit = relation_limits.get(x_name, (None, None))
-                        if lower_limit is not None:
-                            ax.axvline(float(lower_limit), color="lightgrey", linestyle="--", linewidth=1.1)
-                        if upper_limit is not None:
-                            ax.axvline(float(upper_limit), color="lightgrey", linestyle="--", linewidth=1.1)
-                        if x_name == "q_sum":
-                            for combo_label in combo_labels:
-                                q_sum_noise_left = combo_q_boundaries.get(combo_label, {}).get("q_sum_left")
-                                if q_sum_noise_left is None or not np.isfinite(q_sum_noise_left):
-                                    continue
-                                ax.axvline(
-                                    float(q_sum_noise_left),
-                                    **noise_limit_line_kwargs,
-                                )
-                        ax.set_xlim(x_low, x_high)
-                        ax.set_yscale("log", nonpositive="clip")
-                        ax.set_title(observable_labels[x_name], fontsize=9)
-                    else:
-                        after_x = pd.to_numeric(
-                            after_tt.get(x_name, pd.Series(dtype=float)),
-                            errors="coerce",
-                        ).to_numpy(dtype=float)
-                        after_y = pd.to_numeric(
-                            after_tt.get(y_name, pd.Series(dtype=float)),
-                            errors="coerce",
-                        ).to_numpy(dtype=float)
-                        prefilter_removed_x = pd.to_numeric(
-                            prefilter_removed_tt.get(x_name, pd.Series(dtype=float)),
-                            errors="coerce",
-                        ).to_numpy(dtype=float)
-                        prefilter_removed_y = pd.to_numeric(
-                            prefilter_removed_tt.get(y_name, pd.Series(dtype=float)),
-                            errors="coerce",
-                        ).to_numpy(dtype=float)
-                        removed_x = pd.to_numeric(
-                            removed_tt.get(x_name, pd.Series(dtype=float)),
-                            errors="coerce",
-                        ).to_numpy(dtype=float)
-                        removed_y = pd.to_numeric(
-                            removed_tt.get(y_name, pd.Series(dtype=float)),
-                            errors="coerce",
-                        ).to_numpy(dtype=float)
-                        after_mask = np.isfinite(after_x) & np.isfinite(after_y)
-                        prefilter_removed_mask = np.isfinite(prefilter_removed_x) & np.isfinite(prefilter_removed_y)
-                        removed_mask = np.isfinite(removed_x) & np.isfinite(removed_y)
-                        if not np.any(prefilter_removed_mask) and not np.any(removed_mask) and not np.any(after_mask):
-                            ax.set_axis_off()
-                            continue
-                        any_panel_data = True
-                        if np.any(prefilter_removed_mask):
-                            ax.scatter(
-                                prefilter_removed_x[prefilter_removed_mask],
-                                prefilter_removed_y[prefilter_removed_mask],
-                                s=prefilter_scatter_size,
-                                alpha=0.08,
-                                color="grey",
-                                edgecolors="none",
-                                rasterized=True,
-                            )
-                        for combo_label in combo_labels:
-                            combo_after_x = after_scatter_combo_data[combo_label][x_name]
-                            combo_after_y = after_scatter_combo_data[combo_label][y_name]
-                            combo_removed_x = removed_scatter_combo_data[combo_label][x_name]
-                            combo_removed_y = removed_scatter_combo_data[combo_label][y_name]
-                            combo_after_mask = np.isfinite(combo_after_x) & np.isfinite(combo_after_y)
-                            combo_removed_mask = np.isfinite(combo_removed_x) & np.isfinite(combo_removed_y)
-                            if np.any(combo_after_mask):
-                                ax.scatter(
-                                    combo_after_x[combo_after_mask],
-                                    combo_after_y[combo_after_mask],
-                                    s=6,
-                                    alpha=0.16,
-                                    color=combo_color_map[combo_label],
-                                    edgecolors="none",
-                                    rasterized=True,
-                                )
-                            if np.any(combo_removed_mask):
-                                ax.scatter(
-                                    combo_removed_x[combo_removed_mask],
-                                    combo_removed_y[combo_removed_mask],
-                                    s=removed_scatter_marker_size,
-                                    marker=removed_marker,
-                                    alpha=removed_marker_alpha,
-                                    linewidths=1.0,
-                                    color=combo_color_map[combo_label],
-                                    rasterized=True,
-                                )
-                        x_low, x_high = axis_ranges[x_name]
-                        y_low, y_high = axis_ranges[y_name]
-                        ax.set_xlim(x_low, x_high)
-                        ax.set_ylim(y_low, y_high)
-                        x_limits = relation_limits.get(x_name, (None, None))
-                        y_limits = relation_limits.get(y_name, (None, None))
-                        if x_limits[0] is not None:
-                            ax.axvline(float(x_limits[0]), color="lightgrey", linestyle="--", linewidth=0.9)
-                        if x_limits[1] is not None:
-                            ax.axvline(float(x_limits[1]), color="lightgrey", linestyle="--", linewidth=0.9)
-                        if y_limits[0] is not None:
-                            ax.axhline(float(y_limits[0]), color="lightgrey", linestyle="--", linewidth=0.9)
-                        if y_limits[1] is not None:
-                            ax.axhline(float(y_limits[1]), color="lightgrey", linestyle="--", linewidth=0.9)
-                        if x_name == "q_sum":
-                            for combo_label in combo_labels:
-                                q_sum_noise_left = combo_q_boundaries.get(combo_label, {}).get("q_sum_left")
-                                if q_sum_noise_left is None or not np.isfinite(q_sum_noise_left):
-                                    continue
-                                ax.axvline(
-                                    float(q_sum_noise_left),
-                                    **noise_limit_line_kwargs,
-                                )
-                        if y_name == "q_sum":
-                            for combo_label in combo_labels:
-                                q_sum_noise_left = combo_q_boundaries.get(combo_label, {}).get("q_sum_left")
-                                if q_sum_noise_left is None or not np.isfinite(q_sum_noise_left):
-                                    continue
-                                ax.axhline(
-                                    float(q_sum_noise_left),
-                                    **noise_limit_line_kwargs,
-                                )
-                        if x_name == "q_sum" and y_name == "q_dif":
-                            q_sum_values = np.linspace(x_low, x_high, 200)
-                            for combo_label in combo_labels:
-                                combo_boundary = combo_q_boundaries.get(combo_label, {})
-                                q_left_a = combo_boundary.get("q_left_a")
-                                q_left_b = combo_boundary.get("q_left_b")
-                                if q_left_a is not None and np.isfinite(q_left_a):
-                                    ax.plot(
-                                        q_sum_values,
-                                        float(q_left_a) - q_sum_values,
-                                        **noise_limit_boundary_kwargs,
-                                    )
-                                if q_left_b is not None and np.isfinite(q_left_b):
-                                    ax.plot(
-                                        q_sum_values,
-                                        q_sum_values - float(q_left_b),
-                                        **noise_limit_boundary_kwargs,
-                                    )
-
-                    if row_idx == n_obs - 1:
-                        ax.set_xlabel(observable_labels[x_name], fontsize=8)
-                    else:
-                        ax.set_xticklabels([])
-                    if col_idx == 0 and row_idx != col_idx:
-                        ax.set_ylabel(observable_labels[y_name], fontsize=8)
-                    elif col_idx != 0:
-                        ax.set_yticklabels([])
-                    if row_idx == col_idx:
-                        ax.set_ylabel("Counts", fontsize=8)
-                    ax.tick_params(labelsize=6)
-
-            if not any_panel_data:
-                plt.close(fig)
-                continue
-
-            has_noise_limit_boundaries = any(
-                combo_q_boundaries.get(label, {}).get("q_sum_left") is not None
-                or combo_q_boundaries.get(label, {}).get("q_left_a") is not None
-                or combo_q_boundaries.get(label, {}).get("q_left_b") is not None
-                for label in combo_labels
-            )
-            style_handles = [
-                mpl.lines.Line2D([0], [0], color="lightgrey", linestyle="--", linewidth=1.0, label="Removed Before Combination"),
-                mpl.lines.Line2D([0], [0], color="black", linestyle="--", linewidth=1.0, label="Removed By Combination"),
-                mpl.lines.Line2D([0], [0], color="black", linestyle="-", linewidth=1.4, label="Retained"),
-                mpl.lines.Line2D(
-                    [0],
-                    [0],
-                    color="black",
-                    marker=removed_marker,
-                    linestyle="None",
-                    markersize=6,
-                    markerfacecolor="none",
-                    label="Combination Rejection",
-                ),
-            ]
-            if has_noise_limit_boundaries:
-                style_handles.append(
-                    mpl.lines.Line2D(
-                        [0],
-                        [0],
-                        color="red",
-                        linestyle="--",
-                        linewidth=1.4,
-                        label="Noise Charge Limit",
-                    )
-                )
-            combo_handles = [
-                mpl.lines.Line2D([0], [0], color=combo_color_map[label], linestyle="-", linewidth=1.6, label=label)
-                for label in combo_labels
-            ]
-            fig.legend(
-                handles=style_handles + combo_handles,
-                loc="upper center",
-                bbox_to_anchor=(0.5, 0.995),
-                ncol=min(6, max(2, len(combo_handles) + 2)),
-                fontsize=6,
-                frameon=False,
-                handlelength=1.8,
-                columnspacing=0.8,
-            )
-            combo_mode_label = "all pairs" if relation_top_n is None else f"top {int(relation_top_n)} pairs"
-            fig.suptitle(
-                f"Task 1 channel-combination filter by TT {tt_label}\n"
-                f"{basename_no_ext_value} · {relation_label_map.get(relation_type, relation_type)} · {combo_mode_label}",
-                fontsize=11,
-                y=0.94,
-            )
-            if save_plots:
-                final_filename = (
-                    f"{fig_idx_value}_channel_combination_filter_by_tt_"
-                    f"{relation_type}_TT_{tt_label}.png"
-                )
-                fig_idx_value += 1
-                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-                if plot_list is not None:
-                    plot_list.append(save_fig_path)
-                save_plot_figure(save_fig_path, fig=fig, format="png", dpi=150)
-            if show_plots:
-                plt.show()
-            plt.close(fig)
-
-    return fig_idx_value
-
-
-def build_task1_channel_pattern_series(df: pd.DataFrame) -> pd.Series:
-    """Encode per-event front/back channel occupancy as a deterministic 32-bit string."""
-    pattern_arrays: list[np.ndarray] = []
-    for plane, strip, side in TASK1_CHANNEL_PATTERN_ORDER:
-        col_name = f"Q{plane}_{side}_{strip}"
-        if col_name in df.columns:
-            values = df[col_name].fillna(0).to_numpy(copy=False)
-            bits = np.where(values != 0, "1", "0")
-        else:
-            print(f"Warning: missing channel column '{col_name}' while building TASK_1 patterns.")
-            bits = np.full(len(df), "0", dtype="<U1")
-        pattern_arrays.append(bits)
-
-    if not pattern_arrays:
-        return pd.Series(dtype="object", index=df.index)
-
-    full_pattern = pattern_arrays[0].copy()
-    for bits in pattern_arrays[1:]:
-        full_pattern = np.char.add(full_pattern, bits)
-    return pd.Series(full_pattern, index=df.index, dtype="object")
-
-
-def store_pattern_rates(metadata: dict[str, object], patterns: pd.Series, prefix: str, df: pd.DataFrame) -> None:
-    phase_meta = build_events_per_second_metadata(df)
-    try:
-        denominator = float(phase_meta.get("events_per_second_total_seconds", 0) or 0)
-    except (TypeError, ValueError):
-        denominator = 0.0
-
-    counts = patterns.value_counts()
-    for pattern, count in counts.items():
-        rate_hz = round(float(count) / denominator, 6) if denominator > 0 else 0.0
-        metadata[f"{prefix}_{pattern}_rate_hz"] = rate_hz
-
 reprocessing_parameters = pd.DataFrame()
-
-def load_reprocessing_parameters_for_file(station_id: str, task_id: str, basename: str) -> pd.DataFrame:
-    """Return matching reprocessing parameters for *basename* or an empty frame."""
-    station_str = str(station_id).zfill(2)
-    table_path = REFERENCE_TABLES_DIR / f"reprocess_files_station_{station_str}_task_{task_id}.csv"
-    if not table_path.exists():
-        return pd.DataFrame()
-    try:
-        table_df = pd.read_csv(table_path)
-    except Exception as exc:
-        print(f"Warning: unable to read reprocessing table {table_path}: {exc}")
-        return pd.DataFrame()
-    if "filename_base" not in table_df.columns:
-        return pd.DataFrame()
-    matches = table_df[table_df["filename_base"] == basename]
-    return matches.reset_index(drop=True)
-
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# Function definition ---------------------------------------------------------
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-
-enumerate = builtins.enumerate
-def polynomial(x, *coeffs):
-    return sum(c * x**i for i, c in enumerate(coeffs))
-
-def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
-    global fig_idx
-    
-    ydat_translated = ydat
-
-    xdat_plot = xdat[(xdat < distance_sum_charges_plot) & (xdat > -distance_sum_charges_plot) & (ydat_translated < distance_sum_charges_plot) & (ydat_translated > -distance_sum_charges_plot)]
-    ydat_plot = ydat_translated[(xdat < distance_sum_charges_plot) & (xdat > -distance_sum_charges_plot) & (ydat_translated < distance_sum_charges_plot) & (ydat_translated > -distance_sum_charges_plot)]
-    xdat_pre_fit = xdat[(xdat < distance_sum_charges_right_fit) & (xdat > distance_sum_charges_left_fit) & (ydat_translated < distance_dif_charges_up_fit) & (ydat_translated > distance_dif_charges_low_fit)]
-    ydat_pre_fit = ydat_translated[(xdat < distance_sum_charges_right_fit) & (xdat > distance_sum_charges_left_fit) & (ydat_translated < distance_dif_charges_up_fit) & (ydat_translated > distance_dif_charges_low_fit)]
-    
-    # Fit a polynomial of specified degree using curve_fit
-    initial_guess = [1] * (degree_of_polynomial + 1)
-    coeffs, _ = curve_fit(polynomial, xdat_pre_fit, ydat_pre_fit, p0=initial_guess)
-    y_pre_fit = polynomial(xdat_pre_fit, *coeffs)
-    
-    # Filter data for fitting based on residues
-    threshold = front_back_fit_threshold  # Set your desired threshold here
-    residues = np.abs(ydat_pre_fit - y_pre_fit)  # Calculate residues
-    xdat_fit = xdat_pre_fit[residues < threshold]
-    ydat_fit = ydat_pre_fit[residues < threshold]
-    
-    # Perform fit on filtered data
-    coeffs, _ = curve_fit(polynomial, xdat_fit, ydat_fit, p0=initial_guess)
-    
-    y_mean = np.mean(ydat_fit)
-    y_check = polynomial(xdat_fit, *coeffs)
-    ss_res = np.sum((ydat_fit - y_check)**2)
-    ss_tot = np.sum((ydat_fit - y_mean)**2)
-    r_squared = 1 - (ss_res / ss_tot)
-    if r_squared < 0.5:
-        print(f"---> R**2 in {name_of_file[0:4]}: {r_squared:.2g}")
-    
-    if create_plots:
-        x_fit = np.linspace(min(xdat_fit), max(xdat_fit), 100)
-        y_fit = polynomial(x_fit, *coeffs)
-        x_final = xdat_plot
-        y_final = ydat_plot - polynomial(xdat_plot, *coeffs)
-        plt.close()
-        
-        if article_format:
-            ww = (10.84, 4) # (16,6) was very nice
-        else:
-            ww = (13.33, 5)
-            
-        plt.figure(figsize=ww)  # Use plt.subplots() to create figure and axis    
-        plt.scatter(xdat_plot, ydat_plot, s=1, label="Original data points")
-        # plt.scatter(xdat_pre_fit, ydat_pre_fit, s=1, color="magenta", label="Points for prefitting")
-        plt.scatter(xdat_fit, ydat_fit, s=1, color="orange", label="Points for fitting")
-        plt.scatter(x_final, y_final, s=1, color="green", label="Calibrated points")
-        plt.plot(x_fit, y_fit, 'r-', label='Polynomial Fit: ' + ' '.join([f'a{i}={coeff:.2g}' for i, coeff in enumerate(coeffs[::-1])]))
-        plt.title(title)
-        plt.xlabel(x_label)
-        plt.ylabel(y_label)
-        plt.xlim([scatter_2d_and_fit_new_xlim_left, scatter_2d_and_fit_new_xlim_right])
-        plt.ylim([scatter_2d_and_fit_new_ylim_bottom, scatter_2d_and_fit_new_ylim_top])
-        plt.grid()
-        plt.legend(markerscale=5)  # Increase marker scale by 5 times
-        plt.tight_layout()
-        if save_plots:
-            name_of_file = 'charge_dif_vs_charge_sum_cal'
-            final_filename = f'{fig_idx}_{name_of_file}.png'
-            fig_idx += 1
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            save_plot_figure(save_fig_path, format='png')
-        if show_plots: plt.show()
-        plt.close()
-    return coeffs
-
-def interpolate_fast_charge(width):
-        """
-        Interpolates the Fast Charge for given Width values using cubic spline interpolation.
-        Parameters:
-        - width (float or np.ndarray): The Width value(s) to interpolate in ns.
-        Returns:
-        - float or np.ndarray: The interpolated Fast Charge value(s) in fC.
-        """
-        width = np.asarray(width)  # Ensure input is a NumPy array
-        # Keep zero values unchanged
-        result = np.where(width == 0, 0, cs(width))
-        return result
-    
-
-def summary(vector):
-    global coincidence_window_cal_ns
-    quantile_left = CRT_gaussian_fit_quantile * 100
-    quantile_right = 100 - CRT_gaussian_fit_quantile * 100
-    
-    vector = np.array(vector)  # Convert list to NumPy array
-    cond = (vector > -coincidence_window_cal_ns) & (vector < coincidence_window_cal_ns)  # This should result in a boolean array
-    vector = vector[cond]
-    
-    if len(vector) < 100:
-        return np.nan
-    try:
-        percentile_left = np.percentile(vector, quantile_left)
-        percentile_right = np.percentile(vector, quantile_right)
-    except IndexError:
-        print("Gave issue with:")
-        print(vector)
-        return np.nan
-    vector = [x for x in vector if percentile_left <= x <= percentile_right]
-    if len(vector) == 0:
-        return np.nan
-    mu, std = norm.fit(vector)
-    return mu
-
-def hist_1d(vdat, bin_number, title, axis_label, name_of_file):
-    global fig_idx, coincidence_window_cal_ns
-    fig = plt.figure(figsize=(8, 5))
-    ax = fig.add_subplot(1, 1, 1)
-    vdat = np.array(vdat)  # Convert list to NumPy array
-    cond = (vdat > -coincidence_window_cal_ns) & (vdat < coincidence_window_cal_ns)  # This should result in a boolean array
-    vdat = vdat[cond]
-    counts, bins, _ = ax.hist(vdat, bins=bin_number, alpha=0.5, color="red", label=f"All hits, {len(vdat)} events", density=False)
-    bin_centers = (bins[:-1] + bins[1:]) / 2
-    h1_q = CRT_gaussian_fit_quantile
-    lower_bound = np.quantile(vdat, h1_q)
-    upper_bound = np.quantile(vdat, 1 - h1_q)
-    cond = (vdat > lower_bound) & (vdat < upper_bound)  # This should result in a boolean array
-    vdat = vdat[cond]
-    mu, std = norm.fit(vdat)
-    p = norm.pdf(bin_centers, mu, std) * len(vdat) * (bins[1] - bins[0])  # Scale to match histogram
-    label_plot = f'Gaussian fit:\n    $\\mu={mu:.2g}$,\n    $\\sigma={std:.2g}$\n    CRT$={std/np.sqrt(2)*1000:.3g}$ ps'
-    ax.plot(bin_centers, p, 'k', linewidth=2, label=label_plot)
-    ax.legend()
-    ax.set_title(title)
-    plt.xlabel(axis_label)
-    plt.ylabel("Counts")
-    plt.tight_layout()
-    if save_plots:
-        name_of_file = 'timing'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
-        fig_idx += 1
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        save_plot_figure(save_fig_path, format='png')
-    if show_plots: plt.show()
-    plt.close()
-
-def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.99, fit_gaussian=False):
-    global fig_idx
-    nrows, ncols = (2, 3) if figure_number == 1 else (3, 4)
-    fig, axs = plt.subplots(nrows, ncols, figsize=(20, 5 * nrows), constrained_layout=True)
-    axs = axs.flatten()
-    def gaussian(x, mu, sigma, amplitude):
-        return amplitude * np.exp(-((x - mu) ** 2) / (2 * sigma ** 2))
-
-    # Precompute quantiles for faster filtering
-    if fit_gaussian:
-        quantile_bounds = {}
-        for col in columns:
-            data = df[col].values
-            data = data[data != 0]
-            if len(data) > 0:
-                quantile_bounds[col] = np.quantile(data, [(1 - quantile), quantile])
-
-    # Plot histograms and fit Gaussian if needed
-    for i, col in enumerate(columns):
-        
-        data = df[col].values
-        data = data[data != 0]  # Filter out zero values
-
-        if len(data) == 0:  # Skip if no data
-            axs[i].text(0.5, 0.5, "No data", transform=axs[i].transAxes, ha='center', va='center', color='gray')
-            continue
-
-        # Example color map per column type
-        color_map = {
-            "theta": "blue",
-            "phi": "green",
-            "x": "darkorange",
-            "y": "darkorange",
-            "det_y": "darkorange",
-            "s": "purple",
-            "det_s": "purple",
-            "th_chi": "red",
-            "res_ystr": "teal",
-            "res_tsum": "brown",
-            "res_tdif": "purple",
-            "t0": "black"
-        }
-
-        # Set default in case no match is found
-        selected_col = 'gray'
-
-        if "theta" in col:
-            left, right = theta_left_filter, theta_right_filter
-            selected_col = color_map["theta"]
-
-        elif "phi" in col:
-            left, right = phi_left_filter, phi_right_filter
-            selected_col = color_map["phi"]
-
-        elif col in ["x", "det_x", "y", "det_y"]:
-            left, right = -pos_filter, pos_filter
-            selected_col = color_map["x"]
-
-        elif col in ["s", "det_s"]:
-            left, right = slowness_filter_left, slowness_filter_right
-            selected_col = color_map["s"]
-
-        elif "th_chi" in col:
-            left, right = 0, 10
-            selected_col = color_map["th_chi"]
-
-        elif "res_ystr" in col:
-            left, right = -res_ystr_filter, res_ystr_filter
-            selected_col = color_map["res_ystr"]
-
-        elif "res_tsum" in col:
-            left, right = -res_tsum_filter, res_tsum_filter
-            selected_col = color_map["res_tsum"]
-
-        elif "res_tdif" in col:
-            left, right = -res_tdif_filter, res_tdif_filter
-            selected_col = color_map["res_tdif"]
-
-        elif "t0" in col:
-            left, right = t0_left_filter, t0_right_filter
-            selected_col = color_map["t0"]
-
-        # Plot histogram
-        cond = (data > left) & (data < right)
-        hist_data, bin_edges, _ = axs[i].hist(data, bins=50, alpha=0.7, label='Data', color=selected_col)
-
-        axs[i].set_title(col)
-        axs[i].set_xlabel('Value')
-        axs[i].set_ylabel('Frequency')
-        
-        axs[i].set_xlim([left, right])
-
-        # Fit Gaussian if enabled and data is sufficient
-        if fit_gaussian and len(data) >= 10:
-            try:
-                # Use precomputed quantile bounds
-                if col in quantile_bounds:
-                    lower_bound, upper_bound = quantile_bounds[col]
-                    filt_data = data[(data >= lower_bound) & (data <= upper_bound)]
-                else:
-                    lower_bound, upper_bound = left, right
-                    filt_data = data[(data >= lower_bound) & (data <= upper_bound)]
-
-                if len(filt_data) < 2:
-                    axs[i].text(0.5, 0.5, "Not enough data to fit", transform=axs[i].transAxes, ha='center', va='center', color='gray')
-                    continue
-
-                # Fit Gaussian to the histogram data
-                bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-                popt, _ = curve_fit(gaussian, bin_centers, hist_data, p0=[np.mean(filt_data), np.std(filt_data), max(hist_data)])
-                mu, sigma, amplitude = popt
-
-                # Plot Gaussian fit
-                x = np.linspace(lower_bound, upper_bound, 1000)
-                axs[i].plot(x, gaussian(x, mu, sigma, amplitude), 'r-', label=f'Gaussian Fit\nμ={mu:.2g}, σ={sigma:.2g}')
-                axs[i].legend()
-            except (RuntimeError, ValueError):
-                axs[i].text(0.5, 0.5, "Fit failed", transform=axs[i].transAxes, ha='center', va='center', color='red')
-
-    # Remove unused subplots
-    for j in range(i + 1, len(axs)):
-        fig.delaxes(axs[j])
-
-    plt.suptitle(title, fontsize=16)
-    if save_plots:
-        final_filename = f'{fig_idx}_{title.replace(" ", "_")}.png'
-        fig_idx += 1
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        save_plot_figure(save_fig_path, format='png')
-    if show_plots:
-        plt.show()
-    plt.close()
-
 _t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
@@ -3710,205 +3469,6 @@ print("----------------------------------------------------------------------")
 unprocessed_files = sorted(os.listdir(base_directories["unprocessed_directory"]))
 processing_files = sorted(os.listdir(base_directories["processing_directory"]))
 completed_files = sorted(os.listdir(base_directories["completed_directory"]))
-
-def process_file(source_path, dest_path):
-    print("Source path:", source_path)
-    print("Destination path:", dest_path)
-    
-    if source_path == dest_path:
-        return True
-    
-    if os.path.exists(dest_path):
-        print(f"File already exists at destination (removing...)")
-        os.remove(dest_path)
-        # return False
-    
-    print("**********************************************************************")
-    print(f"Moving\n'{source_path}'\nto\n'{dest_path}'...")
-    print("**********************************************************************")
-    
-    safe_move(source_path, dest_path)
-    now = time.time()
-    os.utime(dest_path, (now, now))
-    return True
-
-def get_file_path(directory, file_name):
-    return os.path.join(directory, file_name)
-
-def _as_bool(value: object, default: bool = False) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return default
-    text = str(value).strip().lower()
-    if text in {"1", "true", "yes", "on"}:
-        return True
-    if text in {"0", "false", "no", "off"}:
-        return False
-    return default
-
-def _coerce_z_vector(value: object) -> tuple[float, float, float, float] | None:
-    if not isinstance(value, (list, tuple, np.ndarray)) or len(value) != 4:
-        return None
-    try:
-        vector = tuple(float(item) for item in value)
-    except (TypeError, ValueError):
-        return None
-    if not all(np.isfinite(item) for item in vector):
-        return None
-    return vector
-
-def _normalize_z_vector(z_vector: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
-    base = float(z_vector[0])
-    return tuple(round(float(value) - base, 6) for value in z_vector)
-
-def _iter_priority_vectors(value: object) -> list[tuple[float, float, float, float]]:
-    if value is None:
-        return []
-    if isinstance(value, (list, tuple, np.ndarray)):
-        single = _coerce_z_vector(value)
-        if single is not None:
-            return [single]
-        vectors: list[tuple[float, float, float, float]] = []
-        for entry in value:
-            coerced = _coerce_z_vector(entry)
-            if coerced is not None:
-                vectors.append(coerced)
-        return vectors
-    return []
-
-def _load_task_1_z_priority_settings(config_obj: dict) -> dict[str, object]:
-    settings: dict[str, object] = {
-        "enabled": False,
-        "simulated_only": True,
-        "match_mode": "absolute",
-        "source_csv": SIM_PARAMS_DEFAULT,
-        "priority_abs": set(),
-        "priority_norm": set(),
-    }
-
-    node = config_obj.get("task_1_z_position_priority")
-    if not isinstance(node, dict):
-        return settings
-
-    settings["enabled"] = _as_bool(node.get("enabled"), False)
-    settings["simulated_only"] = _as_bool(node.get("simulated_only"), True)
-
-    match_mode = str(node.get("match_mode", "absolute")).strip().lower()
-    if match_mode not in {"absolute", "normalized", "both"}:
-        match_mode = "absolute"
-    settings["match_mode"] = match_mode
-
-    source_csv = node.get("source_csv")
-    if source_csv:
-        settings["source_csv"] = Path(os.path.expanduser(str(source_csv)))
-
-    vectors = _iter_priority_vectors(node.get("vectors_mm"))
-    settings["priority_abs"] = {tuple(round(value, 6) for value in vector) for vector in vectors}
-    settings["priority_norm"] = {_normalize_z_vector(vector) for vector in vectors}
-
-    if settings["enabled"] and not settings["priority_abs"]:
-        print(
-            "Warning: task_1_z_position_priority.enabled is true but vectors_mm is empty. "
-            "Disabling z-priority for this run.",
-            force=True,
-        )
-        settings["enabled"] = False
-
-    return settings
-
-def _load_simulated_z_lookup(
-    csv_path: Path,
-) -> dict[str, tuple[float, float, float, float]]:
-    lookup: dict[str, tuple[float, float, float, float]] = {}
-    if not csv_path.exists():
-        print(
-            f"Warning: z-priority lookup CSV not found: {csv_path}. "
-            "Falling back to regular newest-file selection.",
-            force=True,
-        )
-        return lookup
-
-    required_cols = ["file_name", "z_plane_1", "z_plane_2", "z_plane_3", "z_plane_4"]
-    try:
-        sim_df = pd.read_csv(csv_path, usecols=required_cols)
-    except Exception as exc:
-        print(
-            f"Warning: failed to load z-priority lookup CSV {csv_path}: {exc}. "
-            "Falling back to regular newest-file selection.",
-            force=True,
-        )
-        return lookup
-
-    for file_name, z1, z2, z3, z4 in sim_df.itertuples(index=False, name=None):
-        file_key = str(file_name).strip().lower()
-        if not file_key:
-            continue
-        try:
-            z_vector = (float(z1), float(z2), float(z3), float(z4))
-        except (TypeError, ValueError):
-            continue
-        if not all(np.isfinite(value) for value in z_vector):
-            continue
-        lookup[file_key] = z_vector
-
-    return lookup
-
-def _z_vector_matches_priority(
-    z_vector: tuple[float, float, float, float],
-    settings: dict[str, object],
-) -> bool:
-    abs_vector = tuple(round(float(value), 6) for value in z_vector)
-    norm_vector = _normalize_z_vector(abs_vector)
-    priority_abs = settings.get("priority_abs", set())
-    priority_norm = settings.get("priority_norm", set())
-    match_mode = settings.get("match_mode", "absolute")
-
-    if match_mode == "normalized":
-        return norm_vector in priority_norm
-    if match_mode == "both":
-        return abs_vector in priority_abs or norm_vector in priority_norm
-    return abs_vector in priority_abs
-
-def _select_latest_candidate_with_z_priority(
-    files: Iterable[str],
-    station: str,
-    settings: dict[str, object],
-    z_lookup: dict[str, tuple[float, float, float, float]],
-    source_label: str,
-    *,
-    fallback_to_latest: bool = True,
-) -> str | None:
-    candidates = [name for name in files if isinstance(name, str) and name]
-    if not candidates:
-        return None
-
-    if not settings.get("enabled", False):
-        return select_latest_candidate(candidates, station) if fallback_to_latest else None
-
-    prioritized: list[str] = []
-    for name in candidates:
-        key = name.lower()
-        if settings.get("simulated_only", True) and not key.startswith("mi00"):
-            continue
-        z_vector = z_lookup.get(key)
-        if z_vector is None:
-            continue
-        if _z_vector_matches_priority(z_vector, settings):
-            prioritized.append(name)
-
-    if prioritized:
-        selected = max(prioritized, key=lambda name: newest_order_key(name, station))
-        selected_z = z_lookup.get(selected.lower())
-        print(
-            f"[Z_PRIORITY] Selected prioritized file from {source_label}: {selected} "
-            f"z={list(selected_z) if selected_z else 'NA'}",
-            force=True,
-        )
-        return selected
-
-    return select_latest_candidate(candidates, station) if fallback_to_latest else None
-
 # Create ALL directories if they don't already exist
 for directory in base_directories.values():
     # Skip figure directories at startup; create lazily after selecting a file.
@@ -4011,16 +3571,6 @@ elif prioritize_other_than_qa_files:
             f"PROCESSING={len(preferred_processing_files)}/{len(processing_files)} "
             f"COMPLETED={len(preferred_completed_files)}/{len(completed_files)}"
         )
-
-
-def _preferred_non_qa_or_all(
-    file_names: list[str],
-    preferred_non_qa_file_names: list[str],
-) -> list[str]:
-    if prioritize_other_than_qa_files and preferred_non_qa_file_names:
-        return preferred_non_qa_file_names
-    return file_names
-
 task_1_z_priority_settings = _load_task_1_z_priority_settings(config)
 simulated_z_lookup: dict[str, tuple[float, float, float, float]] = {}
 if task_1_z_priority_settings.get("enabled", False):
@@ -4345,154 +3895,6 @@ T_FRONT_PATTERN = re.compile(r"^T\d+_F_\d+$")
 T_BACK_PATTERN = re.compile(r"^T\d+_B_\d+$")
 Q_FRONT_PATTERN = re.compile(r"^Q\d+_F_\d+$")
 Q_BACK_PATTERN = re.compile(r"^Q\d+_B_\d+$")
-
-def _apply_bounds(
-    frame: pd.DataFrame,
-    column_names: Iterable[str],
-    lower: float,
-    upper: float,
-    *,
-    snapshot_originals=None,
-) -> None:
-    """Zero out values outside [lower, upper] for the provided columns."""
-    cols = tuple(column_names)
-    if not cols:
-        return
-    subset = frame.loc[:, cols]
-    in_range_mask = (subset >= lower) & (subset <= upper)
-    if snapshot_originals is not None:
-        changed_cols = [col for col in cols if (~in_range_mask[col]).any()]
-        if changed_cols:
-            snapshot_originals(frame, changed_cols)
-    frame.loc[:, cols] = subset.where(in_range_mask, 0)
-
-# Function to process each line
-def process_line(line):
-    line = ZERO_TOKEN_PATTERN.sub('0', line)  # Replace '0000.0000' with '0'
-    line = LEADING_ZERO_PATTERN.sub(r'\1', line)  # Remove leading zeros
-    line = MULTI_SPACE_PATTERN.sub(',', line.strip())  # Replace multiple spaces with a comma
-    line = XYEAR_PATTERN.sub(r'X\n\1', line)  # Replace XYYYY with X\nYYYY
-    line = NEG_GAP_PATTERN.sub(r'\1 -\2', line)  # Ensure X-Y is properly spaced
-    return line
-
-# Function to check for malformed numbers (e.g., '-120.144.0')
-def contains_malformed_numbers(line):
-    return bool(MALFORMED_NUMBER_PATTERN.search(line))  # Detects multiple decimal points
-
-# Function to validate year, month, and day
-def is_valid_date(values):
-    try:
-        year, month, day = int(values[0]), int(values[1]), int(values[2])
-        if year not in VALID_YEARS:  # Check valid years
-            return False
-        if not (1 <= month <= 12):  # Check valid month
-            return False
-        if not (1 <= day <= 31):  # Check valid day
-            return False
-        return True
-    except ValueError:  # In case of non-numeric values
-        return False
-
-
-def _normalize_line_for_numpy(line: str) -> str:
-    """Normalize raw text just enough for fast numeric parsing."""
-    normalized = line.strip()
-    normalized = ZERO_TOKEN_PATTERN.sub("0", normalized)
-    normalized = LEADING_ZERO_PATTERN.sub(r"\1", normalized)
-    if "X20" in normalized:
-        normalized = XYEAR_PATTERN.sub(r"X \1", normalized)
-    if "-" in normalized:
-        normalized = NEG_GAP_PATTERN.sub(r"\1 -\2", normalized)
-    return normalized
-
-
-def _parse_raw_line_fast(line: str, expected_columns: int) -> np.ndarray | None:
-    """Fast path for the common whitespace-only numeric rows."""
-    stripped = line.strip()
-    values = np.fromstring(stripped, sep=" ", dtype=np.float64)
-    if values.size == expected_columns and is_valid_date(values[:3]):
-        return values
-    normalized = _normalize_line_for_numpy(stripped)
-    values = np.fromstring(normalized, sep=" ", dtype=np.float64)
-    if values.size == expected_columns and is_valid_date(values[:3]):
-        return values
-    return None
-
-
-def _build_task1_input_dataframe(
-    source_path: str,
-    rejected_path: str,
-    expected_columns: int,
-    limit_rows: int | None = None,
-) -> tuple[pd.DataFrame, int, int]:
-    """Parse the raw .dat file in one pass and build the typed input dataframe."""
-    read_lines = 0
-    written_lines = 0
-    stored_rows = 0
-    flat_values = array("d")
-    event_ids: list[int] = []
-
-    with open(source_path, "r") as infile, open(rejected_path, "w") as rejectfile:
-        for i, line in enumerate(infile, start=1):
-            if line.lstrip().startswith("#"):
-                continue
-            read_lines += 1
-
-            parsed_values = _parse_raw_line_fast(line, expected_columns)
-            if parsed_values is None:
-                cleaned_line = process_line(line)
-                cleaned_values = cleaned_line.split(",")
-
-                if len(cleaned_values) < 3 or not is_valid_date(cleaned_values[:3]):
-                    rejectfile.write(f"Line {i} (Invalid date): {line.strip()}\n")
-                    continue
-
-                if contains_malformed_numbers(line):
-                    rejectfile.write(f"Line {i} (Malformed number): {line.strip()}\n")
-                    continue
-
-                if len(cleaned_values) != expected_columns:
-                    rejectfile.write(f"Line {i} (Wrong column count): {line.strip()}\n")
-                    continue
-
-                parsed_values = np.fromstring(
-                    cleaned_line.replace(",", " "),
-                    sep=" ",
-                    dtype=np.float64,
-                )
-                if parsed_values.size != expected_columns:
-                    rejectfile.write(f"Line {i} (Wrong column count): {line.strip()}\n")
-                    continue
-
-            written_lines += 1
-            if limit_rows is None or stored_rows < limit_rows:
-                flat_values.extend(parsed_values)
-                event_ids.append(i)
-                stored_rows += 1
-
-    if stored_rows == 0:
-        return pd.DataFrame(), read_lines, written_lines
-
-    raw_matrix = np.frombuffer(flat_values, dtype=np.float64).reshape(stored_rows, expected_columns)
-    datetime_components = {
-        "year": np.rint(raw_matrix[:, 0]).astype(np.int16, copy=False),
-        "month": np.rint(raw_matrix[:, 1]).astype(np.int8, copy=False),
-        "day": np.rint(raw_matrix[:, 2]).astype(np.int8, copy=False),
-        "hour": np.rint(raw_matrix[:, 3]).astype(np.int8, copy=False),
-        "minute": np.rint(raw_matrix[:, 4]).astype(np.int8, copy=False),
-        "second": np.rint(raw_matrix[:, 5]).astype(np.int8, copy=False),
-    }
-    datetime_series = pd.to_datetime(datetime_components)
-
-    value_columns = [f"column_{i}" for i in range(6, expected_columns)]
-    value_data = raw_matrix[:, 6:].astype(np.float32, copy=False)
-    read_df = pd.DataFrame(value_data, columns=value_columns, copy=False)
-    # Stable per-file event identity: raw file line number before any Task 1 filtering.
-    read_df.insert(0, "event_id", np.asarray(event_ids, dtype=np.int64))
-    read_df.insert(0, "datetime", datetime_series)
-    read_df["column_6"] = np.rint(raw_matrix[:, 6]).astype(np.int8, copy=False)
-    return read_df, read_lines, written_lines
-
 # -----------------------------------------------------------------------------------------------------------
 # -----------------------------------------------------------------------------------------------------------
 # -----------------------------------------------------------------------------------------------------------
@@ -4699,10 +4101,6 @@ else:
     print("Error: No input file. Using default z_positions.")
     z_positions = np.array([0, 150, 300, 450])  # In mm
     z_source = "default_no_input_file"
-
-def _zpos_from_conf(row):
-    return np.array([row.get(f"P{i}", np.nan) for i in range(1, 5)])
-
 # If any z_positions is NaN or all zeros, find the closest non-zero configuration.
 if np.isnan(z_positions).any() or np.all(z_positions == 0):
     if used_input_file:
@@ -4790,108 +4188,6 @@ removed_rows_df = working_df.iloc[0:0].copy()
 tracking_base_index = working_df.index.copy()
 original_columns_store: dict[str, pd.Series] = {}
 channel_pair_plot_reference_df = pd.DataFrame(index=working_df.index)
-
-
-def snapshot_original_columns_once(
-    frame: pd.DataFrame,
-    column_names: Iterable[str],
-) -> None:
-    """Store a column once, before its first in-place mutation, to keep original values."""
-    if not track_removed_rows or frame is not working_df:
-        return
-    for col in column_names:
-        if col in frame.columns and col not in original_columns_store:
-            original_columns_store[col] = frame[col].copy()
-
-
-def _restore_original_values(rows: pd.DataFrame) -> pd.DataFrame:
-    if not track_removed_rows or rows.empty:
-        return rows
-    restored_rows = rows.copy()
-    for col, original_series in original_columns_store.items():
-        if col in restored_rows.columns:
-            restored_rows.loc[:, col] = original_series.reindex(restored_rows.index)
-    return restored_rows
-
-
-def append_removed_rows(rows: pd.DataFrame) -> None:
-    """Append fully removed rows with original index and pre-modification values preserved."""
-    global removed_rows_df
-    if not track_removed_rows or rows.empty:
-        return
-    rows_to_add = _restore_original_values(rows)
-    if not removed_rows_df.empty:
-        rows_to_add = rows_to_add.loc[~rows_to_add.index.isin(removed_rows_df.index)]
-        if rows_to_add.empty:
-            return
-    removed_rows_df = pd.concat([removed_rows_df, rows_to_add], ignore_index=False, sort=False)
-
-
-def append_removed_rows_from_mask(frame: pd.DataFrame, removed_mask: pd.Series) -> None:
-    if not track_removed_rows or frame.empty:
-        return
-    aligned_mask = removed_mask.reindex(frame.index, fill_value=False)
-    if aligned_mask.any():
-        append_removed_rows(frame.loc[aligned_mask].copy())
-
-
-def build_original_columns_frame() -> pd.DataFrame:
-    if not track_removed_rows:
-        return pd.DataFrame(index=tracking_base_index)
-    if not original_columns_store:
-        return pd.DataFrame(index=tracking_base_index)
-    return pd.DataFrame(
-        {col: series.reindex(tracking_base_index) for col, series in original_columns_store.items()},
-        index=tracking_base_index,
-    )
-
-
-def build_channel_pair_plot_frames(
-    current_df: pd.DataFrame,
-    *,
-    reference_df: pd.DataFrame | None = None,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Return the retained set plus the reference frame used to show removed points."""
-    if current_df.empty:
-        return current_df, current_df.iloc[0:0].copy()
-    if reference_df is None:
-        reference_df = channel_pair_plot_reference_df
-    if reference_df.empty:
-        return current_df, current_df.copy()
-    reference_df = reference_df.reindex(current_df.index).copy()
-    for col in current_df.columns:
-        if col not in reference_df.columns:
-            reference_df[col] = current_df[col]
-    return current_df, reference_df
-
-
-def build_task1_channel_filter_stage_frames(
-    df_input: pd.DataFrame,
-    *,
-    original_reference_df: pd.DataFrame | None,
-    relation_limits_by_type: Mapping[str, Mapping[str, float]],
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    if df_input.empty:
-        empty_df = df_input.iloc[0:0].copy()
-        return empty_df, empty_df, empty_df
-
-    if original_reference_df is None or original_reference_df.empty:
-        original_df = df_input.copy()
-    else:
-        original_df = original_reference_df.reindex(df_input.index).copy()
-        for col in df_input.columns:
-            if col not in original_df.columns:
-                original_df[col] = df_input[col]
-
-    pre_combination_df = df_input.copy()
-    final_df = pre_combination_df.copy()
-    apply_task1_plane_combination_filter(
-        final_df,
-        relation_limits_by_type=relation_limits_by_type,
-    )
-    return original_df, pre_combination_df, final_df
-
-
 original_number_of_events = len(working_df)
 if status_execution_date is not None:
     update_status_progress(
@@ -4957,40 +4253,6 @@ for key, idx_range in column_indices.items():
         global_variables[global_var_name] = count
 _prof["s_frame_init_s"] = round(time.perf_counter() - _t_frame_init, 2)
 _t_raw_tt_overview = time.perf_counter()
-
-# ----------------------------------------------------------------------------------
-# ----------------------------------------------------------------------------------
-# Trigger type helpers -------------------------------------------------------------
-# ----------------------------------------------------------------------------------
-# ----------------------------------------------------------------------------------
-
-def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:
-    """Compute trigger type based on planes with non-zero charge."""
-    tt_str = pd.Series("", index=df.index, dtype="object")
-    for plane in range(1, 5):
-        if columns_map:
-            charge_columns = [col for col in columns_map.get(plane, []) if col in df.columns]
-        else:
-            charge_columns = [
-                col
-                for col in [
-                    f"Q{plane}_F_1",
-                    f"Q{plane}_F_2",
-                    f"Q{plane}_F_3",
-                    f"Q{plane}_F_4",
-                    f"Q{plane}_B_1",
-                    f"Q{plane}_B_2",
-                    f"Q{plane}_B_3",
-                    f"Q{plane}_B_4",
-                ]
-                if col in df.columns
-            ]
-        if charge_columns:
-            has_charge = df.loc[:, charge_columns].ne(0).any(axis=1)
-            tt_str = tt_str.where(~has_charge, tt_str + str(plane))
-    df.loc[:, column_name] = tt_str.replace("", "0").astype(int)
-    return df
-
 # Apply the function to the DataFrame
 working_df = compute_tt(working_df, "raw_tt")
 
@@ -6424,11 +5686,63 @@ global_variables["plane_combination_noise_limit_values_zeroed"] = 0
 for channel_key in TASK1_CHANNEL_KEYS:
     global_variables[_task1_channel_noise_limit_metric_key(channel_key)] = ""
 
+task1_pre_channel_qt_summary = apply_task1_channel_qt_mismatch_filter(
+    working_df,
+    snapshot_originals=snapshot_original_columns_once,
+)
 plane_combination_summary = apply_task1_plane_combination_filter(
     working_df,
     relation_limits_by_type=task1_channel_combination_limits_by_relation,
     snapshot_originals=snapshot_original_columns_once,
     removed_value_pass_label="plane_combination_filter",
+)
+task1_post_channel_qt_summary = apply_task1_channel_qt_mismatch_filter(
+    working_df,
+    snapshot_originals=snapshot_original_columns_once,
+)
+row_mismatch_mask = (
+    task1_pre_channel_qt_summary["row_mismatch_mask"]
+    | task1_post_channel_qt_summary["row_mismatch_mask"]
+)
+channel_qt_rows_affected = int(row_mismatch_mask.sum())
+channel_qt_values_zeroed = int(
+    task1_pre_channel_qt_summary["values_zeroed"]
+    + task1_post_channel_qt_summary["values_zeroed"]
+)
+channel_qt_q_only_rows = int(
+    (
+        task1_pre_channel_qt_summary["q_only_row_mask"]
+        | task1_post_channel_qt_summary["q_only_row_mask"]
+    ).sum()
+)
+channel_qt_t_only_rows = int(
+    (
+        task1_pre_channel_qt_summary["t_only_row_mask"]
+        | task1_post_channel_qt_summary["t_only_row_mask"]
+    ).sum()
+)
+channel_qt_front_rows = int(
+    (
+        task1_pre_channel_qt_summary["front_row_mask"]
+        | task1_post_channel_qt_summary["front_row_mask"]
+    ).sum()
+)
+channel_qt_back_rows = int(
+    (
+        task1_pre_channel_qt_summary["back_row_mask"]
+        | task1_post_channel_qt_summary["back_row_mask"]
+    ).sum()
+)
+channel_qt_mismatch_channels = int(
+    task1_pre_channel_qt_summary["mismatch_channels"]
+    + task1_post_channel_qt_summary["mismatch_channels"]
+)
+print(
+    "[task1-channel-qt-normalization] "
+    f"pre_rows={task1_pre_channel_qt_summary['rows_affected']} "
+    f"pre_values_zeroed={task1_pre_channel_qt_summary['values_zeroed']} "
+    f"post_rows={task1_post_channel_qt_summary['rows_affected']} "
+    f"post_values_zeroed={task1_post_channel_qt_summary['values_zeroed']}"
 )
 working_df.loc[:, "task1_problematic_channel_count"] = (
     plane_combination_summary["selected_offender_count_by_row"]

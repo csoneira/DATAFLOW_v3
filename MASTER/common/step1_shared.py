@@ -30,7 +30,10 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from MASTER.common.config_loader import load_parameter_overrides
+from MASTER.common.config_loader import (
+    load_declared_parameter_names,
+    load_parameter_overrides,
+)
 from MASTER.common.path_config import get_master_config_root
 from MASTER.common.selection_config import load_yaml_mapping
 
@@ -882,7 +885,6 @@ def apply_step1_task_parameter_overrides(
     task_parameter_path: str | Path,
     fallback_parameter_path: str | Path,
     task_number: int,
-    update_fn: Callable[[dict, Path | str, str], dict],
     log_fn: Callable[..., None] = builtins.print,
     exclude_keys: Iterable[str] | None = None,
 ) -> dict:
@@ -911,6 +913,175 @@ def apply_step1_task_parameter_overrides(
     else:
         log_fn(f"Warning: No parameters file found for task {task_number}")
     return config_obj
+
+
+def apply_step1_optional_parameter_overrides(
+    config_obj: dict,
+    station_id: str,
+    parameter_path: str | Path,
+    *,
+    label: str,
+    log_fn: Callable[..., None] = builtins.print,
+) -> dict:
+    path = Path(parameter_path)
+    if not path.exists():
+        return config_obj
+
+    overrides = load_parameter_overrides(path, station_id)
+    if not overrides:
+        return config_obj
+
+    config_obj.update(overrides)
+    log_fn(f"Info: Loaded {label} parameters from {path}")
+    return config_obj
+
+
+def load_step1_filter_parameter_state(
+    filter_parameter_path: str | Path,
+    station_id: str,
+    *,
+    enabled: bool = True,
+    warn_if_missing: bool = False,
+    log_fn: Callable[..., None] = builtins.print,
+) -> tuple[set[str], dict[str, object], bool]:
+    path = Path(filter_parameter_path)
+    if not enabled:
+        log_fn("Info: Skipping filter parameter config (use_filter_parameter_config=false).")
+        return set(), {}, False
+
+    if not path.exists():
+        if warn_if_missing:
+            log_fn(f"Warning: Requested filter parameter config not found: {path}")
+        return set(), {}, False
+
+    declared_keys = load_declared_parameter_names(path)
+    overrides = load_parameter_overrides(path, station_id)
+    return declared_keys, overrides, True
+
+
+def build_step1_task_config_paths(
+    task_number: int,
+    *,
+    master_config_root: str | Path | None = None,
+) -> dict[str, Path]:
+    root = (
+        Path(master_config_root).expanduser()
+        if master_config_root is not None
+        else get_master_config_root()
+    )
+    step1_root = root / "STAGE_1" / "EVENT_DATA" / "STEP_1"
+    task_root = step1_root / f"TASK_{task_number}"
+    return {
+        "config_root": root,
+        "step1_root": step1_root,
+        "task_root": task_root,
+        "config_file_path": task_root / f"config_task_{task_number}.yaml",
+        "plot_catalog_file_path": task_root / f"config_plots_task_{task_number}.yaml",
+        "parameter_config_file_path": task_root / f"config_parameters_task_{task_number}.csv",
+        "plot_parameter_config_file_path": task_root / f"config_plot_parameters_task_{task_number}.csv",
+        "filter_parameter_config_file_path": task_root / f"config_filter_parameters_task_{task_number}.csv",
+        "fallback_parameter_config_file_path": step1_root / "config_parameters.csv",
+    }
+
+
+def load_step1_task_config_bundle(
+    task_number: int,
+    *,
+    master_config_root: str | Path | None = None,
+    include_filter_parameter_config: bool = True,
+    log_fn: Callable[..., None] = builtins.print,
+) -> dict[str, object]:
+    task_config_paths = build_step1_task_config_paths(
+        task_number,
+        master_config_root=master_config_root,
+    )
+    config_file_path = Path(task_config_paths["config_file_path"])
+    plot_catalog_file_path = Path(task_config_paths["plot_catalog_file_path"])
+    plot_parameter_config_file_path = Path(task_config_paths["plot_parameter_config_file_path"])
+    filter_parameter_config_file_path = Path(task_config_paths["filter_parameter_config_file_path"])
+
+    log_fn(f"Using config file: {config_file_path}")
+    log_fn(f"Using plot catalog file: {plot_catalog_file_path}")
+    with config_file_path.open("r", encoding="utf-8") as config_file:
+        config = yaml.safe_load(config_file) or {}
+
+    plot_parameter_config_file_path = plot_parameter_config_file_path.with_name(
+        str(config.get("plot_parameter_config_csv", plot_parameter_config_file_path.name))
+    )
+    log_fn(f"Using plot parameter config file: {plot_parameter_config_file_path}")
+
+    if include_filter_parameter_config:
+        filter_parameter_config_file_path = filter_parameter_config_file_path.with_name(
+            str(config.get("filter_parameter_config_csv", filter_parameter_config_file_path.name))
+        )
+        log_fn(f"Using filter parameter config file: {filter_parameter_config_file_path}")
+
+    return {
+        **task_config_paths,
+        "config": config,
+        "plot_parameter_config_file_path": plot_parameter_config_file_path,
+        "filter_parameter_config_file_path": filter_parameter_config_file_path,
+    }
+
+
+def resolve_step1_effective_task_config(
+    config_obj: Mapping[str, object],
+    *,
+    station_id: str,
+    task_number: int,
+    config_root: str | Path,
+    parameter_config_file_path: str | Path,
+    fallback_parameter_config_file_path: str | Path,
+    plot_parameter_config_file_path: str | Path | None = None,
+    filter_parameter_config_file_path: str | Path | None = None,
+    use_filter_parameter_config: bool = True,
+    warn_if_missing_filter: bool = False,
+    log_fn: Callable[..., None] = builtins.print,
+) -> dict:
+    config = dict(config_obj)
+    filter_parameter_declared_keys: set[str] = set()
+    filter_parameter_overrides: dict[str, object] = {}
+    filter_parameter_config_loaded = False
+
+    if filter_parameter_config_file_path is not None:
+        (
+            filter_parameter_declared_keys,
+            filter_parameter_overrides,
+            filter_parameter_config_loaded,
+        ) = load_step1_filter_parameter_state(
+            filter_parameter_config_file_path,
+            station_id,
+            enabled=use_filter_parameter_config,
+            warn_if_missing=warn_if_missing_filter,
+            log_fn=log_fn,
+        )
+
+    config = apply_step1_task_parameter_overrides(
+        config_obj=config,
+        station_id=station_id,
+        task_parameter_path=parameter_config_file_path,
+        fallback_parameter_path=fallback_parameter_config_file_path,
+        task_number=task_number,
+        log_fn=log_fn,
+        exclude_keys=filter_parameter_declared_keys,
+    )
+    config = apply_step1_master_overrides(
+        config_obj=config,
+        master_config_root=config_root,
+        log_fn=log_fn,
+    )
+    if filter_parameter_config_loaded:
+        config.update(filter_parameter_overrides)
+        log_fn(f"Info: Loaded filter parameters from {Path(filter_parameter_config_file_path)}")
+    if plot_parameter_config_file_path is not None:
+        config = apply_step1_optional_parameter_overrides(
+            config_obj=config,
+            station_id=station_id,
+            parameter_path=plot_parameter_config_file_path,
+            label="plot",
+            log_fn=log_fn,
+        )
+    return config
 
 
 def load_step1_shared_overrides(

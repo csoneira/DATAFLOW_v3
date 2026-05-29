@@ -2,8 +2,8 @@
 # X_mea noise tuned from the real-data T_dif edge width.
 # sigma_X ~= 15 mm corresponds to sigma_T ~= 0.075 ns through
 # T_diff = X_mea * (3 / (2 * c_mm_per_ns)).
-x_noise_mm: 15.0
-time_sigma_ns: 0.4
+x_noise_mm: 10.0
+time_sigma_ns: 0.500
 # Width parameter gamma of the isotropic 2D Lorentzian induced-charge cloud.
 # Best current matched-topology tuning from fresh MINGO00 vs MINGO01 comparison.
 lorentzian_gamma_mm: 4.73

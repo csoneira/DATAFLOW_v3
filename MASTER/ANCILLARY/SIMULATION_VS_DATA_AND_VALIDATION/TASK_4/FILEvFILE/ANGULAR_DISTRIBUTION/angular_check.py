@@ -14,7 +14,7 @@ from matplotlib.colors import LogNorm
 
 
 station_of_study = 2
-MAX_REFERENCE_SIMULATION_FILES = 30
+MAX_REFERENCE_SIMULATION_FILES = 20
 
 BASE = Path("/home/mingo/DATAFLOW_v3/STATIONS")
 SIMULATION_PARAMS_FILE = Path(

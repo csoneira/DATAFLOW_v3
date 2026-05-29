@@ -3,6 +3,4 @@ strip_speed_factor_of_c,,,,,,task_2
 narrow_strip,,,,,,task_2
 wide_strip,,,,,,task_2
 anc_std,0.075,0.075,0.075,0.075,0.075,
-charge_per_strip_plot_threshold,40,40,40,40,40,
-charge_per_plane_plot_threshold,50,50,50,50,50,
 streamer_high_charge_factor,0.2,0.2,0.2,0.2,0.2,

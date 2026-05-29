@@ -28,12 +28,9 @@ for the fitting stages. It also manages plotting artefacts, metadata logs, and
 file movements so subsequent tasks receive consistent inputs.
 """
 # Standard Library
-import argparse
 import atexit
 import builtins
-import csv
-from datetime import datetime, timedelta
-import gc
+from datetime import datetime
 import hashlib
 import math
 import os
@@ -44,42 +41,27 @@ import shutil
 import sys
 import time
 import warnings
-from collections import defaultdict
-from functools import reduce
 from itertools import combinations
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable
 
 # Scientific Computing
 import numpy as np
 import pandas as pd
-import scipy.linalg as linalg
 from scipy.constants import c
-from scipy.interpolate import CubicSpline
 from scipy.ndimage import gaussian_filter1d
-from scipy.optimize import brentq, curve_fit, minimize_scalar
-from scipy.special import erf
-from scipy.stats import norm, poisson, linregress, median_abs_deviation, skew
-
-# Machine Learning
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import r2_score
+from scipy.optimize import curve_fit
 
 # Plotting
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-from matplotlib import gridspec
 from matplotlib.backends.backend_pdf import PdfPages
-from matplotlib.gridspec import GridSpec
 from mpl_toolkits.mplot3d import Axes3D
 import seaborn as sns
 
 # Image Processing
 from PIL import Image
-
-# Progress Bar
-from tqdm import tqdm
 
 import yaml
 
@@ -95,11 +77,6 @@ if REPO_ROOT is None:
 if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
-from MASTER.common.config_loader import (
-    load_declared_parameter_names,
-    load_parameter_overrides,
-    update_config_with_parameters,
-)
 from MASTER.common.debug_plots import plot_debug_histograms
 from MASTER.common.execution_logger import set_station, start_timer
 from MASTER.common.file_selection import (
@@ -111,7 +88,6 @@ from MASTER.common.file_selection import (
 )
 from MASTER.common.input_file_config import select_input_file_configuration
 from MASTER.common.path_config import (
-    get_master_config_root,
     get_repo_root,
     resolve_home_path_from_config,
 )
@@ -148,8 +124,6 @@ from MASTER.common.step1_activation import (
 from MASTER.common.step1_shared import (
     add_normalized_count_metadata,
     add_trigger_type_total_offender_threshold_metadata,
-    apply_step1_master_overrides,
-    apply_step1_task_parameter_overrides,
     build_events_per_second_metadata,
     build_step1_cli_parser,
     build_step1_filtered_print,
@@ -159,15 +133,27 @@ from MASTER.common.step1_shared import (
     is_trigger_type_file_column,
     is_trigger_type_metadata_column,
     is_specific_metadata_excluded_column,
-    load_itineraries_from_file,
+    load_step1_task_config_bundle,
     normalize_tt_label,
     prune_redundant_count_metadata,
+    resolve_step1_effective_task_config,
     save_metadata,
     select_exact_minimum_vertex_cover,
     set_global_rate_from_tt_rates,
     step1_logging_enabled,
     validate_step1_input_file_args,
     y_pos,
+)
+from analysis_functions import (
+    _count_turns,
+    _task3_config_float,
+    _task3_optional_float,
+    compute_empirical_efficiency_from_tt_counts,
+    tt_value_to_planes,
+)
+from plotting_functions import (
+    _task3_plot_quantile_scatter,
+    _task3_plot_quantile_hexbin,
 )
 
 task_number = 3
@@ -176,118 +162,6 @@ try:
     import pyarrow as pa
 except Exception:  # pragma: no cover - pyarrow is already required for parquet IO here.
     pa = None
-
-
-def _preferred_parquet_compression() -> str:
-    if pa is not None:
-        try:
-            if pa.Codec.is_available("snappy"):
-                return "snappy"
-        except Exception:
-            pass
-    return "zstd"
-
-# I want to chrono the execution time of the script
-start_execution_time_counting = datetime.now()
-_prof_t0 = time.perf_counter()
-_prof = {}
-activation_metadata: dict[str, object] = {}
-pattern_metadata: dict[str, object] = {}
-
-STATION_CHOICES = ("0", "1", "2", "3", "4")
-TASK3_PLOT_STATUSES: tuple[str, ...] = ("none", "debug", "usual", "essential")
-TASK3_PLOT_ALIASES: tuple[str, ...] = (
-    "incoming_parquet_main_columns_debug",
-    "active_strip_patterns_overview",
-    "multi_strip_pair_diagnostics",
-    "tdiff_pattern_spatial_scatter",
-    "tdiff_pattern_charge_scatter",
-    "tdiff_pattern_charge_scan_scatter",
-    "tdiff_pattern_histograms",
-    "tdiff_pattern_charge_slice_fits",
-    "tdiff_pattern_sigma_vs_charge",
-    "tdiff_pattern_sigma1_charge_surface",
-    "tdiff_pattern_sigma2_charge_surface",
-    "y_position_by_cal_tt",
-    "strip_variable_pairgrid",
-    "self_trigger_strip_variable_pairgrid",
-    "rpc_variables_hexbin",
-    "rpc_variables_hexbin_low_charge",
-    "filter6_tsum_debug",
-    "filter6_tdif_debug",
-    "filter6_qsum_debug",
-    "filter6_qdif_debug",
-    "filter6_y_debug",
-    "filtered_rpc_variables_hexbin",
-    "prefilter_qsum_nonzero_debug",
-    "prefilter_list_tt_debug",
-    "list_tt_qsum_pairgrid",
-    "all_events_charge_threshold_population",
-    "source_list_tt_charge_threshold_population",
-    "list_tt_transition_matrices",
-    "list_tt_retention_curves",
-    "list_tt_minimum_charge_distributions",
-    "list_tt_empirical_efficiency_vs_threshold",
-    "full_topology_threshold_retention",
-    "full_topology_exact_retention",
-    "full_topology_class_fraction",
-    "tsum_coincidence_window_histograms",
-    "tsum_coincidence_window_vs_threshold",
-    "plane_charge_fraction_vs_total_charge_threshold_scan",
-    "charge_asymmetry_vs_threshold",
-    "interplane_timing_correlation",
-    "multiplicity_charge_landscape",
-    "streamer_charge_histograms",
-    "streamer_prevalence_by_plane",
-    "streamer_multiplicity",
-    "streamer_contagion_matrix",
-    "streamer_contagion_matrix_strip",
-    "streamer_efficiency_comparison",
-    "fourplane_weakest_charge",
-    "fourplane_weakest_plane_identity",
-    "efficiency_anatomy_by_charge_band",
-    "streamer_contagion_strip_by_tt",
-    "signal_contagion_strip_by_tt",
-    "streamer_to_signal_contagion_strip_by_tt",
-    "streamer_to_highcharge_contagion_strip_by_tt",
-    "strip_activation_matrix_before_after",
-    "plane_combination_filter_by_tt",
-    "charge_by_strip_multiplicity_adj",
-    "charge_by_strip_multiplicity_dis",
-)
-
-TT_COUNT_VALUES: tuple[int, ...] = (
-    0, 1, 2, 3, 4, 12, 13, 14, 23, 24, 34, 123, 124, 134, 234, 1234
-)
-TT_COLOR_LABELS: tuple[str, ...] = tuple(str(tt_value) for tt_value in TT_COUNT_VALUES)
-_task3_tt_palette = sns.color_palette("tab10", n_colors=10)
-TT_COLOR_MAP: dict[str, tuple[float, float, float, float]] = {}
-_task3_multi_idx = 0
-for tt_label in TT_COLOR_LABELS:
-    if len(tt_label) == 1:
-        TT_COLOR_MAP[tt_label] = (0.60, 0.60, 0.60, 1.0)
-    else:
-        rgb = _task3_tt_palette[_task3_multi_idx % len(_task3_tt_palette)]
-        TT_COLOR_MAP[tt_label] = (float(rgb[0]), float(rgb[1]), float(rgb[2]), 1.0)
-        _task3_multi_idx += 1
-TT_COLOR_DEFAULT = (0.45, 0.45, 0.45, 1.0)
-
-
-def get_tt_color(tt_value: object) -> tuple[float, float, float, float]:
-    return TT_COLOR_MAP.get(normalize_tt_label(tt_value), TT_COLOR_DEFAULT)
-
-CLI_PARSER = build_step1_cli_parser("Run Stage 1 STEP_1 TASK_3 (CAL->LIST).", STATION_CHOICES)
-CLI_ARGS = CLI_PARSER.parse_args()
-validate_step1_input_file_args(CLI_PARSER, CLI_ARGS)
-
-VERBOSE = bool(os.environ.get("DATAFLOW_VERBOSE")) or CLI_ARGS.verbose
-print = build_step1_filtered_print(
-    verbose=VERBOSE,
-    debug_mode_getter=lambda: bool(globals().get("debug_mode", False)),
-    raw_print=builtins.print,
-)
-FILTER_METRICS_LOGGING_ENABLED = step1_logging_enabled("filter_metrics")[0]
-
 
 def _log_filter_metrics_message(message: str) -> None:
     if FILTER_METRICS_LOGGING_ENABLED:
@@ -300,7 +174,6 @@ def safe_move(source_path: str, dest_path: str) -> str:
     except OSError as exc:
         print(f"Error moving '{source_path}' to '{dest_path}': {exc}")
         raise
-
 
 def normalize_task3_plot_mode(raw_value: object) -> str:
     if raw_value is None:
@@ -324,7 +197,6 @@ def normalize_task3_plot_mode(raw_value: object) -> str:
         "Invalid create_plots value for Task 3. Use one of: null/none, debug, usual, essential, all."
     )
 
-
 def normalize_task3_plot_catalog_status(raw_value: object) -> str:
     if raw_value is None:
         return "none"
@@ -339,40 +211,6 @@ def normalize_task3_plot_catalog_status(raw_value: object) -> str:
     if status in {"debug", "usual", "essential"}:
         return status
     return status
-
-
-def _task3_optional_float(raw_value: object) -> float | None:
-    if raw_value is None:
-        return None
-    if isinstance(raw_value, str) and raw_value.strip().lower() in {"", "none", "null"}:
-        return None
-    try:
-        return float(raw_value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _task3_config_float(
-    config_obj: dict[str, object],
-    primary_key: str,
-    *alias_keys: str,
-    default: float,
-) -> float:
-    for key in (primary_key, *alias_keys):
-        raw_value = config_obj.get(key)
-        if raw_value is None:
-            continue
-        if isinstance(raw_value, str) and raw_value.strip().lower() in {"", "none", "null"}:
-            continue
-        try:
-            value = float(raw_value)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"Invalid numeric configuration value for '{key}': {raw_value!r}") from exc
-        if not np.isfinite(value):
-            raise ValueError(f"Non-finite numeric configuration value for '{key}': {raw_value!r}")
-        return value
-    return float(default)
-
 
 def resolve_task3_plot_options(config_obj: Dict[str, object]) -> tuple[str, bool, bool, bool, bool, bool, bool]:
     plot_mode = normalize_task3_plot_mode(config_obj.get("create_plots", None))
@@ -391,7 +229,6 @@ def resolve_task3_plot_options(config_obj: Dict[str, object]) -> tuple[str, bool
         show_plots,
         create_debug_plots,
     )
-
 
 def load_task3_plot_catalog(catalog_path: Path) -> dict[str, str]:
     with catalog_path.open("r", encoding="utf-8") as handle:
@@ -435,10 +272,6 @@ def load_task3_plot_catalog(catalog_path: Path) -> dict[str, str]:
     return catalog
 
 
-task3_plot_status_by_alias: dict[str, str] = {}
-plot_mode = "none"
-
-
 def task3_plot_enabled(alias: str) -> bool:
     if alias not in task3_plot_status_by_alias:
         raise KeyError(f"Unknown Task 3 plot alias: {alias}")
@@ -459,15 +292,69 @@ def task3_plot_enabled(alias: str) -> bool:
         return status == "essential"
     return False
 
-
 def task3_any_plot_enabled(*aliases: str) -> bool:
     return any(task3_plot_enabled(alias) for alias in aliases)
 
-MAX_OPEN_FIGURES = 16
-_OPEN_FIGURE_IDS: list[int] = []
-_ORIGINAL_PLT_FIGURE = plt.figure
-_ORIGINAL_PLT_SUBPLOTS = plt.subplots
-_ORIGINAL_PLT_CLOSE = plt.close
+
+def plot_task3_filtered_rpc_tsum_vs_qsum(
+    df_input: pd.DataFrame,
+    fig_idx_value: int,
+    *,
+    plot_kind: str,
+    charge_threshold: float,
+    figure_directory: str,
+    show_plots: bool,
+    save_plots: bool,
+    plot_list: list[str],
+) -> int:
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    axes = np.asarray(axes).reshape(2, 2)
+
+    for i_plane in range(1, 5):
+        ax = axes.flat[i_plane - 1]
+        t_sum_col = f"P{i_plane}_T_sum_final"
+        t_dif_col = f"P{i_plane}_T_dif_final"
+        q_sum_col = f"P{i_plane}_Q_sum_final"
+        q_dif_col = f"P{i_plane}_Q_dif_final"
+        y_col = f"P{i_plane}_Y_final"
+        required_cols = [t_sum_col, t_dif_col, q_sum_col, q_dif_col, y_col]
+
+        if not all(col in df_input.columns for col in required_cols):
+            ax.set_visible(False)
+            continue
+
+        valid_rows = df_input[required_cols].replace(0, np.nan).dropna()
+        filtered_rows = valid_rows.loc[valid_rows[q_sum_col] < charge_threshold]
+        t_sum = filtered_rows[t_sum_col]
+        q_sum = filtered_rows[q_sum_col]
+        title = f"Plane {i_plane}: {t_sum_col} vs {q_sum_col}"
+
+        if plot_kind == "hexbin":
+            _task3_plot_quantile_hexbin(ax, t_sum, q_sum, title, gridsize=50, cmap="turbo")
+        else:
+            _task3_plot_quantile_scatter(ax, t_sum, q_sum, title)
+
+        ax.set_xlabel(t_sum_col)
+        ax.set_ylabel(q_sum_col)
+        ax.grid(True, alpha=0.25)
+
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.92)
+    plt.suptitle(f"Filtered RPC T_sum vs Q_sum by plane ({plot_kind})", fontsize=18)
+
+    if save_plots:
+        name_of_file = f"filtered_rpc_tsum_vs_qsum_{plot_kind}"
+        final_filename = f"{fig_idx_value}_{name_of_file}.png"
+        fig_idx_value += 1
+        save_fig_path = os.path.join(figure_directory, final_filename)
+        plot_list.append(save_fig_path)
+        save_plot_figure(save_fig_path, format="png")
+
+    if show_plots:
+        plt.show()
+    plt.close(fig)
+    return fig_idx_value
+
 
 def _track_figure(fig: mpl.figure.Figure) -> mpl.figure.Figure:
     fig_number = getattr(fig, "number", None)
@@ -501,15 +388,6 @@ def _guarded_close(*args, **kwargs):
         _OPEN_FIGURE_IDS.remove(target)
     return result
 
-plt.figure = _guarded_figure
-plt.subplots = _guarded_subplots
-plt.close = _guarded_close
-
-_direct_pdf_pages: PdfPages | None = None
-_direct_pdf_page_count = 0
-_direct_pdf_target_path: str | None = None
-_direct_pdf_temp_path: str | None = None
-
 
 def _build_temp_pdf_path(target_path: str) -> str:
     """Return a non-colliding temporary PDF path near the final target."""
@@ -541,9 +419,6 @@ def close_direct_pdf_writer() -> None:
     _direct_pdf_page_count = 0
     _direct_pdf_target_path = None
     _direct_pdf_temp_path = None
-
-
-atexit.register(close_direct_pdf_writer)
 
 
 def finalize_saved_plots_to_pdf() -> None:
@@ -593,209 +468,6 @@ def finalize_saved_plots_to_pdf() -> None:
             print(f"Figure directory not empty, skipping removal: {figure_directory}")
 
 
-def _task3_quantile_axis_limits(values: pd.Series | np.ndarray, low_q: float = 1.0, high_q: float = 99.0) -> tuple[float, float] | None:
-    numeric = pd.to_numeric(pd.Series(values), errors="coerce").to_numpy(dtype=float)
-    numeric = numeric[np.isfinite(numeric)]
-    if numeric.size == 0:
-        return None
-
-    low = float(np.nanpercentile(numeric, low_q))
-    high = float(np.nanpercentile(numeric, high_q))
-    if not np.isfinite(low) or not np.isfinite(high) or low >= high:
-        low = float(np.nanmin(numeric))
-        high = float(np.nanmax(numeric))
-    if not np.isfinite(low) or not np.isfinite(high):
-        return None
-    if low >= high:
-        center = low
-        pad = max(abs(center) * 0.05, 1.0)
-        low = center - pad
-        high = center + pad
-    return low, high
-
-
-def _task3_plot_quantile_hexbin(
-    ax: mpl.axes.Axes,
-    x: pd.Series | np.ndarray,
-    y: pd.Series | np.ndarray,
-    title: str,
-    *,
-    gridsize: int = 50,
-    cmap: str = "turbo",
-    low_q: float = 1.0,
-    high_q: float = 99.0,
-) -> None:
-    x_vals = pd.to_numeric(pd.Series(x), errors="coerce").to_numpy(dtype=float)
-    y_vals = pd.to_numeric(pd.Series(y), errors="coerce").to_numpy(dtype=float)
-    valid = np.isfinite(x_vals) & np.isfinite(y_vals)
-    ax.set_title(title)
-
-    if not np.any(valid):
-        ax.text(0.5, 0.5, "No valid data", ha="center", va="center", transform=ax.transAxes)
-        return
-
-    x_valid = x_vals[valid]
-    y_valid = y_vals[valid]
-    x_limits = _task3_quantile_axis_limits(x_valid, low_q=low_q, high_q=high_q)
-    y_limits = _task3_quantile_axis_limits(y_valid, low_q=low_q, high_q=high_q)
-    if x_limits is None or y_limits is None:
-        ax.text(0.5, 0.5, "No finite data", ha="center", va="center", transform=ax.transAxes)
-        return
-
-    x_low, x_high = x_limits
-    y_low, y_high = y_limits
-    plot_mask = (
-        valid
-        & (x_vals >= x_low)
-        & (x_vals <= x_high)
-        & (y_vals >= y_low)
-        & (y_vals <= y_high)
-    )
-    if not np.any(plot_mask):
-        plot_mask = valid
-
-    ax.hexbin(
-        x_vals[plot_mask],
-        y_vals[plot_mask],
-        gridsize=gridsize,
-        cmap=cmap,
-        mincnt=1,
-        extent=(x_low, x_high, y_low, y_high),
-    )
-    ax.set_xlim(x_low, x_high)
-    ax.set_ylim(y_low, y_high)
-
-# Warning Filters
-warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
-
-start_timer(__file__)
-config_root = get_master_config_root()
-config_file_path = (
-    config_root
-    / "STAGE_1"
-    / "EVENT_DATA"
-    / "STEP_1"
-    / "TASK_3"
-    / "config_task_3.yaml"
-)
-parameter_config_file_path = (
-    config_root
-    / "STAGE_1"
-    / "EVENT_DATA"
-    / "STEP_1"
-    / "TASK_3"
-    / "config_parameters_task_3.csv"
-)
-filter_parameter_config_file_path = (
-    config_root
-    / "STAGE_1"
-    / "EVENT_DATA"
-    / "STEP_1"
-    / "TASK_3"
-    / "config_filter_parameters_task_3.csv"
-)
-plot_catalog_file_path = (
-    config_root
-    / "STAGE_1"
-    / "EVENT_DATA"
-    / "STEP_1"
-    / "TASK_3"
-    / "config_plots_task_3.yaml"
-)
-fallback_parameter_config_file_path = (
-    config_root
-    / "STAGE_1"
-    / "EVENT_DATA"
-    / "STEP_1"
-    / "config_parameters.csv"
-)
-print(f"Using config file: {config_file_path}")
-print(f"Using plot catalog file: {plot_catalog_file_path}")
-with config_file_path.open("r", encoding="utf-8") as config_file:
-    config = yaml.safe_load(config_file)
-filter_parameter_config_file_path = filter_parameter_config_file_path.with_name(
-    str(config.get("filter_parameter_config_csv", filter_parameter_config_file_path.name))
-)
-print(f"Using filter parameter config file: {filter_parameter_config_file_path}")
-task3_plot_status_by_alias = load_task3_plot_catalog(plot_catalog_file_path)
-debug_mode = False
-home_path = str(resolve_home_path_from_config(config))
-
-if CLI_ARGS.station is None:
-    CLI_PARSER.error("No station provided. Pass <station>.")
-station = str(CLI_ARGS.station)
-set_station(station)
-
-filter_parameter_declared_keys: set[str] = set()
-filter_parameter_overrides: dict[str, object] = {}
-if filter_parameter_config_file_path.exists():
-    filter_parameter_declared_keys = load_declared_parameter_names(filter_parameter_config_file_path)
-    filter_parameter_overrides = load_parameter_overrides(filter_parameter_config_file_path, station)
-
-config = apply_step1_task_parameter_overrides(
-    config_obj=config,
-    station_id=station,
-    task_parameter_path=str(parameter_config_file_path),
-    fallback_parameter_path=str(fallback_parameter_config_file_path),
-    task_number=task_number,
-    update_fn=update_config_with_parameters,
-    log_fn=print,
-    exclude_keys=filter_parameter_declared_keys,
-)
-config = apply_step1_master_overrides(
-    config_obj=config,
-    master_config_root=config_root,
-    log_fn=print,
-)
-if filter_parameter_config_file_path.exists():
-    config.update(filter_parameter_overrides)
-    print(f"Info: Loaded filter parameters from {filter_parameter_config_file_path}")
-process_only_qa_retry_files = bool(config.get("process_only_qa_retry_files", False))
-if process_only_qa_retry_files:
-    print(
-        "[QA_ONLY] Enabled by STEP_1 shared config: only files present in the active QA retry list will be processed."
-    )
-selection_config = load_selection_for_paths(
-    [config_file_path],
-    master_config_root=config_root,
-)
-if not station_is_selected(station, selection_config.stations):
-    print(f"Station {station} skipped by selection.stations.")
-    sys.exit(0)
-selected_input_file = CLI_ARGS.input_file_flag or CLI_ARGS.input_file
-if selected_input_file:
-    user_file_path = selected_input_file
-    user_file_selection = True
-    print("User provided file path:", user_file_path)
-else:
-    user_file_selection = False
-repo_root = get_repo_root()
-early_metadata_directory = (
-    repo_root
-    / "STATIONS"
-    / f"MINGO0{station}"
-    / "STAGE_1"
-    / "EVENT_DATA"
-    / "STEP_1"
-    / f"TASK_{task_number}"
-    / "METADATA"
-)
-early_metadata_directory.mkdir(parents=True, exist_ok=True)
-early_status_csv_path = early_metadata_directory / f"task_{task_number}_metadata_status.csv"
-if user_file_selection:
-    early_status_filename_base = (
-        Path(user_file_path).name.replace("calibrated_", "").replace(".parquet", "")
-    )
-else:
-    early_status_filename_base = f"__task{task_number}_startup_station_{station}__"
-status_filename_base = early_status_filename_base
-status_execution_date = initialize_status_row(
-    early_status_csv_path,
-    filename_base=status_filename_base,
-    completion_fraction=0.0,
-)
-
-
 def _exit_without_status_row(message: str) -> None:
     print(message)
     if status_execution_date is not None:
@@ -810,9 +482,6 @@ def _exit_without_status_row(message: str) -> None:
                 f"{status_filename_base} ({status_execution_date})."
             )
     sys.exit(0)
-home_path = str(resolve_home_path_from_config(config))
-REFERENCE_TABLES_DIR = Path(home_path) / "DATAFLOW_v3" / "MASTER" / "CONFIG_FILES" / "METADATA_REPRISE" / "REFERENCE_TABLES"
-
 
 def _coerce_config_bool(value: object, default: bool = False) -> bool:
     if value is None:
@@ -827,500 +496,11 @@ def _coerce_config_bool(value: object, default: bool = False) -> bool:
             return False
     return bool(value)
 
-# Round execution time to seconds and format it in YYYY-MM-DD_HH.MM.SS
-execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
-print("Execution time is:", execution_time)
-
-ITINERARY_FILE_PATH = Path(
-    f"{home_path}/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
-)
-
-not_use_q_semisum = False
-
-stratos_save = config["stratos_save"]
-fast_mode = False
-debug_mode = False
-last_file_test = config["last_file_test"]
-keep_all_columns_output = _coerce_config_bool(
-    config.get("keep_all_columns_output", False),
-    default=False,
-)
-
-# Accessing all the variables from the configuration
-(
-    plot_mode,
-    create_plots,
-    create_essential_plots,
-    save_plots,
-    create_pdf,
-    show_plots,
-    create_debug_plots,
-) = resolve_task3_plot_options(config)
-limit_number = config.get("limit_number", None)
-limit = limit_number is not None
-
-# Charge calibration to fC
-
-# Charge front-back
-
-# Slewing correction
-
-# Time filtering
-
-# Time calibration
-
-# Y position
-
-# RPC variables
-y_new_method = config["y_new_method"]
-streamer_high_charge_factor = float(config.get("streamer_high_charge_factor", 0.2))
-streamer_charge_sum_threshold = _task3_optional_float(
-    config.get("streamer_charge_sum_threshold", None)
-)
-
-# Alternative
-
-# TimTrack
-
-# Validation
-
-complete_reanalysis = config["complete_reanalysis"]
-
-limit_number = config.get("limit_number", None)
-limit = limit_number is not None
-
-# Pre-cal Front & Back
-T_side_left_pre_cal_debug = config.get("T_side_left_pre_cal_debug", -500)
-T_side_right_pre_cal_debug = config.get("T_side_right_pre_cal_debug", 500)
-
-T_side_left_pre_cal_default = config.get("T_side_left_pre_cal_default", -200)
-T_side_right_pre_cal_default = config.get("T_side_right_pre_cal_default", -100)
-
-T_side_left_pre_cal_ST = config.get("T_side_left_pre_cal_ST", -200)
-T_side_right_pre_cal_ST = config.get("T_side_right_pre_cal_ST", -50)
-
-# Pre-cal Sum & Diff
-
-# Post-calibration
-
-# Once calculated the RPC variables. Legacy per-plane keys remain as optional
-# compatibility aliases so old configs still load, but Task 3 can now run with
-# only the plane_combination_* thresholds present.
-T_sum_RPC_left = _task3_config_float(
-    config,
-    "T_sum_RPC_left",
-    "plane_combination_plane_t_sum_sum_left",
-    "plane_combination_same_plane_t_sum_sum_left",
-    "plane_combination_self_t_sum_sum_left",
-    default=-25.0,
-)
-T_sum_RPC_right = _task3_config_float(
-    config,
-    "T_sum_RPC_right",
-    "plane_combination_plane_t_sum_sum_right",
-    "plane_combination_same_plane_t_sum_sum_right",
-    "plane_combination_self_t_sum_sum_right",
-    default=25.0,
-)
-T_dif_RPC_abs = abs(
-    _task3_config_float(
-        config,
-        "T_dif_RPC_abs",
-        "T_dif_RPC_right",
-        "plane_combination_plane_t_dif_sum_threshold",
-        "plane_combination_same_plane_t_dif_sum_threshold",
-        "plane_combination_self_t_dif_sum_threshold",
-        default=0.8,
-    )
-)
-T_dif_RPC_right = T_dif_RPC_abs
-T_dif_RPC_left = -T_dif_RPC_abs
-Q_RPC_left = _task3_config_float(
-    config,
-    "Q_RPC_left",
-    "plane_combination_plane_q_sum_sum_left",
-    "plane_combination_same_plane_q_sum_sum_left",
-    "plane_combination_self_q_sum_sum_left",
-    default=0.0,
-)
-Q_RPC_right = _task3_config_float(
-    config,
-    "Q_RPC_right",
-    "plane_combination_plane_q_sum_sum_right",
-    "plane_combination_same_plane_q_sum_sum_right",
-    "plane_combination_self_q_sum_sum_right",
-    default=800.0,
-)
-Q_dif_RPC_abs = abs(
-    _task3_config_float(
-        config,
-        "Q_dif_RPC_abs",
-        "Q_dif_RPC_right",
-        "plane_combination_plane_q_dif_sum_threshold",
-        "plane_combination_same_plane_q_dif_sum_threshold",
-        "plane_combination_self_q_dif_sum_threshold",
-        default=4.0,
-    )
-)
-Q_dif_RPC_right = Q_dif_RPC_abs
-Q_dif_RPC_left = -Q_dif_RPC_abs
-Y_RPC_abs = abs(
-    _task3_config_float(
-        config,
-        "Y_RPC_abs",
-        "Y_RPC_right",
-        "plane_combination_plane_y_sum_right",
-        "plane_combination_same_plane_y_sum_right",
-        "plane_combination_self_y_sum_right",
-        default=200.0,
-    )
-)
-Y_RPC_right = Y_RPC_abs
-Y_RPC_left = -Y_RPC_abs
-plane_combination_plane_q_sum_sum_left = float(
-    config.get(
-        "plane_combination_plane_q_sum_sum_left",
-        Q_RPC_left,
-    )
-)
-plane_combination_plane_q_sum_sum_right = float(
-    config.get(
-        "plane_combination_plane_q_sum_sum_right",
-        Q_RPC_right,
-    )
-)
-plane_combination_plane_q_dif_sum_threshold = abs(
-    float(
-        config.get(
-            "plane_combination_plane_q_dif_sum_threshold",
-            Q_dif_RPC_abs,
-        )
-    )
-)
-plane_combination_plane_t_sum_sum_left = float(
-    config.get(
-        "plane_combination_plane_t_sum_sum_left",
-        T_sum_RPC_left,
-    )
-)
-plane_combination_plane_t_sum_sum_right = float(
-    config.get(
-        "plane_combination_plane_t_sum_sum_right",
-        T_sum_RPC_right,
-    )
-)
-plane_combination_plane_t_dif_sum_threshold = abs(
-    float(
-        config.get(
-            "plane_combination_plane_t_dif_sum_threshold",
-            T_dif_RPC_abs,
-        )
-    )
-)
-plane_combination_plane_y_sum_left = float(
-    config.get(
-        "plane_combination_plane_y_sum_left",
-        Y_RPC_left,
-    )
-)
-plane_combination_plane_y_sum_right = float(
-    config.get(
-        "plane_combination_plane_y_sum_right",
-        Y_RPC_right,
-    )
-)
-plane_combination_detector_q_sum_sum_left = float(
-    config.get(
-        "plane_combination_detector_q_sum_sum_left",
-        Q_RPC_left,
-    )
-)
-plane_combination_detector_q_sum_sum_right = float(
-    config.get(
-        "plane_combination_detector_q_sum_sum_right",
-        Q_RPC_right,
-    )
-)
-plane_combination_detector_q_sum_dif_threshold = abs(
-    float(
-        config.get(
-            "plane_combination_detector_q_sum_dif_threshold",
-            Q_RPC_right,
-        )
-    )
-)
-plane_combination_detector_q_dif_sum_threshold = abs(
-    float(
-        config.get(
-            "plane_combination_detector_q_dif_sum_threshold",
-            Q_dif_RPC_abs,
-        )
-    )
-)
-plane_combination_detector_q_dif_dif_threshold = abs(
-    float(
-        config.get(
-            "plane_combination_detector_q_dif_dif_threshold",
-            Q_dif_RPC_abs,
-        )
-    )
-)
-plane_combination_detector_t_sum_sum_left = float(
-    config.get(
-        "plane_combination_detector_t_sum_sum_left",
-        T_sum_RPC_left,
-    )
-)
-plane_combination_detector_t_sum_sum_right = float(
-    config.get(
-        "plane_combination_detector_t_sum_sum_right",
-        T_sum_RPC_right,
-    )
-)
-plane_combination_detector_t_sum_dif_threshold = abs(
-    float(
-        config.get(
-            "plane_combination_detector_t_sum_dif_threshold",
-            max(abs(T_sum_RPC_left), abs(T_sum_RPC_right)),
-        )
-    )
-)
-plane_combination_detector_t_dif_sum_threshold = abs(
-    float(
-        config.get(
-            "plane_combination_detector_t_dif_sum_threshold",
-            T_dif_RPC_abs,
-        )
-    )
-)
-plane_combination_detector_t_dif_dif_threshold = abs(
-    float(
-        config.get(
-            "plane_combination_detector_t_dif_dif_threshold",
-            T_dif_RPC_abs,
-        )
-    )
-)
-plane_combination_detector_y_sum_left = float(
-    config.get(
-        "plane_combination_detector_y_sum_left",
-        Y_RPC_left,
-    )
-)
-plane_combination_detector_y_sum_right = float(
-    config.get(
-        "plane_combination_detector_y_sum_right",
-        Y_RPC_right,
-    )
-)
-plane_combination_detector_y_dif_threshold = abs(
-    float(
-        config.get(
-            "plane_combination_detector_y_dif_threshold",
-            Y_RPC_abs,
-        )
-    )
-)
-print(
-    "Task 3 plane-combination bounds "
-    f"(station {station}): same_plane q_sum=[{plane_combination_plane_q_sum_sum_left}, "
-    f"{plane_combination_plane_q_sum_sum_right}], "
-    f"same_plane t_sum=[{plane_combination_plane_t_sum_sum_left}, {plane_combination_plane_t_sum_sum_right}], "
-    f"same_plane y_sum=[{plane_combination_plane_y_sum_left}, {plane_combination_plane_y_sum_right}], "
-    f"detector q_sum=[{plane_combination_detector_q_sum_sum_left}, {plane_combination_detector_q_sum_sum_right}], "
-    f"detector t_sum=[{plane_combination_detector_t_sum_sum_left}, {plane_combination_detector_t_sum_sum_right}], "
-    f"detector y_sum=[{plane_combination_detector_y_sum_left}, {plane_combination_detector_y_sum_right}]"
-)
-
-# Alternative fitter filter
-det_pos_filter = config.get("det_pos_filter", 800)
-det_theta_left_filter = config.get("det_theta_left_filter", 0)
-det_theta_right_filter = config.get("det_theta_right_filter", 1.5708)
-det_phi_filter_abs = abs(float(config.get("det_phi_filter_abs", 3.141592)))
-det_phi_right_filter = det_phi_filter_abs
-det_phi_left_filter = -det_phi_filter_abs
-det_slowness_filter_left = config.get("det_slowness_filter_left", -0.02)
-det_slowness_filter_right = config.get("det_slowness_filter_right", 0.02)
-
-# TimTrack filter
-
-# Fitting comparison
-
-# Calibrations
-
-# Pedestal charge calibration
-
-# Front-back charge
-
-# Variables to modify
-beta = config.get("beta", 1)
-strip_speed_factor_of_c = config["strip_speed_factor_of_c"]
-
-# X
-strip_length = config.get("strip_length", 300)
-narrow_strip = config["narrow_strip"]
-wide_strip = config["wide_strip"]
-
-# Timtrack parameters
-anc_std = config["anc_std"]
-
-n_planes_timtrack = config.get("n_planes_timtrack", 4)
-
-# Plotting options
-T_clip_min_debug = config.get("T_clip_min_debug", -500)
-T_clip_max_debug = config.get("T_clip_max_debug", 500)
-Q_clip_min_debug = config.get("Q_clip_min_debug", -500)
-Q_clip_max_debug = config.get("Q_clip_max_debug", 500)
-num_bins_debug = config.get("num_bins_debug", 100)
-
-T_clip_min_default = config.get("T_clip_min_default", -300)
-T_clip_max_default = config.get("T_clip_max_default", 100)
-Q_clip_min_default = config.get("Q_clip_min_default", 0)
-Q_clip_max_default = config.get("Q_clip_max_default", 500)
-num_bins_default = config.get("num_bins_default", 100)
-
-T_clip_min_ST = config.get("T_clip_min_ST", -300)
-T_clip_max_ST = config.get("T_clip_max_ST", 100)
-Q_clip_min_ST = config.get("Q_clip_min_ST", 0)
-Q_clip_max_ST = config.get("Q_clip_max_ST", 500)
-
-# -----------------------------------------------------------------------------
-# Some variables that define the analysis, define a dictionary with the variables:
-# 'purity_of_data', etc.
-# -----------------------------------------------------------------------------
-
-# -----------------------------------------------------------------------------
-# Variables to not touch unless necessary -------------------------------------
-# -----------------------------------------------------------------------------
-Q_sum_color = 'orange'
-Q_dif_color = 'red'
-T_sum_color = 'blue'
-T_dif_color = 'green'
-
-pos_filter = det_pos_filter
-t0_left_filter = T_sum_RPC_left
-t0_right_filter = T_sum_RPC_right
-slowness_filter_left = det_slowness_filter_left
-slowness_filter_right = det_slowness_filter_right
-
-theta_left_filter = det_theta_left_filter
-theta_right_filter = det_theta_right_filter
-phi_left_filter = det_phi_left_filter
-phi_right_filter = det_phi_right_filter
-
-fig_idx, plot_list = ensure_plot_state(globals())
-
-# Time dif calibration (time_dif_reference)
-time_dif_distance = 30
-time_dif_reference = np.array([
-    [-0.0573, 0.031275, 1.033875, 0.761475],
-    [-0.914, -0.873975, -0.19815, 0.452025],
-    [0.8769, 1.2008, 1.014, 2.43915],
-    [1.508825, 2.086375, 1.6876, 3.023575]
-])
-
-# Charge sum pedestal (charge_sum_reference)
-charge_sum_distance = 30
-charge_sum_reference = np.array([
-    [89.4319, 98.19605, 95.99055, 91.83875],
-    [96.55775, 94.50385, 94.9254, 91.0775],
-    [92.12985, 92.23395, 90.60545, 95.5214],
-    [93.75635, 93.57425, 93.07055, 89.27305]
-])
-
-# Charge dif calibration (charge_dif_reference)
-charge_dif_distance = 30
-charge_dif_reference = np.array([
-    [4.512, 0.58715, 1.3204, -1.3918],
-    [-4.50885, 0.918, -3.39445, -0.12325],
-    [-3.8931, -3.28515, 3.27295, 1.0554],
-    [-2.29505, 0.012, 2.49045, -2.14565]
-])
-
-# Time sum calibration (time_sum_reference)
-time_sum_distance = 30
-time_sum_reference = np.array([
-    [0.0, -0.3886308, -0.53020947, 0.33711737],
-    [-0.80494094, -0.68836069, -2.01289387, -1.13481931],
-    [-0.23899338, -0.51373738, 0.50845317, 0.11685095],
-    [0.33586385, 1.08329847, 0.91410244, 0.58815813]
-])
-
-if False:
-    print('Working in fast mode.')
-
-if False:
-    print('Working in debug mode.')
-
-if False:
-    T_F_left_pre_cal = T_side_left_pre_cal_debug
-    T_F_right_pre_cal = T_side_right_pre_cal_debug
-
-    T_B_left_pre_cal = T_side_left_pre_cal_debug
-    T_B_right_pre_cal = T_side_right_pre_cal_debug
-
-else:
-    T_F_left_pre_cal = T_side_left_pre_cal_default  #-130
-    T_F_right_pre_cal = T_side_right_pre_cal_default
-
-    T_B_left_pre_cal = T_side_left_pre_cal_default
-    T_B_right_pre_cal = T_side_right_pre_cal_default
-
-T_F_left_pre_cal_ST = T_side_left_pre_cal_ST  #-115
-T_F_right_pre_cal_ST = T_side_right_pre_cal_ST
-T_B_left_pre_cal_ST = T_side_left_pre_cal_ST
-T_B_right_pre_cal_ST = T_side_right_pre_cal_ST
-
-# Y ---------------------------------------------------------------------------
-
-c_mm_ns = c/1000000
-print(c_mm_ns)
-
-# Miscelanous ----------------------------
-muon_speed = beta * c_mm_ns
-strip_speed = strip_speed_factor_of_c * c_mm_ns # 200 mm/ns
-tdiff_to_x = strip_speed # Factor to transform t_diff to X
-
-# Not-Hardcoded
-vc    = beta * c_mm_ns # mm/ns
-sc    = 1/vc
-ss    = 1/strip_speed # slowness of the signal in the strip
-nplan = n_planes_timtrack
-lenx  = strip_length
-anc_sx = tdiff_to_x * anc_std # 2 cm
-
-if False:
-    T_clip_min = T_clip_min_debug
-    T_clip_max = T_clip_max_debug
-    Q_clip_min = Q_clip_min_debug
-    Q_clip_max = Q_clip_max_debug
-    num_bins = num_bins_debug
-else:
-    T_clip_min = T_clip_min_default
-    T_clip_max = T_clip_max_default
-    Q_clip_min = Q_clip_min_default
-    Q_clip_max = Q_clip_max_default
-    num_bins = num_bins_default
-
-T_clip_min_ST = T_clip_min_ST
-T_clip_max_ST = T_clip_max_ST
-Q_clip_min_ST = Q_clip_min_ST
-Q_clip_max_ST = Q_clip_max_ST
-
-# the analysis mode indicates if it is a regular analysis or a repeated, careful analysis
-# 0 -> regular analysis
-# 1 -> repeated, careful analysis
-global_variables = {}
-
-TT_COUNT_VALUES: tuple[int, ...] = (
-    0, 1, 2, 3, 4, 12, 13, 14, 23, 24, 34, 123, 124, 134, 234, 1234
-)
 
 def ensure_global_count_keys(prefixes: Iterable[str]) -> None:
     for prefix in prefixes:
         for tt_value in TT_COUNT_VALUES:
             global_variables.setdefault(f"{prefix}_{tt_value}_count", 0)
-
 
 def refresh_global_count_metadata(df: pd.DataFrame, column_names: Iterable[str]) -> None:
     prefixes = tuple(f"{column_name}_" for column_name in column_names)
@@ -1335,53 +515,6 @@ def refresh_global_count_metadata(df: pd.DataFrame, column_names: Iterable[str])
             tt_label = normalize_tt_label(tt_value)
             global_variables[f"{column_name}_{tt_label}_count"] = int(count)
 
-TASK3_ACTIVE_STRIP_COLUMNS: tuple[str, ...] = tuple(f"active_strips_P{plane}" for plane in range(1, 5))
-TASK3_SELECTED_OFFENDER_CARDINALITY_VALUES: tuple[int, ...] = tuple(range(0, 5))
-
-FILTER_METRIC_NAMES: tuple[str, ...] = (
-    "plane_combination_plane_rows_affected_pct",
-    "plane_combination_filter_rows_affected_pct",
-    "q_sum_all_zero_rows_removed_pct",
-    "data_purity_percentage",
-    "all_components_zero_rows_removed_pct",
-    "list_tt_lt_10_rows_removed_pct",
-)
-NOISE_CONTROL_RATE_DENOMINATOR_COLUMN = "count_rate_denominator_seconds"
-TASK3_NOISE_CONTROL_METRIC_NAMES: tuple[str, ...] = tuple(
-    f"plane_combination_filter_rows_with_{selected_count}_selected_offenders_rate_hz"
-    for selected_count in TASK3_SELECTED_OFFENDER_CARDINALITY_VALUES
-)
-TASK3_NOISE_CONTROL_PERCENT_METRIC_NAMES: tuple[str, ...] = tuple(
-    f"plane_combination_filter_rows_with_{selected_count}_selected_offenders_pct"
-    for selected_count in TASK3_SELECTED_OFFENDER_CARDINALITY_VALUES
-)
-TASK3_THREE_TO_FOUR_MISSING_TRIGGER_BY_PLANE: dict[int, int] = {
-    1: 234,
-    2: 134,
-    3: 124,
-    4: 123,
-}
-FILTER6_NONZERO_COUNTER_NAMES: tuple[str, ...] = tuple(
-    f"P{i_plane}_{label}_nonzero_{tag}"
-    for tag in ("before_filter6", "after_filter6")
-    for i_plane in range(1, 5)
-    for label in ("T_sum", "T_diff", "Q_sum", "Q_diff", "Y")
-)
-FILTER6_NONZERO_RATE_NAMES: tuple[str, ...] = tuple(
-    f"{name}_rate_hz" for name in FILTER6_NONZERO_COUNTER_NAMES
-)
-FILTER_METADATA_ALLOWED_COLUMNS = {
-    "filename_base",
-    "execution_timestamp",
-    "param_hash",
-    *FILTER_METRIC_NAMES,
-}
-TASK3_DEEP_FILTER_LEGACY_COLUMNS: tuple[str, ...] = (
-    "plane_combination_self_rows_affected_pct",
-    "plane_combination_same_plane_rows_affected_pct",
-)
-
-filter_metrics: dict[str, float] = {}
 
 def record_filter_metric(name: str, removed: float, total: float) -> None:
     """Record percentage removed for a filter."""
@@ -1391,7 +524,6 @@ def record_filter_metric(name: str, removed: float, total: float) -> None:
         f"[filter-metrics] {name}: removed {removed} of {total} ({pct:.2f}%)"
     )
 
-
 def record_activity_metric(name: str, affected: float, total: float, label: str = "affected") -> None:
     """Record a generic percentage metric for non-row-removal filter activity."""
     pct = 0.0 if total == 0 else 100.0 * float(affected) / float(total)
@@ -1400,13 +532,11 @@ def record_activity_metric(name: str, affected: float, total: float, label: str 
         f"[filter-metrics] {name}: {label} {affected} of {total} ({pct:.2f}%)"
     )
 
-
 def _task3_drop_legacy_deep_filter_field(column_name: str) -> bool:
     return (
         column_name.startswith("plane_rpc_window_")
         or column_name in TASK3_DEEP_FILTER_LEGACY_COLUMNS
     )
-
 
 def build_task3_full_strip_pattern_series(df: pd.DataFrame) -> pd.Series:
     """Encode the four per-plane active-strip labels as one deterministic 16-bit string."""
@@ -1427,7 +557,6 @@ def build_task3_full_strip_pattern_series(df: pd.DataFrame) -> pd.Series:
         full_pattern = np.char.add(full_pattern, values)
     return pd.Series(full_pattern, index=df.index, dtype="object")
 
-
 def store_pattern_rates(metadata: dict[str, object], patterns: pd.Series, prefix: str, df: pd.DataFrame) -> None:
     phase_meta = build_events_per_second_metadata(df)
     try:
@@ -1439,116 +568,6 @@ def store_pattern_rates(metadata: dict[str, object], patterns: pd.Series, prefix
     for pattern, count in counts.items():
         rate_hz = round(float(count) / denominator, 6) if denominator > 0 else 0.0
         metadata[f"{prefix}_{pattern}_rate_hz"] = rate_hz
-
-
-def compute_strip_activation_conditional_matrix(
-    df: pd.DataFrame,
-) -> tuple[list[str], np.ndarray, dict[str, int]]:
-    """Return strip-level conditional activation matrix P(target strip active | given strip active)."""
-    labels: list[str] = []
-    strip_active_arrays: list[np.ndarray] = []
-
-    for plane in range(1, 5):
-        col_name = f"active_strips_P{plane}"
-        if col_name in df.columns:
-            strip_values = df[col_name].fillna("0000").astype(str)
-            strip_values = strip_values.where(strip_values.str.len() == 4, "0000")
-        else:
-            strip_values = pd.Series("0000", index=df.index, dtype="object")
-
-        for strip_index in range(4):
-            labels.append(f"P{plane}S{strip_index + 1}")
-            strip_active_arrays.append((strip_values.str[strip_index] == "1").to_numpy(dtype=bool))
-
-    n_strips = len(labels)
-    cond = np.full((n_strips, n_strips), np.nan, dtype=float)
-    given_counts: dict[str, int] = {}
-
-    for i in range(n_strips):
-        n_i = int(np.sum(strip_active_arrays[i]))
-        given_counts[labels[i]] = n_i
-        if n_i == 0:
-            continue
-        for j in range(n_strips):
-            if i == j:
-                cond[i, j] = 1.0
-            else:
-                cond[i, j] = float(np.sum(strip_active_arrays[i] & strip_active_arrays[j])) / n_i
-
-    return labels, cond, given_counts
-
-
-def summarize_strip_activation_matrix(labels: list[str], matrix: np.ndarray) -> dict[str, float | str]:
-    """Extract compact scalar summaries from a strip conditional matrix."""
-    if matrix.size == 0 or len(labels) != matrix.shape[0] or matrix.shape[0] != matrix.shape[1]:
-        return {
-            "mean_off_diagonal": "",
-            "max_off_diagonal": "",
-            "mean_off_diagonal_interplane": "",
-        }
-
-    finite = np.isfinite(matrix)
-    n = matrix.shape[0]
-    off_diag_mask = np.ones((n, n), dtype=bool)
-    np.fill_diagonal(off_diag_mask, False)
-
-    off_diag_values = matrix[finite & off_diag_mask]
-    mean_off_diag = float(np.mean(off_diag_values)) if off_diag_values.size else ""
-    max_off_diag = float(np.max(off_diag_values)) if off_diag_values.size else ""
-
-    plane_ids = np.array([int(label[1]) for label in labels], dtype=int)
-    interplane_mask = off_diag_mask & (plane_ids[:, None] != plane_ids[None, :])
-    interplane_values = matrix[finite & interplane_mask]
-    mean_off_diag_interplane = (
-        float(np.mean(interplane_values)) if interplane_values.size else ""
-    )
-
-    return {
-        "mean_off_diagonal": (
-            round(mean_off_diag, ACTIVATION_METADATA_DECIMALS) if mean_off_diag != "" else ""
-        ),
-        "max_off_diagonal": (
-            round(max_off_diag, ACTIVATION_METADATA_DECIMALS) if max_off_diag != "" else ""
-        ),
-        "mean_off_diagonal_interplane": (
-            round(mean_off_diag_interplane, ACTIVATION_METADATA_DECIMALS)
-            if mean_off_diag_interplane != ""
-            else ""
-        ),
-    }
-
-
-def store_strip_activation_matrix_metadata(
-    metadata: dict[str, object],
-    prefix: str,
-    labels: list[str],
-    matrix: np.ndarray,
-    given_counts: dict[str, int],
-) -> None:
-    """Persist strip-activation matrix values and summary metrics into metadata."""
-    summary = summarize_strip_activation_matrix(labels, matrix)
-    metadata[f"strip_activation_mean_off_diagonal_{prefix}"] = summary["mean_off_diagonal"]
-    metadata[f"strip_activation_max_off_diagonal_{prefix}"] = summary["max_off_diagonal"]
-    metadata[f"strip_activation_mean_off_diagonal_interplane_{prefix}"] = summary[
-        "mean_off_diagonal_interplane"
-    ]
-
-    for label in labels:
-        metadata[f"strip_activation_given_count_{prefix}_{label}"] = int(given_counts.get(label, 0))
-
-    if matrix.size == 0:
-        return
-
-    for i, src_label in enumerate(labels):
-        for j, dst_label in enumerate(labels):
-            value = matrix[i, j]
-            field = f"strip_activation_conditional_{prefix}_{src_label}_to_{dst_label}"
-            metadata[field] = (
-                round(float(value), ACTIVATION_METADATA_DECIMALS) if np.isfinite(value) else ""
-            )
-
-
-TASK3_PLANE_LABELS: tuple[str, ...] = tuple(f"P{plane}" for plane in range(1, 5))
 
 
 def _task3_plane_charge_arrays(df: pd.DataFrame) -> tuple[list[str], list[np.ndarray]]:
@@ -1564,7 +583,6 @@ def _task3_plane_charge_arrays(df: pd.DataFrame) -> tuple[list[str], list[np.nda
         arrays.append(arr)
     return labels, arrays
 
-
 def _format_activation_scalar(value: float | None) -> float | str:
     if value is None:
         return ""
@@ -1572,7 +590,6 @@ def _format_activation_scalar(value: float | None) -> float | str:
     if not np.isfinite(value_float):
         return ""
     return round(value_float, ACTIVATION_METADATA_DECIMALS)
-
 
 def _store_activation_scalar(
     activation_meta: dict[str, object],
@@ -1582,7 +599,6 @@ def _store_activation_scalar(
 ) -> None:
     activation_meta[key] = value
     scalar_meta.pop(key, None)
-
 
 def store_task3_plane_activation_snapshot(
     *,
@@ -1768,7 +784,6 @@ def store_task3_plane_activation_snapshot(
         "streamer_matrix": streamer_matrix,
     }
 
-
 def plot_task3_plane_activation_before_after(
     initial_snapshot: dict[str, object],
     filtered_snapshot: dict[str, object],
@@ -1825,7 +840,6 @@ def plot_task3_plane_activation_before_after(
     plt.close(fig)
     return fig_idx_value
 
-
 def compute_qsum_threshold_tt(df: pd.DataFrame, threshold: float) -> pd.Series:
     """Return TT labels using only planes with P*_Q_sum_final > threshold."""
     tt_str = pd.Series("", index=df.index, dtype="object")
@@ -1837,7 +851,6 @@ def compute_qsum_threshold_tt(df: pd.DataFrame, threshold: float) -> pd.Series:
         plane_active = charge_vals.gt(float(threshold))
         tt_str = tt_str.where(~plane_active, tt_str + str(plane))
     return tt_str.replace("", "0").astype(int)
-
 
 def compute_qsum_threshold_full_strip_patterns(df: pd.DataFrame, threshold: float) -> pd.Series:
     """Return full 16-bit strip topology after applying per-plane Q_sum threshold."""
@@ -1869,7 +882,6 @@ def compute_qsum_threshold_full_strip_patterns(df: pd.DataFrame, threshold: floa
         full_pattern = np.char.add(full_pattern, values)
     return pd.Series(full_pattern, index=df.index, dtype="object")
 
-
 def compute_qsum_threshold_tsum_window(df: pd.DataFrame, threshold: float) -> tuple[pd.Series, pd.Series]:
     """Compute T_sum coincidence window=max-min across planes with Q_sum > threshold."""
     t_cols = [f"P{plane}_T_sum_final" for plane in range(1, 5)]
@@ -1897,15 +909,6 @@ def compute_qsum_threshold_tsum_window(df: pd.DataFrame, threshold: float) -> tu
         pd.Series(window, index=df.index, dtype=float),
         pd.Series(active_counts, index=df.index, dtype=int),
     )
-
-
-def _count_turns(strips: list[int]) -> int:
-    if len(strips) < 3:
-        return 0
-    deltas = [strips[idx + 1] - strips[idx] for idx in range(len(strips) - 1)]
-    signs = [int(np.sign(delta)) for delta in deltas if delta != 0]
-    return int(sum(1 for idx in range(len(signs) - 1) if signs[idx] != signs[idx + 1]))
-
 
 def classify_full_strip_topology(full_pattern: str) -> tuple[str, str, str]:
     """Classify full strip topology into active-mask and coarse topology class."""
@@ -1942,12 +945,6 @@ def classify_full_strip_topology(full_pattern: str) -> tuple[str, str, str]:
         return active_mask, "single_strip_rough", path_label
     return active_mask, "single_strip_smooth", path_label
 
-
-def tt_value_to_planes(tt_value: object) -> list[int]:
-    label = normalize_tt_label(tt_value, default="0")
-    return [int(char) for char in label if char in {"1", "2", "3", "4"}]
-
-
 def compute_source_tt_min_charge(df: pd.DataFrame, source_tt: object) -> pd.Series:
     planes = tt_value_to_planes(source_tt)
     if not planes:
@@ -1959,7 +956,6 @@ def compute_source_tt_min_charge(df: pd.DataFrame, source_tt: object) -> pd.Seri
 
     charge_df = df.loc[:, cols].apply(pd.to_numeric, errors="coerce")
     return charge_df.min(axis=1, skipna=False)
-
 
 def plot_population_table(
     counts_df: pd.DataFrame,
@@ -2019,31 +1015,6 @@ def plot_population_table(
     plt.close(fig)
     return fig_idx + 1
 
-
-def compute_empirical_efficiency_from_tt_counts(
-    tt_counts: pd.Series,
-) -> dict[int, tuple[float, float, int, int]]:
-    """Compute per-plane empirical efficiencies 1 - N(others)/N(1234)."""
-    n_four = int(tt_counts.get(1234, 0))
-    missing_plane_tt = {1: 234, 2: 134, 3: 124, 4: 123}
-    results: dict[int, tuple[float, float, int, int]] = {}
-
-    for plane, tt_value in missing_plane_tt.items():
-        n_three = int(tt_counts.get(tt_value, 0))
-        if n_four <= 0:
-            results[plane] = (np.nan, np.nan, n_three, n_four)
-            continue
-
-        n_three_float = float(n_three)
-        n_four_float = float(n_four)
-        efficiency = 1.0 - (n_three_float / n_four_float)
-        variance = (n_three_float / (n_four_float ** 2)) + ((n_three_float ** 2) / (n_four_float ** 3))
-        error = math.sqrt(max(variance, 0.0))
-        results[plane] = (efficiency, error, n_three, n_four)
-
-    return results
-
-
 def select_task3_streamer_threshold(
     df: pd.DataFrame,
     q_sum_cols: list[str],
@@ -2057,7 +1028,6 @@ def select_task3_streamer_threshold(
         return float(detected_threshold), "auto"
 
     return None, "unavailable"
-
 
 def compute_task3_charge_topology_codes(
     df: pd.DataFrame,
@@ -2089,7 +1059,6 @@ def compute_task3_charge_topology_codes(
 
     return pd.Series(topology_code, index=df.index, dtype="object"), topology_digits_by_plane
 
-
 def compute_task3_tt_from_topology_codes(
     topology_digits_by_plane: dict[int, np.ndarray],
     *,
@@ -2112,7 +1081,6 @@ def compute_task3_tt_from_topology_codes(
     if exclude_streamer_events:
         tt_series = tt_series.mask(any_streamer, pd.NA)
     return pd.to_numeric(tt_series, errors="coerce").astype("Int64")
-
 
 def store_task3_charge_topology_metadata(
     metadata: dict[str, object],
@@ -2273,7 +1241,6 @@ def store_task3_charge_topology_metadata(
                 round(int(n_three) / denominator_seconds, 6) if denominator_seconds > 0 else 0.0
             )
 
-
 def detect_streamer_threshold(
     df: pd.DataFrame,
     q_sum_cols: list[str],
@@ -2325,205 +1292,6 @@ def detect_streamer_threshold(
 
     return None
 
-
-def build_strip_boolean_arrays(
-    df: pd.DataFrame,
-    condition_per_plane: dict[int, np.ndarray],
-) -> tuple[list[str], list[np.ndarray]]:
-    """Build per-strip boolean arrays from a per-plane condition and active_strips columns.
-
-    *condition_per_plane* maps plane number → boolean array (length = len(df)).
-    A strip is True when the plane condition is True AND the strip bit is 1.
-    Returns (labels, arrays) where labels are like "P1S1", "P1S2", ..., "P4S4".
-    """
-    labels: list[str] = []
-    arrays: list[np.ndarray] = []
-    for p in sorted(condition_per_plane.keys()):
-        as_col = f"active_strips_P{p}"
-        if as_col not in df.columns:
-            continue
-        pattern = df[as_col].fillna("0000").astype(str)
-        pattern = pattern.where(pattern.str.len() == 4, "0000")
-        plane_cond = condition_per_plane[p]
-        for s in range(4):
-            strip_on = (pattern.str[s] == "1").to_numpy(dtype=bool)
-            arrays.append(plane_cond & strip_on)
-            labels.append(f"P{p}S{s+1}")
-    return labels, arrays
-
-
-def compute_strip_contagion_matrices_by_tt(
-    tt_series: pd.Series,
-    source_labels: list[str],
-    source_arrays: list[np.ndarray],
-    target_labels: list[str],
-    target_arrays: list[np.ndarray],
-    *,
-    min_events: int = 30,
-    max_tt_panels: int = 6,
-) -> tuple[list[int], dict[int, np.ndarray], dict[int, dict[str, int]], dict[int, int]]:
-    """Compute per-TT conditional strip contagion matrices P(target | given source)."""
-    if not source_labels or not source_arrays or not target_labels or not target_arrays:
-        return [], {}, {}, {}
-
-    tt_counts = tt_series.value_counts()
-    selected_tts = [
-        tt for tt, cnt in tt_counts.items()
-        if cnt >= min_events and tt >= 10
-    ][:max_tt_panels]
-    if not selected_tts:
-        return [], {}, {}, {}
-
-    matrices: dict[int, np.ndarray] = {}
-    given_counts_by_tt: dict[int, dict[str, int]] = {}
-    n_events_by_tt: dict[int, int] = {}
-
-    for tt_val in selected_tts:
-        mask_tt = (tt_series == tt_val).to_numpy(dtype=bool)
-        n_events_by_tt[tt_val] = int(np.sum(mask_tt))
-        cond = np.full((len(source_labels), len(target_labels)), np.nan, dtype=float)
-        given_counts: dict[str, int] = {}
-
-        for i, src_label in enumerate(source_labels):
-            src_active = source_arrays[i] & mask_tt
-            n_given = int(np.sum(src_active))
-            given_counts[src_label] = n_given
-            if n_given == 0:
-                continue
-            for j in range(len(target_labels)):
-                cond[i, j] = float(np.sum(src_active & target_arrays[j])) / n_given
-
-        matrices[tt_val] = cond
-        given_counts_by_tt[tt_val] = given_counts
-
-    return selected_tts, matrices, given_counts_by_tt, n_events_by_tt
-
-
-def store_strip_contagion_by_tt_metadata(
-    metadata: dict[str, object],
-    variant_prefix: str,
-    source_labels: list[str],
-    target_labels: list[str],
-    selected_tts: list[int],
-    matrices: dict[int, np.ndarray],
-    given_counts_by_tt: dict[int, dict[str, int]],
-    n_events_by_tt: dict[int, int],
-) -> None:
-    """Store per-TT strip contagion matrices and source counts in specific metadata."""
-    metadata[f"streamer_contagion_{variant_prefix}_selected_tts"] = ",".join(
-        str(tt) for tt in selected_tts
-    )
-
-    for tt_val in selected_tts:
-        metadata[f"streamer_contagion_{variant_prefix}_tt{tt_val}_event_count"] = int(
-            n_events_by_tt.get(tt_val, 0)
-        )
-        given_counts = given_counts_by_tt.get(tt_val, {})
-        for src_label in source_labels:
-            metadata[
-                f"streamer_contagion_{variant_prefix}_tt{tt_val}_given_count_{src_label}"
-            ] = int(given_counts.get(src_label, 0))
-
-        matrix = matrices.get(tt_val)
-        if matrix is None:
-            continue
-        for i, src_label in enumerate(source_labels):
-            for j, dst_label in enumerate(target_labels):
-                value = matrix[i, j]
-                field = (
-                    f"streamer_contagion_{variant_prefix}_tt{tt_val}_{src_label}_to_{dst_label}"
-                )
-                metadata[field] = (
-                    round(float(value), ACTIVATION_METADATA_DECIMALS) if np.isfinite(value) else ""
-                )
-
-
-def plot_strip_contagion_by_tt(
-    df: pd.DataFrame,
-    source_labels: list[str],
-    source_arrays: list[np.ndarray],
-    tt_column: str,
-    *,
-    title_prefix: str,
-    filename_suffix: str,
-    fig_idx: int,
-    base_dir: str,
-    save_plots: bool,
-    show_plots: bool,
-    plot_list: list[str],
-    target_labels: list[str] | None = None,
-    target_arrays: list[np.ndarray] | None = None,
-    min_events: int = 30,
-    max_tt_panels: int = 6,
-) -> int:
-    """Plot strip-level contagion matrices split by plane combination (TT)."""
-    if not source_labels or not source_arrays:
-        return fig_idx
-
-    if target_labels is None:
-        target_labels = source_labels
-    if target_arrays is None:
-        target_arrays = source_arrays
-    if not target_labels or not target_arrays:
-        return fig_idx
-
-    tt_series = pd.to_numeric(df[tt_column], errors="coerce").fillna(0).astype(int)
-    selected_tts, matrices, _, n_events_by_tt = compute_strip_contagion_matrices_by_tt(
-        tt_series,
-        source_labels,
-        source_arrays,
-        target_labels,
-        target_arrays,
-        min_events=min_events,
-        max_tt_panels=max_tt_panels,
-    )
-    if not selected_tts:
-        return fig_idx
-
-    n_source = len(source_labels)
-    n_target = len(target_labels)
-    ncols = len(selected_tts)
-    fig_w = max(6, 5.5 * ncols)
-    fig, axes = plt.subplots(1, ncols, figsize=(fig_w, 5.5 + 0.15 * max(n_source, n_target)), squeeze=False)
-
-    for col_idx, tt_val in enumerate(selected_tts):
-        ax = axes[0, col_idx]
-        n_tt = int(n_events_by_tt.get(tt_val, 0))
-        cond = matrices.get(tt_val)
-        if cond is None:
-            continue
-
-        im = ax.imshow(cond, cmap="YlOrRd", vmin=0, aspect="equal")
-        ax.set_xticks(range(n_target))
-        ax.set_xticklabels(target_labels, fontsize=5, rotation=90)
-        ax.set_yticks(range(n_source))
-        ax.set_yticklabels(source_labels, fontsize=5)
-        for i in range(n_source):
-            for j in range(n_target):
-                v = cond[i, j]
-                if np.isfinite(v) and v > 0.005:
-                    tc = "white" if v > 0.5 else "black"
-                    ax.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=4.5, color=tc)
-        for boundary in range(4, max(n_source, n_target), 4):
-            ax.axhline(boundary - 0.5, color="grey", linewidth=0.7, alpha=0.6)
-            ax.axvline(boundary - 0.5, color="grey", linewidth=0.7, alpha=0.6)
-        ax.set_title(f"TT {tt_val} (N={n_tt})", fontsize=10)
-
-    fig.colorbar(im, ax=axes[0, -1], label="P(target | given)", shrink=0.75, pad=0.02)
-    fig.suptitle(title_prefix, fontsize=13)
-    fig.tight_layout(rect=[0, 0, 0.97, 0.93])
-    if save_plots:
-        final_filename = f"{fig_idx}_{filename_suffix}.png"
-        fig_idx += 1
-        save_fig_path = os.path.join(base_dir, final_filename)
-        plot_list.append(save_fig_path)
-        save_plot_figure(save_fig_path, fig=fig, format="png", dpi=150)
-    if show_plots:
-        plt.show()
-    plt.close(fig)
-    return fig_idx
-
-
 def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:
     """Compute trigger type based on planes with non-zero charge."""
     tt_str = pd.Series("", index=df.index, dtype="object")
@@ -2551,7 +1319,6 @@ def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[s
     df.loc[:, column_name] = tt_str.replace("", "0").astype(int)
     return df
 
-
 def collect_task3_plane_final_map(df: pd.DataFrame) -> dict[int, dict[str, str]]:
     """Return the available plane-level final columns grouped by plane."""
     plane_map: dict[int, dict[str, str]] = {}
@@ -2567,79 +1334,121 @@ def collect_task3_plane_final_map(df: pd.DataFrame) -> dict[int, dict[str, str]]
             plane_map[plane] = cols
     return plane_map
 
+def snapshot_original_columns_once(
+    frame: pd.DataFrame,
+    column_names: Iterable[str],
+) -> None:
+    """Compatibility hook for normalization callbacks.
 
-TASK3_PLANE_KEYS: tuple[int, ...] = (1, 2, 3, 4)
-TASK3_PLANE_COMBINATION_LIMIT_LABELS: dict[str, str] = {
-    "q_sum_sum_low": "Q_sum semisum below lower limit",
-    "q_sum_sum_high": "Q_sum semisum above upper limit",
-    "q_sum_dif_low": "Q_sum semidifference below lower limit",
-    "q_sum_dif_high": "Q_sum semidifference above upper limit",
-    "q_dif_sum_low": "Q_dif semisum below lower limit",
-    "q_dif_sum_high": "Q_dif semisum above upper limit",
-    "q_dif_dif_low": "Q_dif semidifference below lower limit",
-    "q_dif_dif_high": "Q_dif semidifference above upper limit",
-    "t_sum_sum_low": "T_sum semisum below lower limit",
-    "t_sum_sum_high": "T_sum semisum above upper limit",
-    "t_sum_dif_low": "T_sum semidifference below lower limit",
-    "t_sum_dif_high": "T_sum semidifference above upper limit",
-    "t_dif_sum_low": "T_dif semisum below lower limit",
-    "t_dif_sum_high": "T_dif semisum above upper limit",
-    "t_dif_dif_low": "T_dif semidifference below lower limit",
-    "t_dif_dif_high": "T_dif semidifference above upper limit",
-    "y_sum_low": "Y semisum below lower limit",
-    "y_sum_high": "Y semisum above upper limit",
-    "y_dif_low": "Y semidifference below lower limit",
-    "y_dif_high": "Y semidifference above upper limit",
-}
-TASK3_PLANE_COMBINATION_LIMIT_KEYS: tuple[str, ...] = tuple(
-    TASK3_PLANE_COMBINATION_LIMIT_LABELS
-)
-TASK3_PLANE_SELF_LIMIT_LABELS: dict[str, str] = {
-    "q_sum_sum_low": "Plane Q_sum below lower limit",
-    "q_sum_sum_high": "Plane Q_sum above upper limit",
-    "q_dif_sum_low": "Plane Q_dif below lower limit",
-    "q_dif_sum_high": "Plane Q_dif above upper limit",
-    "t_sum_sum_low": "Plane T_sum below lower limit",
-    "t_sum_sum_high": "Plane T_sum above upper limit",
-    "t_dif_sum_low": "Plane T_dif below lower limit",
-    "t_dif_sum_high": "Plane T_dif above upper limit",
-    "y_sum_low": "Plane Y below lower limit",
-    "y_sum_high": "Plane Y above upper limit",
-}
-TASK3_PLANE_SELF_LIMIT_KEYS: tuple[str, ...] = tuple(
-    TASK3_PLANE_SELF_LIMIT_LABELS
-)
-TASK3_PLANE_SELF_OBSERVABLE_LIMIT_KEYS: dict[str, tuple[str, str]] = {
-    "q_sum_sum": ("q_sum_sum_low", "q_sum_sum_high"),
-    "q_dif_sum": ("q_dif_sum_low", "q_dif_sum_high"),
-    "t_sum_sum": ("t_sum_sum_low", "t_sum_sum_high"),
-    "t_dif_sum": ("t_dif_sum_low", "t_dif_sum_high"),
-    "y_sum": ("y_sum_low", "y_sum_high"),
-}
+    Task 3 currently has no downstream consumer for pre-normalization snapshots,
+    but the plane-block normalization helpers accept this callback.
+    """
+    return None
+
+def normalize_task3_plane_component_blocks(
+    df_input: pd.DataFrame,
+    *,
+    snapshot_originals=None,
+) -> dict[str, int]:
+    """Zero each final plane block when any core Q/T component is zero."""
+    plane_map = collect_task3_plane_final_map(df_input)
+    if not plane_map:
+        return {
+            "rows_affected": 0,
+            "values_zeroed": 0,
+            "planes_affected": 0,
+        }
+
+    plane_keys = sorted(plane_map)
+    q_sum_cols = [plane_map[plane]["Q_sum"] for plane in plane_keys]
+    q_dif_cols = [plane_map[plane]["Q_dif"] for plane in plane_keys]
+    t_sum_cols = [plane_map[plane]["T_sum"] for plane in plane_keys]
+    t_dif_cols = [plane_map[plane]["T_dif"] for plane in plane_keys]
+    y_cols = [plane_map[plane]["Y"] for plane in plane_keys]
+
+    q_sum_values = df_input.loc[:, q_sum_cols].to_numpy(copy=True)
+    q_dif_values = df_input.loc[:, q_dif_cols].to_numpy(copy=True)
+    t_sum_values = df_input.loc[:, t_sum_cols].to_numpy(copy=True)
+    t_dif_values = df_input.loc[:, t_dif_cols].to_numpy(copy=True)
+    y_values = df_input.loc[:, y_cols].to_numpy(copy=True)
+
+    any_core_zero = (
+        (q_sum_values == 0)
+        | (q_dif_values == 0)
+        | (t_sum_values == 0)
+        | (t_dif_values == 0)
+    )
+    all_core_zero = (
+        (q_sum_values == 0)
+        & (q_dif_values == 0)
+        & (t_sum_values == 0)
+        & (t_dif_values == 0)
+    )
+    partial_zero = any_core_zero & ~all_core_zero
+
+    if snapshot_originals is not None:
+        changed_cols: list[str] = []
+        for idx, should_zero in enumerate(np.any(partial_zero, axis=0)):
+            if not should_zero:
+                continue
+            changed_cols.extend(
+                (
+                    q_sum_cols[idx],
+                    q_dif_cols[idx],
+                    t_sum_cols[idx],
+                    t_dif_cols[idx],
+                    y_cols[idx],
+                )
+            )
+        if changed_cols:
+            snapshot_originals(df_input, changed_cols)
+
+    values_zeroed = 0
+    for idx in range(len(plane_keys)):
+        plane_mask = partial_zero[:, idx]
+        if not np.any(plane_mask):
+            continue
+        values_zeroed += int(np.count_nonzero(q_sum_values[plane_mask, idx]))
+        values_zeroed += int(np.count_nonzero(q_dif_values[plane_mask, idx]))
+        values_zeroed += int(np.count_nonzero(t_sum_values[plane_mask, idx]))
+        values_zeroed += int(np.count_nonzero(t_dif_values[plane_mask, idx]))
+        values_zeroed += int(np.count_nonzero(y_values[plane_mask, idx]))
+
+    q_sum_values[any_core_zero] = 0
+    q_dif_values[any_core_zero] = 0
+    t_sum_values[any_core_zero] = 0
+    t_dif_values[any_core_zero] = 0
+    y_values[any_core_zero] = 0
+
+    df_input.loc[:, q_sum_cols] = q_sum_values
+    df_input.loc[:, q_dif_cols] = q_dif_values
+    df_input.loc[:, t_sum_cols] = t_sum_values
+    df_input.loc[:, t_dif_cols] = t_dif_values
+    df_input.loc[:, y_cols] = y_values
+    return {
+        "rows_affected": int(np.count_nonzero(np.any(partial_zero, axis=1))),
+        "values_zeroed": int(values_zeroed),
+        "planes_affected": int(np.count_nonzero(np.any(partial_zero, axis=0))),
+    }
 
 
 def _task3_plane_order_key(plane_key: int) -> tuple[int]:
     return (plane_key,)
 
-
 def _task3_plane_offender_metric_key(plane_key: int) -> str:
     return f"plane_combination_filter_offender_count_P{plane_key}"
-
 
 def _task3_selected_offender_cardinality_metric_key(selected_count: int) -> str:
     return f"plane_combination_filter_rows_with_{selected_count}_selected_offenders"
 
-
 def _task3_selected_offender_cardinality_rate_metric_key(selected_count: int) -> str:
     return f"{_task3_selected_offender_cardinality_metric_key(selected_count)}_rate_hz"
-
 
 def _task3_noise_control_efficiency_metric_key(plane: int, selected_count_threshold: int) -> str:
     return (
         f"plane_combination_filter_eff_p{plane}_selected_offenders_le_"
         f"{selected_count_threshold}"
     )
-
 
 def _task3_noise_control_efficiency_metric_names(
     selected_count_thresholds: Iterable[int],
@@ -2649,25 +1458,6 @@ def _task3_noise_control_efficiency_metric_names(
         for selected_count_threshold in selected_count_thresholds
         for plane in sorted(TASK3_THREE_TO_FOUR_MISSING_TRIGGER_BY_PLANE)
     )
-
-
-_task3_noise_control_efficiency_max_raw = config.get(
-    "noise_control_efficiency_max_selected_offenders",
-    5,
-)
-try:
-    task3_noise_control_efficiency_max_selected_offenders = int(
-        _task3_noise_control_efficiency_max_raw
-    )
-except (TypeError, ValueError):
-    task3_noise_control_efficiency_max_selected_offenders = 5
-task3_noise_control_efficiency_max_selected_offenders = max(
-    0,
-    task3_noise_control_efficiency_max_selected_offenders,
-)
-task3_noise_control_efficiency_selected_offender_values: tuple[int, ...] = tuple(
-    range(task3_noise_control_efficiency_max_selected_offenders + 1)
-)
 
 
 def apply_task3_plane_combination_filter(
@@ -3195,33 +1985,11 @@ def apply_task3_plane_combination_filter(
     return summary
 
 
-TASK3_PLANE_COMBINATION_OBSERVABLES: tuple[tuple[str, str], ...] = (
-    ("q_sum_sum", "Q_sum semisum"),
-    ("q_sum_dif", "Q_sum semidifference"),
-    ("q_dif_sum", "Q_dif semisum"),
-    ("q_dif_dif", "Q_dif semidifference"),
-    ("t_sum_sum", "T_sum semisum"),
-    ("t_sum_dif", "T_sum semidifference"),
-    ("t_dif_sum", "T_dif semisum"),
-    ("t_dif_dif", "T_dif semidifference"),
-    ("y_sum", "Y semisum"),
-    ("y_dif", "Y semidifference"),
-)
-TASK3_PLANE_COMBINATION_SELF_OBSERVABLES: tuple[tuple[str, str], ...] = (
-    ("q_sum_sum", "Q_sum"),
-    ("q_dif_sum", "Q_dif"),
-    ("t_sum_sum", "T_sum"),
-    ("t_dif_sum", "T_dif"),
-    ("y_sum", "Y"),
-)
-
-
 def _task3_filter_tt_series(df: pd.DataFrame) -> pd.Series:
     for candidate in ("list_tt", "cal_tt", "clean_tt", "raw_tt"):
         if candidate in df.columns:
             return df[candidate].apply(normalize_tt_label).astype(str)
     return pd.Series(["0"] * len(df), index=df.index, dtype=str)
-
 
 def collect_task3_plane_combination_histogram_payload(
     df_input: pd.DataFrame,
@@ -3377,7 +2145,6 @@ def collect_task3_plane_combination_histogram_payload(
         return pd.DataFrame(columns=payload_columns)
     return pd.concat(payload_rows, ignore_index=True)
 
-
 def subtract_task3_plane_combination_payload(
     left_payload: pd.DataFrame,
     right_payload: pd.DataFrame,
@@ -3395,7 +2162,6 @@ def subtract_task3_plane_combination_payload(
         indicator=True,
     )
     return removed_payload.loc[removed_payload["_merge"] == "left_only"].drop(columns="_merge")
-
 
 def _task3_full_data_range(
     values: np.ndarray,
@@ -3418,7 +2184,6 @@ def _task3_full_data_range(
     span = high - low
     padding = 0.05 * span if span > 0 else max(1.0, 0.05 * max(abs(low), abs(high), 1.0))
     return low - padding, high + padding
-
 
 def _task3_hist_range(
     before_values: np.ndarray,
@@ -3468,12 +2233,10 @@ def _task3_hist_range(
     padding = 0.04 * span if span > 0 else max(0.5, 0.04 * max(abs(low), abs(high), 1.0))
     return low - padding, high + padding
 
-
 def _task3_population_color(label: str) -> tuple[float, float, float, float]:
     digest = hashlib.md5(label.encode("utf-8")).digest()
     color_pos = int.from_bytes(digest[:4], "big") / float(2**32 - 1)
     return plt.get_cmap("turbo")(0.08 + 0.84 * color_pos)
-
 
 def plot_task3_plane_combination_filter_by_tt(
     original_payload: pd.DataFrame,
@@ -3488,8 +2251,10 @@ def plot_task3_plane_combination_filter_by_tt(
     plot_list: list[str] | None,
     limits_by_observable: dict[str, tuple[float | None, float | None]],
     relation_label: str,
-    observable_definitions: tuple[tuple[str, str], ...] = TASK3_PLANE_COMBINATION_OBSERVABLES,
+    observable_definitions: tuple[tuple[str, str], ...] | None = None,
 ) -> int:
+    if observable_definitions is None:
+        observable_definitions = TASK3_PLANE_COMBINATION_OBSERVABLES
     original_payload = original_payload.copy()
     before_payload = before_payload.copy()
     after_payload = after_payload.copy()
@@ -3833,7 +2598,6 @@ def plot_task3_plane_combination_filter_by_tt(
 
     return fig_idx_value
 
-reprocessing_parameters = pd.DataFrame()
 
 def load_reprocessing_parameters_for_file(station_id: str, task_id: str, basename: str) -> pd.DataFrame:
     """Return matching reprocessing parameters for *basename* or an empty frame."""
@@ -3851,6 +2615,888 @@ def load_reprocessing_parameters_for_file(station_id: str, task_id: str, basenam
     matches = table_df[table_df["filename_base"] == basename]
     return matches.reset_index(drop=True)
 
+
+def _expected_input_files(file_names):
+    return sorted(
+        filter_expected_artifact_names(
+            file_names,
+            prefix=EXPECTED_INPUT_PREFIX,
+            extension=EXPECTED_INPUT_EXTENSION,
+        )
+    )
+
+
+def process_file(source_path, dest_path):
+    print("Source path:", source_path)
+    print("Destination path:", dest_path)
+    
+    if source_path == dest_path:
+        return True
+    
+    if os.path.exists(dest_path):
+        print(f"File already exists at destination (removing...)")
+        os.remove(dest_path)
+        # return False
+    
+    print("**********************************************************************")
+    print(f"Moving\n'{source_path}'\nto\n'{dest_path}'...")
+    print("**********************************************************************")
+    
+    safe_move(source_path, dest_path)
+    now = time.time()
+    os.utime(dest_path, (now, now))
+    return True
+
+
+def _zpos_from_conf(row):
+    return np.array([row.get(f"P{i}", np.nan) for i in range(1, 5)])
+
+
+# Legacy metadata key retained for compatibility: it now tracks the unified
+# Task 3 plane-combination filter, with same-plane bounds coming from the
+# `plane_combination_plane_*` configuration family.
+def record_filter6_counts(df: pd.DataFrame, tag: str) -> None:
+    for i_plane in range(1, 5):
+        columns = {
+            "T_sum": f"P{i_plane}_T_sum_final",
+            "T_diff": f"P{i_plane}_T_dif_final",
+            "Q_sum": f"P{i_plane}_Q_sum_final",
+            "Q_diff": f"P{i_plane}_Q_dif_final",
+            "Y": f"P{i_plane}_Y_final",
+        }
+        for label, col in columns.items():
+            if col in df:
+                count = int((df[col] != 0).sum())
+                global_variables[f"P{i_plane}_{label}_nonzero_{tag}"] = count
+
+
+def _preferred_parquet_compression() -> str:
+    if pa is not None:
+        try:
+            if pa.Codec.is_available("snappy"):
+                return "snappy"
+        except Exception:
+            pass
+    return "zstd"
+
+# I want to chrono the execution time of the script
+start_execution_time_counting = datetime.now()
+_prof_t0 = time.perf_counter()
+_prof = {}
+activation_metadata: dict[str, object] = {}
+pattern_metadata: dict[str, object] = {}
+
+STATION_CHOICES = ("0", "1", "2", "3", "4")
+TASK3_PLOT_STATUSES: tuple[str, ...] = ("none", "debug", "usual", "essential")
+TASK3_PLOT_ALIASES: tuple[str, ...] = (
+    "incoming_parquet_main_columns_debug",
+    "active_strip_patterns_overview",
+    "multi_strip_pair_diagnostics",
+    "tdiff_pattern_spatial_scatter",
+    "tdiff_pattern_charge_scatter",
+    "tdiff_pattern_charge_scan_scatter",
+    "tdiff_pattern_histograms",
+    "tdiff_pattern_charge_slice_fits",
+    "tdiff_pattern_sigma_vs_charge",
+    "tdiff_pattern_sigma1_charge_surface",
+    "tdiff_pattern_sigma2_charge_surface",
+    "y_position_by_cal_tt",
+    "strip_variable_pairgrid",
+    "self_trigger_strip_variable_pairgrid",
+    "rpc_variables_hexbin",
+    "rpc_variables_hexbin_low_charge",
+    "filter6_tsum_debug",
+    "filter6_tdif_debug",
+    "filter6_qsum_debug",
+    "filter6_qdif_debug",
+    "filter6_y_debug",
+    "filtered_rpc_tsum_vs_qsum_scatter",
+    "filtered_rpc_tsum_vs_qsum_hexbin",
+    "filtered_rpc_variables_hexbin",
+    "prefilter_qsum_nonzero_debug",
+    "prefilter_list_tt_debug",
+    "list_tt_qsum_pairgrid",
+    "all_events_charge_threshold_population",
+    "source_list_tt_charge_threshold_population",
+    "list_tt_transition_matrices",
+    "list_tt_retention_curves",
+    "list_tt_minimum_charge_distributions",
+    "list_tt_empirical_efficiency_vs_threshold",
+    "full_topology_threshold_retention",
+    "full_topology_exact_retention",
+    "full_topology_class_fraction",
+    "tsum_coincidence_window_histograms",
+    "tsum_coincidence_window_vs_threshold",
+    "plane_charge_fraction_vs_total_charge_threshold_scan",
+    "charge_asymmetry_vs_threshold",
+    "interplane_timing_correlation",
+    "multiplicity_charge_landscape",
+    "streamer_charge_histograms",
+    "streamer_prevalence_by_plane",
+    "streamer_multiplicity",
+    "streamer_contagion_matrix",
+    "streamer_contagion_matrix_strip",
+    "streamer_efficiency_comparison",
+    "fourplane_weakest_charge",
+    "fourplane_weakest_plane_identity",
+    "efficiency_anatomy_by_charge_band",
+    "streamer_contagion_strip_by_tt",
+    "signal_contagion_strip_by_tt",
+    "streamer_to_signal_contagion_strip_by_tt",
+    "streamer_to_highcharge_contagion_strip_by_tt",
+    "strip_activation_matrix_before_after",
+    "plane_combination_filter_by_tt",
+    "charge_by_strip_multiplicity_adj",
+    "charge_by_strip_multiplicity_dis",
+)
+
+TT_COUNT_VALUES: tuple[int, ...] = (
+    0, 1, 2, 3, 4, 12, 13, 14, 23, 24, 34, 123, 124, 134, 234, 1234
+)
+TT_COLOR_LABELS: tuple[str, ...] = tuple(str(tt_value) for tt_value in TT_COUNT_VALUES)
+_task3_tt_palette = sns.color_palette("tab10", n_colors=10)
+TT_COLOR_MAP: dict[str, tuple[float, float, float, float]] = {}
+_task3_multi_idx = 0
+for tt_label in TT_COLOR_LABELS:
+    if len(tt_label) == 1:
+        TT_COLOR_MAP[tt_label] = (0.60, 0.60, 0.60, 1.0)
+    else:
+        rgb = _task3_tt_palette[_task3_multi_idx % len(_task3_tt_palette)]
+        TT_COLOR_MAP[tt_label] = (float(rgb[0]), float(rgb[1]), float(rgb[2]), 1.0)
+        _task3_multi_idx += 1
+TT_COLOR_DEFAULT = (0.45, 0.45, 0.45, 1.0)
+
+CLI_PARSER = build_step1_cli_parser("Run Stage 1 STEP_1 TASK_3 (CAL->LIST).", STATION_CHOICES)
+CLI_ARGS = CLI_PARSER.parse_args()
+validate_step1_input_file_args(CLI_PARSER, CLI_ARGS)
+
+VERBOSE = bool(os.environ.get("DATAFLOW_VERBOSE")) or CLI_ARGS.verbose
+print = build_step1_filtered_print(
+    verbose=VERBOSE,
+    debug_mode_getter=lambda: bool(globals().get("debug_mode", False)),
+    raw_print=builtins.print,
+)
+FILTER_METRICS_LOGGING_ENABLED = step1_logging_enabled("filter_metrics")[0]
+task3_plot_status_by_alias: dict[str, str] = {}
+plot_mode = "none"
+MAX_OPEN_FIGURES = 16
+_OPEN_FIGURE_IDS: list[int] = []
+_ORIGINAL_PLT_FIGURE = plt.figure
+_ORIGINAL_PLT_SUBPLOTS = plt.subplots
+_ORIGINAL_PLT_CLOSE = plt.close
+plt.figure = _guarded_figure
+plt.subplots = _guarded_subplots
+plt.close = _guarded_close
+
+_direct_pdf_pages: PdfPages | None = None
+_direct_pdf_page_count = 0
+_direct_pdf_target_path: str | None = None
+_direct_pdf_temp_path: str | None = None
+atexit.register(close_direct_pdf_writer)
+# Warning Filters
+warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
+
+start_timer(__file__)
+task_config_bundle = load_step1_task_config_bundle(
+    task_number,
+    include_filter_parameter_config=True,
+    log_fn=print,
+)
+config_root = task_config_bundle["config_root"]
+config_file_path = task_config_bundle["config_file_path"]
+parameter_config_file_path = task_config_bundle["parameter_config_file_path"]
+plot_parameter_config_file_path = task_config_bundle["plot_parameter_config_file_path"]
+filter_parameter_config_file_path = task_config_bundle["filter_parameter_config_file_path"]
+plot_catalog_file_path = task_config_bundle["plot_catalog_file_path"]
+fallback_parameter_config_file_path = task_config_bundle["fallback_parameter_config_file_path"]
+config = task_config_bundle["config"]
+task3_plot_status_by_alias = load_task3_plot_catalog(plot_catalog_file_path)
+debug_mode = False
+home_path = str(resolve_home_path_from_config(config))
+
+if CLI_ARGS.station is None:
+    CLI_PARSER.error("No station provided. Pass <station>.")
+station = str(CLI_ARGS.station)
+set_station(station)
+
+config = resolve_step1_effective_task_config(
+    config,
+    station_id=station,
+    task_number=task_number,
+    config_root=config_root,
+    parameter_config_file_path=parameter_config_file_path,
+    fallback_parameter_config_file_path=fallback_parameter_config_file_path,
+    plot_parameter_config_file_path=plot_parameter_config_file_path,
+    filter_parameter_config_file_path=filter_parameter_config_file_path,
+    log_fn=print,
+)
+process_only_qa_retry_files = bool(config.get("process_only_qa_retry_files", False))
+if process_only_qa_retry_files:
+    print(
+        "[QA_ONLY] Enabled by STEP_1 shared config: only files present in the active QA retry list will be processed."
+    )
+selection_config = load_selection_for_paths(
+    [config_file_path],
+    master_config_root=config_root,
+)
+if not station_is_selected(station, selection_config.stations):
+    print(f"Station {station} skipped by selection.stations.")
+    sys.exit(0)
+selected_input_file = CLI_ARGS.input_file_flag or CLI_ARGS.input_file
+if selected_input_file:
+    user_file_path = selected_input_file
+    user_file_selection = True
+    print("User provided file path:", user_file_path)
+else:
+    user_file_selection = False
+repo_root = get_repo_root()
+early_metadata_directory = (
+    repo_root
+    / "STATIONS"
+    / f"MINGO0{station}"
+    / "STAGE_1"
+    / "EVENT_DATA"
+    / "STEP_1"
+    / f"TASK_{task_number}"
+    / "METADATA"
+)
+early_metadata_directory.mkdir(parents=True, exist_ok=True)
+early_status_csv_path = early_metadata_directory / f"task_{task_number}_metadata_status.csv"
+if user_file_selection:
+    early_status_filename_base = (
+        Path(user_file_path).name.replace("calibrated_", "").replace(".parquet", "")
+    )
+else:
+    early_status_filename_base = f"__task{task_number}_startup_station_{station}__"
+status_filename_base = early_status_filename_base
+status_execution_date = initialize_status_row(
+    early_status_csv_path,
+    filename_base=status_filename_base,
+    completion_fraction=0.0,
+)
+home_path = str(resolve_home_path_from_config(config))
+REFERENCE_TABLES_DIR = Path(home_path) / "DATAFLOW_v3" / "MASTER" / "CONFIG_FILES" / "METADATA_REPRISE" / "REFERENCE_TABLES"
+# Round execution time to seconds and format it in YYYY-MM-DD_HH.MM.SS
+execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
+print("Execution time is:", execution_time)
+
+ITINERARY_FILE_PATH = Path(
+    f"{home_path}/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
+)
+
+not_use_q_semisum = False
+
+stratos_save = config["stratos_save"]
+fast_mode = False
+debug_mode = False
+last_file_test = config["last_file_test"]
+keep_all_columns_output = _coerce_config_bool(
+    config.get("keep_all_columns_output", False),
+    default=False,
+)
+
+# Accessing all the variables from the configuration
+(
+    plot_mode,
+    create_plots,
+    create_essential_plots,
+    save_plots,
+    create_pdf,
+    show_plots,
+    create_debug_plots,
+) = resolve_task3_plot_options(config)
+limit_number = config.get("limit_number", None)
+limit = limit_number is not None
+
+# Charge calibration to fC
+
+# Charge front-back
+
+# Slewing correction
+
+# Time filtering
+
+# Time calibration
+
+# Y position
+
+# RPC variables
+y_new_method = config["y_new_method"]
+streamer_high_charge_factor = float(config.get("streamer_high_charge_factor", 0.2))
+streamer_charge_sum_threshold = _task3_optional_float(
+    config.get("streamer_charge_sum_threshold", None)
+)
+
+# Alternative
+
+# TimTrack
+
+# Validation
+
+complete_reanalysis = config["complete_reanalysis"]
+
+limit_number = config.get("limit_number", None)
+limit = limit_number is not None
+
+# Pre-cal Front & Back
+T_side_left_pre_cal_debug = config.get("T_side_left_pre_cal_debug", -500)
+T_side_right_pre_cal_debug = config.get("T_side_right_pre_cal_debug", 500)
+
+T_side_left_pre_cal_default = config.get("T_side_left_pre_cal_default", -200)
+T_side_right_pre_cal_default = config.get("T_side_right_pre_cal_default", -100)
+
+T_side_left_pre_cal_ST = config.get("T_side_left_pre_cal_ST", -200)
+T_side_right_pre_cal_ST = config.get("T_side_right_pre_cal_ST", -50)
+
+# Pre-cal Sum & Diff
+
+# Post-calibration
+
+# Once calculated the RPC variables. Legacy per-plane keys remain as optional
+# compatibility aliases so old configs still load, but Task 3 can now run with
+# only the plane_combination_* thresholds present.
+T_sum_RPC_left = _task3_config_float(
+    config,
+    "T_sum_RPC_left",
+    "plane_combination_plane_t_sum_sum_left",
+    "plane_combination_same_plane_t_sum_sum_left",
+    "plane_combination_self_t_sum_sum_left",
+    default=-25.0,
+)
+T_sum_RPC_right = _task3_config_float(
+    config,
+    "T_sum_RPC_right",
+    "plane_combination_plane_t_sum_sum_right",
+    "plane_combination_same_plane_t_sum_sum_right",
+    "plane_combination_self_t_sum_sum_right",
+    default=25.0,
+)
+T_dif_RPC_abs = abs(
+    _task3_config_float(
+        config,
+        "T_dif_RPC_abs",
+        "T_dif_RPC_right",
+        "plane_combination_plane_t_dif_sum_threshold",
+        "plane_combination_same_plane_t_dif_sum_threshold",
+        "plane_combination_self_t_dif_sum_threshold",
+        default=0.8,
+    )
+)
+T_dif_RPC_right = T_dif_RPC_abs
+T_dif_RPC_left = -T_dif_RPC_abs
+Q_RPC_left = _task3_config_float(
+    config,
+    "Q_RPC_left",
+    "plane_combination_plane_q_sum_sum_left",
+    "plane_combination_same_plane_q_sum_sum_left",
+    "plane_combination_self_q_sum_sum_left",
+    default=0.0,
+)
+Q_RPC_right = _task3_config_float(
+    config,
+    "Q_RPC_right",
+    "plane_combination_plane_q_sum_sum_right",
+    "plane_combination_same_plane_q_sum_sum_right",
+    "plane_combination_self_q_sum_sum_right",
+    default=800.0,
+)
+Q_dif_RPC_abs = abs(
+    _task3_config_float(
+        config,
+        "Q_dif_RPC_abs",
+        "Q_dif_RPC_right",
+        "plane_combination_plane_q_dif_sum_threshold",
+        "plane_combination_same_plane_q_dif_sum_threshold",
+        "plane_combination_self_q_dif_sum_threshold",
+        default=4.0,
+    )
+)
+Q_dif_RPC_right = Q_dif_RPC_abs
+Q_dif_RPC_left = -Q_dif_RPC_abs
+Y_RPC_abs = abs(
+    _task3_config_float(
+        config,
+        "Y_RPC_abs",
+        "Y_RPC_right",
+        "plane_combination_plane_y_sum_right",
+        "plane_combination_same_plane_y_sum_right",
+        "plane_combination_self_y_sum_right",
+        default=200.0,
+    )
+)
+Y_RPC_right = Y_RPC_abs
+Y_RPC_left = -Y_RPC_abs
+plane_combination_plane_q_sum_sum_left = float(
+    config.get(
+        "plane_combination_plane_q_sum_sum_left",
+        Q_RPC_left,
+    )
+)
+plane_combination_plane_q_sum_sum_right = float(
+    config.get(
+        "plane_combination_plane_q_sum_sum_right",
+        Q_RPC_right,
+    )
+)
+plane_combination_plane_q_dif_sum_threshold = abs(
+    float(
+        config.get(
+            "plane_combination_plane_q_dif_sum_threshold",
+            Q_dif_RPC_abs,
+        )
+    )
+)
+plane_combination_plane_t_sum_sum_left = float(
+    config.get(
+        "plane_combination_plane_t_sum_sum_left",
+        T_sum_RPC_left,
+    )
+)
+plane_combination_plane_t_sum_sum_right = float(
+    config.get(
+        "plane_combination_plane_t_sum_sum_right",
+        T_sum_RPC_right,
+    )
+)
+plane_combination_plane_t_dif_sum_threshold = abs(
+    float(
+        config.get(
+            "plane_combination_plane_t_dif_sum_threshold",
+            T_dif_RPC_abs,
+        )
+    )
+)
+plane_combination_plane_y_sum_left = float(
+    config.get(
+        "plane_combination_plane_y_sum_left",
+        Y_RPC_left,
+    )
+)
+plane_combination_plane_y_sum_right = float(
+    config.get(
+        "plane_combination_plane_y_sum_right",
+        Y_RPC_right,
+    )
+)
+plane_combination_detector_q_sum_sum_left = float(
+    config.get(
+        "plane_combination_detector_q_sum_sum_left",
+        Q_RPC_left,
+    )
+)
+plane_combination_detector_q_sum_sum_right = float(
+    config.get(
+        "plane_combination_detector_q_sum_sum_right",
+        Q_RPC_right,
+    )
+)
+plane_combination_detector_q_sum_dif_threshold = abs(
+    float(
+        config.get(
+            "plane_combination_detector_q_sum_dif_threshold",
+            Q_RPC_right,
+        )
+    )
+)
+plane_combination_detector_q_dif_sum_threshold = abs(
+    float(
+        config.get(
+            "plane_combination_detector_q_dif_sum_threshold",
+            Q_dif_RPC_abs,
+        )
+    )
+)
+plane_combination_detector_q_dif_dif_threshold = abs(
+    float(
+        config.get(
+            "plane_combination_detector_q_dif_dif_threshold",
+            Q_dif_RPC_abs,
+        )
+    )
+)
+plane_combination_detector_t_sum_sum_left = float(
+    config.get(
+        "plane_combination_detector_t_sum_sum_left",
+        T_sum_RPC_left,
+    )
+)
+plane_combination_detector_t_sum_sum_right = float(
+    config.get(
+        "plane_combination_detector_t_sum_sum_right",
+        T_sum_RPC_right,
+    )
+)
+plane_combination_detector_t_sum_dif_threshold = abs(
+    float(
+        config.get(
+            "plane_combination_detector_t_sum_dif_threshold",
+            max(abs(T_sum_RPC_left), abs(T_sum_RPC_right)),
+        )
+    )
+)
+plane_combination_detector_t_dif_sum_threshold = abs(
+    float(
+        config.get(
+            "plane_combination_detector_t_dif_sum_threshold",
+            T_dif_RPC_abs,
+        )
+    )
+)
+plane_combination_detector_t_dif_dif_threshold = abs(
+    float(
+        config.get(
+            "plane_combination_detector_t_dif_dif_threshold",
+            T_dif_RPC_abs,
+        )
+    )
+)
+plane_combination_detector_y_sum_left = float(
+    config.get(
+        "plane_combination_detector_y_sum_left",
+        Y_RPC_left,
+    )
+)
+plane_combination_detector_y_sum_right = float(
+    config.get(
+        "plane_combination_detector_y_sum_right",
+        Y_RPC_right,
+    )
+)
+plane_combination_detector_y_dif_threshold = abs(
+    float(
+        config.get(
+            "plane_combination_detector_y_dif_threshold",
+            Y_RPC_abs,
+        )
+    )
+)
+print(
+    "Task 3 plane-combination bounds "
+    f"(station {station}): same_plane q_sum=[{plane_combination_plane_q_sum_sum_left}, "
+    f"{plane_combination_plane_q_sum_sum_right}], "
+    f"same_plane t_sum=[{plane_combination_plane_t_sum_sum_left}, {plane_combination_plane_t_sum_sum_right}], "
+    f"same_plane y_sum=[{plane_combination_plane_y_sum_left}, {plane_combination_plane_y_sum_right}], "
+    f"detector q_sum=[{plane_combination_detector_q_sum_sum_left}, {plane_combination_detector_q_sum_sum_right}], "
+    f"detector t_sum=[{plane_combination_detector_t_sum_sum_left}, {plane_combination_detector_t_sum_sum_right}], "
+    f"detector y_sum=[{plane_combination_detector_y_sum_left}, {plane_combination_detector_y_sum_right}]"
+)
+
+# Alternative fitter filter
+det_pos_filter = config.get("det_pos_filter", 800)
+det_theta_left_filter = config.get("det_theta_left_filter", 0)
+det_theta_right_filter = config.get("det_theta_right_filter", 1.5708)
+det_phi_filter_abs = abs(float(config.get("det_phi_filter_abs", 3.141592)))
+det_phi_right_filter = det_phi_filter_abs
+det_phi_left_filter = -det_phi_filter_abs
+det_slowness_filter_left = config.get("det_slowness_filter_left", -0.02)
+det_slowness_filter_right = config.get("det_slowness_filter_right", 0.02)
+
+# TimTrack filter
+
+# Fitting comparison
+
+# Calibrations
+
+# Pedestal charge calibration
+
+# Front-back charge
+
+# Variables to modify
+beta = config.get("beta", 1)
+strip_speed_factor_of_c = config["strip_speed_factor_of_c"]
+
+# X
+strip_length = config.get("strip_length", 300)
+narrow_strip = config["narrow_strip"]
+wide_strip = config["wide_strip"]
+
+# Timtrack parameters
+anc_std = config["anc_std"]
+
+n_planes_timtrack = config.get("n_planes_timtrack", 4)
+
+# Plotting options
+T_clip_min_debug = config.get("T_clip_min_debug", -500)
+T_clip_max_debug = config.get("T_clip_max_debug", 500)
+Q_clip_min_debug = config.get("Q_clip_min_debug", -500)
+Q_clip_max_debug = config.get("Q_clip_max_debug", 500)
+num_bins_debug = config.get("num_bins_debug", 100)
+
+T_clip_min_default = config.get("T_clip_min_default", -300)
+T_clip_max_default = config.get("T_clip_max_default", 100)
+Q_clip_min_default = config.get("Q_clip_min_default", 0)
+Q_clip_max_default = config.get("Q_clip_max_default", 500)
+num_bins_default = config.get("num_bins_default", 100)
+
+T_clip_min_ST = config.get("T_clip_min_ST", -300)
+T_clip_max_ST = config.get("T_clip_max_ST", 100)
+Q_clip_min_ST = config.get("Q_clip_min_ST", 0)
+Q_clip_max_ST = config.get("Q_clip_max_ST", 500)
+
+# -----------------------------------------------------------------------------
+# Some variables that define the analysis, define a dictionary with the variables:
+# 'purity_of_data', etc.
+# -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# Variables to not touch unless necessary -------------------------------------
+# -----------------------------------------------------------------------------
+Q_sum_color = 'orange'
+Q_dif_color = 'red'
+T_sum_color = 'blue'
+T_dif_color = 'green'
+
+pos_filter = det_pos_filter
+t0_left_filter = T_sum_RPC_left
+t0_right_filter = T_sum_RPC_right
+slowness_filter_left = det_slowness_filter_left
+slowness_filter_right = det_slowness_filter_right
+
+theta_left_filter = det_theta_left_filter
+theta_right_filter = det_theta_right_filter
+phi_left_filter = det_phi_left_filter
+phi_right_filter = det_phi_right_filter
+
+fig_idx, plot_list = ensure_plot_state(globals())
+
+# Time dif calibration (time_dif_reference)
+time_dif_distance = 30
+time_dif_reference = np.array([
+    [-0.0573, 0.031275, 1.033875, 0.761475],
+    [-0.914, -0.873975, -0.19815, 0.452025],
+    [0.8769, 1.2008, 1.014, 2.43915],
+    [1.508825, 2.086375, 1.6876, 3.023575]
+])
+
+# Charge sum pedestal (charge_sum_reference)
+charge_sum_distance = 30
+charge_sum_reference = np.array([
+    [89.4319, 98.19605, 95.99055, 91.83875],
+    [96.55775, 94.50385, 94.9254, 91.0775],
+    [92.12985, 92.23395, 90.60545, 95.5214],
+    [93.75635, 93.57425, 93.07055, 89.27305]
+])
+
+# Charge dif calibration (charge_dif_reference)
+charge_dif_distance = 30
+charge_dif_reference = np.array([
+    [4.512, 0.58715, 1.3204, -1.3918],
+    [-4.50885, 0.918, -3.39445, -0.12325],
+    [-3.8931, -3.28515, 3.27295, 1.0554],
+    [-2.29505, 0.012, 2.49045, -2.14565]
+])
+
+# Time sum calibration (time_sum_reference)
+time_sum_distance = 30
+time_sum_reference = np.array([
+    [0.0, -0.3886308, -0.53020947, 0.33711737],
+    [-0.80494094, -0.68836069, -2.01289387, -1.13481931],
+    [-0.23899338, -0.51373738, 0.50845317, 0.11685095],
+    [0.33586385, 1.08329847, 0.91410244, 0.58815813]
+])
+
+if False:
+    print('Working in fast mode.')
+
+if False:
+    print('Working in debug mode.')
+
+if False:
+    T_F_left_pre_cal = T_side_left_pre_cal_debug
+    T_F_right_pre_cal = T_side_right_pre_cal_debug
+
+    T_B_left_pre_cal = T_side_left_pre_cal_debug
+    T_B_right_pre_cal = T_side_right_pre_cal_debug
+
+else:
+    T_F_left_pre_cal = T_side_left_pre_cal_default  #-130
+    T_F_right_pre_cal = T_side_right_pre_cal_default
+
+    T_B_left_pre_cal = T_side_left_pre_cal_default
+    T_B_right_pre_cal = T_side_right_pre_cal_default
+
+T_F_left_pre_cal_ST = T_side_left_pre_cal_ST  #-115
+T_F_right_pre_cal_ST = T_side_right_pre_cal_ST
+T_B_left_pre_cal_ST = T_side_left_pre_cal_ST
+T_B_right_pre_cal_ST = T_side_right_pre_cal_ST
+
+# Y ---------------------------------------------------------------------------
+
+c_mm_ns = c/1000000
+print(c_mm_ns)
+
+# Miscelanous ----------------------------
+muon_speed = beta * c_mm_ns
+strip_speed = strip_speed_factor_of_c * c_mm_ns # 200 mm/ns
+tdiff_to_x = strip_speed # Factor to transform t_diff to X
+
+# Not-Hardcoded
+vc    = beta * c_mm_ns # mm/ns
+sc    = 1/vc
+ss    = 1/strip_speed # slowness of the signal in the strip
+nplan = n_planes_timtrack
+lenx  = strip_length
+anc_sx = tdiff_to_x * anc_std # 2 cm
+
+if False:
+    T_clip_min = T_clip_min_debug
+    T_clip_max = T_clip_max_debug
+    Q_clip_min = Q_clip_min_debug
+    Q_clip_max = Q_clip_max_debug
+    num_bins = num_bins_debug
+else:
+    T_clip_min = T_clip_min_default
+    T_clip_max = T_clip_max_default
+    Q_clip_min = Q_clip_min_default
+    Q_clip_max = Q_clip_max_default
+    num_bins = num_bins_default
+
+T_clip_min_ST = T_clip_min_ST
+T_clip_max_ST = T_clip_max_ST
+Q_clip_min_ST = Q_clip_min_ST
+Q_clip_max_ST = Q_clip_max_ST
+
+# the analysis mode indicates if it is a regular analysis or a repeated, careful analysis
+# 0 -> regular analysis
+# 1 -> repeated, careful analysis
+global_variables = {}
+
+TT_COUNT_VALUES: tuple[int, ...] = (
+    0, 1, 2, 3, 4, 12, 13, 14, 23, 24, 34, 123, 124, 134, 234, 1234
+)
+TASK3_ACTIVE_STRIP_COLUMNS: tuple[str, ...] = tuple(f"active_strips_P{plane}" for plane in range(1, 5))
+TASK3_SELECTED_OFFENDER_CARDINALITY_VALUES: tuple[int, ...] = tuple(range(0, 5))
+
+FILTER_METRIC_NAMES: tuple[str, ...] = (
+    "plane_combination_plane_rows_affected_pct",
+    "plane_combination_filter_rows_affected_pct",
+    "q_sum_all_zero_rows_removed_pct",
+    "data_purity_percentage",
+    "all_components_zero_rows_removed_pct",
+    "list_tt_lt_10_rows_removed_pct",
+)
+NOISE_CONTROL_RATE_DENOMINATOR_COLUMN = "count_rate_denominator_seconds"
+TASK3_NOISE_CONTROL_METRIC_NAMES: tuple[str, ...] = tuple(
+    f"plane_combination_filter_rows_with_{selected_count}_selected_offenders_rate_hz"
+    for selected_count in TASK3_SELECTED_OFFENDER_CARDINALITY_VALUES
+)
+TASK3_NOISE_CONTROL_PERCENT_METRIC_NAMES: tuple[str, ...] = tuple(
+    f"plane_combination_filter_rows_with_{selected_count}_selected_offenders_pct"
+    for selected_count in TASK3_SELECTED_OFFENDER_CARDINALITY_VALUES
+)
+TASK3_THREE_TO_FOUR_MISSING_TRIGGER_BY_PLANE: dict[int, int] = {
+    1: 234,
+    2: 134,
+    3: 124,
+    4: 123,
+}
+FILTER6_NONZERO_COUNTER_NAMES: tuple[str, ...] = tuple(
+    f"P{i_plane}_{label}_nonzero_{tag}"
+    for tag in ("before_filter6", "after_filter6")
+    for i_plane in range(1, 5)
+    for label in ("T_sum", "T_diff", "Q_sum", "Q_diff", "Y")
+)
+FILTER6_NONZERO_RATE_NAMES: tuple[str, ...] = tuple(
+    f"{name}_rate_hz" for name in FILTER6_NONZERO_COUNTER_NAMES
+)
+FILTER_METADATA_ALLOWED_COLUMNS = {
+    "filename_base",
+    "execution_timestamp",
+    "param_hash",
+    *FILTER_METRIC_NAMES,
+}
+TASK3_DEEP_FILTER_LEGACY_COLUMNS: tuple[str, ...] = (
+    "plane_combination_self_rows_affected_pct",
+    "plane_combination_same_plane_rows_affected_pct",
+)
+
+filter_metrics: dict[str, float] = {}
+TASK3_PLANE_LABELS: tuple[str, ...] = tuple(f"P{plane}" for plane in range(1, 5))
+TASK3_PLANE_KEYS: tuple[int, ...] = (1, 2, 3, 4)
+TASK3_PLANE_COMBINATION_LIMIT_LABELS: dict[str, str] = {
+    "q_sum_sum_low": "Q_sum semisum below lower limit",
+    "q_sum_sum_high": "Q_sum semisum above upper limit",
+    "q_sum_dif_low": "Q_sum semidifference below lower limit",
+    "q_sum_dif_high": "Q_sum semidifference above upper limit",
+    "q_dif_sum_low": "Q_dif semisum below lower limit",
+    "q_dif_sum_high": "Q_dif semisum above upper limit",
+    "q_dif_dif_low": "Q_dif semidifference below lower limit",
+    "q_dif_dif_high": "Q_dif semidifference above upper limit",
+    "t_sum_sum_low": "T_sum semisum below lower limit",
+    "t_sum_sum_high": "T_sum semisum above upper limit",
+    "t_sum_dif_low": "T_sum semidifference below lower limit",
+    "t_sum_dif_high": "T_sum semidifference above upper limit",
+    "t_dif_sum_low": "T_dif semisum below lower limit",
+    "t_dif_sum_high": "T_dif semisum above upper limit",
+    "t_dif_dif_low": "T_dif semidifference below lower limit",
+    "t_dif_dif_high": "T_dif semidifference above upper limit",
+    "y_sum_low": "Y semisum below lower limit",
+    "y_sum_high": "Y semisum above upper limit",
+    "y_dif_low": "Y semidifference below lower limit",
+    "y_dif_high": "Y semidifference above upper limit",
+}
+TASK3_PLANE_COMBINATION_LIMIT_KEYS: tuple[str, ...] = tuple(
+    TASK3_PLANE_COMBINATION_LIMIT_LABELS
+)
+TASK3_PLANE_SELF_LIMIT_LABELS: dict[str, str] = {
+    "q_sum_sum_low": "Plane Q_sum below lower limit",
+    "q_sum_sum_high": "Plane Q_sum above upper limit",
+    "q_dif_sum_low": "Plane Q_dif below lower limit",
+    "q_dif_sum_high": "Plane Q_dif above upper limit",
+    "t_sum_sum_low": "Plane T_sum below lower limit",
+    "t_sum_sum_high": "Plane T_sum above upper limit",
+    "t_dif_sum_low": "Plane T_dif below lower limit",
+    "t_dif_sum_high": "Plane T_dif above upper limit",
+    "y_sum_low": "Plane Y below lower limit",
+    "y_sum_high": "Plane Y above upper limit",
+}
+TASK3_PLANE_SELF_LIMIT_KEYS: tuple[str, ...] = tuple(
+    TASK3_PLANE_SELF_LIMIT_LABELS
+)
+TASK3_PLANE_SELF_OBSERVABLE_LIMIT_KEYS: dict[str, tuple[str, str]] = {
+    "q_sum_sum": ("q_sum_sum_low", "q_sum_sum_high"),
+    "q_dif_sum": ("q_dif_sum_low", "q_dif_sum_high"),
+    "t_sum_sum": ("t_sum_sum_low", "t_sum_sum_high"),
+    "t_dif_sum": ("t_dif_sum_low", "t_dif_sum_high"),
+    "y_sum": ("y_sum_low", "y_sum_high"),
+}
+_task3_noise_control_efficiency_max_raw = config.get(
+    "noise_control_efficiency_max_selected_offenders",
+    5,
+)
+try:
+    task3_noise_control_efficiency_max_selected_offenders = int(
+        _task3_noise_control_efficiency_max_raw
+    )
+except (TypeError, ValueError):
+    task3_noise_control_efficiency_max_selected_offenders = 5
+task3_noise_control_efficiency_max_selected_offenders = max(
+    0,
+    task3_noise_control_efficiency_max_selected_offenders,
+)
+task3_noise_control_efficiency_selected_offender_values: tuple[int, ...] = tuple(
+    range(task3_noise_control_efficiency_max_selected_offenders + 1)
+)
+TASK3_PLANE_COMBINATION_OBSERVABLES: tuple[tuple[str, str], ...] = (
+    ("q_sum_sum", "Q_sum semisum"),
+    ("q_sum_dif", "Q_sum semidifference"),
+    ("q_dif_sum", "Q_dif semisum"),
+    ("q_dif_dif", "Q_dif semidifference"),
+    ("t_sum_sum", "T_sum semisum"),
+    ("t_sum_dif", "T_sum semidifference"),
+    ("t_dif_sum", "T_dif semisum"),
+    ("t_dif_dif", "T_dif semidifference"),
+    ("y_sum", "Y semisum"),
+    ("y_dif", "Y semidifference"),
+)
+TASK3_PLANE_COMBINATION_SELF_OBSERVABLES: tuple[tuple[str, str], ...] = (
+    ("q_sum_sum", "Q_sum"),
+    ("q_dif_sum", "Q_dif"),
+    ("t_sum_sum", "T_sum"),
+    ("t_dif_sum", "T_dif"),
+    ("y_sum", "Y"),
+)
+reprocessing_parameters = pd.DataFrame()
 # -----------------------------------------------------------------------------
 # Input selection --------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -3965,17 +3611,6 @@ debug_fig_idx = 1
 
 EXPECTED_INPUT_PREFIX = "calibrated_"
 EXPECTED_INPUT_EXTENSION = ".parquet"
-
-
-def _expected_input_files(file_names):
-    return sorted(
-        filter_expected_artifact_names(
-            file_names,
-            prefix=EXPECTED_INPUT_PREFIX,
-            extension=EXPECTED_INPUT_EXTENSION,
-        )
-    )
-
 csv_path = os.path.join(metadata_directory, f"task_{task_number}_metadata_execution.csv")
 csv_path_specific = os.path.join(metadata_directory, f"task_{task_number}_metadata_specific.csv")
 csv_path_pattern = os.path.join(metadata_directory, f"task_{task_number}_metadata_pattern.csv")
@@ -4856,31 +4491,6 @@ print("----------------------------------------------------------------------")
 unprocessed_files = _expected_input_files(os.listdir(base_directories["unprocessed_directory"]))
 processing_files = _expected_input_files(os.listdir(base_directories["processing_directory"]))
 completed_files = _expected_input_files(os.listdir(base_directories["completed_directory"]))
-
-def process_file(source_path, dest_path):
-    print("Source path:", source_path)
-    print("Destination path:", dest_path)
-    
-    if source_path == dest_path:
-        return True
-    
-    if os.path.exists(dest_path):
-        print(f"File already exists at destination (removing...)")
-        os.remove(dest_path)
-        # return False
-    
-    print("**********************************************************************")
-    print(f"Moving\n'{source_path}'\nto\n'{dest_path}'...")
-    print("**********************************************************************")
-    
-    safe_move(source_path, dest_path)
-    now = time.time()
-    os.utime(dest_path, (now, now))
-    return True
-
-def get_file_path(directory, file_name):
-    return os.path.join(directory, file_name)
-
 # Create ALL directories if they don't already exist
 # Create ALL directories if they don't already exist
 for directory in base_directories.values():
@@ -5345,6 +4955,23 @@ elif simulated_param_hash:
         print(f"Warning: param_hash validation fallback used due to error: {exc}")
     if _ph_missing.any():
         working_df.loc[_ph_missing, "param_hash"] = str(simulated_param_hash)
+if not simulated_param_hash and "param_hash" in working_df.columns:
+    try:
+        _recovered_param_hash_series = working_df["param_hash"].astype(str).str.strip()
+        _recovered_param_hash_series = _recovered_param_hash_series[_recovered_param_hash_series.ne("")]
+    except Exception as exc:
+        print(f"Warning: unable to inspect parquet param_hash column after load: {exc}")
+        _recovered_param_hash_series = pd.Series(dtype=str)
+    if not _recovered_param_hash_series.empty:
+        _recovered_param_hash = _recovered_param_hash_series.iloc[0]
+        simulated_z_positions, simulated_param_hash = resolve_simulated_z_positions(
+            basename_no_ext,
+            Path(base_directory),
+            param_hash=_recovered_param_hash,
+        )
+        if simulated_param_hash:
+            global_variables["param_hash"] = simulated_param_hash
+            print(f"Recovered simulated param_hash from parquet column: {simulated_param_hash}")
 print(f"Cleaned dataframe reloaded from: {file_path}")
 print("Columns loaded from parquet:")
 for col in working_df.columns:
@@ -5521,10 +5148,6 @@ else:
     print("Error: No input file. Using default z_positions.")
     z_positions = np.array([0, 150, 300, 450])  # In mm
     z_source = "default_no_input_file"
-
-def _zpos_from_conf(row):
-    return np.array([row.get(f"P{i}", np.nan) for i in range(1, 5)])
-
 # If any z_positions is NaN or all zeros, find the closest non-zero configuration.
 if np.isnan(z_positions).any() or np.all(z_positions == 0):
     if used_input_file:
@@ -6751,6 +6374,30 @@ if y_new_method:
     # Insert all new Y_ columns at once
     working_df = pd.concat([working_df, pd.DataFrame(y_columns, index=working_df.index)], axis=1)
     _prof["s_y_position_core_s"] = round(time.perf_counter() - _t_y_position_core, 2)
+else:
+    y_columns = {}
+
+    for plane_id in range(1, 5):
+        q_plane = working_df[[f'Q{plane_id}_Q_sum_{i}' for i in range(1, 5)]].to_numpy(dtype=float)
+        y_vec = y_pos_P1_and_P3 if plane_id in [1, 3] else y_pos_P2_and_P4
+        widths_vec = y_width_P1_and_P3 if plane_id in [1, 3] else y_width_P2_and_P4
+
+        total_charge = q_plane.sum(axis=1)
+        max_strip_idx = q_plane.argmax(axis=1)
+        y_position = np.zeros(len(working_df), dtype=float)
+
+        nonzero_mask = total_charge > 0
+        if np.any(nonzero_mask):
+            rows = np.where(nonzero_mask)[0]
+            cols = max_strip_idx[nonzero_mask]
+            centers = y_vec[cols]
+            widths = widths_vec[cols]
+            y_position[rows] = np.random.uniform(centers - widths / 2, centers + widths / 2)
+
+        y_columns[f'P{plane_id}_Y_final'] = y_position
+
+    working_df = pd.concat([working_df, pd.DataFrame(y_columns, index=working_df.index)], axis=1)
+    _prof["s_y_position_core_s"] = round(time.perf_counter() - _t_y_position_core, 2)
 
 if task3_plot_enabled("y_position_by_cal_tt"):
 
@@ -7110,24 +6757,6 @@ vals_normalized[~has_signal] = 0
 working_df[cols] = vals_normalized
 for i_plane in range(1, 5):
     plane_raw_values[i_plane]["T_sum"] = vals_normalized[:, i_plane - 1].copy()
-
-# Legacy metadata key retained for compatibility: it now tracks the unified
-# Task 3 plane-combination filter, with same-plane bounds coming from the
-# `plane_combination_plane_*` configuration family.
-def record_filter6_counts(df: pd.DataFrame, tag: str) -> None:
-    for i_plane in range(1, 5):
-        columns = {
-            "T_sum": f"P{i_plane}_T_sum_final",
-            "T_diff": f"P{i_plane}_T_dif_final",
-            "Q_sum": f"P{i_plane}_Q_sum_final",
-            "Q_diff": f"P{i_plane}_Q_dif_final",
-            "Y": f"P{i_plane}_Y_final",
-        }
-        for label, col in columns.items():
-            if col in df:
-                count = int((df[col] != 0).sum())
-                global_variables[f"P{i_plane}_{label}_nonzero_{tag}"] = count
-
 filter6_cols: list[str] = []
 for i_plane in range(1, 5):
     filter6_cols.extend([
@@ -7242,6 +6871,16 @@ if filter6_cols and task3_any_plot_enabled(
             fig_idx=debug_fig_idx,
         )
 
+task3_pre_plane_block_summary = normalize_task3_plane_component_blocks(
+    working_df,
+    snapshot_originals=snapshot_original_columns_once,
+)
+print(
+    "[task3-plane-block-normalization] "
+    f"phase=pre-final-filter rows_affected={task3_pre_plane_block_summary['rows_affected']} "
+    f"planes_affected={task3_pre_plane_block_summary['planes_affected']} "
+    f"values_zeroed={task3_pre_plane_block_summary['values_zeroed']}"
+)
 record_filter6_counts(working_df, "before_filter6")
 
 _plot_plane_combination_filter_by_tt = task3_plot_enabled("plane_combination_filter_by_tt")
@@ -7386,6 +7025,16 @@ for observable_key, metric_prefix, metric_label, left_limit, right_limit in plan
         label=f"rows with {metric_label} boundary failures",
     )
 
+task3_post_plane_block_summary = normalize_task3_plane_component_blocks(
+    working_df,
+    snapshot_originals=snapshot_original_columns_once,
+)
+print(
+    "[task3-plane-block-normalization] "
+    f"phase=post-final-filter rows_affected={task3_post_plane_block_summary['rows_affected']} "
+    f"planes_affected={task3_post_plane_block_summary['planes_affected']} "
+    f"values_zeroed={task3_post_plane_block_summary['values_zeroed']}"
+)
 record_filter6_counts(working_df, "after_filter6")
 _prof["s_filter6_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
@@ -7670,6 +7319,30 @@ if stratos_save:
 # ----------------------------------------------------------------------------------------------------------------
 
 # Same for hexbin
+if task3_plot_enabled("filtered_rpc_tsum_vs_qsum_scatter"):
+    fig_idx = plot_task3_filtered_rpc_tsum_vs_qsum(
+        working_df,
+        fig_idx,
+        plot_kind="scatter",
+        charge_threshold=150.0,
+        figure_directory=base_directories["figure_directory"],
+        show_plots=show_plots,
+        save_plots=save_plots,
+        plot_list=plot_list,
+    )
+
+if task3_plot_enabled("filtered_rpc_tsum_vs_qsum_hexbin"):
+    fig_idx = plot_task3_filtered_rpc_tsum_vs_qsum(
+        working_df,
+        fig_idx,
+        plot_kind="hexbin",
+        charge_threshold=150.0,
+        figure_directory=base_directories["figure_directory"],
+        show_plots=show_plots,
+        save_plots=save_plots,
+        plot_list=plot_list,
+    )
+
 if task3_plot_enabled("filtered_rpc_variables_hexbin"):
 
     fig, axes = plt.subplots(4, 10, figsize=(40, 20))  # 10 combinations per plane

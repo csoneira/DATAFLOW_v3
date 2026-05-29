@@ -24,6 +24,7 @@ from MASTER.ANCILLARY.SIMULATION_VS_DATA_AND_VALIDATION.common.file_pairing impo
     FilePairSelection,
     build_filevfile_pair,
     load_json_config,
+    resolve_timestamped_pair_output_dir,
     write_pair_summary,
 )
 from MASTER.ANCILLARY.SIMULATION_VS_DATA_AND_VALIDATION.common.task2_strip_metric_histograms import (  # noqa: E402
@@ -31,6 +32,10 @@ from MASTER.ANCILLARY.SIMULATION_VS_DATA_AND_VALIDATION.common.task2_strip_metri
     case_values,
     filter_frame_for_case,
     format_efficiency_vector,
+)
+from MASTER.ANCILLARY.SIMULATION_VS_DATA_AND_VALIDATION.common.value_filters import (  # noqa: E402
+    apply_config_value_filters,
+    format_resolved_value_filters,
 )
 
 
@@ -47,14 +52,7 @@ def parse_scatter_args(default_config_path: Path, description: str) -> argparse.
 
 
 def resolve_output_dir(config: dict[str, object], selection: FilePairSelection) -> Path:
-    raw = str(config.get("output_dir", "OUTPUTS"))
-    base = Path(raw)
-    if not base.is_absolute():
-        base = (Path(config["_config_dir"]) / base).resolve()
-    pair_dir = f"{selection.station_of_study_label.lower()}_{selection.study_filename_base}__vs__{selection.reference_filename_base}"
-    out_dir = base / pair_dir
-    out_dir.mkdir(parents=True, exist_ok=True)
-    return out_dir
+    return resolve_timestamped_pair_output_dir(config, selection)
 
 
 def load_pair_frames(selection: FilePairSelection, *, x_columns: Sequence[str], y_columns: Sequence[str], case_column: str) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -225,6 +223,9 @@ def run_tdif_vs_qsum_comparison(args: argparse.Namespace) -> None:
     y_columns = [f"Q{plane}_Q_sum_{strip}" for plane in range(1, 5) for strip in range(1, 5)]
     out_dir = resolve_output_dir(config, selection)
     sim_df, real_df = load_pair_frames(selection, x_columns=x_columns, y_columns=y_columns, case_column=case_column)
+    sim_rows_before_filters = len(sim_df)
+    real_rows_before_filters = len(real_df)
+    sim_df, real_df, resolved_value_filters = apply_config_value_filters(sim_df, real_df, config.get("value_filters"))
     exclude_zero_values = bool(config.get("exclude_zero_values", True))
     exclude_exact_values = [float(value) for value in config.get("exclude_exact_values", [])]
     clip_max_raw = config.get("clip_max_value")
@@ -289,6 +290,12 @@ def run_tdif_vs_qsum_comparison(args: argparse.Namespace) -> None:
     print(f"Study file: {selection.study_file_path}")
     print(f"Reference file: {selection.reference_file_path}")
     print(f"Efficiency distance: {selection.eff_distance:.6f}")
+    if resolved_value_filters:
+        print(f"Applied value filters: {format_resolved_value_filters(resolved_value_filters)}")
+        print(
+            f"Rows after value filters: simulation={len(sim_df)}/{sim_rows_before_filters} | "
+            f"study={len(real_df)}/{real_rows_before_filters}"
+        )
     print(f"Saved pair summary: {summary_path}")
     print(f"Saved per-strip summary CSV: {summary_csv_path}")
     for saved_plot in saved_plots:

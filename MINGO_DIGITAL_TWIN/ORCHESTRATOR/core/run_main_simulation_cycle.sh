@@ -34,6 +34,11 @@ set -euo pipefail
 ROOT_DIR="$HOME/DATAFLOW_v3"
 DT_DIR="${ROOT_DIR}/MINGO_DIGITAL_TWIN"
 ROOT_RUNTIME_DIR="${ROOT_DIR}/OPERATIONS_RUNTIME"
+INTERSTEPS_DIR="${DT_DIR}/INTERSTEPS"
+RUN_STEP_STATE_DIR_DEFAULT="${ROOT_RUNTIME_DIR}/STATE/run_step"
+SIM_INTERSTEPS_RESET_MARKER="${ROOT_RUNTIME_DIR}/STATE/sim_intersteps_reset_needed.flag"
+SIM_INTERSTEPS_RESET_TRIGGER_PCT="${SIM_INTERSTEPS_RESET_TRIGGER_PCT:-95}"
+SIM_INTERSTEPS_RESET_RECOVER_PCT="${SIM_INTERSTEPS_RESET_RECOVER_PCT:-90}"
 
 SIM_STRUCTURED_LOGS_ENABLED="${SIM_STRUCTURED_LOGS_ENABLED:-1}"
 if [[ "${SIM_STRUCTURED_LOGS_ENABLED}" != "0" && "${SIM_STRUCTURED_LOGS_ENABLED}" != "1" ]]; then
@@ -96,6 +101,80 @@ log_info() {
 log_warn() {
   printf '%s [SIM_CYCLE] [WARN] %s\n' "$(log_ts)" "$*"
   emit_structured_log "WARN" "$*"
+}
+
+home_disk_usage_percent() {
+  df -P /home 2>/dev/null | awk 'NR==2 {gsub("%","",$5); print $5}'
+}
+
+mark_intersteps_reset_needed() {
+  local reason="${1:-disk_pressure}"
+  local usage="${2:-unknown}"
+  mkdir -p "$(dirname "${SIM_INTERSTEPS_RESET_MARKER}")"
+  printf 'timestamp=%s\nreason=%s\nusage_pct=%s\n' "$(log_ts)" "${reason}" "${usage}" > "${SIM_INTERSTEPS_RESET_MARKER}"
+  log_warn "intersteps_reset status=marked reason=${reason} usage_pct=${usage} marker=${SIM_INTERSTEPS_RESET_MARKER}"
+}
+
+maybe_handle_intersteps_reset_after_disk_pressure() {
+  local usage
+  local enqueue_fd processing_fd final_fd
+
+  usage="$(home_disk_usage_percent || true)"
+  if [[ -z "${usage}" || ! "${usage}" =~ ^[0-9]+$ ]]; then
+    log_warn "intersteps_reset status=skipped reason=unknown_disk_usage"
+    return 0
+  fi
+
+  if (( usage >= SIM_INTERSTEPS_RESET_TRIGGER_PCT )); then
+    if [[ ! -f "${SIM_INTERSTEPS_RESET_MARKER}" ]]; then
+      mark_intersteps_reset_needed "disk_pressure" "${usage}"
+    else
+      log_warn "intersteps_reset status=pending usage_pct=${usage} marker=${SIM_INTERSTEPS_RESET_MARKER}"
+    fi
+    return 0
+  fi
+
+  if [[ ! -f "${SIM_INTERSTEPS_RESET_MARKER}" ]]; then
+    return 0
+  fi
+
+  if (( usage > SIM_INTERSTEPS_RESET_RECOVER_PCT )); then
+    log_info "intersteps_reset status=waiting usage_pct=${usage} recover_below_pct=${SIM_INTERSTEPS_RESET_RECOVER_PCT}"
+    return 0
+  fi
+
+  mkdir -p "$(dirname "${SIM_ENQUEUE_LOCK}")" "$(dirname "${SIM_PROCESSING_LOCK}")" "$(dirname "${SIM_FINAL_LOCK}")"
+  exec {enqueue_fd}> "${SIM_ENQUEUE_LOCK}"
+  if ! flock -n "${enqueue_fd}"; then
+    log_info "intersteps_reset status=skipped reason=enqueue_lock_busy usage_pct=${usage}"
+    exec {enqueue_fd}>&-
+    return 0
+  fi
+  exec {processing_fd}> "${SIM_PROCESSING_LOCK}"
+  if ! flock -n "${processing_fd}"; then
+    log_info "intersteps_reset status=skipped reason=processing_lock_busy usage_pct=${usage}"
+    exec {processing_fd}>&-
+    exec {enqueue_fd}>&-
+    return 0
+  fi
+  exec {final_fd}> "${SIM_FINAL_LOCK}"
+  if ! flock -n "${final_fd}"; then
+    log_info "intersteps_reset status=skipped reason=final_lock_busy usage_pct=${usage}"
+    exec {final_fd}>&-
+    exec {processing_fd}>&-
+    exec {enqueue_fd}>&-
+    return 0
+  fi
+
+  log_warn "intersteps_reset status=start usage_pct=${usage} intersteps=${INTERSTEPS_DIR} run_step_state=${RUN_STEP_STATE_DIR_DEFAULT}"
+  rm -rf "${INTERSTEPS_DIR}" "${RUN_STEP_STATE_DIR_DEFAULT}"
+  mkdir -p "${INTERSTEPS_DIR}"
+  rm -f "${SIM_INTERSTEPS_RESET_MARKER}"
+  log_warn "intersteps_reset status=done usage_pct=${usage}"
+
+  exec {final_fd}>&-
+  exec {processing_fd}>&-
+  exec {enqueue_fd}>&-
 }
 
 is_nonneg_int() {
@@ -733,6 +812,7 @@ main() {
 
   load_frequency_gate_settings
   log_info "cycle status=start"
+  maybe_handle_intersteps_reset_after_disk_pressure
 
   if ! run_enqueue_phase; then
     failed=1

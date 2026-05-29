@@ -24,7 +24,12 @@ from MASTER.ANCILLARY.SIMULATION_VS_DATA_AND_VALIDATION.common.file_pairing impo
     FilePairSelection,
     build_filevfile_pair,
     load_json_config,
+    resolve_timestamped_pair_output_dir,
     write_pair_summary,
+)
+from MASTER.ANCILLARY.SIMULATION_VS_DATA_AND_VALIDATION.common.value_filters import (  # noqa: E402
+    apply_config_value_filters,
+    format_resolved_value_filters,
 )
 
 
@@ -80,14 +85,7 @@ def parse_metric_args(default_config_path: Path, description: str) -> argparse.N
 
 
 def resolve_output_dir(config: dict[str, object], selection: FilePairSelection) -> Path:
-    raw = str(config.get("output_dir", "OUTPUTS"))
-    base = Path(raw)
-    if not base.is_absolute():
-        base = (Path(config["_config_dir"]) / base).resolve()
-    pair_dir = f"{selection.station_of_study_label.lower()}_{selection.study_filename_base}__vs__{selection.reference_filename_base}"
-    out_dir = base / pair_dir
-    out_dir.mkdir(parents=True, exist_ok=True)
-    return out_dir
+    return resolve_timestamped_pair_output_dir(config, selection)
 
 
 def load_pair_frames(selection: FilePairSelection, metric_columns: Sequence[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -124,6 +122,19 @@ def filtered_values(
     if clip_max_value is not None:
         values = np.minimum(values, float(clip_max_value))
     return values
+
+
+def histogram_edges_from_arrays(arrays: Sequence[np.ndarray], *, bins: int) -> np.ndarray | None:
+    finite_arrays = [values for values in arrays if values.size]
+    if not finite_arrays:
+        return None
+    combined = np.concatenate(finite_arrays)
+    lower = float(np.nanmin(combined))
+    upper = float(np.nanmax(combined))
+    if lower == upper:
+        lower -= 0.5
+        upper += 0.5
+    return np.linspace(lower, upper, int(bins) + 1)
 
 
 def build_summary_table(
@@ -185,37 +196,53 @@ def plot_metric_histograms(
     exclude_exact_values: Sequence[float],
     clip_max_value: float | None,
     y_axis_log_scale: bool,
+    share_x_axis: bool,
     case_label: str | None,
     output_path: Path,
 ) -> Path:
-    fig, axes = plt.subplots(2, 2, figsize=(13, 10), constrained_layout=True)
+    per_column_values: list[tuple[np.ndarray, np.ndarray]] = []
+    for column in metric_columns:
+        per_column_values.append(
+            (
+                filtered_values(
+                    sim_df,
+                    column,
+                    exclude_zero_values=exclude_zero_values,
+                    exclude_exact_values=exclude_exact_values,
+                    clip_max_value=clip_max_value,
+                ),
+                filtered_values(
+                    real_df,
+                    column,
+                    exclude_zero_values=exclude_zero_values,
+                    exclude_exact_values=exclude_exact_values,
+                    clip_max_value=clip_max_value,
+                ),
+            )
+        )
+    shared_edges = None
+    if share_x_axis:
+        shared_edges = histogram_edges_from_arrays(
+            [values for pair in per_column_values for values in pair],
+            bins=bins,
+        )
+
+    fig, axes = plt.subplots(2, 2, figsize=(13, 10), constrained_layout=True, sharex=share_x_axis)
     for plane_idx, ax in enumerate(axes.flat, start=1):
         column = metric_columns[plane_idx - 1]
-        sim_values = filtered_values(
-            sim_df,
-            column,
-            exclude_zero_values=exclude_zero_values,
-            exclude_exact_values=exclude_exact_values,
-            clip_max_value=clip_max_value,
-        )
-        real_values = filtered_values(
-            real_df,
-            column,
-            exclude_zero_values=exclude_zero_values,
-            exclude_exact_values=exclude_exact_values,
-            clip_max_value=clip_max_value,
-        )
+        sim_values, real_values = per_column_values[plane_idx - 1]
         both = np.concatenate([sim_values, real_values]) if sim_values.size or real_values.size else np.array([], dtype=float)
         if both.size == 0:
             ax.set_title(f"Plane {plane_idx} | no finite values")
             ax.set_axis_off()
             continue
-        lower = float(np.nanmin(both))
-        upper = float(np.nanmax(both))
-        if lower == upper:
-            lower -= 0.5
-            upper += 0.5
-        edges = np.linspace(lower, upper, int(bins) + 1)
+        edges = shared_edges
+        if edges is None:
+            edges = histogram_edges_from_arrays([sim_values, real_values], bins=bins)
+        if edges is None:
+            ax.set_title(f"Plane {plane_idx} | no finite values")
+            ax.set_axis_off()
+            continue
         ax.hist(sim_values, bins=edges, density=density, histtype="step", linewidth=1.6, color=SIM_COLOR, label=SIM_LABEL)
         ax.hist(
             real_values,
@@ -267,6 +294,9 @@ def run_metric_histogram_comparison(
     selection = build_filevfile_pair(config)
     out_dir = resolve_output_dir(config, selection)
     sim_df, real_df = load_pair_frames(selection, metric_columns)
+    sim_rows_before_filters = len(sim_df)
+    real_rows_before_filters = len(real_df)
+    sim_df, real_df, resolved_value_filters = apply_config_value_filters(sim_df, real_df, config.get("value_filters"))
     exclude_zero_values = bool(config.get("exclude_zero_values", True))
     exclude_exact_values = [float(value) for value in config.get("exclude_exact_values", [])]
     clip_max_raw = config.get("clip_max_value")
@@ -303,6 +333,7 @@ def run_metric_histogram_comparison(
         "exclude_exact_values": exclude_exact_values,
         "clip_max_value": clip_max_value,
         "y_axis_log_scale": y_axis_log_scale,
+        "share_x_axis": bool(config.get("share_x_axis", False)),
     }
     if mode == "total":
         saved_plots.append(
@@ -335,6 +366,12 @@ def run_metric_histogram_comparison(
     print(f"Study file: {selection.study_file_path}")
     print(f"Reference file: {selection.reference_file_path}")
     print(f"Efficiency distance: {selection.eff_distance:.6f}")
+    if resolved_value_filters:
+        print(f"Applied value filters: {format_resolved_value_filters(resolved_value_filters)}")
+        print(
+            f"Rows after value filters: simulation={len(sim_df)}/{sim_rows_before_filters} | "
+            f"study={len(real_df)}/{real_rows_before_filters}"
+        )
     print(f"Saved pair summary: {summary_path}")
     print(f"Saved per-plane summary CSV: {summary_csv_path}")
     for saved_plot in saved_plots:
