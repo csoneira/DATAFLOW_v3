@@ -11,6 +11,7 @@ article_format: false
 # Task 1 plot alias statuses live in config_plots_task_1.yaml
 create_plots: null
 keep_all_columns_output: false
+save_removed_channel_values: false
 removed_marker: x
 removed_marker_size: 10
 removed_marker_alpha: 0.9

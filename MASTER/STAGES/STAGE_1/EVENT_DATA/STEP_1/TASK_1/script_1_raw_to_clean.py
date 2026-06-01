@@ -2570,6 +2570,10 @@ config = resolve_step1_effective_task_config(
 )
 process_only_qa_retry_files = bool(config.get("process_only_qa_retry_files", False))
 prioritize_other_than_qa_files = bool(config.get("prioritize_other_than_qa_files", True))
+save_removed_channel_values = _coerce_config_bool(
+    config.get("save_removed_channel_values"),
+    default=True,
+)
 if process_only_qa_retry_files:
     print(
         "[QA_ONLY] Enabled by STEP_1 shared config: only files present in the active QA retry list will be processed."
@@ -6515,30 +6519,33 @@ if "datetime" in working_df.columns:
 if "param_hash" not in working_df.columns:
     working_df["param_hash"] = str(simulated_param_hash) if simulated_param_hash else ""
 
-channel_removed_values_output_directory = base_directories["removed_channel_values_directory"]
-os.makedirs(channel_removed_values_output_directory, exist_ok=True)
-channel_removed_values_base = os.path.join(
-    channel_removed_values_output_directory,
-    f"removed_channel_values_{basename_no_ext}",
-)
-if not task1_removed_channel_values_df.empty:
-    task1_removed_channel_values_output_df = task1_removed_channel_values_df.assign(
-        filename_base=filename_base
+if save_removed_channel_values:
+    channel_removed_values_output_directory = base_directories["removed_channel_values_directory"]
+    os.makedirs(channel_removed_values_output_directory, exist_ok=True)
+    channel_removed_values_base = os.path.join(
+        channel_removed_values_output_directory,
+        f"removed_channel_values_{basename_no_ext}",
     )
-    task1_removed_channel_values_output_df.to_parquet(
-        f"{channel_removed_values_base}.parquet",
-        engine="pyarrow",
-        compression="zstd",
-        index=False,
-    )
-    task1_removed_channel_values_output_df.to_csv(
-        f"{channel_removed_values_base}.csv",
-        index=False,
-    )
-    print(f"Removed channel-value parquet saved to: {channel_removed_values_base}.parquet")
-    print(f"Removed channel-value CSV saved to: {channel_removed_values_base}.csv")
+    if not task1_removed_channel_values_df.empty:
+        task1_removed_channel_values_output_df = task1_removed_channel_values_df.assign(
+            filename_base=filename_base
+        )
+        task1_removed_channel_values_output_df.to_parquet(
+            f"{channel_removed_values_base}.parquet",
+            engine="pyarrow",
+            compression="zstd",
+            index=False,
+        )
+        task1_removed_channel_values_output_df.to_csv(
+            f"{channel_removed_values_base}.csv",
+            index=False,
+        )
+        print(f"Removed channel-value parquet saved to: {channel_removed_values_base}.parquet")
+        print(f"Removed channel-value CSV saved to: {channel_removed_values_base}.csv")
+    else:
+        print("Removed channel-value export skipped: no zeroed channel values recorded.")
 else:
-    print("Removed channel-value export skipped: no zeroed channel values recorded.")
+    print("Removed channel-value export skipped: save_removed_channel_values is false.")
 
 if track_removed_rows and not removed_rows_df.empty:
     tracking_output_directory = base_directories["tracking_directory"]

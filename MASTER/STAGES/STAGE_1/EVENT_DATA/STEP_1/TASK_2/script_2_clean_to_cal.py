@@ -52,7 +52,7 @@ from scipy.interpolate import CubicSpline
 from scipy.ndimage import gaussian_filter1d
 from scipy.optimize import curve_fit
 from scipy.signal import find_peaks
-from scipy.stats import norm, median_abs_deviation
+from scipy.stats import norm, median_abs_deviation, binned_statistic_2d
 
 # Machine Learning
 from sklearn.linear_model import LinearRegression
@@ -185,6 +185,7 @@ TASK2_PLOT_ALIASES: tuple[str, ...] = (
     "new_calibration_calibrated_charge",
     "scatter_new_calibration_calibrated_charge",
     "charge_dif_vs_charge_sum_cal",
+    "charge_dif_vs_time_dif_cal",
     "timing",
     "grand_figure_q_pedestal",
     "grand_figure_q_pedestal_zoom",
@@ -221,6 +222,12 @@ TASK2_PLOT_ALIASES: tuple[str, ...] = (
     "r2_scores",
     "time_calibrated_filtered_removed_zeroes",
     "tsum_pair_charge_correlations",
+    "slewing_pair_delta_t_qsum1_qsum2_contour",
+    "slewing_delta_t_vs_qsum2_by_qsum1_bins",
+    "slewing_delta_t_vs_qsum2_by_qsum1_bins_fit",
+    "slewing_per_strip_from_pair_fit",
+    "slewing_delta_t_centroid_by_qsum_cuts",
+    "slewing_delta_t_centroid_vs_qsum_cut",
     "stat_window_accumulation",
     "rejected_scatter_clean_tt",
     "rejected_scatter_q_sum_zero",
@@ -411,7 +418,7 @@ def should_drop_calibration_metadata_field(column_name: str) -> bool:
       - filename_base
       - execution_timestamp
       - param_hash
-      - P*_s*_{Q_B,Q_F,Q_FB_coeffs(__N),Q_sum,T_sum,T_dif,crstlk_*}
+      - P*_s*_{Q_B,Q_F,Q_FB_coeffs(__N),Q_TDIF_coeffs(__N),Q_sum,T_sum,T_dif,crstlk_*}
     """
     if column_name in ("filename_base", "execution_timestamp", "param_hash"):
         return False
@@ -782,19 +789,13 @@ def build_task2_strict_calibration_mask_from_raw(
     detector_charge_threshold: float,
     plane_charge_threshold: float,
     strip_charge_threshold: float,
+    allowed_topologies: tuple[tuple[int, ...], ...],
 ) -> np.ndarray:
     """Return strict calibration rows using allowed raw-charge topologies only."""
     if len(df) == 0:
         return np.zeros(0, dtype=bool)
 
     strict_mask = np.zeros(len(df), dtype=bool)
-    allowed_topologies = (
-        (1, 2, 3, 4),
-        (1, 2, 3),
-        (1, 2, 4),
-        (1, 3, 4),
-        (2, 3, 4),
-    )
     full_plane_set = {1, 2, 3, 4}
 
     for required_planes in allowed_topologies:
@@ -816,6 +817,7 @@ def build_task2_qfb_calibration_mask_from_raw(
     detector_charge_threshold: float,
     plane_charge_threshold: float,
     strip_charge_threshold: float,
+    allowed_topologies: tuple[tuple[int, ...], ...],
 ) -> np.ndarray:
     """Return streamer-enriched calibration rows using the strict topology gates with cluster size > 1."""
     if len(df) == 0:
@@ -823,13 +825,6 @@ def build_task2_qfb_calibration_mask_from_raw(
 
     active_by_plane = _task2_active_strip_matrix_from_raw(df)
     qfb_mask = np.zeros(len(df), dtype=bool)
-    allowed_topologies = (
-        (1, 2, 3, 4),
-        (1, 2, 3),
-        (1, 2, 4),
-        (1, 3, 4),
-        (2, 3, 4),
-    )
     full_plane_set = {1, 2, 3, 4}
 
     for required_planes in allowed_topologies:
@@ -874,6 +869,58 @@ def build_task2_qfb_calibration_mask_from_raw(
         qfb_mask |= topology_mask & has_multistrip_plane
 
     return qfb_mask
+
+def _parse_task2_calibration_plane_topologies(
+    configured_topologies,
+) -> tuple[tuple[int, ...], ...]:
+    """Parse allowed calibration plane topologies from YAML labels like 1234."""
+    default_topologies = ("1234", "123", "124", "134", "234")
+    if configured_topologies is None:
+        configured_topologies = default_topologies
+    if isinstance(configured_topologies, (str, int)):
+        configured_topologies = [configured_topologies]
+
+    parsed_topologies: list[tuple[int, ...]] = []
+    seen: set[tuple[int, ...]] = set()
+    for raw_topology in configured_topologies:
+        topology_label = str(raw_topology).strip()
+        if not topology_label:
+            continue
+        try:
+            topology = tuple(int(char) for char in topology_label)
+        except ValueError as exc:
+            raise ValueError(
+                "Invalid task2_calibration_plane_topologies entry "
+                f"{raw_topology!r}; use labels such as 1234 or 134."
+            ) from exc
+        if any(plane < 1 or plane > 4 for plane in topology):
+            raise ValueError(
+                "Invalid task2_calibration_plane_topologies entry "
+                f"{raw_topology!r}; plane numbers must be in 1..4."
+            )
+        if len(set(topology)) != len(topology):
+            raise ValueError(
+                "Invalid task2_calibration_plane_topologies entry "
+                f"{raw_topology!r}; duplicate planes are not allowed."
+            )
+        topology = tuple(sorted(topology))
+        if not topology:
+            continue
+        if topology in seen:
+            continue
+        seen.add(topology)
+        parsed_topologies.append(topology)
+
+    if not parsed_topologies:
+        raise ValueError(
+            "task2_calibration_plane_topologies resolved to an empty list."
+        )
+    return tuple(parsed_topologies)
+
+def _format_task2_plane_topologies(
+    topologies: tuple[tuple[int, ...], ...],
+) -> str:
+    return ",".join("".join(str(plane) for plane in topology) for topology in topologies)
 
 def keep_task2_highest_charge_strip_only_inplace(df: pd.DataFrame) -> None:
     """Keep only the highest-charge raw strip per plane and row, zeroing the rest."""
@@ -3979,6 +4026,230 @@ def summary(vector):
     mu, std = norm.fit(vector)
     return mu
 
+def calculate_task2_tsum_calibration_from_pair_residuals(
+    pair_residuals_df: pd.DataFrame,
+) -> list[list[float]]:
+    print(
+        "Using direct T_sum calibration from geometry-corrected pair residuals "
+        "with high-Q centroid pair offsets."
+    )
+    strip_pair_patterns = [
+        (1, 1), (2, 2), (3, 3), (4, 4),
+        (1, 2), (2, 1), (2, 3), (3, 2), (3, 4), (4, 3),
+        (1, 3), (3, 1), (2, 4), (4, 2), (1, 4),
+    ]
+    plane_pair_order = [(1, 3), (1, 4), (2, 4), (3, 4), (1, 2), (2, 3)]
+    vector_names = [
+        f"P{plane_a}s{strip_a}_P{plane_b}s{strip_b}"
+        for plane_a, plane_b in plane_pair_order
+        for strip_a, strip_b in strip_pair_patterns
+    ]
+    vectors = []
+    rows = ['P{}s{}'.format(i, j) for i in range(1, 5) for j in range(1, 5)]
+    columns = ['P{}s{}'.format(i, j) for i in range(1, 5) for j in range(1, 5)]
+    df = pd.DataFrame(index=rows, columns=columns)
+    pair_offset_lookup.clear()
+
+    residual_work_df = pair_residuals_df.copy()
+    residual_work_df["Q_sum_1"] = pd.to_numeric(residual_work_df["Q_sum_1"], errors="coerce")
+    residual_work_df["Q_sum_2"] = pd.to_numeric(residual_work_df["Q_sum_2"], errors="coerce")
+    residual_work_df["delta_t_corrected"] = pd.to_numeric(
+        residual_work_df["delta_t_corrected"],
+        errors="coerce",
+    )
+    valid_qcut_rows = (
+        np.isfinite(residual_work_df["Q_sum_1"])
+        & np.isfinite(residual_work_df["Q_sum_2"])
+        & np.isfinite(residual_work_df["delta_t_corrected"])
+        & (residual_work_df["Q_sum_1"] > 0)
+        & (residual_work_df["Q_sum_2"] > 0)
+    )
+    residual_work_df = residual_work_df.loc[valid_qcut_rows].copy()
+    q_cut_quantiles = np.asarray(config.get(
+        "slewing_delta_t_centroid_q_cut_quantiles",
+        [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
+    ), dtype=float)
+    q_cut_quantiles = q_cut_quantiles[
+        np.isfinite(q_cut_quantiles)
+        & (q_cut_quantiles >= 0.0)
+        & (q_cut_quantiles < 1.0)
+    ]
+    if q_cut_quantiles.size == 0:
+        q_cut_quantiles = np.asarray([0.0], dtype=float)
+    if residual_work_df.empty:
+        q_cuts = np.asarray([], dtype=float)
+    else:
+        q_min = np.minimum(
+            residual_work_df["Q_sum_1"].to_numpy(dtype=float),
+            residual_work_df["Q_sum_2"].to_numpy(dtype=float),
+        )
+        q_cuts = np.unique(np.quantile(q_min, q_cut_quantiles))
+    min_events_per_pair = int(config.get("slewing_delta_t_centroid_min_events_per_pair", 100))
+    min_events_per_q_cut = int(config.get("slewing_delta_t_centroid_min_events_per_q_cut", 100))
+
+    for plane_a, plane_b in plane_pair_order:
+        for strip_a, strip_b in strip_pair_patterns:
+            label1 = f"P{plane_a}s{strip_a}"
+            label2 = f"P{plane_b}s{strip_b}"
+            pair_mask = (
+                (pair_residuals_df["label1"] == label1)
+                & (pair_residuals_df["label2"] == label2)
+            )
+            values = pd.to_numeric(
+                pair_residuals_df.loc[pair_mask, "delta_t_corrected"],
+                errors="coerce",
+            ).dropna().to_numpy(dtype=float)
+            vectors.append(values)
+            if values.size == 0:
+                continue
+            pair_qcut_df = residual_work_df[
+                (residual_work_df["label1"] == label1)
+                & (residual_work_df["label2"] == label2)
+            ]
+            pair_offset = np.nan
+            pair_offset_q_cut = np.nan
+            if len(pair_qcut_df) >= min_events_per_pair:
+                for q_cut in q_cuts:
+                    cut_df = pair_qcut_df[
+                        (pair_qcut_df["Q_sum_1"] > q_cut)
+                        & (pair_qcut_df["Q_sum_2"] > q_cut)
+                    ]
+                    if len(cut_df) < min_events_per_q_cut:
+                        continue
+                    pair_offset = summary(cut_df["delta_t_corrected"].to_numpy(dtype=float))
+                    pair_offset_q_cut = float(q_cut)
+            if not np.isfinite(pair_offset):
+                pair_offset = summary(values)
+                print(
+                    "Warning: high-Q pair offset unavailable for "
+                    f"{label1}-{label2}; using all-event centroid."
+                )
+            else:
+                print(
+                    f"T_sum pair offset {label1}-{label2}: "
+                    f"centroid={pair_offset:.5g} from Q>{pair_offset_q_cut:.5g}"
+                )
+            df.loc[label1, label2] = pair_offset
+            df.loc[label2, label1] = -pair_offset
+            pair_offset_lookup[(label1, label2)] = float(pair_offset)
+            pair_offset_lookup[(label2, label1)] = float(-pair_offset)
+
+    print("----------------------------------------------------------------------")
+    print("--------------------- Time resolution calculation --------------------")
+    print("----------------------------------------------------------------------")
+    crt_values = {}
+    for var_name, vector in zip(vector_names, vectors):
+        vdat = np.asarray(vector, dtype=float)
+        if len(vdat) > 1:
+            try:
+                vdat = vdat[
+                    (vdat > np.quantile(vdat, CRT_gaussian_fit_quantile))
+                    & (vdat < np.quantile(vdat, 1 - CRT_gaussian_fit_quantile))
+                ]
+            except IndexError:
+                print(f"IndexError encountered for {var_name}, setting CRT to 0")
+                vdat = np.array([0])
+        CRT = norm.fit(vdat)[1] / np.sqrt(2) if len(vdat) > 0 else 0
+        crt_values[f'CRT_{var_name}'] = CRT
+    print("CRT values:", crt_values)
+    crt_array = np.array(list(crt_values.values()), dtype=float)
+    if crt_array.size > 0:
+        Q1, Q3 = np.percentile(crt_array, [25, 75])
+        crt_array = crt_array[crt_array <= 1]
+        filtered_crt_values = crt_array[
+            (crt_array >= Q1 - 1.5 * (Q3 - Q1))
+            & (crt_array <= Q3 + 1.5 * (Q3 - Q1))
+        ]
+        global_variables['CRT_avg'] = np.mean(filtered_crt_values) * 1000 if filtered_crt_values.size else 0
+        global_variables['CRT_std'] = np.std(filtered_crt_values) * 1000 if filtered_crt_values.size else 0
+    else:
+        global_variables['CRT_avg'] = 0
+        global_variables['CRT_std'] = 0
+    print("---------------------------")
+    print(f"CRT Avg: {global_variables['CRT_avg']:.4g} ps")
+    print(f"CRT Std: {global_variables['CRT_std']:.4g} ps")
+    print("---------------------------")
+    print("Antisymmetric matrix:")
+    print(df.map(lambda x: f"{x:.2f}" if pd.notnull(x) else ""))
+
+    try:
+        itineraries = load_itineraries_from_file(
+            ITINERARY_FILE_PATH,
+            echo_entries=False,
+            header_suffix="",
+        )
+    except (FileNotFoundError, ValueError) as itinerary_error:
+        print(itinerary_error)
+        sys.exit(1)
+
+    def has_duplicate_sublists(lst):
+        seen = set()
+        for sub_list in lst:
+            sub_list_tuple = tuple(sub_list)
+            if sub_list_tuple in seen:
+                return True
+            seen.add(sub_list_tuple)
+        return False
+
+    if has_duplicate_sublists(itineraries):
+        print("Duplicated itineraries.")
+
+    selected_path_list = []
+    rows = ['P{}'.format(i) for i in range(1, 5)]
+    columns = ['s{}'.format(i) for i in range(1, 5)]
+    selected_path_df = pd.DataFrame(0, index=rows, columns=columns)
+
+    for itinerary in itineraries:
+        selected_path_df[selected_path_df.columns] = 0
+        step = itinerary
+        a = []
+        for i in range(len(step)):
+            if i > 0:
+                a.append(df[step[i - 1]][step[i]])
+
+            relative_time = sum(a)
+            ind1 = str(step[i][0:2])
+            ind2 = str(step[i][2:4])
+
+            selected_path_df[ind2] = selected_path_df[ind2].astype(float)
+            selected_path_df.loc[ind1, ind2] = selected_path_df.loc[ind1, ind2] + relative_time
+
+        selected_path_df = selected_path_df.sub(selected_path_df.iloc[0, 0])
+        selected_path_list.append(selected_path_df.values)
+
+    selected_path_array = np.array(selected_path_list, dtype=float)
+    if selected_path_array.size == 0:
+        calibration_times = np.zeros((4, 4), dtype=float)
+        print("Warning: No itinerary paths available; using zero T_sum calibration.")
+    else:
+        valid_counts = np.sum(np.isfinite(selected_path_array), axis=0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            median = np.nanmedian(selected_path_array, axis=0)
+        median = np.where(valid_counts > 0, median, 0.0)
+
+        abs_dev = np.abs(selected_path_array - median)
+        epsilon = 1e-6
+        weights = 1.0 / (abs_dev + epsilon)
+        weighted_sum = np.nansum(selected_path_array * weights, axis=0)
+        sum_of_weights = np.nansum(weights, axis=0)
+        calibration_times = np.divide(
+            weighted_sum,
+            sum_of_weights,
+            out=np.full_like(weighted_sum, np.nan, dtype=float),
+            where=sum_of_weights > 0,
+        )
+
+    print("------------------------")
+    print("Calculated calibration in times is:\n", calibration_times)
+
+    nan_mask = np.isnan(calibration_times)
+    if np.any(nan_mask):
+        calibration_times[nan_mask] = 0.0
+        print("Some NaN values in calibration times were set to 0 (no correction applied for those strips).")
+
+    return [list(calibration_times[i]) for i in range(len(calibration_times))]
+
 def hist_1d(vdat, bin_number, title, axis_label, name_of_file):
     global fig_idx, coincidence_window_cal_ns
     fig = plt.figure(figsize=(8, 5))
@@ -4125,6 +4396,113 @@ def _fit_qfb_coeffs(xdat, ydat):
     except (RuntimeError, ValueError):
         return None
 
+def _fit_qtdif_coeffs(tdif_values, qdif_values):
+    """Pure-compute Q_dif vs T_dif polynomial fit."""
+    degree = int(config.get("q_dif_t_dif_degree", 1))
+    tdif = np.asarray(tdif_values, dtype=float).ravel()
+    qdif = np.asarray(qdif_values, dtype=float).ravel()
+    finite_mask = (
+        np.isfinite(tdif)
+        & np.isfinite(qdif)
+        & (tdif != 0)
+        & (qdif != 0)
+    )
+    range_mask = (
+        finite_mask
+        & (tdif > q_dif_t_dif_fit_tdif_left)
+        & (tdif < q_dif_t_dif_fit_tdif_right)
+        & (np.abs(qdif) < q_dif_t_dif_fit_qdif_abs)
+    )
+    tdif_pre_fit = tdif[range_mask]
+    qdif_pre_fit = qdif[range_mask]
+    if len(tdif_pre_fit) < degree + 2:
+        return None
+
+    initial_guess = [1] * (degree + 1)
+    try:
+        coeffs, _ = curve_fit(polynomial, tdif_pre_fit, qdif_pre_fit, p0=initial_guess)
+        residuals = np.abs(qdif_pre_fit - polynomial(tdif_pre_fit, *coeffs))
+        fit_mask = residuals < q_dif_t_dif_fit_residual_abs
+        tdif_fit = tdif_pre_fit[fit_mask]
+        qdif_fit = qdif_pre_fit[fit_mask]
+        if len(tdif_fit) < degree + 2:
+            return None
+        coeffs, _ = curve_fit(polynomial, tdif_fit, qdif_fit, p0=initial_guess)
+        return coeffs
+    except (RuntimeError, ValueError):
+        return None
+
+def scatter_2d_and_fit_qdif_vs_tdif(tdif, qdif, coeffs, title, name_of_file):
+    global fig_idx
+    if not task2_plot_requested("charge_dif_vs_time_dif_cal", essential=True):
+        return
+
+    coeffs = np.asarray(coeffs, dtype=float)
+    tdif = np.asarray(tdif, dtype=float).ravel()
+    qdif = np.asarray(qdif, dtype=float).ravel()
+    finite_mask = (
+        np.isfinite(tdif)
+        & np.isfinite(qdif)
+        & (tdif != 0)
+        & (qdif != 0)
+    )
+    plot_mask = (
+        finite_mask
+        & (tdif > q_dif_t_dif_plot_tdif_left)
+        & (tdif < q_dif_t_dif_plot_tdif_right)
+        & (np.abs(qdif) < q_dif_t_dif_plot_qdif_abs)
+    )
+    fit_range_mask = (
+        finite_mask
+        & (tdif > q_dif_t_dif_fit_tdif_left)
+        & (tdif < q_dif_t_dif_fit_tdif_right)
+        & (np.abs(qdif) < q_dif_t_dif_fit_qdif_abs)
+    )
+    residual_mask = np.zeros_like(finite_mask, dtype=bool)
+    residual_mask[fit_range_mask] = (
+        np.abs(qdif[fit_range_mask] - polynomial(tdif[fit_range_mask], *coeffs))
+        < q_dif_t_dif_fit_residual_abs
+    )
+    if not np.any(plot_mask):
+        return
+
+    qdif_corrected = qdif[plot_mask] - polynomial(tdif[plot_mask], *coeffs)
+    x_left = q_dif_t_dif_plot_tdif_left
+    x_right = q_dif_t_dif_plot_tdif_right
+    x_fit = np.linspace(x_left, x_right, 200)
+    y_fit = polynomial(x_fit, *coeffs)
+
+    plt.close()
+    plt.figure(figsize=(13.33, 5))
+    plt.scatter(tdif[plot_mask], qdif[plot_mask], s=1, label="Original data points")
+    if np.any(residual_mask):
+        plt.scatter(tdif[residual_mask], qdif[residual_mask], s=1, color="orange", label="Points for fitting")
+    plt.scatter(tdif[plot_mask], qdif_corrected, s=1, color="green", label="Corrected points")
+    plt.plot(x_fit, y_fit, "r-", label="Polynomial Fit: " + " ".join(
+        [f"a{i}={coeff:.2g}" for i, coeff in enumerate(coeffs)]
+    ))
+    plt.title(title)
+    plt.xlabel("T_dif")
+    plt.ylabel("Q_dif")
+    plt.xlim([x_left, x_right])
+    plt.ylim([-q_dif_t_dif_plot_qdif_abs, q_dif_t_dif_plot_qdif_abs])
+    plt.grid()
+    plt.legend(markerscale=5)
+    plt.tight_layout()
+    if save_plots:
+        final_filename = f"{fig_idx}_charge_dif_vs_time_dif_cal.png"
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        save_plot_figure(
+            save_fig_path,
+            alias="charge_dif_vs_time_dif_cal",
+            format="png",
+        )
+    if show_plots:
+        plt.show()
+    plt.close()
+
 # helper for slewing correction parallelization
 
 def _compute_slew_pair(
@@ -4153,6 +4531,7 @@ def _compute_slew_pair(
     T2 = data_arrays.get(f"T{p2}_T_sum_{s2}")
     TD1 = data_arrays.get(f"T{p1}_T_dif_{s1}")
     TD2 = data_arrays.get(f"T{p2}_T_dif_{s2}")
+    row_index_values = data_arrays.get("__row_index__")
     if Q1 is None or Q2 is None or T1 is None or T2 is None or TD1 is None or TD2 is None:
         return None
 
@@ -4169,12 +4548,17 @@ def _compute_slew_pair(
     if not np.any(valid_mask):
         return None
 
-    Q1 = Q1[valid_mask]
-    Q2 = Q2[valid_mask]
-    T1 = T1[valid_mask]
-    T2 = T2[valid_mask]
-    TD1 = TD1[valid_mask]
-    TD2 = TD2[valid_mask]
+    row_index = (
+        row_index_values[valid_mask]
+        if row_index_values is not None
+        else np.flatnonzero(valid_mask)
+    )
+    Q1 = Q1[valid_mask].astype(float, copy=False)
+    Q2 = Q2[valid_mask].astype(float, copy=False)
+    T1 = T1[valid_mask].astype(float, copy=False)
+    T2 = T2[valid_mask].astype(float, copy=False)
+    TD1 = TD1[valid_mask].astype(float, copy=False)
+    TD2 = TD2[valid_mask].astype(float, copy=False)
 
     x1 = TD1 * tdiff_to_x  # mm
     x2 = TD2 * tdiff_to_x
@@ -4188,19 +4572,1353 @@ def _compute_slew_pair(
     dz = z1 - z2
 
     travel_time = np.sqrt(dx**2 + dy**2 + dz**2) / c_mm_ns
-    tsum_diff = (T1 - T2)
-    corrected_tsum_diff = tsum_diff + travel_time
+    delta_t_sum_raw = T2 - T1
+    delta_t_corrected = delta_t_sum_raw - travel_time
+    label1 = f"P{p1}s{s1}"
+    label2 = f"P{p2}s{s2}"
 
     return pd.DataFrame({
+        'row_index': row_index,
         'plane1': p1, 'strip1': s1,
         'plane2': p2, 'strip2': s2,
-        'Q_sum_semidiff': 0.5 * (Q1 - Q2),
-        'Q_sum_semisum':  0.5 * (Q1 + Q2),
-        'T_sum_corrected_diff': corrected_tsum_diff,
-        'T_sum_diff': tsum_diff,
+        'label1': label1, 'label2': label2,
+        'Q_sum_1': Q1,
+        'Q_sum_2': Q2,
+        'T_sum_1': T1,
+        'T_sum_2': T2,
+        'T_dif_1': TD1,
+        'T_dif_2': TD2,
+        'x_1': x1,
+        'x_2': x2,
         'x_diff': dx,
-        'travel_time': travel_time
+        'travel_time': travel_time,
+        'delta_t_sum_raw': delta_t_sum_raw,
+        'delta_t_corrected': delta_t_corrected,
     })
+
+def _build_tsum_pair_residuals(
+    df: pd.DataFrame,
+    *,
+    y_lookup: dict[int, list[float] | np.ndarray],
+    z_positions: np.ndarray,
+    tdiff_to_x: float,
+    c_mm_ns: float,
+) -> pd.DataFrame:
+    cols = df.columns
+    t_sum_cols = [c for c in cols if "T_sum" in c and "_final" not in c]
+    q_sum_cols = [c for c in cols if "Q_sum" in c and "_final" not in c]
+    t_dif_cols = [c for c in cols if "T_dif" in c and "_final" not in c]
+    data_arrays: dict[str, np.ndarray] = {}
+    for col in t_sum_cols + q_sum_cols + t_dif_cols:
+        data_arrays[col] = pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=float)
+    data_arrays["__row_index__"] = df.index.to_numpy(copy=False)
+
+    pairs = [
+        (p1, s1, p2, s2)
+        for p1 in range(1, 5)
+        for s1 in range(1, 5)
+        for p2 in range(p1 + 1, 5)
+        for s2 in range(1, 5)
+    ]
+    one_strip_masks = _task2_plane_one_strip_masks_from_components(df)
+    pair_topology_masks = {
+        pair: _task2_prefer_one_strip_mask(
+            one_strip_masks.get(pair[0], {}).get(pair[1], np.zeros(len(df), dtype=bool))
+            & one_strip_masks.get(pair[2], {}).get(pair[3], np.zeros(len(df), dtype=bool)),
+            label=f"P{pair[0]}s{pair[1]}_P{pair[2]}s{pair[3]} T_sum residual",
+        )
+        for pair in pairs
+    }
+
+    results: list[pd.DataFrame] = []
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {
+            executor.submit(
+                _compute_slew_pair,
+                pair,
+                data_arrays,
+                pair_topology_masks,
+                y_lookup,
+                z_positions,
+                tdiff_to_x,
+                c_mm_ns,
+            ): pair
+            for pair in pairs
+        }
+        for fut in as_completed(futures):
+            df_pair = fut.result()
+            if df_pair is not None and not df_pair.empty:
+                results.append(df_pair)
+
+    if results:
+        return pd.concat(results, ignore_index=True)
+    return pd.DataFrame(columns=[
+        "plane1", "strip1", "plane2", "strip2", "label1", "label2",
+        "Q_sum_1", "Q_sum_2", "T_sum_1", "T_sum_2", "T_dif_1", "T_dif_2",
+        "x_1", "x_2", "x_diff", "travel_time",
+        "delta_t_sum_raw", "delta_t_corrected",
+    ])
+
+def _enrich_tsum_pair_residuals(
+    pair_residuals_df: pd.DataFrame,
+    Tsum_cal: list[list[float]] | np.ndarray,
+    pair_offset_lookup: dict[tuple[str, str], float],
+) -> pd.DataFrame:
+    if pair_residuals_df.empty:
+        return pair_residuals_df.copy()
+
+    cal_matrix = np.asarray(Tsum_cal, dtype=float)
+    enriched = pair_residuals_df.copy()
+    enriched["T_sum_cal_1"] = [
+        cal_matrix[int(plane) - 1, int(strip) - 1]
+        for plane, strip in zip(enriched["plane1"], enriched["strip1"])
+    ]
+    enriched["T_sum_cal_2"] = [
+        cal_matrix[int(plane) - 1, int(strip) - 1]
+        for plane, strip in zip(enriched["plane2"], enriched["strip2"])
+    ]
+    enriched["pair_offset_used"] = [
+        pair_offset_lookup.get((str(label1), str(label2)), np.nan)
+        for label1, label2 in zip(enriched["label1"], enriched["label2"])
+    ]
+    enriched["delta_t_centered_by_pair_offset"] = (
+        pd.to_numeric(enriched["delta_t_corrected"], errors="coerce")
+        - pd.to_numeric(enriched["pair_offset_used"], errors="coerce")
+    )
+    enriched["delta_t_after_tsum_cal"] = (
+        pd.to_numeric(enriched["T_sum_2"], errors="coerce")
+        + pd.to_numeric(enriched["T_sum_cal_2"], errors="coerce")
+        - pd.to_numeric(enriched["T_sum_1"], errors="coerce")
+        - pd.to_numeric(enriched["T_sum_cal_1"], errors="coerce")
+        - pd.to_numeric(enriched["travel_time"], errors="coerce")
+    )
+    return enriched
+
+def _save_tsum_pair_residuals(pair_residuals_df: pd.DataFrame) -> str | None:
+    if not save_time_slewing_pair_residuals:
+        print("T_sum pair residual table export skipped: save_time_slewing_pair_residuals is false.")
+        return None
+    if pair_residuals_df.empty:
+        print("Warning: no T_sum pair residual rows available to save.")
+        return None
+    output_dir = os.path.join(base_directories["ancillary_directory"], "TIME_SLEWING_PAIR_RESIDUALS")
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(
+        output_dir,
+        f"{basename_no_ext}_time_slewing_pair_residuals.parquet",
+    )
+    pair_residuals_df.to_parquet(output_path, index=False)
+    print(f"Saved T_sum pair residual table: {output_path}")
+    return output_path
+
+def plot_slewing_pair_delta_t_qsum1_qsum2_contours(
+    pair_residuals_df: pd.DataFrame,
+    *,
+    min_points_for_contour: int = 50,
+) -> None:
+    global fig_idx
+    if not task2_plot_requested("slewing_pair_delta_t_qsum1_qsum2_contour", essential=True):
+        return
+    if pair_residuals_df.empty:
+        print("Warning: no pair residual data available for slewing contour plots.")
+        return
+
+    target_column = None
+    for candidate in (
+        "delta_t_after_tsum_cal",
+        "delta_t_centered_by_pair_offset",
+        "delta_t_corrected",
+    ):
+        if candidate in pair_residuals_df.columns:
+            target_column = candidate
+            break
+    if target_column is None:
+        print("Warning: no delta-t residual column available for slewing contour plots.")
+        return
+
+    pair_keys = (
+        pair_residuals_df[["label1", "label2"]]
+        .drop_duplicates()
+        .sort_values(["label1", "label2"])
+        .itertuples(index=False, name=None)
+    )
+    for label1, label2 in pair_keys:
+        pair_df = pair_residuals_df[
+            (pair_residuals_df["label1"] == label1)
+            & (pair_residuals_df["label2"] == label2)
+        ]
+        qsum1_column = _slewing_qsum_column("Q_sum_1")
+        qsum2_column = _slewing_qsum_column("Q_sum_2")
+        if qsum1_column not in pair_df.columns or qsum2_column not in pair_df.columns:
+            print(
+                f"Warning: skipping {label1}-{label2}; missing slewing Q columns "
+                f"{qsum1_column}/{qsum2_column}."
+            )
+            continue
+        x = pd.to_numeric(pair_df[qsum1_column], errors="coerce").to_numpy(dtype=float)
+        y = pd.to_numeric(pair_df[qsum2_column], errors="coerce").to_numpy(dtype=float)
+        z = pd.to_numeric(pair_df[target_column], errors="coerce").to_numpy(dtype=float)
+        valid = np.isfinite(x) & np.isfinite(y) & np.isfinite(z)
+        if not bool(config.get("slewing_use_log_qsum", False)):
+            valid &= (x != 0) & (y != 0)
+        x = x[valid]
+        y = y[valid]
+        z = z[valid]
+
+        fig, ax = plt.subplots(figsize=(7, 6), constrained_layout=True)
+        if len(x) < min_points_for_contour:
+            ax.text(
+                0.5,
+                0.5,
+                "Not enough valid events",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
+        else:
+            statistic, x_edges, y_edges, _ = binned_statistic_2d(
+                x,
+                y,
+                z,
+                statistic="median",
+                bins=40,
+            )
+            mesh = ax.pcolormesh(
+                x_edges,
+                y_edges,
+                statistic.T,
+                shading="auto",
+                cmap="coolwarm",
+            )
+            fig.colorbar(mesh, ax=ax, label=target_column)
+        ax.set_xlabel(_slewing_qsum_axis_label("Q_sum_1"))
+        ax.set_ylabel(_slewing_qsum_axis_label("Q_sum_2"))
+        ax.set_title(
+            "Slewing preparation: ΔT vs "
+            f"{_slewing_qsum_axis_label('Q_sum_1')},"
+            f"{_slewing_qsum_axis_label('Q_sum_2')} | "
+            f"{label1} - {label2} | N={len(x)} | {target_column}"
+        )
+        ax.grid(True, alpha=0.25)
+
+        if save_plots:
+            safe_label1 = str(label1).replace(" ", "")
+            safe_label2 = str(label2).replace(" ", "")
+            final_filename = (
+                f"{fig_idx}_slewing_pair_delta_t_qsum1_qsum2_contour_"
+                f"{safe_label1}_{safe_label2}.png"
+            )
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            save_plot_figure(
+                save_fig_path,
+                fig=fig,
+                alias="slewing_pair_delta_t_qsum1_qsum2_contour",
+                format="png",
+                dpi=150,
+            )
+        if show_plots:
+            plt.show()
+        plt.close(fig)
+
+def plot_slewing_delta_t_vs_qsum2_by_qsum1_bins(
+    pair_residuals_df: pd.DataFrame,
+    *,
+    n_qsum1_bins: int | None = None,
+    n_qsum2_bins: int | None = None,
+    min_points_per_qsum1_bin: int = 100,
+    min_points_per_qsum2_bin: int = 10,
+) -> None:
+    global fig_idx
+    alias = "slewing_delta_t_vs_qsum2_by_qsum1_bins"
+    if not task2_plot_requested(alias, essential=True):
+        return
+    if pair_residuals_df.empty:
+        print("Warning: no pair residual data available for Q_sum_2 profile slewing plots.")
+        return
+    if n_qsum1_bins is None:
+        n_qsum1_bins = int(config.get("slewing_delta_t_qsum1_bins", 5))
+    if n_qsum2_bins is None:
+        n_qsum2_bins = int(config.get("slewing_delta_t_qsum2_bins", 30))
+    if n_qsum1_bins < 1 or n_qsum2_bins < 1:
+        print(
+            "Warning: slewing_delta_t_vs_qsum2_by_qsum1_bins requires "
+            f"positive bin counts; got Q_sum_1={n_qsum1_bins}, Q_sum_2={n_qsum2_bins}."
+        )
+        return
+
+    pair_keys = (
+        pair_residuals_df[["label1", "label2"]]
+        .drop_duplicates()
+        .sort_values(["label1", "label2"])
+        .itertuples(index=False, name=None)
+    )
+    for label1, label2 in pair_keys:
+        pair_df = pair_residuals_df[
+            (pair_residuals_df["label1"] == label1)
+            & (pair_residuals_df["label2"] == label2)
+        ].copy()
+        qsum1_column = _slewing_qsum_column("Q_sum_1")
+        qsum2_column = _slewing_qsum_column("Q_sum_2")
+        if qsum1_column not in pair_df.columns or qsum2_column not in pair_df.columns:
+            print(
+                f"Warning: skipping {label1}-{label2}; missing slewing Q columns "
+                f"{qsum1_column}/{qsum2_column}."
+            )
+            continue
+
+        delta_t_column = None
+        for candidate in [
+            "delta_t_after_tsum_cal",
+            "delta_t_centered_by_pair_offset",
+            "delta_t_corrected",
+        ]:
+            if candidate in pair_df.columns:
+                delta_t_column = candidate
+                break
+        if delta_t_column is None:
+            print(f"Warning: skipping {label1}-{label2}; no delta-t residual column available.")
+            continue
+
+        qsum1 = pd.to_numeric(pair_df[qsum1_column], errors="coerce")
+        qsum2 = pd.to_numeric(pair_df[qsum2_column], errors="coerce")
+        delta_t = pd.to_numeric(pair_df[delta_t_column], errors="coerce")
+        valid = (
+            np.isfinite(qsum1)
+            & np.isfinite(qsum2)
+            & np.isfinite(delta_t)
+        )
+        if not bool(config.get("slewing_use_log_qsum", False)):
+            valid &= (qsum1 != 0) & (qsum2 != 0)
+        pair_df = pair_df.loc[valid].copy()
+        pair_df["_slewing_Q_sum_1"] = qsum1.loc[valid].to_numpy(dtype=float)
+        pair_df["_slewing_Q_sum_2"] = qsum2.loc[valid].to_numpy(dtype=float)
+        pair_df[delta_t_column] = delta_t.loc[valid].to_numpy(dtype=float)
+        if len(pair_df) < min_points_per_qsum1_bin * 2:
+            print(
+                f"Warning: skipping {label1}-{label2}; not enough valid events "
+                f"for Q_sum_1-bin profiles ({len(pair_df)})."
+            )
+            continue
+
+        try:
+            pair_df["Q_sum_1_bin"] = pd.qcut(
+                pair_df["_slewing_Q_sum_1"],
+                q=n_qsum1_bins,
+                duplicates="drop",
+            )
+        except ValueError:
+            pair_df["Q_sum_1_bin"] = pd.cut(
+                pair_df["_slewing_Q_sum_1"],
+                bins=n_qsum1_bins,
+            )
+        pair_df = pair_df.dropna(subset=["Q_sum_1_bin"])
+        qsum1_bins = pair_df["Q_sum_1_bin"].dropna().unique()
+        if len(qsum1_bins) < 2:
+            print(f"Warning: skipping {label1}-{label2}; fewer than two valid Q_sum_1 bins.")
+            continue
+
+        fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
+        scatter_sample = pair_df.sample(n=min(len(pair_df), 3000), random_state=0)
+        ax.scatter(
+            scatter_sample[delta_t_column],
+            scatter_sample["_slewing_Q_sum_2"],
+            s=3,
+            alpha=0.2,
+            color="0.35",
+            label="_nolegend_",
+        )
+
+        plotted_profiles = 0
+        for qsum1_bin, group in pair_df.groupby("Q_sum_1_bin", observed=True):
+            if len(group) < min_points_per_qsum1_bin:
+                continue
+            group = group.copy()
+            group["Q_sum_2_bin"] = pd.cut(group["_slewing_Q_sum_2"], bins=n_qsum2_bins)
+            profile = (
+                group.groupby("Q_sum_2_bin", observed=True)
+                .agg(
+                    qsum2_center=("_slewing_Q_sum_2", "median"),
+                    delta_t_median=(delta_t_column, "median"),
+                    delta_t_std=(delta_t_column, "std"),
+                    n=(delta_t_column, "size"),
+                )
+                .reset_index()
+            )
+            profile = profile[profile["n"] >= min_points_per_qsum2_bin]
+            if profile.empty:
+                continue
+            ax.plot(
+                profile["delta_t_median"],
+                profile["qsum2_center"],
+                marker="o",
+                markersize=3,
+                linewidth=1.5,
+                label=str(qsum1_bin),
+            )
+            plotted_profiles += 1
+
+        if plotted_profiles == 0:
+            plt.close(fig)
+            print(f"Warning: skipping {label1}-{label2}; no Q_sum_1 bins had enough Q_sum_2 profile points.")
+            continue
+
+        ax.set_title(
+            f"{_slewing_qsum_axis_label('Q_sum_2')} vs ΔT by "
+            f"{_slewing_qsum_axis_label('Q_sum_1')} bins | "
+            f"{label1} - {label2} | N={len(pair_df)}"
+        )
+        ax.set_ylabel(_slewing_qsum_axis_label("Q_sum_2"))
+        ax.set_xlabel(delta_t_column)
+        ax.grid(True, alpha=0.25)
+        ax.legend(title=f"{_slewing_qsum_axis_label('Q_sum_1')} bins", fontsize="small")
+
+        if save_plots:
+            safe_label1 = str(label1).replace(" ", "")
+            safe_label2 = str(label2).replace(" ", "")
+            final_filename = (
+                f"{fig_idx}_slewing_delta_t_vs_qsum2_by_qsum1_bins_"
+                f"{safe_label1}_{safe_label2}.png"
+            )
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            save_plot_figure(
+                save_fig_path,
+                fig=fig,
+                alias=alias,
+                format="png",
+                dpi=150,
+            )
+        if show_plots:
+            plt.show()
+        plt.close(fig)
+
+
+def plot_slewing_delta_t_vs_qsum2_by_qsum1_bins_fit(
+    pair_residuals_df: pd.DataFrame,
+    *,
+    n_qsum1_bins: int | None = None,
+    n_qsum2_bins: int | None = None,
+    min_points_per_qsum1_bin: int = 100,
+    min_points_per_qsum2_bin: int = 10,
+) -> pd.DataFrame:
+    global fig_idx
+    alias = "slewing_delta_t_vs_qsum2_by_qsum1_bins_fit"
+    if not task2_plot_requested(alias, essential=True):
+        return pd.DataFrame()
+    if pair_residuals_df.empty:
+        print("Warning: no pair residual data available for fitted Q_sum_2 profile slewing plots.")
+        return pd.DataFrame()
+
+    if n_qsum1_bins is None:
+        n_qsum1_bins = int(config.get("slewing_delta_t_qsum1_bins", 5))
+    if n_qsum2_bins is None:
+        n_qsum2_bins = int(config.get("slewing_delta_t_qsum2_bins", 30))
+    fit_degree = int(config.get("slewing_delta_t_fit_degree", 1))
+    if n_qsum1_bins < 1 or n_qsum2_bins < 1 or fit_degree < 0:
+        print(
+            "Warning: fitted slewing Q_sum profile requires positive bin counts "
+            f"and non-negative degree; got Q_sum_1={n_qsum1_bins}, "
+            f"Q_sum_2={n_qsum2_bins}, degree={fit_degree}."
+        )
+        return pd.DataFrame()
+
+    fit_rows: list[dict[str, float | int | str]] = []
+    pair_keys = (
+        pair_residuals_df[["label1", "label2"]]
+        .drop_duplicates()
+        .sort_values(["label1", "label2"])
+        .itertuples(index=False, name=None)
+    )
+    for label1, label2 in pair_keys:
+        pair_df = pair_residuals_df[
+            (pair_residuals_df["label1"] == label1)
+            & (pair_residuals_df["label2"] == label2)
+        ].copy()
+        qsum1_column = _slewing_qsum_column("Q_sum_1")
+        qsum2_column = _slewing_qsum_column("Q_sum_2")
+        if qsum1_column not in pair_df.columns or qsum2_column not in pair_df.columns:
+            print(
+                f"Warning: skipping fitted profile {label1}-{label2}; missing slewing Q columns "
+                f"{qsum1_column}/{qsum2_column}."
+            )
+            continue
+
+        delta_t_column = _slewing_delta_t_column(pair_df)
+        if delta_t_column is None:
+            print(f"Warning: skipping {label1}-{label2}; no delta-t residual column available.")
+            continue
+
+        qsum1 = pd.to_numeric(pair_df[qsum1_column], errors="coerce")
+        qsum2 = pd.to_numeric(pair_df[qsum2_column], errors="coerce")
+        delta_t = pd.to_numeric(pair_df[delta_t_column], errors="coerce")
+        valid = np.isfinite(qsum1) & np.isfinite(qsum2) & np.isfinite(delta_t)
+        if not bool(config.get("slewing_use_log_qsum", False)):
+            valid &= (qsum1 != 0) & (qsum2 != 0)
+        pair_df = pair_df.loc[valid].copy()
+        pair_df["_slewing_Q_sum_1"] = qsum1.loc[valid].to_numpy(dtype=float)
+        pair_df["_slewing_Q_sum_2"] = qsum2.loc[valid].to_numpy(dtype=float)
+        pair_df[delta_t_column] = delta_t.loc[valid].to_numpy(dtype=float)
+        if len(pair_df) < min_points_per_qsum1_bin * 2:
+            print(
+                f"Warning: skipping fitted profile {label1}-{label2}; not enough valid events "
+                f"for Q_sum_1-bin profiles ({len(pair_df)})."
+            )
+            continue
+
+        try:
+            pair_df["Q_sum_1_bin"] = pd.qcut(
+                pair_df["_slewing_Q_sum_1"],
+                q=n_qsum1_bins,
+                duplicates="drop",
+            )
+        except ValueError:
+            pair_df["Q_sum_1_bin"] = pd.cut(
+                pair_df["_slewing_Q_sum_1"],
+                bins=n_qsum1_bins,
+            )
+        pair_df = pair_df.dropna(subset=["Q_sum_1_bin"])
+        if pair_df["Q_sum_1_bin"].dropna().nunique() < 2:
+            print(f"Warning: skipping fitted profile {label1}-{label2}; fewer than two valid Q_sum_1 bins.")
+            continue
+
+        pair_df["delta_t_slewing_corrected"] = np.nan
+        fig, axes = plt.subplots(
+            2,
+            2,
+            figsize=(15, 8),
+            constrained_layout=True,
+            gridspec_kw={"height_ratios": [3.0, 1.15]},
+        )
+        profile_axes = axes[0]
+        hist_axes = axes[1]
+        scatter_sample = pair_df.sample(n=min(len(pair_df), 3000), random_state=0)
+        profile_axes[0].scatter(
+            scatter_sample[delta_t_column],
+            scatter_sample["_slewing_Q_sum_2"],
+            s=3,
+            alpha=0.16,
+            color="0.35",
+            label="_nolegend_",
+        )
+
+        plotted_fits = 0
+        for qsum1_bin, group in pair_df.groupby("Q_sum_1_bin", observed=True):
+            if len(group) < min_points_per_qsum1_bin:
+                continue
+            group = group.copy()
+            group["Q_sum_2_bin"] = pd.cut(group["_slewing_Q_sum_2"], bins=n_qsum2_bins)
+            profile = (
+                group.groupby("Q_sum_2_bin", observed=True)
+                .agg(
+                    qsum2_center=("_slewing_Q_sum_2", "median"),
+                    delta_t_median=(delta_t_column, "median"),
+                    n=(delta_t_column, "size"),
+                )
+                .reset_index()
+            )
+            profile = profile[profile["n"] >= min_points_per_qsum2_bin]
+            profile = profile.replace([np.inf, -np.inf], np.nan).dropna(
+                subset=["qsum2_center", "delta_t_median"]
+            )
+            if len(profile) < fit_degree + 1:
+                continue
+
+            x_fit_data = profile["qsum2_center"].to_numpy(dtype=float)
+            y_fit_data = profile["delta_t_median"].to_numpy(dtype=float)
+            coeffs = np.polyfit(x_fit_data, y_fit_data, deg=fit_degree)
+            polynomial_fit = np.poly1d(coeffs)
+
+            group_index = group.index
+            corrected_values = (
+                group[delta_t_column].to_numpy(dtype=float)
+                - polynomial_fit(group["_slewing_Q_sum_2"].to_numpy(dtype=float))
+            )
+            pair_df.loc[group_index, "delta_t_slewing_corrected"] = corrected_values
+            corrected_group = group.copy()
+            corrected_group["delta_t_slewing_corrected"] = corrected_values
+
+            qsum2_line = np.linspace(np.nanmin(x_fit_data), np.nanmax(x_fit_data), 200)
+            delta_t_line = polynomial_fit(qsum2_line)
+            profile_axes[0].plot(
+                y_fit_data,
+                x_fit_data,
+                marker="o",
+                markersize=3,
+                linewidth=1.2,
+                label=str(qsum1_bin),
+            )
+            profile_axes[0].plot(
+                delta_t_line,
+                qsum2_line,
+                linestyle="--",
+                linewidth=1.4,
+                color=profile_axes[0].lines[-1].get_color(),
+                label="_nolegend_",
+            )
+
+            corrected_profile = (
+                corrected_group
+                .dropna(subset=["delta_t_slewing_corrected"])
+                .groupby("Q_sum_2_bin", observed=True)
+                .agg(
+                    qsum2_center=("_slewing_Q_sum_2", "median"),
+                    delta_t_median=("delta_t_slewing_corrected", "median"),
+                    n=("delta_t_slewing_corrected", "size"),
+                )
+                .reset_index()
+            )
+            corrected_profile = corrected_profile[corrected_profile["n"] >= min_points_per_qsum2_bin]
+            if not corrected_profile.empty:
+                profile_axes[1].plot(
+                    corrected_profile["delta_t_median"],
+                    corrected_profile["qsum2_center"],
+                    marker="o",
+                    markersize=3,
+                    linewidth=1.2,
+                    label=str(qsum1_bin),
+                )
+
+            fit_row = {
+                "label1": str(label1),
+                "label2": str(label2),
+                "qsum1_bin": str(qsum1_bin),
+                "qsum1_left": float(qsum1_bin.left) if isinstance(qsum1_bin, pd.Interval) else float(np.nanmin(group["_slewing_Q_sum_1"])),
+                "qsum1_right": float(qsum1_bin.right) if isinstance(qsum1_bin, pd.Interval) else float(np.nanmax(group["_slewing_Q_sum_1"])),
+                "qsum1_closed": str(qsum1_bin.closed) if isinstance(qsum1_bin, pd.Interval) else "both",
+                "degree": int(fit_degree),
+                "n_profile_points": int(len(profile)),
+                "n_events": int(len(group)),
+                "delta_t_column": delta_t_column,
+            }
+            for coeff_idx, coeff in enumerate(coeffs):
+                power = fit_degree - coeff_idx
+                fit_row[f"coeff_power_{power}"] = float(coeff)
+            fit_rows.append(fit_row)
+            plotted_fits += 1
+
+        corrected_valid = pair_df.dropna(subset=["delta_t_slewing_corrected"])
+        if corrected_valid.empty or plotted_fits == 0:
+            plt.close(fig)
+            print(f"Warning: skipping fitted profile {label1}-{label2}; no fitted Q_sum_1 bins.")
+            continue
+
+        corrected_scatter = corrected_valid.sample(n=min(len(corrected_valid), 3000), random_state=0)
+        profile_axes[1].scatter(
+            corrected_scatter["delta_t_slewing_corrected"],
+            corrected_scatter["_slewing_Q_sum_2"],
+            s=3,
+            alpha=0.16,
+            color="0.35",
+            label="_nolegend_",
+        )
+        raw_delta_values = pair_df[delta_t_column].to_numpy(dtype=float)
+        raw_delta_values = raw_delta_values[np.isfinite(raw_delta_values)]
+        corrected_delta_values = corrected_valid["delta_t_slewing_corrected"].to_numpy(dtype=float)
+        corrected_delta_values = corrected_delta_values[np.isfinite(corrected_delta_values)]
+        combined_delta_values = np.concatenate([raw_delta_values, corrected_delta_values])
+        if combined_delta_values.size:
+            x_left, x_right = np.nanpercentile(combined_delta_values, [0.5, 99.5])
+            if not np.isfinite(x_left) or not np.isfinite(x_right) or x_left == x_right:
+                x_left = float(np.nanmin(combined_delta_values) - 0.5)
+                x_right = float(np.nanmax(combined_delta_values) + 0.5)
+            padding = 0.05 * max(x_right - x_left, 1e-6)
+            shared_xlim = (x_left - padding, x_right + padding)
+        else:
+            shared_xlim = (-1.0, 1.0)
+
+        def _plot_delta_histogram(ax, values: np.ndarray, title: str, color: str) -> None:
+            values = values[np.isfinite(values)]
+            if values.size == 0:
+                ax.text(0.5, 0.5, "No valid data", ha="center", va="center", transform=ax.transAxes)
+                ax.set_title(title)
+                return
+            ax.hist(values, bins=80, alpha=0.65, color=color, density=False, label=f"N={len(values)}")
+            if values.size >= 2:
+                mu, sigma = norm.fit(values)
+                if np.isfinite(sigma) and sigma > 0:
+                    x_line = np.linspace(shared_xlim[0], shared_xlim[1], 300)
+                    bin_width = (shared_xlim[1] - shared_xlim[0]) / 80.0
+                    y_line = norm.pdf(x_line, mu, sigma) * len(values) * bin_width
+                    ax.plot(
+                        x_line,
+                        y_line,
+                        color="black",
+                        linewidth=1.2,
+                        label=f"Gaussian sigma={sigma:.3g}",
+                    )
+            ax.set_title(title)
+            ax.legend(fontsize="small")
+
+        _plot_delta_histogram(hist_axes[0], raw_delta_values, "DeltaT projection before", "tab:blue")
+        _plot_delta_histogram(hist_axes[1], corrected_delta_values, "DeltaT projection after", "tab:green")
+
+        for ax in profile_axes:
+            ax.axvline(0.0, color="black", linestyle=":", linewidth=1.0, alpha=0.8)
+            ax.set_ylabel(_slewing_qsum_axis_label("Q_sum_2"))
+            ax.grid(True, alpha=0.25)
+            ax.legend(title=f"{_slewing_qsum_axis_label('Q_sum_1')} bins", fontsize="small")
+            ax.set_xlim(shared_xlim)
+        for ax in hist_axes:
+            ax.axvline(0.0, color="black", linestyle=":", linewidth=1.0, alpha=0.8)
+            ax.set_xlim(shared_xlim)
+            ax.set_xlabel("DeltaT")
+            ax.set_ylabel("Counts")
+            ax.grid(True, alpha=0.25)
+
+        profile_axes[0].set_xlabel(delta_t_column)
+        profile_axes[1].set_xlabel("delta_t_slewing_corrected")
+        profile_axes[0].set_title("Profile centroids with polynomial fits")
+        profile_axes[1].set_title("Event data after subtracting fitted charge trend")
+        fig.suptitle(
+            f"Slewing profile fit | {label1} - {label2} | "
+            f"degree={fit_degree} | {_slewing_qsum_axis_label('Q_sum_2')} -> ΔT",
+            fontsize=12,
+        )
+
+        if save_plots:
+            safe_label1 = str(label1).replace(" ", "")
+            safe_label2 = str(label2).replace(" ", "")
+            final_filename = (
+                f"{fig_idx}_slewing_delta_t_vs_qsum2_by_qsum1_bins_fit_"
+                f"{safe_label1}_{safe_label2}.png"
+            )
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            save_plot_figure(
+                save_fig_path,
+                fig=fig,
+                alias=alias,
+                format="png",
+                dpi=150,
+            )
+        if show_plots:
+            plt.show()
+        plt.close(fig)
+
+    fit_df = pd.DataFrame(fit_rows)
+    if not fit_df.empty:
+        if save_time_slewing_pair_residuals:
+            output_dir = os.path.join(base_directories["ancillary_directory"], "TIME_SLEWING_PAIR_RESIDUALS")
+            os.makedirs(output_dir, exist_ok=True)
+            output_path = os.path.join(
+                output_dir,
+                f"{basename_no_ext}_slewing_delta_t_vs_qsum2_by_qsum1_bins_fit_coeffs.csv",
+            )
+            fit_df.to_csv(output_path, index=False)
+            print(f"Saved slewing Q-profile fit coefficients: {output_path}")
+        else:
+            print(
+                "Slewing Q-profile fit coefficient export skipped: "
+                "save_time_slewing_pair_residuals is false."
+            )
+    return fit_df
+
+
+def _slewing_fit_row_contains_qsum1(fit_row: pd.Series, qsum1: float) -> bool:
+    left = pd.to_numeric(fit_row.get("qsum1_left"), errors="coerce")
+    right = pd.to_numeric(fit_row.get("qsum1_right"), errors="coerce")
+    if not np.isfinite(left) or not np.isfinite(right) or not np.isfinite(qsum1):
+        return False
+    closed = str(fit_row.get("qsum1_closed", "right"))
+    left_ok = qsum1 >= left if closed in {"left", "both"} else qsum1 > left
+    right_ok = qsum1 <= right if closed in {"right", "both"} else qsum1 < right
+    return bool(left_ok and right_ok)
+
+def _slewing_fit_coefficients_from_row(fit_row: pd.Series) -> np.ndarray:
+    coeff_items: list[tuple[int, float]] = []
+    for column_name, value in fit_row.items():
+        if not str(column_name).startswith("coeff_power_"):
+            continue
+        try:
+            power = int(str(column_name).removeprefix("coeff_power_"))
+            coeff_value = float(value)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(coeff_value):
+            coeff_items.append((power, coeff_value))
+    coeff_items.sort(key=lambda item: item[0], reverse=True)
+    return np.asarray([coeff_value for _, coeff_value in coeff_items], dtype=float)
+
+def evaluate_existing_pair_slewing_fit(
+    fit_records: pd.DataFrame,
+    *,
+    qsum1: float,
+    qsum2: float,
+) -> float | None:
+    if fit_records.empty or not np.isfinite(qsum1) or not np.isfinite(qsum2):
+        return None
+    for _, fit_row in fit_records.iterrows():
+        if not _slewing_fit_row_contains_qsum1(fit_row, qsum1):
+            continue
+        coeffs = _slewing_fit_coefficients_from_row(fit_row)
+        if coeffs.size == 0:
+            return None
+        try:
+            value = float(np.polyval(coeffs, qsum2))
+        except (TypeError, ValueError, FloatingPointError):
+            return None
+        return value if np.isfinite(value) else None
+    return None
+
+def plot_slewing_per_strip_from_pair_fit(
+    pair_residuals_df: pd.DataFrame,
+    slewing_fit_df: pd.DataFrame,
+) -> pd.DataFrame:
+    global fig_idx
+    alias = "slewing_per_strip_from_pair_fit"
+    if not task2_plot_requested(alias, essential=True):
+        return pd.DataFrame()
+    if pair_residuals_df.empty:
+        print("Warning: no pair residual data available for per-strip slewing diagnostic.")
+        return pd.DataFrame()
+    if slewing_fit_df.empty:
+        print("Warning: no fitted pair slewing records available for per-strip slewing diagnostic.")
+        return pd.DataFrame()
+    required_columns = {
+        "row_index",
+        "label1",
+        "label2",
+        "Q_sum_1",
+        "Q_sum_2",
+        "T_sum_1",
+        "T_sum_2",
+    }
+    missing_columns = required_columns.difference(pair_residuals_df.columns)
+    if missing_columns:
+        print(
+            "Warning: per-strip slewing diagnostic skipped; missing pair residual columns: "
+            f"{sorted(missing_columns)}."
+        )
+        return pd.DataFrame()
+
+    fit_records_by_pair = {
+        (str(label1), str(label2)): group.copy()
+        for (label1, label2), group in slewing_fit_df.groupby(["label1", "label2"], observed=True)
+    }
+    if not fit_records_by_pair:
+        print("Warning: per-strip slewing diagnostic skipped; no usable pair fit groups.")
+        return pd.DataFrame()
+
+    points_by_strip: dict[str, dict[str, list[float]]] = {
+        f"P{plane}s{strip}": {"q": [], "s": []}
+        for plane in range(1, 5)
+        for strip in range(1, 5)
+    }
+    diagnostic_rows: list[dict[str, float | int | str]] = []
+    events_considered = 0
+    events_with_points = 0
+    skipped_insufficient_active = 0
+    skipped_missing_fits = 0
+
+    q_fit_1_column = _slewing_qsum_column("Q_sum_1")
+    q_fit_2_column = _slewing_qsum_column("Q_sum_2")
+    if q_fit_1_column not in pair_residuals_df.columns or q_fit_2_column not in pair_residuals_df.columns:
+        print(
+            "Warning: per-strip slewing diagnostic skipped; missing slewing fit "
+            f"Q columns {q_fit_1_column}/{q_fit_2_column}."
+        )
+        return pd.DataFrame()
+    work_columns = [
+        "row_index",
+        "label1",
+        "label2",
+        q_fit_1_column,
+        q_fit_2_column,
+        "Q_sum_1",
+        "Q_sum_2",
+        "T_sum_1",
+        "T_sum_2",
+    ]
+    work_columns = list(dict.fromkeys(work_columns))
+    work_df = pair_residuals_df.loc[:, work_columns].copy()
+    work_df[q_fit_1_column] = pd.to_numeric(work_df[q_fit_1_column], errors="coerce")
+    work_df[q_fit_2_column] = pd.to_numeric(work_df[q_fit_2_column], errors="coerce")
+    work_df["Q_sum_1"] = pd.to_numeric(work_df["Q_sum_1"], errors="coerce")
+    work_df["Q_sum_2"] = pd.to_numeric(work_df["Q_sum_2"], errors="coerce")
+    work_df["T_sum_1"] = pd.to_numeric(work_df["T_sum_1"], errors="coerce")
+    work_df["T_sum_2"] = pd.to_numeric(work_df["T_sum_2"], errors="coerce")
+    work_df = work_df.replace([np.inf, -np.inf], np.nan).dropna(
+        subset=[
+            q_fit_1_column,
+            q_fit_2_column,
+            "Q_sum_1",
+            "Q_sum_2",
+            "T_sum_1",
+            "T_sum_2",
+        ]
+    )
+    nonzero_pair_mask = (
+        (work_df["Q_sum_1"] != 0)
+        & (work_df["Q_sum_2"] != 0)
+        & (work_df["T_sum_1"] != 0)
+        & (work_df["T_sum_2"] != 0)
+    )
+    work_df = work_df.loc[nonzero_pair_mask].copy()
+    if work_df.empty:
+        print(
+            "Warning: per-strip slewing diagnostic skipped; no finite, nonzero "
+            "pair Q_sum/T_sum values."
+        )
+        return pd.DataFrame()
+
+    for row_index, event_df in work_df.groupby("row_index", sort=False):
+        events_considered += 1
+        charges: dict[str, float] = {}
+        pair_values: dict[tuple[str, str], float] = {}
+        event_missing_fit = False
+
+        for row in event_df.itertuples(index=False):
+            label1 = str(row.label1)
+            label2 = str(row.label2)
+            qfit1 = float(getattr(row, q_fit_1_column))
+            qfit2 = float(getattr(row, q_fit_2_column))
+            qplot1 = float(row.Q_sum_1)
+            qplot2 = float(row.Q_sum_2)
+            tsum1 = float(row.T_sum_1)
+            tsum2 = float(row.T_sum_2)
+            if (
+                not np.isfinite(qfit1)
+                or not np.isfinite(qfit2)
+                or not np.isfinite(qplot1)
+                or not np.isfinite(qplot2)
+                or not np.isfinite(tsum1)
+                or not np.isfinite(tsum2)
+                or qplot1 == 0
+                or qplot2 == 0
+                or tsum1 == 0
+                or tsum2 == 0
+            ):
+                continue
+            charges[label1] = max(charges.get(label1, -np.inf), qplot1)
+            charges[label2] = max(charges.get(label2, -np.inf), qplot2)
+
+            fit_records = fit_records_by_pair.get((label1, label2))
+            if fit_records is None:
+                event_missing_fit = True
+                continue
+            pair_fit_value = evaluate_existing_pair_slewing_fit(
+                fit_records,
+                qsum1=qfit1,
+                qsum2=qfit2,
+            )
+            if pair_fit_value is None:
+                event_missing_fit = True
+                continue
+            pair_values[(label1, label2)] = pair_fit_value
+            pair_values[(label2, label1)] = -pair_fit_value
+
+        active_labels = [
+            label
+            for label, charge in charges.items()
+            if np.isfinite(charge)
+        ]
+        if len(active_labels) < 2:
+            skipped_insufficient_active += 1
+            continue
+
+        reference_label = max(active_labels, key=lambda label: charges[label])
+        event_rows: list[dict[str, float | int | str]] = []
+        for label in active_labels:
+            if label == reference_label:
+                slewing_value = 0.0
+            else:
+                pair_key = (label, reference_label)
+                if pair_key not in pair_values:
+                    continue
+                slewing_value = float(pair_values[pair_key])
+            charge = float(charges[label])
+            event_rows.append(
+                {
+                    "row_index": row_index,
+                    "strip_id": label,
+                    "q_sum": charge,
+                    "slewing_value": slewing_value,
+                    "reference_strip_id": reference_label,
+                }
+            )
+
+        if len(event_rows) <= 1:
+            if event_missing_fit:
+                skipped_missing_fits += 1
+            else:
+                skipped_insufficient_active += 1
+            continue
+
+        events_with_points += 1
+        for point in event_rows:
+            strip_id = str(point["strip_id"])
+            if strip_id not in points_by_strip:
+                continue
+            q_value = float(point["q_sum"])
+            s_value = float(point["slewing_value"])
+            points_by_strip[strip_id]["q"].append(q_value)
+            points_by_strip[strip_id]["s"].append(s_value)
+            diagnostic_rows.append(point)
+
+    diagnostic_df = pd.DataFrame(diagnostic_rows)
+    if diagnostic_df.empty:
+        print(
+            "[SLEWING_PER_STRIP_FROM_PAIR_FIT] no plotted points; "
+            f"events_considered={events_considered} "
+            f"skipped_insufficient_active={skipped_insufficient_active} "
+            f"skipped_missing_fits={skipped_missing_fits}"
+        )
+        return diagnostic_df
+
+    def _plot_per_strip_figure(*, log_q_axis: bool) -> None:
+        global fig_idx
+        fig, axes = plt.subplots(4, 4, figsize=(18, 14), sharex=True, sharey=True, constrained_layout=True)
+        for plane in range(1, 5):
+            for strip in range(1, 5):
+                strip_id = f"P{plane}s{strip}"
+                ax = axes[plane - 1, strip - 1]
+                q_values = np.asarray(points_by_strip[strip_id]["q"], dtype=float)
+                s_values = np.asarray(points_by_strip[strip_id]["s"], dtype=float)
+                fee_effect_values = -s_values
+                valid = (
+                    np.isfinite(q_values)
+                    & np.isfinite(fee_effect_values)
+                    & (q_values != 0)
+                    & (fee_effect_values != 0)
+                )
+                if log_q_axis:
+                    valid &= q_values > 0.0
+                q_values = q_values[valid]
+                fee_effect_values = fee_effect_values[valid]
+                if q_values.size:
+                    ax.scatter(fee_effect_values, q_values, s=2, alpha=0.25, color="tab:blue")
+                    try:
+                        bin_count = min(20, max(4, int(np.sqrt(q_values.size))))
+                        bin_edges = np.linspace(
+                            np.nanmin(fee_effect_values),
+                            np.nanmax(fee_effect_values),
+                            bin_count + 1,
+                        )
+                        if np.unique(bin_edges).size > 1:
+                            bin_ids = np.digitize(fee_effect_values, bin_edges[1:-1], right=False)
+                            med_x: list[float] = []
+                            med_y: list[float] = []
+                            for bin_id in range(bin_count):
+                                bin_mask = bin_ids == bin_id
+                                if int(np.sum(bin_mask)) < 5:
+                                    continue
+                                med_x.append(float(np.nanmedian(fee_effect_values[bin_mask])))
+                                med_y.append(float(np.nanmedian(q_values[bin_mask])))
+                            if med_x:
+                                ax.plot(med_x, med_y, color="black", linewidth=1.1, alpha=0.9)
+                    except (TypeError, ValueError, FloatingPointError):
+                        pass
+                else:
+                    ax.text(0.5, 0.5, "No points", ha="center", va="center", transform=ax.transAxes)
+                ax.axvline(0.0, color="0.25", linestyle=":", linewidth=0.8)
+                if log_q_axis:
+                    ax.set_yscale("log")
+                ax.set_title(strip_id)
+                ax.grid(True, alpha=0.2)
+                if plane == 4:
+                    ax.set_xlabel("Estimated FEE T_sum effect")
+                if strip == 1:
+                    ax.set_ylabel("Q_sum" if not log_q_axis else "Q_sum (log scale)")
+
+        fig.suptitle(
+            "Per-strip FEE T_sum effect estimated from fitted pair corrections",
+            fontsize=14,
+        )
+        if save_plots:
+            q_axis_suffix = "logq" if log_q_axis else "linearq"
+            final_filename = f"{fig_idx}_slewing_per_strip_from_pair_fit_{q_axis_suffix}.png"
+            fig_idx += 1
+            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+            plot_list.append(save_fig_path)
+            save_plot_figure(
+                save_fig_path,
+                fig=fig,
+                alias=alias,
+                format="png",
+                dpi=150,
+            )
+        if show_plots:
+            plt.show()
+        plt.close(fig)
+
+    _plot_per_strip_figure(log_q_axis=False)
+    _plot_per_strip_figure(log_q_axis=True)
+
+    points_per_strip = diagnostic_df["strip_id"].value_counts().sort_index()
+    print(
+        "[SLEWING_PER_STRIP_FROM_PAIR_FIT] "
+        f"events_considered={events_considered} "
+        f"events_with_points={events_with_points} "
+        f"skipped_insufficient_active={skipped_insufficient_active} "
+        f"skipped_missing_fits={skipped_missing_fits} "
+        f"total_points={len(diagnostic_df)}"
+    )
+    print(
+        "[SLEWING_PER_STRIP_FROM_PAIR_FIT] points_per_strip="
+        + ", ".join(f"{strip_id}:{count}" for strip_id, count in points_per_strip.items())
+    )
+    return diagnostic_df
+
+
+def _slewing_delta_t_column(pair_residuals_df: pd.DataFrame) -> str | None:
+    for candidate in (
+        "delta_t_after_tsum_cal",
+        "delta_t_centered_by_pair_offset",
+        "delta_t_corrected",
+    ):
+        if candidate in pair_residuals_df.columns:
+            return candidate
+    return None
+
+def _apply_slewing_qsum_coordinate_transform(
+    pair_residuals_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Apply the configured Q coordinate for the slewing stage."""
+    if pair_residuals_df.empty:
+        return pair_residuals_df
+
+    transformed = pair_residuals_df.copy()
+    if not bool(config.get("slewing_use_log_qsum", False)):
+        return transformed
+
+    for column_name in ("Q_sum_1", "Q_sum_2"):
+        if column_name not in transformed.columns:
+            continue
+        q_values = pd.to_numeric(transformed[column_name], errors="coerce").to_numpy(dtype=float)
+        transformed[f"{column_name}_log"] = np.where(q_values > 0.0, np.log(q_values), np.nan)
+
+    print("Using dedicated log(Q_sum) columns for the slewing stage and slewing Q plots.")
+    return transformed
+
+def _slewing_qsum_column(base_label: str) -> str:
+    if bool(config.get("slewing_use_log_qsum", False)):
+        log_column = f"{base_label}_log"
+        return log_column
+    return base_label
+
+def _slewing_qsum_axis_label(base_label: str) -> str:
+    if bool(config.get("slewing_use_log_qsum", False)):
+        return f"log({base_label})"
+    return base_label
+
+def plot_slewing_delta_t_centroid_by_qsum_cuts(
+    pair_residuals_df: pd.DataFrame,
+    *,
+    min_events_per_pair: int = 100,
+    min_events_per_q_cut: int = 100,
+) -> pd.DataFrame:
+    global fig_idx
+    histogram_alias = "slewing_delta_t_centroid_by_qsum_cuts"
+    scatter_alias = "slewing_delta_t_centroid_vs_qsum_cut"
+    histogram_requested = task2_plot_requested(histogram_alias, essential=True)
+    scatter_requested = task2_plot_requested(scatter_alias, essential=True)
+    if not histogram_requested and not scatter_requested:
+        return pd.DataFrame()
+    if pair_residuals_df.empty:
+        print("Warning: no pair residual data available for Q-cut centroid slewing plots.")
+        return pd.DataFrame()
+
+    delta_t_column = _slewing_delta_t_column(pair_residuals_df)
+    if delta_t_column is None:
+        print("Warning: no delta-t residual column available for Q-cut centroid slewing plots.")
+        return pd.DataFrame()
+
+    work_df = pair_residuals_df.copy()
+    work_df["Q_sum_1"] = pd.to_numeric(work_df["Q_sum_1"], errors="coerce")
+    work_df["Q_sum_2"] = pd.to_numeric(work_df["Q_sum_2"], errors="coerce")
+    work_df[delta_t_column] = pd.to_numeric(work_df[delta_t_column], errors="coerce")
+    valid = (
+        np.isfinite(work_df["Q_sum_1"])
+        & np.isfinite(work_df["Q_sum_2"])
+        & np.isfinite(work_df[delta_t_column])
+        & (work_df["Q_sum_1"] > 0)
+        & (work_df["Q_sum_2"] > 0)
+    )
+    work_df = work_df.loc[valid].copy()
+    if work_df.empty:
+        print("Warning: no valid positive-Q rows available for Q-cut centroid slewing plots.")
+        return pd.DataFrame()
+
+    q_min = np.minimum(
+        work_df["Q_sum_1"].to_numpy(dtype=float),
+        work_df["Q_sum_2"].to_numpy(dtype=float),
+    )
+    q_cut_quantiles = np.asarray(config.get(
+        "slewing_delta_t_centroid_q_cut_quantiles",
+        [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
+    ), dtype=float)
+    q_cut_quantiles = q_cut_quantiles[
+        np.isfinite(q_cut_quantiles)
+        & (q_cut_quantiles >= 0.0)
+        & (q_cut_quantiles < 1.0)
+    ]
+    if q_cut_quantiles.size == 0:
+        q_cut_quantiles = np.asarray([0.0], dtype=float)
+    q_cuts = np.unique(np.quantile(q_min, q_cut_quantiles))
+
+    centroid_rows: list[dict[str, float | int | str]] = []
+    histogram_plot_count = 0
+    pair_keys = (
+        work_df[["plane1", "strip1", "plane2", "strip2", "label1", "label2"]]
+        .drop_duplicates()
+        .sort_values(["plane1", "strip1", "plane2", "strip2"])
+        .itertuples(index=False, name=None)
+    )
+    for plane1, strip1, plane2, strip2, label1, label2 in pair_keys:
+        pair_df = work_df[
+            (work_df["plane1"] == plane1)
+            & (work_df["strip1"] == strip1)
+            & (work_df["plane2"] == plane2)
+            & (work_df["strip2"] == strip2)
+        ].copy()
+        if len(pair_df) < min_events_per_pair:
+            continue
+
+        pair_centroid_rows: list[dict[str, float | int | str]] = []
+        fig = None
+        ax = None
+        if histogram_requested:
+            fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
+        for q_cut in q_cuts:
+            cut_df = pair_df[
+                (pair_df["Q_sum_1"] > q_cut)
+                & (pair_df["Q_sum_2"] > q_cut)
+            ]
+            if len(cut_df) < min_events_per_q_cut:
+                continue
+            delta_values = cut_df[delta_t_column].to_numpy(dtype=float)
+            centroid = summary(delta_values)
+            row = {
+                "plane1": int(plane1),
+                "strip1": int(strip1),
+                "plane2": int(plane2),
+                "strip2": int(strip2),
+                "label1": str(label1),
+                "label2": str(label2),
+                "q_cut": float(q_cut),
+                "centroid": float(centroid),
+                "n_events": int(len(delta_values)),
+                "delta_t_column": delta_t_column,
+            }
+            pair_centroid_rows.append(row)
+            if histogram_requested and ax is not None:
+                ax.hist(
+                    delta_values,
+                    bins=80,
+                    histtype="step",
+                    linewidth=1.2,
+                    alpha=0.85,
+                    label=f"Q>{q_cut:.3g}, N={len(delta_values)}, c={centroid:.3g}",
+                )
+
+        if pair_centroid_rows:
+            centroid_rows.extend(pair_centroid_rows)
+            if histogram_requested and ax is not None and fig is not None:
+                ax.set_title(
+                    "Delta-T distributions by Q_sum cut | "
+                    f"{label1} - {label2}"
+                )
+                ax.set_xlabel(delta_t_column)
+                ax.set_ylabel("Counts")
+                ax.grid(True, alpha=0.25)
+                ax.legend(fontsize="x-small")
+            if histogram_requested and save_plots and fig is not None:
+                safe_label1 = str(label1).replace(" ", "")
+                safe_label2 = str(label2).replace(" ", "")
+                final_filename = (
+                    f"{fig_idx}_slewing_delta_t_qcut_distributions_"
+                    f"{safe_label1}_{safe_label2}.png"
+                )
+                fig_idx += 1
+                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+                plot_list.append(save_fig_path)
+                save_plot_figure(
+                    save_fig_path,
+                    fig=fig,
+                    alias=histogram_alias,
+                    format="png",
+                    dpi=150,
+                )
+                histogram_plot_count += 1
+            if histogram_requested and show_plots:
+                plt.show()
+        if fig is not None:
+            plt.close(fig)
+
+    centroid_df = pd.DataFrame(centroid_rows)
+    if centroid_df.empty:
+        print("Warning: no Q-cut centroid rows passed the minimum event requirements.")
+        return centroid_df
+    if histogram_requested and save_plots and histogram_plot_count == 0:
+        print(
+            "Warning: Q-cut centroid rows were computed, but no per-pair "
+            "delta-T histogram files were saved."
+        )
+
+    if save_time_slewing_pair_residuals:
+        output_dir = os.path.join(base_directories["ancillary_directory"], "TIME_SLEWING_PAIR_RESIDUALS")
+        os.makedirs(output_dir, exist_ok=True)
+        centroid_csv_path = os.path.join(
+            output_dir,
+            f"{basename_no_ext}_time_slewing_qcut_centroids.csv",
+        )
+        centroid_df.to_csv(centroid_csv_path, index=False)
+        print(f"Saved Q-cut slewing centroid table: {centroid_csv_path}")
+    else:
+        print(
+            "Q-cut slewing centroid table export skipped: "
+            "save_time_slewing_pair_residuals is false."
+        )
+
+    fig, ax = plt.subplots(figsize=(9, 6), constrained_layout=True)
+    for (label1, label2), group in centroid_df.groupby(["label1", "label2"], observed=True):
+        ax.plot(
+            group["centroid"],
+            group["q_cut"],
+            marker="o",
+            markersize=3,
+            linewidth=0.8,
+            alpha=0.45,
+            label=f"{label1}-{label2}",
+        )
+    ax.scatter(
+        centroid_df["centroid"],
+        centroid_df["q_cut"],
+        s=8,
+        alpha=0.35,
+        color="black",
+        label="_nolegend_",
+    )
+    ax.set_title(
+        "Q_sum threshold vs Delta-T centroid "
+        f"({delta_t_column}, Q_sum_1 and Q_sum_2 > Q)"
+    )
+    ax.set_xlabel("Delta-T centroid")
+    ax.set_ylabel("Q threshold")
+    ax.grid(True, alpha=0.25)
+    if len(centroid_df[["label1", "label2"]].drop_duplicates()) <= 20:
+        ax.legend(fontsize="xx-small", ncol=2)
+
+    if save_plots:
+        final_filename = f"{fig_idx}_slewing_delta_t_centroid_vs_qcut.png"
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        save_plot_figure(
+            save_fig_path,
+            fig=fig,
+            alias=scatter_alias,
+            format="png",
+            dpi=150,
+        )
+    if show_plots:
+        plt.show()
+    plt.close(fig)
+    return centroid_df
 
 
 def task2_plot_enabled(alias: str) -> bool:
@@ -4221,6 +5939,12 @@ TASK2_SLEWING_OBSERVABLE_ALIASES: tuple[str, ...] = (
     "dx_vs_tsum",
     "dx_vs_travel_time",
     "tsum_pair_charge_correlations",
+    "slewing_pair_delta_t_qsum1_qsum2_contour",
+    "slewing_delta_t_vs_qsum2_by_qsum1_bins",
+    "slewing_delta_t_vs_qsum2_by_qsum1_bins_fit",
+    "slewing_per_strip_from_pair_fit",
+    "slewing_delta_t_centroid_by_qsum_cuts",
+    "slewing_delta_t_centroid_vs_qsum_cut",
     "slewing",
     "slewing_3d",
 )
@@ -4255,7 +5979,7 @@ _direct_pdf_temp_path: str | None = None
 atexit.register(close_direct_pdf_writer)
 
 CALIBRATION_METADATA_PATTERN = re.compile(
-    r"^P[1-4]_s[1-4]_(Q_FB_coeffs(?:__[0-9]+)?|Q_sum|Q_F|Q_B|T_sum|T_dif|crstlk_[A-Za-z0-9_]+)$"
+    r"^P[1-4]_s[1-4]_((?:Q_FB|Q_TDIF)_coeffs(?:__[0-9]+)?|Q_sum|Q_F|Q_B|T_sum|T_dif|crstlk_[A-Za-z0-9_]+)$"
 )
 # Warning Filters
 warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
@@ -4316,6 +6040,10 @@ config = resolve_step1_effective_task_config(
     log_fn=print,
 )
 process_only_qa_retry_files = bool(config.get("process_only_qa_retry_files", False))
+save_time_slewing_pair_residuals = _coerce_config_bool(
+    config.get("save_time_slewing_pair_residuals"),
+    default=True,
+)
 if process_only_qa_retry_files:
     print(
         "[QA_ONLY] Enabled by STEP_1 shared config: only files present in the active QA retry list will be processed."
@@ -4709,6 +6437,12 @@ task2_min_charge_event_share = float(np.clip(task2_min_charge_event_share, 0.0, 
 calibration_detector_charge_threshold = float(config.get("calibration_detector_charge_threshold", 75.0))
 calibration_plane_charge_threshold = float(config.get("calibration_plane_charge_threshold", 75.0))
 calibration_strip_charge_threshold = float(config.get("calibration_strip_charge_threshold", 75.0))
+task2_calibration_plane_topologies = _parse_task2_calibration_plane_topologies(
+    config.get("task2_calibration_plane_topologies")
+)
+task2_calibration_plane_topology_label = _format_task2_plane_topologies(
+    task2_calibration_plane_topologies
+)
 plot_only_calibration_detector_charge_hist_right_clip = _optional_config_float(
     config,
     "plot_only_calibration_detector_charge_hist_right_clip",
@@ -4756,6 +6490,7 @@ res_tdif_filter = config.get("res_tdif_filter", 1.0)
 # _resolve_station_mode selects the value for this station; missing → "make".
 charge_side_mode          = _resolve_station_mode(config["charge_side"],          station)
 charge_front_back_mode    = _resolve_station_mode(config["charge_front_back"],    station)
+q_dif_t_dif_correction_mode = _resolve_station_mode(config["q_dif_t_dif_correction"], station)
 time_calibration_mode     = _resolve_station_mode(config["time_calibration"],     station)
 time_dif_calibration_mode = _resolve_station_mode(config["time_dif_calibration"], station)
 
@@ -4783,6 +6518,14 @@ strip_speed_factor_of_c = config["strip_speed_factor_of_c"]
 validate_pos_cal = config["validate_pos_cal"]
 
 degree_of_polynomial = config["degree_of_polynomial"]
+q_dif_t_dif_degree = int(config.get("q_dif_t_dif_degree", 1))
+q_dif_t_dif_fit_tdif_left = float(config.get("q_dif_t_dif_fit_tdif_left", -10))
+q_dif_t_dif_fit_tdif_right = float(config.get("q_dif_t_dif_fit_tdif_right", 10))
+q_dif_t_dif_fit_qdif_abs = abs(float(config.get("q_dif_t_dif_fit_qdif_abs", 40)))
+q_dif_t_dif_fit_residual_abs = abs(float(config.get("q_dif_t_dif_fit_residual_abs", 4)))
+q_dif_t_dif_plot_tdif_left = float(config.get("q_dif_t_dif_plot_tdif_left", -10))
+q_dif_t_dif_plot_tdif_right = float(config.get("q_dif_t_dif_plot_tdif_right", 10))
+q_dif_t_dif_plot_qdif_abs = abs(float(config.get("q_dif_t_dif_plot_qdif_abs", 40)))
 
 # X
 strip_length = config["strip_length"]
@@ -5933,6 +7676,7 @@ _strict_calibration_mask = build_task2_strict_calibration_mask_from_raw(
     detector_charge_threshold=calibration_detector_charge_threshold,
     plane_charge_threshold=calibration_plane_charge_threshold,
     strip_charge_threshold=calibration_strip_charge_threshold,
+    allowed_topologies=task2_calibration_plane_topologies,
 )
 _strict_rows = int(np.count_nonzero(_strict_calibration_mask))
 print(
@@ -5941,14 +7685,14 @@ print(
     f"detector_q>{calibration_detector_charge_threshold:g} "
     f"plane_q>{calibration_plane_charge_threshold:g} "
     f"strip_q>{calibration_strip_charge_threshold:g} "
-    "allowed_topologies=1234,123,124,134,234"
+    f"allowed_topologies={task2_calibration_plane_topology_label}"
 )
 if _strict_rows == 0:
     raise RuntimeError(
         "Task 2 strict calibration sample is empty. "
         "Adjust calibration_detector_charge_threshold / calibration_plane_charge_threshold / "
         "calibration_strip_charge_threshold in config_filter_parameters_task_2.csv, or "
-        "review the allowed strict topologies (1234,123,124,134,234)."
+        f"review task2_calibration_plane_topologies ({task2_calibration_plane_topology_label})."
     )
 calibration_work_df = calibration_work_df.loc[_strict_calibration_mask].copy()
 calibration_work_df = build_task2_strip_component_columns(calibration_work_df)
@@ -5977,6 +7721,7 @@ _strict_qfb_mask = build_task2_qfb_calibration_mask_from_raw(
     detector_charge_threshold=calibration_detector_charge_threshold,
     plane_charge_threshold=calibration_plane_charge_threshold,
     strip_charge_threshold=calibration_strip_charge_threshold,
+    allowed_topologies=task2_calibration_plane_topologies,
 )
 _strict_qfb_rows = int(np.count_nonzero(_strict_qfb_mask))
 print(
@@ -5985,7 +7730,7 @@ print(
     f"detector_q>{calibration_detector_charge_threshold:g} "
     f"plane_q>{calibration_plane_charge_threshold:g} "
     f"strip_q>{calibration_strip_charge_threshold:g} "
-    "allowed_topologies=1234,123,124,134,234 multistrip_only=true"
+    f"allowed_topologies={task2_calibration_plane_topology_label} multistrip_only=true"
 )
 if _strict_qfb_rows > 0:
     calibration_work_df_qfb = calibration_work_df_qfb.loc[_strict_qfb_mask].copy()
@@ -5996,6 +7741,7 @@ if _strict_qfb_rows > 0:
             detector_charge_threshold=calibration_detector_charge_threshold,
             plane_charge_threshold=calibration_plane_charge_threshold,
             strip_charge_threshold=calibration_strip_charge_threshold,
+            allowed_topologies=task2_calibration_plane_topologies,
         )
     ].copy()
     calibration_work_df_qfb = build_task2_strip_component_columns(calibration_work_df_qfb)
@@ -6042,6 +7788,7 @@ if calibration_work_st_df is not None:
         detector_charge_threshold=calibration_detector_charge_threshold,
         plane_charge_threshold=calibration_plane_charge_threshold,
         strip_charge_threshold=calibration_strip_charge_threshold,
+        allowed_topologies=task2_calibration_plane_topologies,
     )
     _strict_st_rows = int(np.count_nonzero(_strict_st_mask))
     print(
@@ -6050,7 +7797,7 @@ if calibration_work_st_df is not None:
         f"detector_q>{calibration_detector_charge_threshold:g} "
         f"plane_q>{calibration_plane_charge_threshold:g} "
         f"strip_q>{calibration_strip_charge_threshold:g} "
-        "allowed_topologies=1234,123,124,134,234"
+        f"allowed_topologies={task2_calibration_plane_topology_label}"
     )
     if _strict_st_rows > 0:
         calibration_work_st_df = calibration_work_st_df.loc[_strict_st_mask].copy()
@@ -6087,6 +7834,7 @@ if calibration_work_st_df_qfb is not None:
         detector_charge_threshold=calibration_detector_charge_threshold,
         plane_charge_threshold=calibration_plane_charge_threshold,
         strip_charge_threshold=calibration_strip_charge_threshold,
+        allowed_topologies=task2_calibration_plane_topologies,
     )
     _strict_st_qfb_rows = int(np.count_nonzero(_strict_st_qfb_mask))
     print(
@@ -6095,7 +7843,7 @@ if calibration_work_st_df_qfb is not None:
         f"detector_q>{calibration_detector_charge_threshold:g} "
         f"plane_q>{calibration_plane_charge_threshold:g} "
         f"strip_q>{calibration_strip_charge_threshold:g} "
-        "allowed_topologies=1234,123,124,134,234 multistrip_only=true"
+        f"allowed_topologies={task2_calibration_plane_topology_label} multistrip_only=true"
     )
     if _strict_st_qfb_rows > 0:
         calibration_work_st_df_qfb = calibration_work_st_df_qfb.loc[_strict_st_qfb_mask].copy()
@@ -6106,6 +7854,7 @@ if calibration_work_st_df_qfb is not None:
                 detector_charge_threshold=calibration_detector_charge_threshold,
                 plane_charge_threshold=calibration_plane_charge_threshold,
                 strip_charge_threshold=calibration_strip_charge_threshold,
+                allowed_topologies=task2_calibration_plane_topologies,
             )
         ].copy()
         calibration_work_st_df_qfb = build_task2_strip_component_columns(calibration_work_st_df_qfb)
@@ -6245,22 +7994,26 @@ print(
 #   charge_front_back:    null=×1, file=×5,  make=×7
 #   time_calibration:     null=×1, file=×11, make=×13
 #   time_dif_calibration: null=×1, file=×17, make=×19
+#   q_dif_t_dif_correction: null=×1, file=×23, make=×29
 # Decode by divisibility: analysis_mode % 2 == 0 → charge_side=file, etc.
 _cs_prime  = {None: 1, "file": 2,  "make": 3 }[charge_side_mode]
 _cfb_prime = {None: 1, "file": 5,  "make": 7 }[charge_front_back_mode]
 _tc_prime  = {None: 1, "file": 11, "make": 13}[time_calibration_mode]
 _tdc_prime = {None: 1, "file": 17, "make": 19}[time_dif_calibration_mode]
-global_variables["analysis_mode"] = _cs_prime * _cfb_prime * _tc_prime * _tdc_prime
+_qtdif_prime = {None: 1, "file": 23, "make": 29}[q_dif_t_dif_correction_mode]
+global_variables["analysis_mode"] = _cs_prime * _cfb_prime * _tc_prime * _tdc_prime * _qtdif_prime
 print(
     f"analysis_mode={global_variables['analysis_mode']} "
     f"(charge_side={charge_side_mode}, charge_front_back={charge_front_back_mode}, "
-    f"time_calibration={time_calibration_mode}, time_dif_calibration={time_dif_calibration_mode})"
+    f"time_calibration={time_calibration_mode}, time_dif_calibration={time_dif_calibration_mode}, "
+    f"q_dif_t_dif_correction={q_dif_t_dif_correction_mode})"
 )
 
 # --- Load calibration CSV once if any calibration uses file mode ---
 _cal_csv_data = None
 if any(m == "file" for m in [charge_side_mode, charge_front_back_mode,
-                               time_calibration_mode, time_dif_calibration_mode]):
+                               time_calibration_mode, time_dif_calibration_mode,
+                               q_dif_t_dif_correction_mode]):
     _cal_csv_path = str(
         repo_root
         / "MASTER"
@@ -6284,6 +8037,9 @@ apply_charge_side           = (charge_side_mode in ["make", "file"])
 calculate_Q_FB_calibration  = (charge_front_back_mode == "make")
 apply_Q_FB_calibration      = (charge_front_back_mode in ["make", "file"])
 
+calculate_Q_TDIF_calibration = (q_dif_t_dif_correction_mode == "make")
+apply_Q_TDIF_calibration     = (q_dif_t_dif_correction_mode in ["make", "file"])
+
 calculate_T_sum_calibration = (time_calibration_mode == "make")
 apply_T_sum_calibration     = (time_calibration_mode in ["make", "file"])
 
@@ -6298,6 +8054,7 @@ defer_charge_calibration_until_post_time = True
 #   2) calibration-parameter application (working_df).
 qfb_deferred_updates: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]] = {}
 qfb_coefficients: dict[tuple[int, int], np.ndarray] = {}
+qtdif_coefficients: dict[tuple[int, int], np.ndarray] = {}
 t_sum_calibration_filter_left = task2_calibration_strip_t_sum_left
 t_sum_calibration_filter_right = task2_calibration_strip_t_sum_right
 charge_side_applied_to_calibration_df = False
@@ -6331,6 +8088,15 @@ if charge_front_back_mode == "file":
             _coeffs = _json.loads(_raw) if isinstance(_raw, str) else list(_raw)
             global_variables[f"P{_M}_s{_s}_Q_FB_coeffs"] = _coeffs
             qfb_coefficients[(_M, _s)] = np.asarray(_coeffs, dtype=float)
+
+if q_dif_t_dif_correction_mode == "file":
+    import json as _json
+    for _M in range(1, 5):
+        for _s in range(1, 5):
+            _raw = get_reprocessing_value(_cal_csv_data, f"P{_M}_s{_s}_Q_TDIF_coeffs")
+            _coeffs = _json.loads(_raw) if isinstance(_raw, str) else list(_raw)
+            global_variables[f"P{_M}_s{_s}_Q_TDIF_coeffs"] = _coeffs
+            qtdif_coefficients[(_M, _s)] = np.asarray(_coeffs, dtype=float)
 
 # print(Q_sum_calibration)
 
@@ -6462,7 +8228,7 @@ if apply_charge_side:
 
         if task2_plot_requested("grand_figure_q_pedestal", essential=True):
             # Create the grand figure for Q values
-            fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
+            fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10), sharex=True)  # Adjust the layout as necessary
             axes_Q = axes_Q.flatten()
 
             for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
@@ -7669,8 +9435,8 @@ print("----------------------------------------------------------------------")
 print("---------------- Charge diff calibration and filtering ---------------")
 print("----------------------------------------------------------------------")
 print(
-    "Deferring Q_dif pedestal calibration/filtering until after "
-    "time-diff/time-sum calibration and filtering."
+    "Deferring Q_dif pedestal calibration/filtering until the late "
+    "charge-calibration section."
 )
 
 _prof["s_q_dif_calibration_s"] = round(time.perf_counter() - _t_sec, 2)
@@ -7680,8 +9446,8 @@ print("----------------------------------------------------------------------")
 print("----------- Charge sum pedestal, calibration and filtering -----------")
 print("----------------------------------------------------------------------")
 print(
-    "Deferring Q_sum pedestal calibration/filtering until after "
-    "time-diff/time-sum calibration and filtering."
+    "Deferring Q_sum pedestal calibration/filtering until the late "
+    "charge-calibration section."
 )
 
 _prof["s_q_sum_calibration_s"] = round(time.perf_counter() - _t_sec, 2)
@@ -7846,6 +9612,13 @@ _slewing_plot_requests = {
         "dx_vs_tsum",
         "dx_vs_travel_time",
         "tsum_pair_charge_correlations",
+        "slewing_pair_delta_t_qsum1_qsum2_contour",
+        "slewing_delta_t_vs_qsum2_by_qsum1_bins",
+        "slewing_delta_t_centroid_by_qsum_cuts",
+        "slewing_delta_t_centroid_vs_qsum_cut",
+        "slewing",
+        "slewing_3d",
+        "slewing_3d_fitproj",
     }))
     for alias in TASK2_SLEWING_OBSERVABLE_ALIASES + TASK2_SLEWING_FIT_ALIASES
 }
@@ -7855,18 +9628,58 @@ _plot_tsum_spread_histograms_filtered_og = _slewing_plot_requests["tsum_spread_h
 _plot_dx_vs_tsum = _slewing_plot_requests["dx_vs_tsum"]
 _plot_dx_vs_travel_time = _slewing_plot_requests["dx_vs_travel_time"]
 _plot_tsum_pair_charge_correlations = _slewing_plot_requests["tsum_pair_charge_correlations"]
+_plot_slewing_pair_delta_t_qsum1_qsum2_contour = _slewing_plot_requests["slewing_pair_delta_t_qsum1_qsum2_contour"]
+_plot_slewing_delta_t_vs_qsum2_by_qsum1_bins = _slewing_plot_requests["slewing_delta_t_vs_qsum2_by_qsum1_bins"]
+_plot_slewing_delta_t_vs_qsum2_by_qsum1_bins_fit = _slewing_plot_requests["slewing_delta_t_vs_qsum2_by_qsum1_bins_fit"]
+_plot_slewing_per_strip_from_pair_fit = _slewing_plot_requests["slewing_per_strip_from_pair_fit"]
+_plot_slewing_delta_t_centroid_by_qsum_cuts = _slewing_plot_requests["slewing_delta_t_centroid_by_qsum_cuts"]
+_plot_slewing_delta_t_centroid_vs_qsum_cut = _slewing_plot_requests["slewing_delta_t_centroid_vs_qsum_cut"]
 _plot_slewing_histograms = _slewing_plot_requests["slewing"]
 _plot_slewing_3d = _slewing_plot_requests["slewing_3d"]
 _plot_slewing_3d_fitproj = _slewing_plot_requests["slewing_3d_fitproj"]
 _plot_slewing_fit_validation = _slewing_plot_requests["model_validation_simple"]
+if _plot_slewing_3d_fitproj or _plot_slewing_fit_validation:
+    print(
+        "Active slewing regression plots are disabled: no slewing fit is "
+        "performed in Task 2. Use slewing_pair_delta_t_qsum1_qsum2_contour "
+        "for current slewing-preparation diagnostics."
+    )
+    _plot_slewing_3d_fitproj = False
+    _plot_slewing_fit_validation = False
 _need_slewing_observables = slewing_correction or any(
     _slewing_plot_requests[alias] for alias in TASK2_SLEWING_OBSERVABLE_ALIASES + TASK2_SLEWING_FIT_ALIASES
 )
-_need_slewing_fit = slewing_correction or any(
-    _slewing_plot_requests[alias] for alias in TASK2_SLEWING_FIT_ALIASES
+_need_slewing_fit = False
+_defer_tsum_calibration_until_late_slot = True
+_need_time_pair_residuals = (
+    (not _defer_tsum_calibration_until_late_slot)
+    and (calculate_T_sum_calibration or _need_slewing_observables)
 )
 
-if _need_slewing_observables:
+y_lookup = {
+    1: y_pos_T[0],
+    2: y_pos_T[1],
+    3: y_pos_T[0],
+    4: y_pos_T[1],
+}
+time_pair_residuals_df = pd.DataFrame()
+pair_offset_lookup: dict[tuple[str, str], float] = {}
+if _need_time_pair_residuals:
+    time_pair_residuals_df = _build_tsum_pair_residuals(
+        calibration_work_df,
+        y_lookup=y_lookup,
+        z_positions=z_positions,
+        tdiff_to_x=tdiff_to_x,
+        c_mm_ns=c_mm_ns,
+    )
+    print(f"Built T_sum pair residual table with {len(time_pair_residuals_df)} rows.")
+    if slewing_correction:
+        print(
+            "slewing_correction=True: active slewing correction is currently disabled. "
+            "Saving pair-level T_sum residual and charge data for future slewing studies."
+        )
+
+if (not _defer_tsum_calibration_until_late_slot) and _need_slewing_observables:
 
     print("----------------------------------------------------------------------")
     if slewing_correction:
@@ -7881,81 +9694,7 @@ if _need_slewing_observables:
     if _requested_slewing_aliases:
         print("Requested slewing plot aliases:", ", ".join(_requested_slewing_aliases))
     
-    # Select desired columns
-    cols = calibration_work_df.columns
-    t_sum_cols   = [c for c in cols if 'T_sum' in c and '_final' not in c]
-    q_sum_cols   = [c for c in cols if 'Q_sum' in c and '_final' not in c]
-    t_dif_cols  = [c for c in cols if 'T_dif' in c and '_final' not in c]
-    type_col     = ['type'] if 'type' in cols else []
-
-    data_df_times = calibration_work_df[t_sum_cols]
-    data_df_charges = calibration_work_df[q_sum_cols]
-    data_df_tdiff = calibration_work_df[t_dif_cols]
-    type_series = calibration_work_df[type_col] if type_col else None
-
-    # Concatenate all relevant data with 'type' column
-    data_df_filt = pd.concat([data_df_charges, data_df_times, data_df_tdiff], axis=1)
-    data_slew = data_df_filt
-    
-    # Select y_pos for each plane
-    y_lookup = {
-        1: y_pos_T[0],
-        2: y_pos_T[1],
-        3: y_pos_T[0],
-        4: y_pos_T[1],
-    }
-    
-    # prepare arrays for thread workers to avoid DataFrame indexing inside threads
-    data_arrays: dict[str, np.ndarray] = {}
-    for col in t_sum_cols + q_sum_cols + t_dif_cols:
-        data_arrays[col] = calibration_work_df[col].values
-
-    pairs = [
-        (p1, s1, p2, s2)
-        for p1 in range(1, 5)
-        for s1 in range(1, 5)
-        for p2 in range(p1 + 1, 5)
-        for s2 in range(1, 5)
-    ]
-    slew_one_strip_masks = _task2_plane_one_strip_masks_from_components(calibration_work_df)
-    pair_topology_masks = {
-        pair: _task2_prefer_one_strip_mask(
-            slew_one_strip_masks.get(pair[0], {}).get(pair[1], np.zeros(len(calibration_work_df), dtype=bool))
-            & slew_one_strip_masks.get(pair[2], {}).get(pair[3], np.zeros(len(calibration_work_df), dtype=bool)),
-            label=f"P{pair[0]}s{pair[1]}_P{pair[2]}s{pair[3]} slewing",
-        )
-        for pair in pairs
-    }
-
-    results: list[pd.DataFrame] = []
-    # run pair computation in parallel; worker defined above
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        futures = {executor.submit(
-            _compute_slew_pair,
-            pair,
-            data_arrays,
-            pair_topology_masks,
-            y_lookup,
-            z_positions,
-            tdiff_to_x,
-            c_mm_ns,
-        ): pair for pair in pairs}
-        for fut in as_completed(futures):
-            df_pair = fut.result()
-            if df_pair is not None and not df_pair.empty:
-                results.append(df_pair)
-
-    # Concatenate all results
-    if results:
-        slew_df = pd.concat(results, ignore_index=True)
-    else:
-        # no valid data at all
-        slew_df = pd.DataFrame(columns=[
-            'plane1', 'strip1', 'plane2', 'strip2',
-            'Q_sum_semidiff', 'Q_sum_semisum',
-            'T_sum_corrected_diff', 'T_sum_diff',
-            'x_diff', 'travel_time'
-        ])
+    slew_df = time_pair_residuals_df
 
     if _plot_timing_summary:
         timing_summary_df = slew_df.copy()
@@ -7964,8 +9703,8 @@ if _need_slewing_observables:
 
         fig, axes = plt.subplots(1, 3, figsize=(15, 5), constrained_layout=True)
         timing_panels = (
-            ("T_sum_diff", "Original timing spread", "tab:red", (-5, 5)),
-            ("T_sum_corrected_diff", "Corrected timing spread", "tab:blue", (-5, 5)),
+            ("delta_t_sum_raw", "Original timing spread", "tab:red", (-5, 5)),
+            ("delta_t_corrected", "Corrected timing spread", "tab:blue", (-5, 5)),
             ("travel_time", "Travel time", "tab:green", None),
         )
         for ax, (column_name, title_text, color, x_limits) in zip(axes, timing_panels):
@@ -8032,7 +9771,7 @@ if _need_slewing_observables:
                     (slew_df["plane2"] == p2) & (slew_df["strip2"] == s2)
                 )
                 data = slew_df.loc[mask]
-                values = pd.to_numeric(data.get("T_sum_diff", pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
+                values = pd.to_numeric(data.get("delta_t_sum_raw", pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
                 values = values[np.isfinite(values)]
 
                 ax = axes[col_idx]
@@ -8041,7 +9780,7 @@ if _need_slewing_observables:
                 else:
                     ax.hist(values, bins=100, alpha=0.75, color="tab:orange")
                 ax.set_title(f"P{p1}S{s1} vs P{p2}S{s2}")
-                ax.set_xlabel("T_sum_diff (ns)")
+                ax.set_xlabel("delta_t_sum_raw (ns)")
                 ax.set_ylabel("Counts")
                 ax.set_xlim([-5, 5])
                 ax.grid(True, linestyle="--", alpha=0.5)
@@ -8094,7 +9833,7 @@ if _need_slewing_observables:
                     (slew_df["plane2"] == p2) & (slew_df["strip2"] == s2)
                 )
                 data = slew_df.loc[mask]
-                values = pd.to_numeric(data.get("T_sum_diff", pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
+                values = pd.to_numeric(data.get("delta_t_sum_raw", pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
                 values = values[np.isfinite(values) & (values != 0)]
 
                 ax = axes[col_idx]
@@ -8103,7 +9842,7 @@ if _need_slewing_observables:
                 else:
                     ax.hist(values, bins=100, alpha=0.75, color="tab:red")
                 ax.set_title(f"P{p1}S{s1} vs P{p2}S{s2}")
-                ax.set_xlabel("T_sum_diff (ns)")
+                ax.set_xlabel("delta_t_sum_raw (ns)")
                 ax.set_ylabel("Counts")
                 ax.set_xlim([-5, 5])
                 ax.grid(True, linestyle="--", alpha=0.5)
@@ -8169,21 +9908,21 @@ if _need_slewing_observables:
                 # Only use rows with valid x_diff and T values
                 valid_mask = (
                     (data['x_diff'] != 0) &
-                    (data['T_sum_corrected_diff'] != 0) &
-                    (data['T_sum_diff'] != 0)
+                    (data['delta_t_corrected'] != 0) &
+                    (data['delta_t_sum_raw'] != 0)
                 )
                 data = data[valid_mask]
 
                 x = data['x_diff']
-                t_uncorrected = data['T_sum_diff']
-                t_corrected = data['T_sum_corrected_diff']
+                t_uncorrected = data['delta_t_sum_raw']
+                t_corrected = data['delta_t_corrected']
 
-                # dx vs T_sum_diff (uncorrected)
+                # dx vs delta_t_sum_raw (uncorrected)
                 ax1 = axes[0, col_idx]
                 ax1.scatter(x, t_uncorrected, s=5, alpha=0.6, color='tab:red')
                 ax1.set_title(f"P{p1}S{s1} vs P{p2}S{s2} — Uncorrected")
                 ax1.set_xlabel("dx (mm)")
-                ax1.set_ylabel("T_sum_diff (ns)")
+                ax1.set_ylabel("delta_t_sum_raw (ns)")
                 ax1.set_xlim([-300, 300])
                 ax1.set_ylim([-5, 5])
 
@@ -8311,9 +10050,9 @@ if _need_slewing_observables:
                 )
                 data = slew_df.loc[mask].replace([np.inf, -np.inf], np.nan)
 
-                q_sum = pd.to_numeric(data.get("Q_sum_semisum", pd.Series(dtype=float)), errors="coerce")
-                q_dif = pd.to_numeric(data.get("Q_sum_semidiff", pd.Series(dtype=float)), errors="coerce")
-                t_corr = pd.to_numeric(data.get("T_sum_corrected_diff", pd.Series(dtype=float)), errors="coerce")
+                q_sum = pd.to_numeric(data.get("Q_sum_1", pd.Series(dtype=float)), errors="coerce")
+                q_dif = pd.to_numeric(data.get("Q_sum_2", pd.Series(dtype=float)), errors="coerce")
+                t_corr = pd.to_numeric(data.get("delta_t_corrected", pd.Series(dtype=float)), errors="coerce")
 
                 valid_sum = q_sum.notna() & t_corr.notna() & (q_sum != 0) & (t_corr != 0)
                 valid_dif = q_dif.notna() & t_corr.notna() & (t_corr != 0)
@@ -8324,8 +10063,8 @@ if _need_slewing_observables:
                 else:
                     ax_sum.text(0.5, 0.5, "No valid data", ha="center", va="center", transform=ax_sum.transAxes)
                 ax_sum.set_title(f"P{p1}S{s1} vs P{p2}S{s2}")
-                ax_sum.set_xlabel("Q_sum_semisum")
-                ax_sum.set_ylabel("T_sum_corrected_diff (ns)")
+                ax_sum.set_xlabel("Q_sum_1")
+                ax_sum.set_ylabel("delta_t_corrected (ns)")
                 ax_sum.set_xlim([0, 60])
                 ax_sum.set_ylim([-5, 5])
                 ax_sum.grid(True, linestyle="--", alpha=0.4)
@@ -8335,8 +10074,8 @@ if _need_slewing_observables:
                     ax_dif.scatter(q_dif[valid_dif], t_corr[valid_dif], s=5, alpha=0.35, color="tab:purple")
                 else:
                     ax_dif.text(0.5, 0.5, "No valid data", ha="center", va="center", transform=ax_dif.transAxes)
-                ax_dif.set_xlabel("Q_sum_semidiff")
-                ax_dif.set_ylabel("T_sum_corrected_diff (ns)")
+                ax_dif.set_xlabel("Q_sum_2")
+                ax_dif.set_ylabel("delta_t_corrected (ns)")
                 ax_dif.set_xlim([-40, 40])
                 ax_dif.set_ylim([-5, 5])
                 ax_dif.grid(True, linestyle="--", alpha=0.4)
@@ -8401,24 +10140,24 @@ if _need_slewing_observables:
                 )
                 data = slew_df[mask]
 
-                # Plot Q_sum_semidiff
-                sns.histplot(data['Q_sum_semidiff'], bins=100, kde=True, ax=axes[0, col_idx], element='bars', edgecolor=None)
+                # Plot Q_sum_2
+                sns.histplot(data['Q_sum_2'], bins=100, kde=True, ax=axes[0, col_idx], element='bars', edgecolor=None)
                 axes[0, col_idx].set_title(f"P{p1}S{s1} vs P{p2}S{s2} — Q_diff")
-                axes[0, col_idx].set_xlabel("Q_sum_semidiff")
+                axes[0, col_idx].set_xlabel("Q_sum_2")
                 axes[0, col_idx].set_ylabel("Counts")
                 axes[0, col_idx].set_xlim([-40, 40])
 
-                # Plot Q_sum_semisum
-                sns.histplot(data['Q_sum_semisum'], bins=100, kde=True, ax=axes[1, col_idx], element='bars', edgecolor=None)
+                # Plot Q_sum_1
+                sns.histplot(data['Q_sum_1'], bins=100, kde=True, ax=axes[1, col_idx], element='bars', edgecolor=None)
                 axes[1, col_idx].set_title(f"P{p1}S{s1} vs P{p2}S{s2} — Q_sum")
-                axes[1, col_idx].set_xlabel("Q_sum_semisum")
+                axes[1, col_idx].set_xlabel("Q_sum_1")
                 axes[1, col_idx].set_ylabel("Counts")
                 axes[1, col_idx].set_xlim([0, 60])
 
-                # Plot T_sum_corrected_diff
-                sns.histplot(data['T_sum_corrected_diff'], bins=100, kde=True, ax=axes[2, col_idx], element='bars', edgecolor=None)
+                # Plot delta_t_corrected
+                sns.histplot(data['delta_t_corrected'], bins=100, kde=True, ax=axes[2, col_idx], element='bars', edgecolor=None)
                 axes[2, col_idx].set_title(f"P{p1}S{s1} vs P{p2}S{s2} — ΔT corrected")
-                axes[2, col_idx].set_xlabel("T_sum_corrected_diff")
+                axes[2, col_idx].set_xlabel("delta_t_corrected")
                 axes[2, col_idx].set_ylabel("Counts")
                 axes[2, col_idx].set_xlim([-5, 5])
 
@@ -8480,23 +10219,23 @@ if _need_slewing_observables:
 
                 # Drop rows with any invalid values for this pair
                 valid_mask = (
-                    (data['Q_sum_semidiff'] != 0) &
-                    (data['Q_sum_semisum'] != 0) &
-                    (data['T_sum_corrected_diff'] != 0)
+                    (data['Q_sum_2'] != 0) &
+                    (data['Q_sum_1'] != 0) &
+                    (data['delta_t_corrected'] != 0)
                 )
                 data = data[valid_mask]
 
-                x = data['T_sum_corrected_diff']
-                y = data['Q_sum_semisum']
-                z = data['Q_sum_semidiff']
+                x = data['delta_t_corrected']
+                y = data['Q_sum_1']
+                z = data['Q_sum_2']
 
                 # 3D plot
                 ax3d = fig.add_subplot(spec[0:2, col_idx], projection='3d')
                 ax3d.scatter(x, y, z, s=5, alpha=0.6)
                 ax3d.set_title(f"P{p1}S{s1} vs P{p2}S{s2}")
                 ax3d.set_xlabel('ΔT corrected (ns)')
-                ax3d.set_ylabel('Q_sum_semisum')
-                ax3d.set_zlabel('Q_sum_semidiff')
+                ax3d.set_ylabel('Q_sum_1')
+                ax3d.set_zlabel('Q_sum_2')
                 
 
                 ax3d.set_xlim([delta_t_left, delta_t_right])
@@ -8507,7 +10246,7 @@ if _need_slewing_observables:
                 ax_xy = fig.add_subplot(spec[2, col_idx])
                 ax_xy.scatter(x, y, s=5, alpha=0.5)
                 ax_xy.set_xlabel('ΔT corrected')
-                ax_xy.set_ylabel('Q_sum_semisum')
+                ax_xy.set_ylabel('Q_sum_1')
                 ax_xy.set_title('XY projection')
                 ax_xy.set_xlim([delta_t_left, delta_t_right])
                 ax_xy.set_ylim([q_sum_left, q_sum_right])
@@ -8516,7 +10255,7 @@ if _need_slewing_observables:
                 ax_xz = fig.add_subplot(spec[3, col_idx])
                 ax_xz.scatter(x, z, s=5, alpha=0.5, c='tab:red')
                 ax_xz.set_xlabel('ΔT corrected')
-                ax_xz.set_ylabel('Q_sum_semidiff')
+                ax_xz.set_ylabel('Q_sum_2')
                 ax_xz.set_title('XZ projection')
                 ax_xz.set_xlim([delta_t_left, delta_t_right])
                 ax_xz.set_ylim([q_dif_left, q_dif_right])
@@ -8570,9 +10309,9 @@ if _need_slewing_observables:
             data = slew_df[mask]
 
             valid_mask = (
-                (data['Q_sum_semidiff'] != 0) &
-                (data['Q_sum_semisum'] != 0) &
-                (data['T_sum_corrected_diff'] != 0)
+                (data['Q_sum_2'] != 0) &
+                (data['Q_sum_1'] != 0) &
+                (data['delta_t_corrected'] != 0)
             )
             data = data[valid_mask]
 
@@ -8581,11 +10320,11 @@ if _need_slewing_observables:
 
             # The T_sum calibration sample is defined upstream. Do not trim it
             # again here with semisum/semidiff/timing windows.
-            # data = robust_z_filter(data, ['Q_sum_semidiff', 'Q_sum_semisum', 'T_sum_corrected_diff'])
+            # data = robust_z_filter(data, ['Q_sum_2', 'Q_sum_1', 'delta_t_corrected'])
             
             if not_use_q_semisum:
-                X = data[['Q_sum_semidiff']].values
-                y = data['T_sum_corrected_diff'].values
+                X = data[['Q_sum_2']].values
+                y = data['delta_t_corrected'].values
 
                 model = LinearRegression()
                 model.fit(X, y)
@@ -8594,8 +10333,8 @@ if _need_slewing_observables:
                 a_semisum = 0
                 r2_score_val = model.score(X, y)
             else:
-                X = data[['Q_sum_semisum', 'Q_sum_semidiff']].values
-                y = data['T_sum_corrected_diff'].values
+                X = data[['Q_sum_1', 'Q_sum_2']].values
+                y = data['delta_t_corrected'].values
 
                 model = LinearRegression()
                 model.fit(X, y)
@@ -8616,10 +10355,10 @@ if _need_slewing_observables:
             })
 
         # Create dataframe with all model parameters
-        slewing_fit_df = pd.DataFrame(fit_results)
+        disabled_fit_df = pd.DataFrame(fit_results)
         
         print("Fitting results:")
-        print(slewing_fit_df)
+        print(disabled_fit_df)
         
         
         # -------------------------------------------------------------------
@@ -8655,21 +10394,21 @@ if _need_slewing_observables:
                     data = slew_df[mask]
 
                     valid_mask = (
-                        (data['Q_sum_semidiff'] != 0) &
-                        (data['Q_sum_semisum'] != 0) &
-                        (data['T_sum_corrected_diff'] != 0)
+                        (data['Q_sum_2'] != 0) &
+                        (data['Q_sum_1'] != 0) &
+                        (data['delta_t_corrected'] != 0)
                     )
                     data = data[valid_mask]
 
                     if len(data) < 10:
                         continue
 
-                    # Retrieve fitted model coefficients from slewing_fit_df
-                    fit_row = slewing_fit_df[
-                        (slewing_fit_df['plane1'] == p1) &
-                        (slewing_fit_df['strip1'] == s1) &
-                        (slewing_fit_df['plane2'] == p2) &
-                        (slewing_fit_df['strip2'] == s2)
+                    # Retrieve fitted model coefficients from disabled_fit_df
+                    fit_row = disabled_fit_df[
+                        (disabled_fit_df['plane1'] == p1) &
+                        (disabled_fit_df['strip1'] == s1) &
+                        (disabled_fit_df['plane2'] == p2) &
+                        (disabled_fit_df['strip2'] == s2)
                     ]
                     if fit_row.empty:
                         continue
@@ -8678,17 +10417,17 @@ if _need_slewing_observables:
                     b = fit_row['b_semidiff'].values[0]
                     c = fit_row['c_offset'].values[0]
 
-                    x = data['T_sum_corrected_diff'].values
-                    y = data['Q_sum_semisum'].values
-                    z = data['Q_sum_semidiff'].values
+                    x = data['delta_t_corrected'].values
+                    y = data['Q_sum_1'].values
+                    z = data['Q_sum_2'].values
 
                     # 3D plot
                     ax3d = fig.add_subplot(spec[0:2, col_idx], projection='3d')
                     ax3d.scatter(x, y, z, s=5, alpha=0.6)
                     ax3d.set_title(f"P{p1}S{s1} vs P{p2}S{s2}")
                     ax3d.set_xlabel('ΔT corrected (ns)')
-                    ax3d.set_ylabel('Q_sum_semisum')
-                    ax3d.set_zlabel('Q_sum_semidiff')
+                    ax3d.set_ylabel('Q_sum_1')
+                    ax3d.set_zlabel('Q_sum_2')
 
                     ax3d.set_xlim([delta_t_left, delta_t_right])
                     ax3d.set_ylim([q_sum_left, q_sum_right])
@@ -8702,7 +10441,7 @@ if _need_slewing_observables:
                     x_line = a * y_line + b * z_fixed + c
                     ax_xy.plot(x_line, y_line, color='black', lw=1, label='Fitted projection')
                     ax_xy.set_xlabel('ΔT corrected')
-                    ax_xy.set_ylabel('Q_sum_semisum')
+                    ax_xy.set_ylabel('Q_sum_1')
                     ax_xy.set_title('XY projection')
                     ax_xy.legend(fontsize='x-small')
                     ax_xy.set_xlim([delta_t_left, delta_t_right])
@@ -8716,7 +10455,7 @@ if _need_slewing_observables:
                     x_line2 = a * y_fixed + b * z_line + c
                     ax_xz.plot(x_line2, z_line, color='black', lw=1, label='Fitted projection')
                     ax_xz.set_xlabel('ΔT corrected')
-                    ax_xz.set_ylabel('Q_sum_semidiff')
+                    ax_xz.set_ylabel('Q_sum_2')
                     ax_xz.set_title('XZ projection')
                     ax_xz.legend(fontsize='x-small')
                     ax_xz.set_xlim([T_sum_corrected_dif_left, T_sum_corrected_dif_right])
@@ -8772,9 +10511,9 @@ if _need_slewing_observables:
                     data = slew_df[mask]
 
                     valid_mask = (
-                        (data['Q_sum_semidiff'] != 0) &
-                        (data['Q_sum_semisum'] != 0) &
-                        (data['T_sum_corrected_diff'] != 0)
+                        (data['Q_sum_2'] != 0) &
+                        (data['Q_sum_1'] != 0) &
+                        (data['delta_t_corrected'] != 0)
                     )
                     data = data[valid_mask]
 
@@ -8783,11 +10522,11 @@ if _need_slewing_observables:
                             axes[row, col_idx].set_visible(False)
                         continue
 
-                    fit_row = slewing_fit_df[
-                        (slewing_fit_df['plane1'] == p1) &
-                        (slewing_fit_df['strip1'] == s1) &
-                        (slewing_fit_df['plane2'] == p2) &
-                        (slewing_fit_df['strip2'] == s2)
+                    fit_row = disabled_fit_df[
+                        (disabled_fit_df['plane1'] == p1) &
+                        (disabled_fit_df['strip1'] == s1) &
+                        (disabled_fit_df['plane2'] == p2) &
+                        (disabled_fit_df['strip2'] == s2)
                     ]
                     if fit_row.empty:
                         for row in range(2):
@@ -8798,9 +10537,9 @@ if _need_slewing_observables:
                     b = fit_row['b_semidiff'].values[0]
                     c = fit_row['c_offset'].values[0]
 
-                    qsum = data['Q_sum_semisum'].values
-                    qdiff = data['Q_sum_semidiff'].values
-                    t_true = data['T_sum_corrected_diff'].values
+                    qsum = data['Q_sum_1'].values
+                    qdiff = data['Q_sum_2'].values
+                    t_true = data['delta_t_corrected'].values
                     t_pred = a * qsum + b * qdiff + c
                     residual = t_true - t_pred
                     
@@ -8854,286 +10593,75 @@ print("----------------------------------------------------------------------")
 print("----------------------- Time sum calibration -------------------------")
 print("----------------------------------------------------------------------")
 
-if time_calibration_mode is not None:
-    forced_old_timing_method = not slewing_correction
-
-    if forced_old_timing_method:
-        old_timing_method = True
-    
-
+if (not _defer_tsum_calibration_until_late_slot) and time_calibration_mode is not None:
     if calculate_T_sum_calibration:
-        if old_timing_method:
-            if forced_old_timing_method:
-                print(
-                    "Info: slewing_correction=False, using compatibility old_timing_method path."
+        print("Using direct T_sum calibration from geometry-corrected pair residuals.")
+        strip_pair_patterns = [
+            (1, 1), (2, 2), (3, 3), (4, 4),
+            (1, 2), (2, 1), (2, 3), (3, 2), (3, 4), (4, 3),
+            (1, 3), (3, 1), (2, 4), (4, 2), (1, 4),
+        ]
+        plane_pair_order = [(1, 3), (1, 4), (2, 4), (3, 4), (1, 2), (2, 3)]
+        vector_names = [
+            f"P{plane_a}s{strip_a}_P{plane_b}s{strip_b}"
+            for plane_a, plane_b in plane_pair_order
+            for strip_a, strip_b in strip_pair_patterns
+        ]
+        vectors = []
+        rows = ['P{}s{}'.format(i, j) for i in range(1, 5) for j in range(1, 5)]
+        columns = ['P{}s{}'.format(i, j) for i in range(1, 5) for j in range(1, 5)]
+        df = pd.DataFrame(index=rows, columns=columns)
+        pair_offset_lookup.clear()
+        for plane_a, plane_b in plane_pair_order:
+            for strip_a, strip_b in strip_pair_patterns:
+                label1 = f"P{plane_a}s{strip_a}"
+                label2 = f"P{plane_b}s{strip_b}"
+                pair_mask = (
+                    (time_pair_residuals_df["label1"] == label1)
+                    & (time_pair_residuals_df["label2"] == label2)
                 )
-            else:
-                warnings.warn(
-                    "old_timing_method is deprecated and can be significantly slower than the vectorized path.",
-                    DeprecationWarning,
-                    stacklevel=2,
-                )
-                print(
-                    "Warning: old_timing_method=True enables a deprecated compatibility timing-calibration path."
-                )
-            
-            old_timing_prep_start = time.perf_counter()
-            timing_mask = np.ones(len(calibration_work_df), dtype=bool)
-            skipped_time_calibration = int((~timing_mask).sum())
-            timing_df = calibration_work_df.loc[timing_mask]
-            n_timing_events = len(timing_df)
-            event_matrices = np.zeros((n_timing_events, 4, 3), dtype=float)
-            timing_one_strip_masks = _task2_plane_one_strip_masks_from_components(calibration_work_df)
-
-            if n_timing_events > 0:
-                row_idx = np.arange(n_timing_events)
-                for module_idx in range(4):
-                    module = f"T{module_idx + 1}"
-                    q_sum_cols = [f"Q{module_idx + 1}_Q_sum_{strip}" for strip in range(1, 5)]
-                    t_sum_cols = [f"{module}_T_sum_{strip}" for strip in range(1, 5)]
-                    t_dif_cols = [f"{module}_T_dif_{strip}" for strip in range(1, 5)]
-
-                    plane_one_strip_matrix = np.column_stack([
-                        timing_one_strip_masks.get(module_idx + 1, {}).get(
-                            strip,
-                            np.zeros(len(calibration_work_df), dtype=bool),
-                        )
-                        for strip in range(1, 5)
-                    ])[timing_mask]
-                    best_strip_idx = np.argmax(plane_one_strip_matrix, axis=1)
-                    has_signal = np.any(plane_one_strip_matrix, axis=1)
-
-                    selected_strip = np.where(has_signal, best_strip_idx + 1, 0)
-                    t_sum_values = timing_df[t_sum_cols].to_numpy()[row_idx, best_strip_idx]
-                    t_dif_values = timing_df[t_dif_cols].to_numpy()[row_idx, best_strip_idx]
-                    selected_t_sum = np.where(has_signal, t_sum_values, 0.0)
-                    selected_t_dif = np.where(has_signal, t_dif_values, 0.0)
-
-                    event_matrices[:, module_idx, 0] = selected_strip
-                    event_matrices[:, module_idx, 1] = selected_t_sum
-                    event_matrices[:, module_idx, 2] = selected_t_dif
-
-            print(
-                "Using the strict raw-charge calibration sample for time calibration; "
-                f"additional timing rows skipped by this branch: {skipped_time_calibration}."
-            )
-            print(
-                f"[PROFILE][TASK_2] old_timing_method event-matrix build: {time.perf_counter() - old_timing_prep_start:.2f}s",
-                force=True,
-            )
-            _prof["s_time_sum_old_timing_matrix_build_s"] = round(
-                time.perf_counter() - old_timing_prep_start,
-                2,
-            )
-            
-            # The old code to do this -----------------------------
-            
-            yz_big = np.array([[[y, z] for y in y_pos_T[i % 2]] for i, z in enumerate(z_positions)])
-            
-            def calculate_diff(P_a, s_a, P_b, s_b, ps):
-                
-                # First position
-                x_1 = ps[P_a-1, 1]
-                yz_1 = yz_big[P_a-1, s_a-1]
-                xyz_1 = np.append(x_1, yz_1)
-                
-                # Second position
-                x_2 = ps[P_b-1, 1]
-                yz_2 = yz_big[P_b-1, s_b-1]
-                xyz_2 = np.append(x_2, yz_2)
-                
-                pos_x.append(x_1)
-                pos_x.append(x_2)
-                
-                t_0_1 = ps[P_a-1, 2]
-                t_0_2 = ps[P_b-1, 2]
-                t_0.append(t_0_1)
-                t_0.append(t_0_2)
-                
-                # Length
-                dist = np.sqrt(np.sum((xyz_2 - xyz_1)**2))
-                travel_time = dist / muon_speed
-                
-                v_travel_time.append(travel_time)
-                
-                # diff = travel_time
-                diff = ps[P_b-1, 2] - ps[P_a-1, 2] - travel_time
-                # diff = ps[P_b-1, 2] - ps[P_a-1, 2]
-                return diff
-            
-            strip_pair_patterns = [
-                (1, 1), (2, 2), (3, 3), (4, 4),
-                (1, 2), (2, 1), (2, 3), (3, 2), (3, 4), (4, 3),
-                (1, 3), (3, 1), (2, 4), (4, 2), (1, 4),
-            ]
-            plane_pair_order = [(1, 3), (1, 4), (2, 4), (3, 4), (1, 2), (2, 3)]
-            vector_names = [
-                f"P{plane_a}s{strip_a}_P{plane_b}s{strip_b}"
-                for plane_a, plane_b in plane_pair_order
-                for strip_a, strip_b in strip_pair_patterns
-            ]
-            vector_lookup = {
-                (plane_a, strip_a, plane_b, strip_b): f"P{plane_a}s{strip_a}_P{plane_b}s{strip_b}"
-                for plane_a, plane_b in plane_pair_order
-                for strip_a, strip_b in strip_pair_patterns
-            }
-            vector_data = {name: [] for name in vector_names}
-
-            pos_x = []
-            v_travel_time = []
-            t_0 = []
-
-            old_timing_accum_start = time.perf_counter()
-            i = 0
-            for event in event_matrices:
-                if limit and i >= limit_number:
-                    break
-                if np.all(event[:, 0] == 0):
+                values = pd.to_numeric(
+                    time_pair_residuals_df.loc[pair_mask, "delta_t_corrected"],
+                    errors="coerce",
+                ).dropna().to_numpy(dtype=float)
+                vectors.append(values)
+                if values.size == 0:
                     continue
+                pair_offset = summary(values)
+                df.loc[label1, label2] = pair_offset
+                df.loc[label2, label1] = -pair_offset
+                pair_offset_lookup[(label1, label2)] = float(pair_offset)
+                pair_offset_lookup[(label2, label1)] = float(-pair_offset)
 
-                istrip = event[:, 0]
-                t0 = event[:, 1] - strip_length / 2 / strip_speed
-                x = event[:, 2] * strip_speed
-                ps = np.column_stack((istrip, x, t0))
-                ps[:, 2] = ps[:, 2] - ps[0, 2]
-
-                for plane_a, plane_b in plane_pair_order:
-                    strip_a = int(ps[plane_a - 1, 0])
-                    strip_b = int(ps[plane_b - 1, 0])
-                    if strip_a == 0 or strip_b == 0:
-                        continue
-                    vector_name = vector_lookup.get((plane_a, strip_a, plane_b, strip_b))
-                    if vector_name is None:
-                        continue
-                    vector_data[vector_name].append(
-                        calculate_diff(plane_a, strip_a, plane_b, strip_b, ps)
-                    )
-
-                i += 1
-
-            vectors = [vector_data[name] for name in vector_names]
-            print(
-                f"[PROFILE][TASK_2] old_timing_method strip-pair accumulation: {time.perf_counter() - old_timing_accum_start:.2f}s",
-                force=True,
-            )
-            _prof["s_time_sum_old_timing_strip_accum_s"] = round(
-                time.perf_counter() - old_timing_accum_start,
-                2,
-            )
-
-            if create_plots:
-            
-            
-                # Convert data to numpy arrays and filter
-                pos_x = np.array(pos_x)
-                pos_x = pos_x[(-200 < pos_x) & (pos_x < 200) & (pos_x != 0)]
-                v_travel_time = np.array(v_travel_time)
-                v_travel_time = v_travel_time[v_travel_time < 1.6]
-                t_0 = np.array(t_0)
-                
-                
-                t_0 = t_0[(-t0_time_cal_lim < t_0) & (t_0 < t0_time_cal_lim)]
-                t_0 = t_0[t_0 != 0]
-                
-                # Prepare a figure with 1x3 subplots
-                fig, axs = plt.subplots(1, 3, figsize=(15, 5), constrained_layout=True)
-                
-                # Plot histogram for positions (pos_x)
-                axs[0].hist(pos_x, bins='auto', alpha=0.6, color='blue')
-                axs[0].set_title('Positions')
-                axs[0].set_xlabel('Position (units)')
-                axs[0].set_ylabel('Frequency')
-                
-                # Plot histogram for travel time (v_travel_time)
-                axs[1].hist(v_travel_time, bins=300, alpha=0.6, color='green')
-                axs[1].set_title('Travel Time of a Particle at c')
-                axs[1].set_xlabel('T / ns')
-                axs[1].set_ylabel('Frequency')
-                
-                # Plot histogram for T0s (t_0)
-                axs[2].hist(t_0, bins='auto', alpha=0.6, color='red')
-                axs[2].set_title('T0s')
-                axs[2].set_xlabel('T / ns')
-                axs[2].set_ylabel('Frequency')
-                
-                # Show the combined figure
-                plt.suptitle('Combined Histograms of Positions, Travel Time, and T0s')
-                if save_plots:
-                    name_of_file = 'positions_travel_time_tzeros'
-                    final_filename = f'{fig_idx}_{name_of_file}.png'
-                    fig_idx += 1
-                    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-                    plot_list.append(save_fig_path)
-                    save_plot_figure(save_fig_path, format='png')
-                if show_plots: plt.show()
-                plt.close()
-            
-                for i, (var_name, vector) in enumerate(zip(vector_names, vectors)):
-                    if i >= number_of_time_cal_figures: break
-                    hist_1d(vector, 100, var_name, "T / ns", var_name)
-            
-            
-            print("----------------------------------------------------------------------")
-            print("--------------------- Time resolution calculation --------------------")
-            print("----------------------------------------------------------------------")
-
-            # Dictionary to store CRT values
-            crt_values = {}
-            for var_name, vector in zip(vector_names, vectors):
-                vdat = np.array(vector)
-                if len(vdat) > 1:
-                    try:
-                        vdat = vdat[(vdat > np.quantile(vdat, CRT_gaussian_fit_quantile)) & (vdat < np.quantile(vdat, 1 - CRT_gaussian_fit_quantile))]
-                    except IndexError:
-                        print(f"IndexError encountered for {var_name}, setting CRT to 0")
-                        vdat = np.array([0])
-                
-                CRT = norm.fit(vdat)[1] / np.sqrt(2) if len(vdat) > 0 else 0
-                # print(f"CRT for {var_name} is {CRT:.4g}")
-                crt_values[f'CRT_{var_name}'] = CRT
-            
-            # Turn crt_values into a vector
-            print("CRT values:", crt_values)
-            crt_values = np.array(list(crt_values.values()))
-            # print("CRT values:", crt_values)
-            Q1, Q3 = np.percentile(crt_values, [25, 75])
-            crt_values = crt_values[crt_values <= 1]
-            filtered_crt_values = crt_values[(crt_values >= Q1 - 1.5 * (Q3 - Q1)) & (crt_values <= Q3 + 1.5 * (Q3 - Q1))]
-            global_variables['CRT_avg'] = np.mean(filtered_crt_values)*1000 # To ps
-            global_variables['CRT_std'] = np.std(filtered_crt_values)*1000 # To ps
-            
-            print("---------------------------")
-            print(f"CRT Avg: {global_variables['CRT_avg']:.4g} ps")
-            print(f"CRT Std: {global_variables['CRT_std']:.4g} ps")
-            print("---------------------------")
-            
-            
-            # Create row and column indices
-            rows = ['P{}s{}'.format(i, j) for i in range(1, 5) for j in range(1, 5)]
-            columns = ['P{}s{}'.format(i, j) for i in range(1, 5) for j in range(1, 5)]
-            
-            df = pd.DataFrame(index=rows, columns=columns)
-            for var_name, vector in zip(vector_names, vectors):
-                current_prefix = str(var_name.split('_')[0])
-                current_suffix = str(var_name.split('_')[1])
-                # Key part: create the antisymmetric matrix
-                df.loc[current_prefix, current_suffix] = summary(vector)
-                df.loc[current_suffix, current_prefix] = -df.loc[current_prefix, current_suffix]
-                
+        print("----------------------------------------------------------------------")
+        print("--------------------- Time resolution calculation --------------------")
+        print("----------------------------------------------------------------------")
+        crt_values = {}
+        for var_name, vector in zip(vector_names, vectors):
+            vdat = np.asarray(vector, dtype=float)
+            if len(vdat) > 1:
+                try:
+                    vdat = vdat[(vdat > np.quantile(vdat, CRT_gaussian_fit_quantile)) & (vdat < np.quantile(vdat, 1 - CRT_gaussian_fit_quantile))]
+                except IndexError:
+                    print(f"IndexError encountered for {var_name}, setting CRT to 0")
+                    vdat = np.array([0])
+            CRT = norm.fit(vdat)[1] / np.sqrt(2) if len(vdat) > 0 else 0
+            crt_values[f'CRT_{var_name}'] = CRT
+        print("CRT values:", crt_values)
+        crt_array = np.array(list(crt_values.values()), dtype=float)
+        if crt_array.size > 0:
+            Q1, Q3 = np.percentile(crt_array, [25, 75])
+            crt_array = crt_array[crt_array <= 1]
+            filtered_crt_values = crt_array[(crt_array >= Q1 - 1.5 * (Q3 - Q1)) & (crt_array <= Q3 + 1.5 * (Q3 - Q1))]
+            global_variables['CRT_avg'] = np.mean(filtered_crt_values) * 1000 if filtered_crt_values.size else 0
+            global_variables['CRT_std'] = np.std(filtered_crt_values) * 1000 if filtered_crt_values.size else 0
         else:
-            # Create row and column indices
-            rows = ['P{}s{}'.format(i, j) for i in range(1, 5) for j in range(1, 5)]
-            columns = ['P{}s{}'.format(i, j) for i in range(1, 5) for j in range(1, 5)]
-            
-            df = pd.DataFrame(index=rows, columns=columns)
-            
-            # Fill df with antisymmetric c_offset values from slewing_fit_df
-            for _, row in slewing_fit_df.iterrows():
-                l1 = f'P{str(int(row["plane1"]))}s{str(int(row["strip1"]))}'
-                l2 = f'P{str(int(row["plane2"]))}s{str(int(row["strip2"]))}'
-                offset = row['c_offset']
-                df.loc[l1, l2] = -offset
-                df.loc[l2, l1] = offset
+            global_variables['CRT_avg'] = 0
+            global_variables['CRT_std'] = 0
+        print("---------------------------")
+        print(f"CRT Avg: {global_variables['CRT_avg']:.4g} ps")
+        print(f"CRT Std: {global_variables['CRT_std']:.4g} ps")
+        print("---------------------------")
             
         print("Antisymmetric matrix:")
         print(df.map(lambda x: f"{x:.2f}" if pd.notnull(x) else ""))
@@ -9230,99 +10758,18 @@ if time_calibration_mode is not None:
 
     if apply_T_sum_calibration:
         print(f"Final calibration in times used (mode={time_calibration_mode}):", _format_value_for_print(Tsum_cal))
-        # Applying time calibration
-        apply_task2_tsum_offsets_to_components(
-            calibration_work_df,
-            Tsum_cal,
+        print(
+            "Deferring calibration-subsample T_sum offset application until "
+            "after the Q-cut delta-T centroid diagnostic."
         )
-        if calibration_work_df_qfb is not None:
-            apply_task2_tsum_offsets_to_components(
-                calibration_work_df_qfb,
-                Tsum_cal,
-            )
 
 else:
-    print("Skipping time calibration (mode=null).")
-
-if apply_T_sum_calibration:
-    t_sum_calibration_filter_left = task2_calibration_strip_t_sum_left
-    t_sum_calibration_filter_right = task2_calibration_strip_t_sum_right
     print(
-        "Using same-strip strip-combination T_sum bounds for calibration-subsample "
-        "post-calibration filtering: "
-        f"[{_format_value_for_print(t_sum_calibration_filter_left)}, "
-        f"{_format_value_for_print(t_sum_calibration_filter_right)}]"
+        "Deferring T_sum pair residual table construction and T_sum "
+        "calibration until the late charge-calibrated section."
     )
 
-    if calibration_dataframe_filtering:
-        _debug_plot_filter_group(
-            calibration_work_df,
-            collect_strip_family_columns(calibration_work_df.columns, "T_sum"),
-            [t_sum_calibration_filter_left, t_sum_calibration_filter_right],
-            "T_sum_post_calibration_filter",
-        )
-        filter_strip_family_inplace(
-            calibration_work_df,
-            "T_sum",
-            left=t_sum_calibration_filter_left,
-            right=t_sum_calibration_filter_right,
-        )
-        if calibration_work_df_qfb is not None:
-            filter_strip_family_inplace(
-                calibration_work_df_qfb,
-                "T_sum",
-                left=t_sum_calibration_filter_left,
-                right=t_sum_calibration_filter_right,
-            )
-        if calibration_work_st_df is not None:
-            apply_task2_tsum_offsets_to_components(
-                calibration_work_st_df,
-                Tsum_cal,
-            )
-            filter_strip_family_inplace(
-                calibration_work_st_df,
-                "T_sum",
-                left=t_sum_calibration_filter_left,
-                right=t_sum_calibration_filter_right,
-            )
-        if calibration_work_st_df_qfb is not None:
-            apply_task2_tsum_offsets_to_components(
-                calibration_work_st_df_qfb,
-                Tsum_cal,
-            )
-            filter_strip_family_inplace(
-                calibration_work_st_df_qfb,
-                "T_sum",
-                left=t_sum_calibration_filter_left,
-                right=t_sum_calibration_filter_right,
-            )
-
-        run_strip_zeroing_stage(
-            "calibrated_t_sum",
-            calibration_work_df,
-        )
-        if calibration_work_df_qfb is not None:
-            run_strip_zeroing_stage(
-                "calibrated_t_sum",
-                calibration_work_df_qfb,
-            )
-        if calibration_work_st_df is not None:
-            zero_strip_component_blocks(calibration_work_st_df, self_trigger_mode=True)
-        if calibration_work_st_df_qfb is not None:
-            zero_strip_component_blocks(calibration_work_st_df_qfb, self_trigger_mode=True)
-    else:
-        if calibration_work_st_df is not None:
-            apply_task2_tsum_offsets_to_components(
-                calibration_work_st_df,
-                Tsum_cal,
-            )
-        if calibration_work_st_df_qfb is not None:
-            apply_task2_tsum_offsets_to_components(
-                calibration_work_st_df_qfb,
-                Tsum_cal,
-            )
-        print("Skipping calibration-sample T_sum filtering and strip zeroing (config disabled).")
-else:
+if not apply_T_sum_calibration:
     print(
         "Skipping calibrated T_sum strip filter "
         "(requires apply_T_sum_calibration=true)."
@@ -9619,6 +11066,145 @@ if defer_charge_calibration_until_post_time:
         print('Charge front-back correction skipped (mode=null).')
         Q_dif_cal_threshold_FB = Q_dif_cal_threshold_FB_wide
 
+    if q_dif_t_dif_correction_mode is not None:
+        qtdif_one_strip_masks = _task2_plane_one_strip_masks_from_components(calibration_work_df)
+        qtdif_one_strip_masks_qfb = (
+            _task2_plane_one_strip_masks_from_components(calibration_work_df_qfb)
+            if calibration_work_df_qfb is not None
+            else {}
+        )
+        _qtdif_tasks = []
+        for key in [1, 2, 3, 4]:
+            for i in range(4):
+                tdif_col = f"T{key}_T_dif_{i+1}"
+                qdif_col = f"Q{key}_Q_dif_{i+1}"
+                if tdif_col not in calibration_work_df.columns or qdif_col not in calibration_work_df.columns:
+                    continue
+
+                T_dif = pd.to_numeric(calibration_work_df[tdif_col], errors="coerce").to_numpy(dtype=float)
+                Q_diff = pd.to_numeric(calibration_work_df[qdif_col], errors="coerce").to_numpy(dtype=float)
+                one_strip_mask = _task2_prefer_one_strip_mask(
+                    qtdif_one_strip_masks.get(key, {}).get(i + 1, np.zeros(len(calibration_work_df), dtype=bool)),
+                    label=f"P{key}s{i+1} Q_TDIF calibration (deferred)",
+                )
+                cond = (
+                    one_strip_mask
+                    & np.isfinite(T_dif)
+                    & np.isfinite(Q_diff)
+                    & (T_dif != 0)
+                    & (Q_diff != 0)
+                )
+                T_dif_adj = T_dif[cond]
+                Q_dif_adj = Q_diff[cond]
+
+                T_dif_fit = T_dif_adj
+                Q_dif_fit = Q_dif_adj
+                if calibration_work_df_qfb is not None and tdif_col in calibration_work_df_qfb.columns and qdif_col in calibration_work_df_qfb.columns:
+                    T_dif_qfb = pd.to_numeric(calibration_work_df_qfb[tdif_col], errors="coerce").to_numpy(dtype=float)
+                    Q_diff_qfb = pd.to_numeric(calibration_work_df_qfb[qdif_col], errors="coerce").to_numpy(dtype=float)
+                    one_strip_mask_qfb = _task2_prefer_one_strip_mask(
+                        qtdif_one_strip_masks_qfb.get(key, {}).get(i + 1, np.zeros(len(calibration_work_df_qfb), dtype=bool)),
+                        label=f"P{key}s{i+1} Q_TDIF calibration (deferred, qfb)",
+                    )
+                    cond_qfb = (
+                        one_strip_mask_qfb
+                        & np.isfinite(T_dif_qfb)
+                        & np.isfinite(Q_diff_qfb)
+                        & (T_dif_qfb != 0)
+                        & (Q_diff_qfb != 0)
+                    )
+                    Q_dif_qfb_adj = Q_diff_qfb[cond_qfb]
+                    if apply_Q_FB_calibration:
+                        qfb_coeffs = qfb_coefficients.get((key, i + 1))
+                        if qfb_coeffs is None:
+                            qfb_coeffs = global_variables.get(f"P{key}_s{i+1}_Q_FB_coeffs")
+                        qsum_col = f"Q{key}_Q_sum_{i+1}"
+                        if qfb_coeffs is not None and qsum_col in calibration_work_df_qfb.columns:
+                            Q_sum_qfb = pd.to_numeric(calibration_work_df_qfb[qsum_col], errors="coerce").to_numpy(dtype=float)
+                            Q_dif_qfb_adj = Q_dif_qfb_adj - polynomial(Q_sum_qfb[cond_qfb], *np.asarray(qfb_coeffs, dtype=float))
+                    if T_dif_adj.size == 0:
+                        T_dif_fit = T_dif_qfb[cond_qfb]
+                        Q_dif_fit = Q_dif_qfb_adj
+                    elif np.any(cond_qfb):
+                        T_dif_fit = np.concatenate([T_dif_adj, T_dif_qfb[cond_qfb]])
+                        Q_dif_fit = np.concatenate([Q_dif_adj, Q_dif_qfb_adj])
+
+                _qtdif_tasks.append((key, i, T_dif_adj, Q_dif_adj, cond, T_dif_fit, Q_dif_fit))
+
+        if calculate_Q_TDIF_calibration:
+            _qtdif_coeffs_map = {}
+            with ThreadPoolExecutor(max_workers=4) as _qtdif_pool:
+                _qtdif_futures = {
+                    _qtdif_pool.submit(_fit_qtdif_coeffs, T_dif_fit, Q_dif_fit): (key, i)
+                    for key, i, T_dif_adj, Q_dif_adj, cond, T_dif_fit, Q_dif_fit in _qtdif_tasks
+                    if T_dif_fit.size > 0 and Q_dif_fit.size > 0
+                }
+                for fut in as_completed(_qtdif_futures):
+                    _key, _i = _qtdif_futures[fut]
+                    _qtdif_coeffs_map[(_key, _i)] = fut.result()
+                for (_key, _i), _coeffs in _qtdif_coeffs_map.items():
+                    if _coeffs is None:
+                        print(f"Warning: Q_dif vs T_dif fit failed for P{_key}s{_i+1}; skipping this strip.")
+                        continue
+                    _coeff_array = np.asarray(_coeffs, dtype=float)
+                    global_variables[f"P{_key}_s{_i+1}_Q_TDIF_coeffs"] = _coeff_array.tolist()
+                    qtdif_coefficients[(_key, _i + 1)] = _coeff_array
+
+        for key, i, T_dif_adj, Q_dif_adj, cond, T_dif_fit, Q_dif_fit in _qtdif_tasks:
+            if T_dif_adj.size == 0:
+                continue
+            coeffs = qtdif_coefficients.get((key, i + 1))
+            if coeffs is None:
+                coeffs = global_variables.get(f"P{key}_s{i+1}_Q_TDIF_coeffs")
+            if coeffs is None:
+                print(f"Warning: Q_dif vs T_dif coefficients missing for P{key}s{i+1}; skipping this strip.")
+                continue
+            coeffs = np.asarray(coeffs, dtype=float)
+
+            qdif_col = f"Q{key}_Q_dif_{i+1}"
+            corrected_diff = Q_dif_adj - polynomial(T_dif_adj, *coeffs)
+            snapshot_column_if_changed(calibration_work_df, qdif_col, cond)
+            calibration_work_df.loc[cond, qdif_col] = np.asarray(corrected_diff, dtype=float)
+
+            if task2_plot_requested("charge_dif_vs_time_dif_cal", essential=True):
+                title = (
+                    f"P{key} strip {i+1}. Q_dif vs T_dif. "
+                    f"Station MINGO0{station}, {basename_no_ext}"
+                )
+                name_of_file = f"P{key}_s{i+1}_charge_dif_vs_time_dif_cal"
+                scatter_2d_and_fit_qdif_vs_tdif(T_dif_fit, Q_dif_fit, coeffs, title, name_of_file)
+
+        if calibration_work_st_df is not None:
+            print("SELF TRIGGER Q_dif vs T_dif correction (deferred)...")
+            for key in [1, 2, 3, 4]:
+                for i in range(4):
+                    tdif_col = f"T{key}_T_dif_{i+1}"
+                    qdif_col = f"Q{key}_Q_dif_{i+1}"
+                    if tdif_col not in calibration_work_st_df.columns or qdif_col not in calibration_work_st_df.columns:
+                        continue
+                    coeffs = qtdif_coefficients.get((key, i + 1))
+                    if coeffs is None:
+                        coeffs = global_variables.get(f"P{key}_s{i+1}_Q_TDIF_coeffs")
+                    if coeffs is None:
+                        continue
+                    coeffs = np.asarray(coeffs, dtype=float)
+                    T_dif = pd.to_numeric(calibration_work_st_df[tdif_col], errors="coerce").to_numpy(dtype=float)
+                    Q_diff = pd.to_numeric(calibration_work_st_df[qdif_col], errors="coerce").to_numpy(dtype=float)
+                    cond = np.isfinite(T_dif) & np.isfinite(Q_diff) & (T_dif != 0) & (Q_diff != 0)
+                    if not np.any(cond):
+                        continue
+                    snapshot_column_if_changed(calibration_work_st_df, qdif_col, cond)
+                    calibration_work_st_df.loc[cond, qdif_col] = Q_diff[cond] - polynomial(T_dif[cond], *coeffs)
+
+        if q_dif_t_dif_correction_mode == "file":
+            for _M in range(1, 5):
+                for _s in range(1, 5):
+                    global_variables.pop(f"P{_M}_s{_s}_Q_TDIF_coeffs", None)
+
+        print(f"Q_dif vs T_dif correction performed (mode={q_dif_t_dif_correction_mode}, deferred stage).")
+    else:
+        print("Q_dif vs T_dif correction skipped (mode=null).")
+
     if calibration_dataframe_filtering:
         _debug_plot_filter_group(
             calibration_work_df,
@@ -9866,6 +11452,184 @@ if calibration_dataframe_filtering:
 else:
     print("Skipping calibration-sample post-crosstalk Q_sum filtering and strip zeroing (config disabled).")
 
+_need_pre_tsum_offset_pair_residuals = (
+    calculate_T_sum_calibration
+    or _plot_slewing_delta_t_centroid_by_qsum_cuts
+    or _plot_slewing_delta_t_centroid_vs_qsum_cut
+)
+if _need_pre_tsum_offset_pair_residuals:
+    print(
+        "Building charge-calibrated, pre-T_sum-offset residual table for "
+        "T_sum calibration and Q-cut delta-T diagnostics."
+    )
+    time_pair_residuals_df = _build_tsum_pair_residuals(
+        calibration_work_df,
+        y_lookup=y_lookup,
+        z_positions=z_positions,
+        tdiff_to_x=tdiff_to_x,
+        c_mm_ns=c_mm_ns,
+    )
+    print(
+        "Built charge-calibrated pre-T_sum-offset T_sum pair residual table with "
+        f"{len(time_pair_residuals_df)} rows."
+    )
+
+if time_calibration_mode is not None:
+    print("----------------------------------------------------------------------")
+    print("----------------------- Time sum calibration -------------------------")
+    print("----------------------------------------------------------------------")
+    if calculate_T_sum_calibration:
+        Tsum_cal = calculate_task2_tsum_calibration_from_pair_residuals(
+            time_pair_residuals_df,
+        )
+    if apply_T_sum_calibration:
+        print(f"Final calibration in times used (mode={time_calibration_mode}):", _format_value_for_print(Tsum_cal))
+else:
+    print("Skipping time calibration (mode=null).")
+
+if (
+    _plot_slewing_delta_t_centroid_by_qsum_cuts
+    or _plot_slewing_delta_t_centroid_vs_qsum_cut
+):
+    plot_slewing_delta_t_centroid_by_qsum_cuts(time_pair_residuals_df)
+
+if not time_pair_residuals_df.empty and pair_offset_lookup:
+    time_pair_residuals_df = time_pair_residuals_df.copy()
+    time_pair_residuals_df["pair_offset_used"] = [
+        pair_offset_lookup.get((str(label1), str(label2)), np.nan)
+        for label1, label2 in zip(time_pair_residuals_df["label1"], time_pair_residuals_df["label2"])
+    ]
+    time_pair_residuals_df["delta_t_centered_by_pair_offset"] = (
+        pd.to_numeric(time_pair_residuals_df["delta_t_corrected"], errors="coerce")
+        - pd.to_numeric(time_pair_residuals_df["pair_offset_used"], errors="coerce")
+    )
+    print(
+        "Centered pre-slewing T_sum pair residuals using high-Q selected "
+        "pair offsets."
+    )
+
+if apply_T_sum_calibration:
+    print(
+        "Applying deferred T_sum offsets to the calibration subsample before "
+        "the slewing-correction slot."
+    )
+    t_sum_calibration_filter_left = task2_calibration_strip_t_sum_left
+    t_sum_calibration_filter_right = task2_calibration_strip_t_sum_right
+    print(
+        "Using same-strip strip-combination T_sum bounds for calibration-subsample "
+        "post-calibration filtering: "
+        f"[{_format_value_for_print(t_sum_calibration_filter_left)}, "
+        f"{_format_value_for_print(t_sum_calibration_filter_right)}]"
+    )
+
+    apply_task2_tsum_offsets_to_components(
+        calibration_work_df,
+        Tsum_cal,
+    )
+    if calibration_work_df_qfb is not None:
+        apply_task2_tsum_offsets_to_components(
+            calibration_work_df_qfb,
+            Tsum_cal,
+        )
+    if calibration_work_st_df is not None:
+        apply_task2_tsum_offsets_to_components(
+            calibration_work_st_df,
+            Tsum_cal,
+        )
+    if calibration_work_st_df_qfb is not None:
+        apply_task2_tsum_offsets_to_components(
+            calibration_work_st_df_qfb,
+            Tsum_cal,
+        )
+
+    if calibration_dataframe_filtering:
+        _debug_plot_filter_group(
+            calibration_work_df,
+            collect_strip_family_columns(calibration_work_df.columns, "T_sum"),
+            [t_sum_calibration_filter_left, t_sum_calibration_filter_right],
+            "T_sum_post_calibration_filter",
+        )
+        filter_strip_family_inplace(
+            calibration_work_df,
+            "T_sum",
+            left=t_sum_calibration_filter_left,
+            right=t_sum_calibration_filter_right,
+        )
+        if calibration_work_df_qfb is not None:
+            filter_strip_family_inplace(
+                calibration_work_df_qfb,
+                "T_sum",
+                left=t_sum_calibration_filter_left,
+                right=t_sum_calibration_filter_right,
+            )
+        if calibration_work_st_df is not None:
+            filter_strip_family_inplace(
+                calibration_work_st_df,
+                "T_sum",
+                left=t_sum_calibration_filter_left,
+                right=t_sum_calibration_filter_right,
+            )
+        if calibration_work_st_df_qfb is not None:
+            filter_strip_family_inplace(
+                calibration_work_st_df_qfb,
+                "T_sum",
+                left=t_sum_calibration_filter_left,
+                right=t_sum_calibration_filter_right,
+            )
+
+        run_strip_zeroing_stage(
+            "calibrated_t_sum",
+            calibration_work_df,
+        )
+        if calibration_work_df_qfb is not None:
+            run_strip_zeroing_stage(
+                "calibrated_t_sum",
+                calibration_work_df_qfb,
+            )
+        if calibration_work_st_df is not None:
+            zero_strip_component_blocks(calibration_work_st_df, self_trigger_mode=True)
+        if calibration_work_st_df_qfb is not None:
+            zero_strip_component_blocks(calibration_work_st_df_qfb, self_trigger_mode=True)
+    else:
+        print("Skipping calibration-sample T_sum filtering and strip zeroing (config disabled).")
+
+if (
+    slewing_correction
+    or _plot_slewing_pair_delta_t_qsum1_qsum2_contour
+    or _plot_slewing_delta_t_vs_qsum2_by_qsum1_bins
+    or _plot_slewing_delta_t_vs_qsum2_by_qsum1_bins_fit
+    or _plot_slewing_per_strip_from_pair_fit
+):
+    print(
+        "Rebuilding T_sum pair residual table from the time- and "
+        "charge-calibrated calibration subsample for slewing diagnostics."
+    )
+    time_pair_residuals_df = _build_tsum_pair_residuals(
+        calibration_work_df,
+        y_lookup=y_lookup,
+        z_positions=z_positions,
+        tdiff_to_x=tdiff_to_x,
+        c_mm_ns=c_mm_ns,
+    )
+    print(
+        "Built post-calibration T_sum pair residual table with "
+        f"{len(time_pair_residuals_df)} rows."
+    )
+    time_pair_residuals_df = _apply_slewing_qsum_coordinate_transform(
+        time_pair_residuals_df,
+    )
+    _save_tsum_pair_residuals(time_pair_residuals_df)
+    plot_slewing_pair_delta_t_qsum1_qsum2_contours(time_pair_residuals_df)
+    plot_slewing_delta_t_vs_qsum2_by_qsum1_bins(time_pair_residuals_df)
+    slewing_fit_df = plot_slewing_delta_t_vs_qsum2_by_qsum1_bins_fit(time_pair_residuals_df)
+    plot_slewing_per_strip_from_pair_fit(time_pair_residuals_df, slewing_fit_df)
+    if slewing_correction:
+        print(
+            "slewing_correction=True: active slewing correction is currently disabled. "
+            "Post-calibration pair-level T_sum residual and charge data were saved "
+            "for slewing studies."
+        )
+
 print("----------------------------------------------------------------------")
 print("--------- Applying deferred calibrations to working_df ---------------")
 print("----------------------------------------------------------------------")
@@ -9931,6 +11695,37 @@ if charge_front_back_mode is not None:
             snapshot_column_if_changed(working_df, column_name, live_mask)
             target_dtype = working_df[column_name].dtype
             working_df.loc[:, column_name] = corrected_values.astype(target_dtype, copy=False)
+
+if apply_Q_TDIF_calibration:
+    for plane in [1, 2, 3, 4]:
+        for strip in range(1, 5):
+            coeffs = qtdif_coefficients.get((plane, strip))
+            if coeffs is None:
+                coeffs = global_variables.get(f"P{plane}_s{strip}_Q_TDIF_coeffs")
+            if coeffs is None:
+                continue
+            coeffs = np.asarray(coeffs, dtype=float)
+
+            tdif_col = f"T{plane}_T_dif_{strip}"
+            qdif_col = f"Q{plane}_Q_dif_{strip}"
+            if tdif_col not in working_df.columns or qdif_col not in working_df.columns:
+                continue
+
+            tdif_values = pd.to_numeric(working_df[tdif_col], errors="coerce").to_numpy(dtype=float)
+            qdif_values = pd.to_numeric(working_df[qdif_col], errors="coerce").to_numpy(dtype=float)
+            mask = (
+                np.isfinite(tdif_values)
+                & np.isfinite(qdif_values)
+                & (tdif_values != 0)
+                & (qdif_values != 0)
+            )
+            if not np.any(mask):
+                continue
+
+            corrected_values = qdif_values.copy()
+            corrected_values[mask] = qdif_values[mask] - polynomial(tdif_values[mask], *coeffs)
+            snapshot_column_if_changed(working_df, qdif_col, mask)
+            working_df.loc[:, qdif_col] = corrected_values
 
 if crosstalk_removal_and_recalibration:
     for i, key in enumerate(['1', '2', '3', '4']):
@@ -11423,6 +13218,7 @@ execution_metadata_row = {
     "analysis_mode": int(global_variables["analysis_mode"]),
     "charge_side_mode": charge_side_mode,
     "charge_front_back_mode": charge_front_back_mode,
+    "q_dif_t_dif_correction_mode": q_dif_t_dif_correction_mode,
     "time_calibration_mode": time_calibration_mode,
     "time_dif_calibration_mode": time_dif_calibration_mode,
 }
@@ -11441,6 +13237,7 @@ metadata_execution_csv_path = save_metadata(
         *QA_REPROCESSING_METADATA_KEYS,
         "charge_side_mode",
         "charge_front_back_mode",
+        "q_dif_t_dif_correction_mode",
         "time_calibration_mode",
         "time_dif_calibration_mode",
     ),
@@ -11514,7 +13311,8 @@ calibration_variables = extract_calibration_metadata(
 # Only write a calibration row if at least one calibration was freshly computed
 # (make mode). null and file modes produce no new information worth persisting.
 if any(m == "make" for m in [charge_side_mode, charge_front_back_mode,
-                               time_calibration_mode, time_dif_calibration_mode]):
+                               time_calibration_mode, time_dif_calibration_mode,
+                               q_dif_t_dif_correction_mode]):
     metadata_calibration_csv_path = save_metadata(
         csv_path_calibration,
         calibration_variables,

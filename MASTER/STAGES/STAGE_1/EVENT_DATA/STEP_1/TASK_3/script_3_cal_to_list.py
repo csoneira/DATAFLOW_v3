@@ -355,6 +355,108 @@ def plot_task3_filtered_rpc_tsum_vs_qsum(
     plt.close(fig)
     return fig_idx_value
 
+def plot_task3_filtered_rpc_tsum_vs_qsum_per_combination(
+    df_input: pd.DataFrame,
+    fig_idx_value: int,
+    *,
+    charge_threshold: float,
+    figure_directory: str,
+    show_plots: bool,
+    save_plots: bool,
+    plot_list: list[str],
+    basename: str,
+) -> int:
+    tt_column = "list_tt" if "list_tt" in df_input.columns else "cal_tt"
+    if tt_column not in df_input.columns:
+        print(
+            "Warning: cannot create filtered_rpc_tsum_vs_qsum_scatter_per_combination "
+            "because neither 'list_tt' nor 'cal_tt' exists."
+        )
+        return fig_idx_value
+
+    target_tt_labels = ["1234", "123", "234", "12", "23", "34"]
+    tt_labels = df_input[tt_column].map(normalize_tt_label)
+    fig, axes = plt.subplots(
+        len(target_tt_labels),
+        4,
+        figsize=(20, 24),
+        sharex=False,
+        sharey=False,
+        squeeze=False,
+    )
+
+    for row_idx, tt_label in enumerate(target_tt_labels):
+        tt_mask = tt_labels == tt_label
+        for col_idx, i_plane in enumerate(range(1, 5)):
+            ax = axes[row_idx, col_idx]
+            t_sum_col = f"P{i_plane}_T_sum_final"
+            t_dif_col = f"P{i_plane}_T_dif_final"
+            q_sum_col = f"P{i_plane}_Q_sum_final"
+            q_dif_col = f"P{i_plane}_Q_dif_final"
+            y_col = f"P{i_plane}_Y_final"
+            required_cols = [t_sum_col, t_dif_col, q_sum_col, q_dif_col, y_col]
+
+            if not all(col in df_input.columns for col in required_cols):
+                ax.text(
+                    0.5,
+                    0.5,
+                    "Missing columns",
+                    ha="center",
+                    va="center",
+                    transform=ax.transAxes,
+                )
+                ax.set_title(f"TT={tt_label}, P{i_plane}, N=0")
+                ax.grid(True, alpha=0.25)
+                continue
+
+            valid_rows = df_input.loc[tt_mask, required_cols].replace(0, np.nan).dropna()
+            filtered_rows = valid_rows.loc[valid_rows[q_sum_col] < charge_threshold]
+            t_sum = pd.to_numeric(filtered_rows[t_sum_col], errors="coerce")
+            q_sum = pd.to_numeric(filtered_rows[q_sum_col], errors="coerce")
+            valid = np.isfinite(t_sum) & np.isfinite(q_sum)
+            t_sum = t_sum[valid]
+            q_sum = q_sum[valid]
+            n_points = int(len(t_sum))
+            title = f"TT={tt_label}, P{i_plane}, N={n_points}"
+
+            if n_points == 0:
+                ax.text(
+                    0.5,
+                    0.5,
+                    "No valid events",
+                    ha="center",
+                    va="center",
+                    transform=ax.transAxes,
+                )
+                ax.set_title(title)
+            else:
+                _task3_plot_quantile_scatter(ax, t_sum, q_sum, title)
+
+            if row_idx == len(target_tt_labels) - 1:
+                ax.set_xlabel("T_sum")
+            if col_idx == 0:
+                ax.set_ylabel("Q_sum")
+            ax.grid(True, alpha=0.25)
+
+    fig.suptitle(
+        f"Filtered RPC T_sum vs Q_sum per {tt_column} - {basename}",
+        fontsize=16,
+    )
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+
+    if save_plots:
+        name_of_file = "filtered_rpc_tsum_vs_qsum_scatter_per_combination"
+        final_filename = f"{fig_idx_value}_{name_of_file}.png"
+        fig_idx_value += 1
+        save_fig_path = os.path.join(figure_directory, final_filename)
+        plot_list.append(save_fig_path)
+        save_plot_figure(save_fig_path, fig=fig, format="png", dpi=150)
+
+    if show_plots:
+        plt.show()
+    plt.close(fig)
+    return fig_idx_value
+
 
 def _track_figure(fig: mpl.figure.Figure) -> mpl.figure.Figure:
     fig_number = getattr(fig, "number", None)
@@ -2711,6 +2813,7 @@ TASK3_PLOT_ALIASES: tuple[str, ...] = (
     "filter6_qdif_debug",
     "filter6_y_debug",
     "filtered_rpc_tsum_vs_qsum_scatter",
+    "filtered_rpc_tsum_vs_qsum_scatter_per_combination",
     "filtered_rpc_tsum_vs_qsum_hexbin",
     "filtered_rpc_variables_hexbin",
     "prefilter_qsum_nonzero_debug",
@@ -7329,6 +7432,18 @@ if task3_plot_enabled("filtered_rpc_tsum_vs_qsum_scatter"):
         show_plots=show_plots,
         save_plots=save_plots,
         plot_list=plot_list,
+    )
+
+if task3_plot_enabled("filtered_rpc_tsum_vs_qsum_scatter_per_combination"):
+    fig_idx = plot_task3_filtered_rpc_tsum_vs_qsum_per_combination(
+        working_df,
+        fig_idx,
+        charge_threshold=150.0,
+        figure_directory=base_directories["figure_directory"],
+        show_plots=show_plots,
+        save_plots=save_plots,
+        plot_list=plot_list,
+        basename=basename_no_ext,
     )
 
 if task3_plot_enabled("filtered_rpc_tsum_vs_qsum_hexbin"):

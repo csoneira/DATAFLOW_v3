@@ -50,7 +50,7 @@ clean_dataflow.sh
 Unified cleaner for DATAFLOW_v3 artefacts (COMPLETED_DIRECTORY exports, plot bundles, and Stage-0 buffers).
 
 Usage:
-  clean_dataflow.sh [--force|-f] [--threshold|-t <percent>] [--select|-s <list>] [--compact|-c] [--keep-final]
+  clean_dataflow.sh [--force|-f] [--threshold|-t <percent>] [--select|-s <list>] [--compact|-c] [--keep-final] [--kill-lock-holder]
 
 Options:
   -h, --help             Show this help message and exit.
@@ -64,12 +64,16 @@ Options:
                          during completed cleanup. If /home usage rises above 90%,
                          prune the oldest files from those final completed directories
                          until usage drops to 60% or no files remain.
+  --kill-lock-holder     If another clean_dataflow process holds the lock, terminate it,
+                         remove the stale lock file, and continue. Use only after checking
+                         that the previous cleaner should be stopped.
 
 Examples:
   clean_dataflow.sh
   clean_dataflow.sh --threshold 65 --select plots,completed
   clean_dataflow.sh --force -s temps
   clean_dataflow.sh --force --select completed --keep-final
+  clean_dataflow.sh --force --select plots,completed --kill-lock-holder
   clean_dataflow.sh --force --compact
 EOF
 }
@@ -239,6 +243,7 @@ clean_completed() {
   local type="completed"
   local -a dirs=()
   local -a final_dirs=()
+  local station_dir dir
   if [[ ! -d "$STATIONS_BASE" ]]; then
     log_info "Skipping completed cleanup: $STATIONS_BASE not found."
     TYPE_BEFORE["$type"]=0
@@ -248,36 +253,39 @@ clean_completed() {
     return 0
   fi
 
-  local -a patterns=(
-    '*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/INPUT_FILES/COMPLETED_DIRECTORY'
-    '*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/INPUT_FILES/ERROR_DIRECTORY'
-    '*/STAGE_1/EVENT_DATA/STEP_1/TASK_1/ANCILLARY/REJECTED_FILES'
-    '*/STAGE_1/EVENT_DATA/STEP_2/INPUT_FILES/COMPLETED'
-    '*/STAGE_1/EVENT_DATA/STEP_2/INPUT_FILES/ERROR_DIRECTORY'
-    '*/STAGE_1/EVENT_DATA/STEP_3/TASK_2/INPUT_FILES/COMPLETED'
-    '*/STAGE_1/LAB_LOGS/STEP_*/INPUT_FILES/COMPLETED'
-    '*/STAGE_1/LAB_LOGS/STEP_*/INPUT_FILES/ERROR*'
-    '*/STAGE_0/REPROCESSING/STEP_2/INPUT_FILES/COMPLETED'
-    '*/STAGE_0/REPROCESSING/STEP_2/INPUT_FILES/ERROR*'
-  )
-
   declare -A seen_dirs=()
-  for pattern in "${patterns[@]}"; do
-    while IFS= read -r -d '' dir; do
-      [[ -d "$dir" ]] || continue
-      [[ -n ${seen_dirs["$dir"]:-} ]] && continue
-      if is_metadata_path "$dir"; then
-        log_warn "Skipping metadata path during completed cleanup: $dir"
-        continue
-      fi
-      if [[ "$KEEP_FINAL" == true ]] && is_final_completed_dir "$dir"; then
-        log_info "Keeping final completed directory due to --keep-final: $dir"
-        final_dirs+=("$dir")
-        continue
-      fi
-      seen_dirs["$dir"]=1
-      dirs+=("$dir")
-    done < <(find "$STATIONS_BASE" -type d -path "$pattern" -print0 2>/dev/null)
+  add_completed_dir() {
+    local candidate="$1"
+    [[ -d "$candidate" ]] || return 0
+    [[ -n ${seen_dirs["$candidate"]:-} ]] && return 0
+    if is_metadata_path "$candidate"; then
+      log_warn "Skipping metadata path during completed cleanup: $candidate"
+      return 0
+    fi
+    if [[ "$KEEP_FINAL" == true ]] && is_final_completed_dir "$candidate"; then
+      log_info "Keeping final completed directory due to --keep-final: $candidate"
+      final_dirs+=("$candidate")
+      return 0
+    fi
+    seen_dirs["$candidate"]=1
+    dirs+=("$candidate")
+  }
+
+  for station_dir in "$STATIONS_BASE"/*; do
+    [[ -d "$station_dir" ]] || continue
+    for dir in \
+      "$station_dir"/STAGE_1/EVENT_DATA/STEP_1/TASK_*/INPUT_FILES/COMPLETED_DIRECTORY \
+      "$station_dir"/STAGE_1/EVENT_DATA/STEP_1/TASK_*/INPUT_FILES/ERROR_DIRECTORY \
+      "$station_dir"/STAGE_1/EVENT_DATA/STEP_1/TASK_1/ANCILLARY/REJECTED_FILES \
+      "$station_dir"/STAGE_1/EVENT_DATA/STEP_2/INPUT_FILES/COMPLETED \
+      "$station_dir"/STAGE_1/EVENT_DATA/STEP_2/INPUT_FILES/ERROR_DIRECTORY \
+      "$station_dir"/STAGE_1/EVENT_DATA/STEP_3/TASK_2/INPUT_FILES/COMPLETED \
+      "$station_dir"/STAGE_1/LAB_LOGS/STEP_*/INPUT_FILES/COMPLETED \
+      "$station_dir"/STAGE_1/LAB_LOGS/STEP_*/INPUT_FILES/ERROR* \
+      "$station_dir"/STAGE_0/REPROCESSING/STEP_2/INPUT_FILES/COMPLETED \
+      "$station_dir"/STAGE_0/REPROCESSING/STEP_2/INPUT_FILES/ERROR*; do
+      add_completed_dir "$dir"
+    done
   done
 
   if (( ${#dirs[@]} == 0 )); then
@@ -290,9 +298,7 @@ clean_completed() {
     return 0
   fi
 
-  # Single batched du before any deletion — avoids 2×N separate du calls
-  local total_before
-  total_before=$(du -sb "${dirs[@]}" 2>/dev/null | awk '{sum+=$1} END{print sum+0}')
+  local total_before=0
 
   for dir in "${dirs[@]}"; do
     log_detail "--> Cleaning $dir"
@@ -309,15 +315,14 @@ clean_completed() {
   TYPE_COUNTS["$type"]=${#dirs[@]}
 
   log_info "Completed/Error directories cleaned: ${#dirs[@]}"
-  log_info "   Size before: $(format_bytes "$total_before")"
-  log_info "   Size after:  $(format_bytes "$total_after")"
-  log_info "   Freed:       $(format_bytes "$freed")"
+  log_info "   Size accounting skipped for speed."
 
   prune_final_completed_if_needed "${final_dirs[@]}"
 }
 
 clean_step1_queue_sidecars() {
   local -a files=()
+  local station_dir task_input_dir queue_dir file
   if [[ ! -d "$STATIONS_BASE" ]]; then
     log_info "Skipping Step-1 queue sidecar cleanup: $STATIONS_BASE not found."
     QUEUE_SIDECAR_BEFORE=0
@@ -327,18 +332,19 @@ clean_step1_queue_sidecars() {
     return 0
   fi
 
-  while IFS= read -r -d '' file; do
-    [[ -f "$file" ]] || continue
-    files+=("$file")
-  done < <(
-    find "$STATIONS_BASE" -type f \
-      \( \
-        -path '*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/INPUT_FILES/UNPROCESSED_DIRECTORY/removed_channel_values_*' -o \
-        -path '*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/INPUT_FILES/UNPROCESSED_DIRECTORY/removed_rows_*' -o \
-        -path '*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/INPUT_FILES/PROCESSING_DIRECTORY/removed_channel_values_*' -o \
-        -path '*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/INPUT_FILES/PROCESSING_DIRECTORY/removed_rows_*' \
-      \) -print0 2>/dev/null
-  )
+  for station_dir in "$STATIONS_BASE"/*; do
+    [[ -d "$station_dir" ]] || continue
+    for task_input_dir in "$station_dir"/STAGE_1/EVENT_DATA/STEP_1/TASK_*/INPUT_FILES; do
+      [[ -d "$task_input_dir" ]] || continue
+      for queue_dir in "$task_input_dir"/UNPROCESSED_DIRECTORY "$task_input_dir"/PROCESSING_DIRECTORY; do
+        [[ -d "$queue_dir" ]] || continue
+        for file in "$queue_dir"/removed_channel_values_* "$queue_dir"/removed_rows_*; do
+          [[ -f "$file" ]] || continue
+          files+=("$file")
+        done
+      done
+    done
+  done
 
   if (( ${#files[@]} == 0 )); then
     log_info "No misplaced Step-1 queue sidecars found."
@@ -417,6 +423,7 @@ clean_cronlogs() {
 clean_plots() {
   local type="plots"
   local -a dirs=()
+  local station_dir dir
   declare -A seen_dirs=()
   if [[ ! -d "$STATIONS_BASE" ]]; then
     log_info "Skipping plots cleanup: $STATIONS_BASE not found."
@@ -427,19 +434,39 @@ clean_plots() {
     return 0
   fi
 
-  # Single find covering both PLOTS dirs and DEBUG_PLOTS fallback in one tree walk.
-  # DEBUG_PLOTS entries whose parent PLOTS is already queued are removed below.
-  while IFS= read -r -d '' dir; do
-    [[ -n ${seen_dirs["$dir"]:-} ]] && continue
-    if is_metadata_path "$dir"; then
-      log_warn "Skipping metadata path during plots cleanup: $dir"
-      continue
+  add_plot_dir() {
+    local candidate="$1"
+    [[ -d "$candidate" ]] || return 0
+    [[ -n ${seen_dirs["$candidate"]:-} ]] && return 0
+    if is_metadata_path "$candidate"; then
+      log_warn "Skipping metadata path during plots cleanup: $candidate"
+      return 0
     fi
-    seen_dirs["$dir"]=1
-    dirs+=("$dir")
-  done < <(find "$STATIONS_BASE" -maxdepth 10 -type d \
-    \( -name 'PLOTS' -o -path '*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/PLOTS/DEBUG_PLOTS' \) \
-    -print0 2>/dev/null)
+    seen_dirs["$candidate"]=1
+    dirs+=("$candidate")
+  }
+
+  # Avoid a broad find over STATIONS. This cleaner is ancillary and should move
+  # quickly even when /home is almost full or station trees contain huge queues.
+  for station_dir in "$STATIONS_BASE"/*; do
+    [[ -d "$station_dir" ]] || continue
+    for dir in \
+      "$station_dir"/STAGE_0/REPROCESSING/STEP_*/PLOTS \
+      "$station_dir"/STAGE_1/EVENT_DATA/STEP_1/TASK_*/PLOTS \
+      "$station_dir"/STAGE_1/EVENT_DATA/STEP_1/TASK_*/PLOTS/DEBUG_PLOTS \
+      "$station_dir"/STAGE_1/EVENT_DATA/STEP_2/PLOTS \
+      "$station_dir"/STAGE_1/EVENT_DATA/STEP_3/TASK_*/PLOTS \
+      "$station_dir"/STAGE_1/LAB_LOGS/STEP_*/PLOTS; do
+      add_plot_dir "$dir"
+    done
+  done
+
+  # Fallback for future shallow station plot locations without walking large
+  # INPUT_FILES/COMPLETED trees.
+  for dir in "$STATIONS_BASE"/*/*/*/PLOTS "$STATIONS_BASE"/*/*/*/*/PLOTS "$STATIONS_BASE"/*/*/*/*/*/PLOTS; do
+    [[ -n ${seen_dirs["$dir"]:-} ]] && continue
+    add_plot_dir "$dir"
+  done
 
   # Post-filter: drop any DEBUG_PLOTS whose parent PLOTS is also in the list
   local -a filtered_dirs=()
@@ -469,9 +496,10 @@ clean_plots() {
     return 0
   fi
 
-  # Single batched du before deletion — avoids 2×N separate du calls
-  local total_before
-  total_before=$(du -sb "${dirs[@]}" 2>/dev/null | awk '{sum+=$1} END{print sum+0}')
+  log_info "PLOTS directories discovered: ${#dirs[@]}"
+  local total_before=0
+  local total_after=0
+  local total_freed=0
   local total_deleted=0
   local kept_per_dir=$PLOTS_KEEP_FRESHEST
 
@@ -484,47 +512,57 @@ clean_plots() {
     chmod -R u+w "$dir" 2>/dev/null || true
 
     local -a ranked_entries=()
-    local entry path
+    local entry path rest file_size dir_before dir_after
     local idx=0
+    dir_before=0
+    dir_after=0
     while IFS= read -r -d '' entry; do
       ranked_entries+=("$entry")
-    done < <(find "$dir" -type f -printf '%T@|%p\0' 2>/dev/null | sort -z -t '|' -k1,1nr)
+      rest="${entry#*|}"
+      file_size="${rest%%|*}"
+      dir_before=$((dir_before + file_size))
+    done < <(find "$dir" -type f -printf '%T@|%s|%p\0' 2>/dev/null | sort -z -t '|' -k1,1nr)
+    total_before=$((total_before + dir_before))
 
     if (( ${#ranked_entries[@]} <= kept_per_dir )); then
+      total_after=$((total_after + dir_before))
       continue
     fi
 
     for entry in "${ranked_entries[@]}"; do
-      path="${entry#*|}"
+      rest="${entry#*|}"
+      file_size="${rest%%|*}"
+      path="${rest#*|}"
       if (( idx < kept_per_dir )); then
+        dir_after=$((dir_after + file_size))
         idx=$((idx + 1))
         continue
       fi
       if rm -f -- "$path" 2>/dev/null; then
         total_deleted=$((total_deleted + 1))
+        total_freed=$((total_freed + file_size))
       else
         log_warn "Failed to remove old plot file: $path"
+        dir_after=$((dir_after + file_size))
       fi
       idx=$((idx + 1))
     done
+    total_after=$((total_after + dir_after))
 
     # Remove empty subdirectories left after trimming old files.
     find "$dir" -mindepth 1 -type d -empty -delete 2>/dev/null || true
   done
 
-  local total_after
-  total_after=$(du -sb "${dirs[@]}" 2>/dev/null | awk '{sum+=$1} END{print sum+0}')
-  local freed=$((total_before - total_after))
   TYPE_BEFORE["$type"]=$total_before
   TYPE_AFTER["$type"]=$total_after
-  TYPE_FREED["$type"]=$freed
+  TYPE_FREED["$type"]=$total_freed
   TYPE_COUNTS["$type"]=${#dirs[@]}
 
   log_info "PLOTS directories cleaned: ${#dirs[@]} (kept newest $kept_per_dir file(s) per directory)"
   log_info "   Old files deleted: $total_deleted"
   log_info "   Total before: $(format_bytes "$total_before")"
   log_info "   Total after:  $(format_bytes "$total_after")"
-  log_info "   Total freed:  $(format_bytes "$freed")"
+  log_info "   Total freed:  $(format_bytes "$total_freed")"
 }
 
 clean_temps() {
@@ -543,10 +581,12 @@ clean_temps() {
   for root in "${roots[@]}"; do
     [[ -d "$root" ]] || continue
 
-    # Single find covering both varData and rawData in one tree walk
-    while IFS= read -r -d '' found_dir; do
-      local base
-      base="$(dirname "$found_dir")"
+    local base
+    for base in \
+      "$root"/MASTER/STAGES/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/mingo*/data/daqData \
+      "$root"/STATIONS/MINGO*/STAGE_0/*/system/devices/TRB3/mingo*/data/daqData \
+      "$root"/STATIONS/MINGO*/STAGE_0/*/*/system/devices/TRB3/mingo*/data/daqData; do
+      [[ -d "$base" ]] || continue
       if [[ -n ${seen_bases["$base"]:-} ]]; then
         continue
       fi
@@ -554,7 +594,7 @@ clean_temps() {
       for rel in "${rel_targets[@]}"; do
         patterns+=("$base/$rel")
       done
-    done < <(find "$root" -type d \( -name 'varData' -o -path '*/rawData' \) -print0 2>/dev/null)
+    done
   done
 
   if (( ${#patterns[@]} == 0 )); then
@@ -629,8 +669,82 @@ clean_temps() {
   fi
 }
 
+lock_file_key() {
+  local path="$1"
+  local key
+  key=$(stat -Lc '%t:%T:%i' "$path" 2>/dev/null || true)
+  [[ -n "$key" ]] || return 1
+  printf '%s' "$key"
+}
+
+lock_holder_pid() {
+  local path="$1"
+  local key inode pid
+  key=$(lock_file_key "$path") || return 1
+  pid=$(awk -v key="$key" '$6 == key {print $5; exit}' /proc/locks 2>/dev/null || true)
+  if [[ -n "$pid" ]]; then
+    printf '%s' "$pid"
+    return 0
+  fi
+  inode="${key##*:}"
+  awk -v inode="$inode" '$2 == "FLOCK" && $6 ~ ":" inode "$" {print $5; exit}' /proc/locks 2>/dev/null || true
+}
+
+process_command_line() {
+  local pid="$1"
+  if [[ -r "/proc/$pid/cmdline" ]]; then
+    tr '\0' ' ' <"/proc/$pid/cmdline" | sed 's/[[:space:]]*$//'
+  else
+    ps -p "$pid" -o args= 2>/dev/null || true
+  fi
+}
+
+wait_for_process_exit() {
+  local pid="$1"
+  local attempts="${2:-10}"
+  local i
+  for ((i = 0; i < attempts; i++)); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+process_descendants() {
+  local pid="$1"
+  local child
+  while IFS= read -r child; do
+    [[ -n "$child" ]] || continue
+    process_descendants "$child"
+    printf '%s\n' "$child"
+  done < <(pgrep -P "$pid" 2>/dev/null || true)
+}
+
+terminate_process_tree() {
+  local pid="$1"
+  local -a targets=()
+  local target
+  while IFS= read -r target; do
+    [[ -n "$target" ]] || continue
+    targets+=("$target")
+  done < <(process_descendants "$pid")
+  targets+=("$pid")
+
+  kill -TERM "${targets[@]}" 2>/dev/null || true
+  if wait_for_process_exit "$pid" 2; then
+    return 0
+  fi
+
+  log_warn "PID $pid did not exit after TERM. Sending KILL to lock holder process tree."
+  kill -KILL "${targets[@]}" 2>/dev/null || true
+  wait_for_process_exit "$pid" 2
+}
+
 FORCE=false
 KEEP_FINAL=false
+KILL_LOCK_HOLDER=false
 THRESHOLD=$(validate_threshold "50")
 declare -a SELECTION_ARGS=()
 
@@ -650,6 +764,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --keep-final)
       KEEP_FINAL=true
+      shift
+      ;;
+    --kill-lock-holder)
+      KILL_LOCK_HOLDER=true
       shift
       ;;
     -t|--threshold)
@@ -726,10 +844,52 @@ else
 fi
 
 # Acquire exclusive lock to prevent concurrent runs (LOCK_FILE was declared above)
-exec {LOCK_FD}>"$LOCK_FILE" 2>/dev/null || { log_warn "Cannot open lock file: $LOCK_FILE"; exit 1; }
+if ! { exec {LOCK_FD}>"$LOCK_FILE"; } 2>/dev/null; then
+  log_warn "Cannot open lock file: $LOCK_FILE"
+  exit 1
+fi
 if ! flock -n "$LOCK_FD"; then
-  log_warn "Another clean_dataflow instance is already running (lock: $LOCK_FILE). Exiting."
-  exit 0
+  holder_pid="$(lock_holder_pid "$LOCK_FILE")"
+  if [[ -n "$holder_pid" ]]; then
+    holder_cmd="$(process_command_line "$holder_pid")"
+    log_warn "Another clean_dataflow instance is already running."
+    log_warn "   Lock file: $LOCK_FILE"
+    log_warn "   Holder PID: $holder_pid"
+    if [[ -n "$holder_cmd" ]]; then
+      log_warn "   Holder command: $holder_cmd"
+    fi
+  else
+    log_warn "Another process holds the clean_dataflow lock, but the holder PID could not be identified."
+    log_warn "   Lock file: $LOCK_FILE"
+  fi
+
+  if [[ "$KILL_LOCK_HOLDER" != true ]]; then
+    log_warn "Exiting without cleaning. Re-run with --kill-lock-holder to terminate the holder and continue."
+    exit 0
+  fi
+
+  if [[ -z "$holder_pid" ]]; then
+    log_warn "--kill-lock-holder was requested, but no holder PID was found. Refusing to remove a possibly active lock."
+    exit 1
+  fi
+
+  log_warn "--kill-lock-holder requested. Terminating lock holder PID $holder_pid and its children."
+  if ! terminate_process_tree "$holder_pid"; then
+    log_warn "PID $holder_pid is still present after KILL. Refusing to continue."
+    exit 1
+  fi
+
+  exec {LOCK_FD}>&-
+  rm -f "$LOCK_FILE" 2>/dev/null || true
+  if ! { exec {LOCK_FD}>"$LOCK_FILE"; } 2>/dev/null; then
+    log_warn "Cannot recreate lock file: $LOCK_FILE"
+    exit 1
+  fi
+  if ! flock -n "$LOCK_FD"; then
+    log_warn "Lock is still held after killing PID $holder_pid. Refusing to continue."
+    exit 1
+  fi
+  log_warn "Previous lock holder stopped; continuing with cleanup."
 fi
 trap 'flock -u "$LOCK_FD" 2>/dev/null || true; rm -f "$LOCK_FILE" 2>/dev/null || true' EXIT
 

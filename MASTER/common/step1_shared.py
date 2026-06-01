@@ -53,6 +53,8 @@ STEP1_TASK_OVERRIDE_KEYS: Tuple[str, ...] = (
     "keep_all_columns_output",
     "process_only_qa_retry_files",
     "prioritize_other_than_qa_files",
+    "save_removed_channel_values",
+    "save_time_slewing_pair_residuals",
 )
 STEP1_METADATA_OUTPUT_TYPES: Tuple[str, ...] = (
     "activation",
