@@ -1,19 +1,55 @@
-STATIONS
-.git
+# Safe mirror policy:
+# Keep source code, configs, docs, and lightweight operational scripts.
+# Exclude generated data, local environments, caches, logs, archives, and
+# simulation/analysis products. The daily cron rsync in CONFIG/add_to_crontab.info
+# uses this file to populate $HOME/SAFE_DATAFLOW_v3.
+
+# Repository/runtime internals
+.git/
 .gitignore
-OPERATIONS_RUNTIME
-MINGO_DIGITAL_TWIN/INTERSTEPS
-MINGO_DIGITAL_TWIN/SIMULATED_DATA
+.agents/
+.codex/
+.pytest_cache/
+.venv/
+.vscode/
+OPERATIONS_RUNTIME/
+
+# Top-level data/archive trees that should not be mirrored
+.ATTIC/
+LOG_BACKUP/hosts/
+LOG_BACKUP/runtime/
+STATIONS/
+VARIOUS/
+SIMULATION_DATA_JUNK/
+STATIONS_FEB_26/
 
 # Generated outputs / figures / plots / logs
-LOG_BACKUP/runtime
-**/OUTPUTS
-**/PLOTS
-**/FIGURES
-**/LOGS
-**/NMDB
-**/__pycache__
-**/.pytest_cache
+**/.ATTIC/***
+**/OUTPUT/***
+**/OUTPUTS/***
+**/OUTPUT_FILES/***
+**/PLOTS/***
+**/FIGURES/***
+**/LOGS/***
+**/logs/***
+**/NMDB/***
+**/__pycache__/***
+**/.pytest_cache/***
+**/.ipynb_checkpoints/***
+
+# Digital twin generated data and archived simulation outputs
+MINGO_DIGITAL_TWIN/.ATTIC/
+MINGO_DIGITAL_TWIN/INTERSTEPS/
+MINGO_DIGITAL_TWIN/SIMULATED_DATA/
+MINGO_DIGITAL_TWIN/VALIDATION/output/
+MINGO_DIGITAL_TWIN/PLOTTERS/EXECUTION/OUTPUT_FILES/
+MINGO_DIGITAL_TWIN/PLOTTERS/EXECUTION/MESH/OUTPUT_FILES/
+MINGO_DIGITAL_TWIN/PLOTTERS/STEPS/OUTPUT_FILES/
+
+# Bundled unpacker runtime data/logs. Keep the unpacker source, skip raw/runtime
+# detector dumps and generated runtime state.
+MASTER/STAGES/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES/system/
+**/rawData/***
 
 # Known standalone generated data files outside output trees
 QUICK_TEST/*.csv
@@ -34,5 +70,17 @@ QUICK_TEST/*.csv
 *.png
 *.jpg
 *.jpeg
+*.JPG
+*.JPEG
 *.pdf
+*.PDF
 *.svg
+*.SVG
+*.eps
+*.EPS
+*.ps
+*.PS
+*.mat
+*.MAT
+*.hld
+*.HLD

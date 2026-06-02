@@ -45,11 +45,17 @@ time_dif_calibration: [make]
 slewing_correction: true
 # Binning for slewing_delta_t_vs_qsum2_by_qsum1_bins.
 # Q_sum_1 uses quantile bins; Q_sum_2 uses equal-width bins within each Q_sum_1 bin.
-slewing_delta_t_qsum1_bins: 4
-slewing_delta_t_qsum2_bins: 6
+slewing_delta_t_qsum1_bins: 5
+slewing_delta_t_qsum2_bins: 8
 slewing_delta_t_fit_degree: 1
 # Use log(Q_sum) instead of linear Q_sum for the slewing stage and its plots.
 slewing_use_log_qsum: true
+# Reference convention for slewing_per_strip_from_pair_fit: mean_zero | max_charge
+slewing_per_strip_reference_mode: mean_zero
+apply_slewing_correction_from_pair_fit: true
+slewing_application_reference_mode: mean_zero
+joined_analysis_files: 1
+joined_analysis_time_tolerance_hours: 24
 time_window_filtering: false
 charge_share_prefilter: false
 calibration_dataframe_filtering: true

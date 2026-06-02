@@ -10,4 +10,6 @@ complete_reanalysis: false
 # Task 5 plot alias statuses live in config_plots_task_5.yaml
 create_plots: null
 keep_all_columns_output: false
+joined_analysis_files: 3
+joined_analysis_time_tolerance_hours: 5
 correct_angle: false

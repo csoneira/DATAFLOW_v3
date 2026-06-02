@@ -12,6 +12,8 @@ complete_reanalysis: false
 # Task 4 plot alias statuses live in config_plots_task_4.yaml
 create_plots: null
 keep_all_columns_output: true
+joined_analysis_files: 3
+joined_analysis_time_tolerance_hours: 5
 save_rejected_rows: false
 create_reject_plots: false
 limit_number: null

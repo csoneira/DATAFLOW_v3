@@ -123,6 +123,8 @@ from MASTER.common.step1_shared import (
     build_step1_cli_parser,
     build_step1_filtered_print,
     collect_columns,
+    coerce_nonnegative_float_config,
+    coerce_positive_int_config,
     extract_rate_histogram_metadata,
     extract_trigger_type_metadata,
     is_trigger_type_file_column,
@@ -132,8 +134,10 @@ from MASTER.common.step1_shared import (
     load_step1_task_plot_catalog,
     normalize_tt_label,
     prune_redundant_count_metadata,
+    replicate_joined_metadata_rows,
     resolve_step1_effective_task_config,
     save_metadata,
+    select_joined_analysis_file_names,
     select_exact_minimum_vertex_cover,
     set_global_rate_from_tt_rates,
     resolve_step1_plot_options,
@@ -328,6 +332,7 @@ def save_plot_figure(save_path: str, fig: mpl.figure.Figure | None = None, **sav
         pdf_save_rasterized_page(_direct_pdf_pages, target_fig, dpi=dpi, **pdf_kwargs)
         _direct_pdf_page_count += 1
         return
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
     target_fig.savefig(save_path, **savefig_kwargs)
 
 def close_direct_pdf_writer() -> None:
@@ -347,11 +352,14 @@ def close_direct_pdf_writer() -> None:
     _direct_pdf_temp_path = None
 
 def finalize_saved_plots_to_pdf() -> None:
+    figure_directory = base_directories["figure_directory"]
     if not create_pdf:
+        if os.path.exists(figure_directory):
+            shutil.rmtree(figure_directory)
         return
 
     print(f"Creating PDF with all plots in {save_pdf_path}")
-    existing_pngs = collect_saved_plot_paths(plot_list, base_directories["figure_directory"])
+    existing_pngs = collect_saved_plot_paths(plot_list, figure_directory)
 
     if _direct_pdf_pages is not None:
         # Direct PDF mode already wrote each page incrementally via save_plot_figure.
@@ -378,12 +386,8 @@ def finalize_saved_plots_to_pdf() -> None:
         except OSError as e:
             print(f"Error: {e.filename} - {e.strerror}.")
 
-    figure_directory = base_directories["figure_directory"]
     if os.path.exists(figure_directory):
-        if not os.listdir(figure_directory):
-            os.rmdir(figure_directory)
-        else:
-            print(f"Figure directory not empty, skipping removal: {figure_directory}")
+        shutil.rmtree(figure_directory)
 
 
 def _exit_without_status_row(message: str) -> None:
@@ -2574,6 +2578,11 @@ save_removed_channel_values = _coerce_config_bool(
     config.get("save_removed_channel_values"),
     default=True,
 )
+joined_analysis_files = coerce_positive_int_config(config.get("joined_analysis_files"), default=1)
+joined_analysis_time_tolerance_hours = coerce_nonnegative_float_config(
+    config.get("joined_analysis_time_tolerance_hours"),
+    default=5.0,
+)
 if process_only_qa_retry_files:
     print(
         "[QA_ONLY] Enabled by STEP_1 shared config: only files present in the active QA retry list will be processed."
@@ -2627,6 +2636,10 @@ early_metadata_directory = (
 )
 early_metadata_directory.mkdir(parents=True, exist_ok=True)
 early_status_csv_path = early_metadata_directory / f"task_{task_number}_metadata_status.csv"
+selected_file_source = "user" if user_file_selection else ""
+selected_source_candidates: list[str] = []
+joined_input_records: list[dict[str, str]] = []
+
 if user_file_selection:
     early_status_filename_base = Path(user_file_path).stem
 else:
@@ -3608,6 +3621,8 @@ else:
         )
         if latest_unprocessed:
             file_name = latest_unprocessed
+            selected_file_source = "unprocessed"
+            selected_source_candidates = list(_preferred_non_qa_or_all(unprocessed_files, preferred_unprocessed_files))
             unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
             processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
             completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
@@ -3627,6 +3642,8 @@ else:
             )
             if latest_processing:
                 file_name = latest_processing
+                selected_file_source = "processing"
+                selected_source_candidates = list(_preferred_non_qa_or_all(processing_files, preferred_processing_files))
                 processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
                 completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
 
@@ -3647,6 +3664,8 @@ else:
                 )
                 if latest_completed:
                     file_name = latest_completed
+                    selected_file_source = "completed"
+                    selected_source_candidates = list(_preferred_non_qa_or_all(completed_files, preferred_completed_files))
                     processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
                     completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
 
@@ -3669,6 +3688,8 @@ else:
             )
             if priority_file is not None:
                 file_name = priority_file
+                selected_file_source = "unprocessed"
+                selected_source_candidates = list(_preferred_non_qa_or_all(unprocessed_files, preferred_unprocessed_files))
                 unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
                 processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
                 completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
@@ -3677,9 +3698,9 @@ else:
                 print(f"File moved to PROCESSING: {processing_file_path}")
             else:
                 print("Selecting a random file in UNPROCESSED...")
-                file_name = random.choice(
-                    _preferred_non_qa_or_all(unprocessed_files, preferred_unprocessed_files)
-                )
+                selected_file_source = "unprocessed"
+                selected_source_candidates = list(_preferred_non_qa_or_all(unprocessed_files, preferred_unprocessed_files))
+                file_name = random.choice(selected_source_candidates)
                 unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
                 processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
                 completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
@@ -3699,6 +3720,8 @@ else:
             )
             if priority_file is not None:
                 file_name = priority_file
+                selected_file_source = "processing"
+                selected_source_candidates = list(_preferred_non_qa_or_all(processing_files, preferred_processing_files))
                 processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
                 completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
                 print(f"Processing prioritized file in PROCESSING: {processing_file_path}")
@@ -3709,9 +3732,9 @@ else:
                 print(f"File moved to ERROR: {processing_file_path}")
             else:
                 print("Selecting a random file in PROCESSING...")
-                file_name = random.choice(
-                    _preferred_non_qa_or_all(processing_files, preferred_processing_files)
-                )
+                selected_file_source = "processing"
+                selected_source_candidates = list(_preferred_non_qa_or_all(processing_files, preferred_processing_files))
+                file_name = random.choice(selected_source_candidates)
                 processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
                 completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
 
@@ -3734,6 +3757,8 @@ else:
                 )
                 if priority_file is not None:
                     file_name = priority_file
+                    selected_file_source = "completed"
+                    selected_source_candidates = list(_preferred_non_qa_or_all(completed_files, preferred_completed_files))
                     completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
                     processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
                     print(f"Moving prioritized '{file_name}' to PROCESSING...")
@@ -3741,9 +3766,9 @@ else:
                     print(f"File moved to PROCESSING: {processing_file_path}")
                 else:
                     print("Selecting a random file in COMPLETED...")
-                    file_name = random.choice(
-                        _preferred_non_qa_or_all(completed_files, preferred_completed_files)
-                    )
+                    selected_file_source = "completed"
+                    selected_source_candidates = list(_preferred_non_qa_or_all(completed_files, preferred_completed_files))
+                    file_name = random.choice(selected_source_candidates)
                     completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
                     processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
 
@@ -3758,10 +3783,63 @@ else:
         else:
             _exit_without_status_row("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
 
+joined_input_records = [
+    {
+        "file_name": file_name,
+        "processing_file_path": processing_file_path,
+        "completed_file_path": completed_file_path if not user_file_selection else "",
+        "basename_no_ext": os.path.splitext(file_name)[0],
+    }
+]
+if (
+    not user_file_selection
+    and joined_analysis_files > 1
+    and selected_file_source in {"unprocessed", "completed"}
+):
+    joined_file_names = select_joined_analysis_file_names(
+        file_name,
+        selected_source_candidates,
+        station_id=station,
+        max_files=joined_analysis_files,
+        tolerance_hours=joined_analysis_time_tolerance_hours,
+        selection_order=os.environ.get("DATAFLOW_STEP1_SELECTION_ORDER", "latest"),
+        log_fn=print,
+    )
+    source_directory = (
+        base_directories["unprocessed_directory"]
+        if selected_file_source == "unprocessed"
+        else base_directories["completed_directory"]
+    )
+    for joined_file_name in joined_file_names:
+        if joined_file_name == file_name:
+            continue
+        joined_source_path = os.path.join(source_directory, joined_file_name)
+        joined_processing_path = os.path.join(base_directories["processing_directory"], joined_file_name)
+        joined_completed_path = os.path.join(base_directories["completed_directory"], joined_file_name)
+        if not os.path.exists(joined_source_path):
+            print(f"Warning: joined analysis candidate disappeared before move; skipping {joined_source_path}.")
+            continue
+        if os.path.exists(joined_processing_path):
+            print(f"Warning: joined analysis candidate already exists in PROCESSING; skipping {joined_processing_path}.")
+            continue
+        print(f"Moving joined analysis file to PROCESSING: {joined_source_path} -> {joined_processing_path}")
+        safe_move(joined_source_path, joined_processing_path)
+        joined_input_records.append(
+            {
+                "file_name": joined_file_name,
+                "processing_file_path": joined_processing_path,
+                "completed_file_path": joined_completed_path,
+                "basename_no_ext": os.path.splitext(joined_file_name)[0],
+            }
+        )
+elif joined_analysis_files > 1:
+    print(
+        "Joined analysis not expanded for this selection "
+        f"(source={selected_file_source or 'unknown'}, user_file_selection={user_file_selection})."
+    )
+
 # This is for all cases
 file_path = processing_file_path
-if save_plots:
-    os.makedirs(base_directories["figure_directory"], exist_ok=True)
 print(f"File to be processed, complete original path: {file_path}")
 the_filename = os.path.basename(file_path)
 print(f"File to process: {the_filename}")
@@ -3913,19 +3991,52 @@ Q_BACK_PATTERN = re.compile(r"^Q\d+_B_\d+$")
 # -----------------------------------------------------------------------------------------------------------
 # -----------------------------------------------------------------------------------------------------------
 
-# Process the file
-read_df, read_lines, written_lines = _build_task1_input_dataframe(
-    file_path,
-    rejected_file,
-    EXPECTED_COLUMNS,
-    limit_rows=limit_number if limit else None,
-)
+# Process the input file(s)
+joined_source_file_column = "__task1_joined_source_file__"
+joined_source_basename_column = "__task1_joined_source_basename__"
+joined_frames: list[pd.DataFrame] = []
+read_lines = 0
+written_lines = 0
+for joined_record in joined_input_records:
+    joined_path = joined_record["processing_file_path"]
+    joined_read_df, joined_read_lines, joined_written_lines = _build_task1_input_dataframe(
+        joined_path,
+        rejected_file,
+        EXPECTED_COLUMNS,
+        limit_rows=limit_number if limit else None,
+    )
+    read_lines += int(joined_read_lines)
+    written_lines += int(joined_written_lines)
+    if not joined_read_df.empty:
+        joined_read_df.loc[:, joined_source_file_column] = joined_record["file_name"]
+        joined_read_df.loc[:, joined_source_basename_column] = joined_record["basename_no_ext"]
+        joined_frames.append(joined_read_df)
+    print(
+        "Raw dataframe loaded for Task 1 joined analysis: "
+        f"{joined_path} read_lines={joined_read_lines} valid_lines={joined_written_lines}"
+    )
+if joined_frames:
+    read_df = pd.concat(joined_frames, ignore_index=True, sort=False)
+else:
+    read_df = pd.DataFrame()
+joined_analysis_active = len(joined_input_records) > 1
+if joined_analysis_active:
+    print(
+        "Joined analysis active: "
+        f"files={len(joined_input_records)} total_rows={len(read_df)} primary={file_name}"
+    )
+global_variables["joined_analysis_files_requested"] = int(joined_analysis_files)
+global_variables["joined_analysis_files_used"] = int(len(joined_input_records))
+global_variables["joined_analysis_time_tolerance_hours"] = float(joined_analysis_time_tolerance_hours)
 
 if written_lines == 0:
     print("No valid lines found after preprocessing; skipping file.")
     if user_file_selection == False:
-        error_file_path = os.path.join(base_directories["error_directory"], file_name)
-        process_file(file_path, error_file_path)
+        for joined_record in joined_input_records:
+            joined_processing_path = joined_record["processing_file_path"]
+            error_file_path = os.path.join(base_directories["error_directory"], joined_record["file_name"])
+            if os.path.exists(joined_processing_path):
+                process_file(joined_processing_path, error_file_path)
     sys.exit("Empty temp file generated; no valid data to process.")
 
 # Print the number of rows in input
@@ -4185,7 +4296,15 @@ for key, idx_range in column_indices.items():
         channel_source_columns.append(source_column)
         channel_rename_map[source_column] = target_column
 
-working_df = read_df.loc[selected_mask, ["event_id", "datetime", *channel_source_columns]].copy()
+task1_join_source_columns = [
+    col
+    for col in (joined_source_file_column, joined_source_basename_column)
+    if col in read_df.columns
+]
+working_df = read_df.loc[
+    selected_mask,
+    ["event_id", "datetime", *task1_join_source_columns, *channel_source_columns],
+].copy()
 working_df = working_df.rename(columns=channel_rename_map)
 # Track rows that later drop out of Task 1 so their original indexed values stay inspectable.
 removed_rows_df = working_df.iloc[0:0].copy()
@@ -6376,6 +6495,7 @@ execution_metadata_row = {
     "param_hash": param_hash_value,
     "data_purity_percentage": round(float(data_purity_percentage), 4),
     "total_execution_time_minutes": round(float(total_execution_time_minutes), 4),
+    "joined_analysis_files_used": int(len(joined_input_records)),
     **channel_contagion_metrics,
 }
 apply_qa_reprocessing_context(execution_metadata_row, qa_reprocessing_context)
@@ -6389,6 +6509,7 @@ metadata_execution_csv_path = save_metadata(
         "param_hash",
         "data_purity_percentage",
         "total_execution_time_minutes",
+        "joined_analysis_files_used",
         *QA_REPROCESSING_METADATA_KEYS,
         *CHANNEL_CONTAGION_METADATA_FIELDS,
     ),
@@ -6583,22 +6704,49 @@ elif track_removed_rows:
 # Ensure no figure handles remain open before persistence/final move.
 plt.close("all")
 
-# Save to HDF5 file
-working_df.to_parquet(OUT_PATH, engine="pyarrow", compression="zstd", index=False)
-print(f"Cleaned dataframe saved to: {OUT_PATH}")
+if joined_analysis_active and joined_source_file_column in working_df.columns:
+    for joined_record in joined_input_records:
+        joined_file_name = joined_record["file_name"]
+        joined_basename = joined_record["basename_no_ext"]
+        joined_out_path = os.path.join(output_directory, f"cleaned_{joined_basename}.parquet")
+        joined_mask = working_df[joined_source_file_column].astype(str).eq(joined_file_name)
+        joined_output_df = working_df.loc[joined_mask].drop(
+            columns=[joined_source_file_column, joined_source_basename_column],
+            errors="ignore",
+        )
+        joined_output_df.to_parquet(
+            joined_out_path,
+            engine="pyarrow",
+            compression="zstd",
+            index=False,
+        )
+        print(f"Cleaned joined-analysis dataframe saved to: {joined_out_path} rows={len(joined_output_df)}")
+else:
+    output_df = working_df.drop(
+        columns=[joined_source_file_column, joined_source_basename_column],
+        errors="ignore",
+    )
+    output_df.to_parquet(OUT_PATH, engine="pyarrow", compression="zstd", index=False)
+    print(f"Cleaned dataframe saved to: {OUT_PATH}")
 _prof["s_output_write_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
 
 # Move the original datafile to COMPLETED -------------------------------------
-print("Moving file to COMPLETED directory...")
+print("Moving file(s) to COMPLETED directory...")
 
 if user_file_selection == False:
-    safe_move(file_path, completed_file_path)
-    now = time.time()
-    os.utime(completed_file_path, (now, now))
-    print("************************************************************")
-    print(f"File moved from\n{file_path}\nto:\n{completed_file_path}")
-    print("************************************************************")
+    for joined_record in joined_input_records:
+        joined_processing_path = joined_record["processing_file_path"]
+        joined_completed_path = joined_record["completed_file_path"]
+        if os.path.exists(joined_processing_path):
+            safe_move(joined_processing_path, joined_completed_path)
+            now = time.time()
+            os.utime(joined_completed_path, (now, now))
+            print("************************************************************")
+            print(f"File moved from\n{joined_processing_path}\nto:\n{joined_completed_path}")
+            print("************************************************************")
+        else:
+            print(f"Warning: processing file not found for completion move: {joined_processing_path}")
 
 if status_execution_date is not None:
     update_status_progress(
@@ -6616,3 +6764,21 @@ _prof["execution_timestamp"] = execution_timestamp
 _prof["param_hash"] = param_hash_value
 _prof["total_s"] = round(time.perf_counter() - _prof_t0, 2)
 save_metadata(csv_path_profiling, _prof)
+replicate_joined_metadata_rows(
+    [
+        csv_path,
+        csv_path_specific,
+        csv_path_pattern,
+        csv_path_rate_histogram,
+        csv_path_activation,
+        csv_path_trigger_type,
+        csv_path_filter,
+        csv_path_deep_fiter,
+        csv_path_noise_control,
+        csv_path_status,
+        csv_path_profiling,
+    ],
+    primary_filename_base=filename_base,
+    joined_input_records=joined_input_records,
+    log_fn=print,
+)

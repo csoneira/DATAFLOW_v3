@@ -12,6 +12,8 @@ article_format: false
 create_plots: null
 keep_all_columns_output: false
 save_removed_channel_values: false
+joined_analysis_files: 3
+joined_analysis_time_tolerance_hours: 5
 removed_marker: x
 removed_marker_size: 10
 removed_marker_alpha: 0.9

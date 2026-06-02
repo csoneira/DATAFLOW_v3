@@ -32,6 +32,7 @@ state of each dataset.
 import atexit
 import ast
 import builtins
+from collections import defaultdict
 from datetime import datetime
 import os
 from pathlib import Path
@@ -85,6 +86,7 @@ if str(REPO_ROOT) not in sys.path:
 from MASTER.common.debug_plots import plot_debug_histograms
 from MASTER.common.execution_logger import set_station, start_timer
 from MASTER.common.file_selection import (
+    extract_run_datetime_from_name,
     filter_expected_artifact_names,
     file_name_in_any_date_range,
     load_date_ranges_from_config,
@@ -144,6 +146,7 @@ from MASTER.common.step1_shared import (
     load_step1_task_plot_catalog,
     normalize_tt_label,
     prune_redundant_count_metadata,
+    replicate_joined_metadata_rows,
     resolve_step1_effective_task_config,
     save_metadata,
     select_exact_minimum_vertex_cover,
@@ -226,6 +229,7 @@ TASK2_PLOT_ALIASES: tuple[str, ...] = (
     "slewing_delta_t_vs_qsum2_by_qsum1_bins",
     "slewing_delta_t_vs_qsum2_by_qsum1_bins_fit",
     "slewing_per_strip_from_pair_fit",
+    "slewing_relative_tsum_vs_qsum_after_correction",
     "slewing_delta_t_centroid_by_qsum_cuts",
     "slewing_delta_t_centroid_vs_qsum_cut",
     "stat_window_accumulation",
@@ -390,6 +394,7 @@ def save_plot_figure(
         pdf_save_rasterized_page(_direct_pdf_pages, target_fig, dpi=dpi, **pdf_kwargs)
         _direct_pdf_page_count += 1
         return
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
     target_fig.savefig(save_path, **savefig_kwargs)
 
 def close_direct_pdf_writer() -> None:
@@ -485,6 +490,71 @@ def _expected_input_files(file_names):
             extension=EXPECTED_INPUT_EXTENSION,
         )
     )
+
+def _coerce_positive_int_config(value: object, default: int = 1) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= 1 else default
+
+def _coerce_positive_float_config(value: object, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= 0 else default
+
+def _joined_analysis_candidate_names(
+    selected_file_name: str,
+    candidate_file_names: Iterable[str],
+    *,
+    station_id: str,
+    max_files: int,
+    tolerance_hours: float,
+) -> list[str]:
+    """Return selected file plus adjacent timestamp-compatible candidates."""
+    if max_files <= 1:
+        return [selected_file_name]
+    selected_datetime = extract_run_datetime_from_name(selected_file_name)
+    if selected_datetime is None:
+        print(
+            "Joined analysis disabled for this selection: could not parse "
+            f"timestamp from {selected_file_name}."
+        )
+        return [selected_file_name]
+
+    tolerance = pd.Timedelta(hours=tolerance_hours)
+    order = os.environ.get("DATAFLOW_STEP1_SELECTION_ORDER", "latest").strip().lower()
+    prefer_older = order not in {"oldest", "fifo", "first"}
+    selected_names: list[str] = [selected_file_name]
+    candidate_rows: list[tuple[pd.Timedelta, str]] = []
+    for candidate_name in candidate_file_names:
+        if candidate_name == selected_file_name:
+            continue
+        if infer_station_number_from_processing_name(candidate_name) != int(station_id):
+            continue
+        candidate_datetime = extract_run_datetime_from_name(candidate_name)
+        if candidate_datetime is None:
+            continue
+        delta = pd.Timestamp(selected_datetime) - pd.Timestamp(candidate_datetime)
+        if prefer_older:
+            if delta < pd.Timedelta(0) or delta > tolerance:
+                continue
+        else:
+            if delta > pd.Timedelta(0) or abs(delta) > tolerance:
+                continue
+        candidate_rows.append((abs(delta), candidate_name))
+
+    candidate_rows.sort(key=lambda item: item[0])
+    selected_names.extend(name for _delta, name in candidate_rows[: max_files - 1])
+    selected_names.sort(key=lambda name: extract_run_datetime_from_name(name) or datetime.min)
+    print(
+        "Joined analysis file selection: "
+        f"requested={max_files} selected={len(selected_names)} "
+        f"tolerance_hours={tolerance_hours:g} files={selected_names}"
+    )
+    return selected_names
 
 def _debug_plot_filter_group(
     df: pd.DataFrame,
@@ -4928,6 +4998,7 @@ def plot_slewing_delta_t_vs_qsum2_by_qsum1_bins(
             alpha=0.2,
             color="0.35",
             label="_nolegend_",
+            rasterized=True,
         )
 
         plotted_profiles = 0
@@ -4996,6 +5067,156 @@ def plot_slewing_delta_t_vs_qsum2_by_qsum1_bins(
         plt.close(fig)
 
 
+def calculate_slewing_delta_t_vs_qsum2_by_qsum1_bins_fit(
+    pair_residuals_df: pd.DataFrame,
+    *,
+    n_qsum1_bins: int | None = None,
+    n_qsum2_bins: int | None = None,
+    min_points_per_qsum1_bin: int = 100,
+    min_points_per_qsum2_bin: int = 10,
+    save_coefficients: bool = True,
+) -> pd.DataFrame:
+    if pair_residuals_df.empty:
+        print("Warning: no pair residual data available for fitted Q_sum_2 profile slewing calculation.")
+        return pd.DataFrame()
+
+    if n_qsum1_bins is None:
+        n_qsum1_bins = int(config.get("slewing_delta_t_qsum1_bins", 5))
+    if n_qsum2_bins is None:
+        n_qsum2_bins = int(config.get("slewing_delta_t_qsum2_bins", 30))
+    fit_degree = int(config.get("slewing_delta_t_fit_degree", 1))
+    if n_qsum1_bins < 1 or n_qsum2_bins < 1 or fit_degree < 0:
+        print(
+            "Warning: fitted slewing Q_sum profile requires positive bin counts "
+            f"and non-negative degree; got Q_sum_1={n_qsum1_bins}, "
+            f"Q_sum_2={n_qsum2_bins}, degree={fit_degree}."
+        )
+        return pd.DataFrame()
+
+    fit_rows: list[dict[str, float | int | str]] = []
+    pair_keys = (
+        pair_residuals_df[["label1", "label2"]]
+        .drop_duplicates()
+        .sort_values(["label1", "label2"])
+        .itertuples(index=False, name=None)
+    )
+    for label1, label2 in pair_keys:
+        pair_df = pair_residuals_df[
+            (pair_residuals_df["label1"] == label1)
+            & (pair_residuals_df["label2"] == label2)
+        ].copy()
+        qsum1_column = _slewing_qsum_column("Q_sum_1")
+        qsum2_column = _slewing_qsum_column("Q_sum_2")
+        if qsum1_column not in pair_df.columns or qsum2_column not in pair_df.columns:
+            print(
+                f"Warning: skipping fitted profile {label1}-{label2}; missing slewing Q columns "
+                f"{qsum1_column}/{qsum2_column}."
+            )
+            continue
+
+        delta_t_column = _slewing_delta_t_column(pair_df)
+        if delta_t_column is None:
+            print(f"Warning: skipping {label1}-{label2}; no delta-t residual column available.")
+            continue
+
+        qsum1 = pd.to_numeric(pair_df[qsum1_column], errors="coerce")
+        qsum2 = pd.to_numeric(pair_df[qsum2_column], errors="coerce")
+        delta_t = pd.to_numeric(pair_df[delta_t_column], errors="coerce")
+        valid = np.isfinite(qsum1) & np.isfinite(qsum2) & np.isfinite(delta_t)
+        if not bool(config.get("slewing_use_log_qsum", False)):
+            valid &= (qsum1 != 0) & (qsum2 != 0)
+        pair_df = pair_df.loc[valid].copy()
+        pair_df["_slewing_Q_sum_1"] = qsum1.loc[valid].to_numpy(dtype=float)
+        pair_df["_slewing_Q_sum_2"] = qsum2.loc[valid].to_numpy(dtype=float)
+        pair_df[delta_t_column] = delta_t.loc[valid].to_numpy(dtype=float)
+        if len(pair_df) < min_points_per_qsum1_bin * 2:
+            print(
+                f"Warning: skipping fitted profile {label1}-{label2}; not enough valid events "
+                f"for Q_sum_1-bin profiles ({len(pair_df)})."
+            )
+            continue
+
+        try:
+            pair_df["Q_sum_1_bin"] = pd.qcut(
+                pair_df["_slewing_Q_sum_1"],
+                q=n_qsum1_bins,
+                duplicates="drop",
+            )
+        except ValueError:
+            pair_df["Q_sum_1_bin"] = pd.cut(
+                pair_df["_slewing_Q_sum_1"],
+                bins=n_qsum1_bins,
+            )
+        pair_df = pair_df.dropna(subset=["Q_sum_1_bin"])
+        if pair_df["Q_sum_1_bin"].dropna().nunique() < 2:
+            print(f"Warning: skipping fitted profile {label1}-{label2}; fewer than two valid Q_sum_1 bins.")
+            continue
+
+        fitted_qsum1_bins = 0
+        for qsum1_bin, group in pair_df.groupby("Q_sum_1_bin", observed=True):
+            if len(group) < min_points_per_qsum1_bin:
+                continue
+            group = group.copy()
+            group["Q_sum_2_bin"] = pd.cut(group["_slewing_Q_sum_2"], bins=n_qsum2_bins)
+            profile = (
+                group.groupby("Q_sum_2_bin", observed=True)
+                .agg(
+                    qsum2_center=("_slewing_Q_sum_2", "median"),
+                    delta_t_median=(delta_t_column, "median"),
+                    n=(delta_t_column, "size"),
+                )
+                .reset_index()
+            )
+            profile = profile[profile["n"] >= min_points_per_qsum2_bin]
+            profile = profile.replace([np.inf, -np.inf], np.nan).dropna(
+                subset=["qsum2_center", "delta_t_median"]
+            )
+            if len(profile) < fit_degree + 1:
+                continue
+
+            x_fit_data = profile["qsum2_center"].to_numpy(dtype=float)
+            y_fit_data = profile["delta_t_median"].to_numpy(dtype=float)
+            coeffs = np.polyfit(x_fit_data, y_fit_data, deg=fit_degree)
+            fit_row = {
+                "label1": str(label1),
+                "label2": str(label2),
+                "qsum1_bin": str(qsum1_bin),
+                "qsum1_left": float(qsum1_bin.left) if isinstance(qsum1_bin, pd.Interval) else float(np.nanmin(group["_slewing_Q_sum_1"])),
+                "qsum1_right": float(qsum1_bin.right) if isinstance(qsum1_bin, pd.Interval) else float(np.nanmax(group["_slewing_Q_sum_1"])),
+                "qsum1_closed": str(qsum1_bin.closed) if isinstance(qsum1_bin, pd.Interval) else "both",
+                "degree": int(fit_degree),
+                "n_profile_points": int(len(profile)),
+                "n_events": int(len(group)),
+                "delta_t_column": delta_t_column,
+            }
+            for coeff_idx, coeff in enumerate(coeffs):
+                power = fit_degree - coeff_idx
+                fit_row[f"coeff_power_{power}"] = float(coeff)
+            fit_rows.append(fit_row)
+            fitted_qsum1_bins += 1
+
+        if fitted_qsum1_bins == 0:
+            print(f"Warning: skipping fitted profile {label1}-{label2}; no fitted Q_sum_1 bins.")
+
+    fit_df = pd.DataFrame(fit_rows)
+    if not fit_df.empty and save_coefficients:
+        if save_time_slewing_pair_residuals:
+            output_dir = os.path.join(base_directories["ancillary_directory"], "TIME_SLEWING_PAIR_RESIDUALS")
+            os.makedirs(output_dir, exist_ok=True)
+            output_path = os.path.join(
+                output_dir,
+                f"{basename_no_ext}_slewing_delta_t_vs_qsum2_by_qsum1_bins_fit_coeffs.csv",
+            )
+            fit_df.to_csv(output_path, index=False)
+            print(f"Saved slewing Q-profile fit coefficients: {output_path}")
+        else:
+            print(
+                "Slewing Q-profile fit coefficient export skipped: "
+                "save_time_slewing_pair_residuals is false."
+            )
+    return fit_df
+
+
 def plot_slewing_delta_t_vs_qsum2_by_qsum1_bins_fit(
     pair_residuals_df: pd.DataFrame,
     *,
@@ -5003,6 +5224,7 @@ def plot_slewing_delta_t_vs_qsum2_by_qsum1_bins_fit(
     n_qsum2_bins: int | None = None,
     min_points_per_qsum1_bin: int = 100,
     min_points_per_qsum2_bin: int = 10,
+    save_coefficients: bool = True,
 ) -> pd.DataFrame:
     global fig_idx
     alias = "slewing_delta_t_vs_qsum2_by_qsum1_bins_fit"
@@ -5300,7 +5522,7 @@ def plot_slewing_delta_t_vs_qsum2_by_qsum1_bins_fit(
         plt.close(fig)
 
     fit_df = pd.DataFrame(fit_rows)
-    if not fit_df.empty:
+    if not fit_df.empty and save_coefficients:
         if save_time_slewing_pair_residuals:
             output_dir = os.path.join(base_directories["ancillary_directory"], "TIME_SLEWING_PAIR_RESIDUALS")
             os.makedirs(output_dir, exist_ok=True)
@@ -5364,6 +5586,424 @@ def evaluate_existing_pair_slewing_fit(
         return value if np.isfinite(value) else None
     return None
 
+def _task2_slewing_per_strip_reference_mode() -> str:
+    mode = str(config.get("slewing_per_strip_reference_mode", "mean_zero")).strip().lower()
+    if mode not in {"mean_zero", "max_charge"}:
+        print(
+            "Warning: invalid slewing_per_strip_reference_mode="
+            f"{mode!r}; using mean_zero."
+        )
+        return "mean_zero"
+    return mode
+
+def _solve_slewing_mean_zero_values(
+    active_labels: list[str],
+    pair_values: dict[tuple[str, str], float],
+) -> dict[str, float]:
+    label_to_idx = {label: idx for idx, label in enumerate(active_labels)}
+    rows: list[list[float]] = []
+    rhs: list[float] = []
+    seen_edges: set[tuple[str, str]] = set()
+    for (label_i, label_j), value in pair_values.items():
+        if label_i not in label_to_idx or label_j not in label_to_idx:
+            continue
+        edge_key = tuple(sorted((label_i, label_j)))
+        if edge_key in seen_edges:
+            continue
+        seen_edges.add(edge_key)
+        row = [0.0] * len(active_labels)
+        row[label_to_idx[label_i]] = 1.0
+        row[label_to_idx[label_j]] = -1.0
+        rows.append(row)
+        rhs.append(float(value))
+
+    if not rows:
+        return {}
+
+    constraint_row = [1.0] * len(active_labels)
+    rows.append(constraint_row)
+    rhs.append(0.0)
+    matrix = np.asarray(rows, dtype=float)
+    vector = np.asarray(rhs, dtype=float)
+    try:
+        solution, *_ = np.linalg.lstsq(matrix, vector, rcond=None)
+    except np.linalg.LinAlgError:
+        return {}
+    if not np.all(np.isfinite(solution)):
+        return {}
+    return {
+        label: float(solution[idx])
+        for label, idx in label_to_idx.items()
+    }
+
+def _task2_parse_strip_label(label: str) -> tuple[int, int] | None:
+    match = re.fullmatch(r"P([1-4])s([1-4])", str(label))
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+def _summarize_tsum_pair_residuals(
+    pair_residuals_df: pd.DataFrame,
+    label: str,
+) -> dict[str, float | int | str]:
+    if pair_residuals_df.empty:
+        summary = {"label": label, "n": 0, "median": np.nan, "std": np.nan, "mad": np.nan}
+        print(
+            f"{label}: T_sum pair residual summary n=0 median=nan std=nan mad=nan"
+        )
+        return summary
+    residual_column = _slewing_delta_t_column(pair_residuals_df)
+    if residual_column not in pair_residuals_df.columns:
+        summary = {"label": label, "n": 0, "median": np.nan, "std": np.nan, "mad": np.nan}
+        print(
+            f"{label}: T_sum pair residual summary skipped; missing {residual_column}."
+        )
+        return summary
+    values = pd.to_numeric(pair_residuals_df[residual_column], errors="coerce")
+    values = values.replace([np.inf, -np.inf], np.nan).dropna()
+    if values.empty:
+        summary = {"label": label, "n": 0, "median": np.nan, "std": np.nan, "mad": np.nan}
+        print(
+            f"{label}: T_sum pair residual summary n=0 median=nan std=nan mad=nan"
+        )
+        return summary
+    median = float(values.median())
+    mad = float((values - median).abs().median())
+    std = float(values.std(ddof=0))
+    summary = {
+        "label": label,
+        "n": int(values.size),
+        "median": median,
+        "std": std,
+        "mad": mad,
+    }
+    print(
+        f"{label}: T_sum pair residual summary "
+        f"n={summary['n']} median={median:.6g} std={std:.6g} mad={mad:.6g}"
+    )
+    return summary
+
+def _build_pair_fit_slewing_event_solutions(
+    source_df: pd.DataFrame,
+    slewing_fit_df: pd.DataFrame,
+    *,
+    context_label: str,
+) -> tuple[dict[object, dict[str, float]], dict[str, object], pd.DataFrame]:
+    diagnostics: dict[str, object] = {
+        "context": context_label,
+        "events_considered": int(len(source_df.index)),
+        "events_with_valid_pair_correction": 0,
+        "events_with_successful_mean_zero_solution": 0,
+        "corrected_strip_tsum_values": 0,
+        "skipped_pairs_zero_charge": 0,
+        "skipped_pairs_missing_fit": 0,
+        "per_strip_counts": {},
+        "per_strip_median": {},
+        "per_strip_std": {},
+    }
+    if source_df.empty or slewing_fit_df.empty:
+        return {}, diagnostics, pd.DataFrame()
+
+    pair_residuals_df = _build_tsum_pair_residuals(
+        source_df,
+        y_lookup=y_lookup,
+        z_positions=z_positions,
+        tdiff_to_x=tdiff_to_x,
+        c_mm_ns=c_mm_ns,
+    )
+    pair_residuals_df = _apply_slewing_qsum_coordinate_transform(pair_residuals_df)
+    required_columns = {
+        "row_index",
+        "label1",
+        "label2",
+        "Q_sum_1",
+        "Q_sum_2",
+        "T_sum_1",
+        "T_sum_2",
+    }
+    missing_columns = required_columns.difference(pair_residuals_df.columns)
+    if pair_residuals_df.empty or missing_columns:
+        if missing_columns:
+            print(
+                f"{context_label}: slewing application skipped; missing pair residual "
+                f"columns {sorted(missing_columns)}."
+            )
+        return {}, diagnostics, pair_residuals_df
+
+    q_fit_1_column = _slewing_qsum_column("Q_sum_1")
+    q_fit_2_column = _slewing_qsum_column("Q_sum_2")
+    if q_fit_1_column not in pair_residuals_df.columns or q_fit_2_column not in pair_residuals_df.columns:
+        print(
+            f"{context_label}: slewing application skipped; missing slewing fit "
+            f"Q columns {q_fit_1_column}/{q_fit_2_column}."
+        )
+        return {}, diagnostics, pair_residuals_df
+
+    fit_records_by_pair = {
+        (str(label1), str(label2)): group.copy()
+        for (label1, label2), group in slewing_fit_df.groupby(["label1", "label2"], observed=True)
+    }
+    if not fit_records_by_pair:
+        return {}, diagnostics, pair_residuals_df
+
+    work_columns = [
+        "row_index",
+        "label1",
+        "label2",
+        q_fit_1_column,
+        q_fit_2_column,
+        "Q_sum_1",
+        "Q_sum_2",
+        "T_sum_1",
+        "T_sum_2",
+    ]
+    work_columns = list(dict.fromkeys(work_columns))
+    work_df = pair_residuals_df.loc[:, work_columns].copy()
+    for column in [q_fit_1_column, q_fit_2_column, "Q_sum_1", "Q_sum_2", "T_sum_1", "T_sum_2"]:
+        work_df[column] = pd.to_numeric(work_df[column], errors="coerce")
+    work_df = work_df.replace([np.inf, -np.inf], np.nan).dropna(
+        subset=[q_fit_1_column, q_fit_2_column, "Q_sum_1", "Q_sum_2", "T_sum_1", "T_sum_2"]
+    )
+    if work_df.empty:
+        return {}, diagnostics, pair_residuals_df
+
+    event_solutions: dict[object, dict[str, float]] = {}
+    per_strip_values: dict[str, list[float]] = defaultdict(list)
+    for row_index, event_df in work_df.groupby("row_index", sort=False):
+        charges: dict[str, float] = {}
+        pair_values: dict[tuple[str, str], float] = {}
+        event_had_valid_pair = False
+
+        for row in event_df.itertuples(index=False):
+            label1 = str(row.label1)
+            label2 = str(row.label2)
+            qfit1 = float(getattr(row, q_fit_1_column))
+            qfit2 = float(getattr(row, q_fit_2_column))
+            qplot1 = float(row.Q_sum_1)
+            qplot2 = float(row.Q_sum_2)
+            tsum1 = float(row.T_sum_1)
+            tsum2 = float(row.T_sum_2)
+            if (
+                not np.isfinite(qfit1)
+                or not np.isfinite(qfit2)
+                or not np.isfinite(qplot1)
+                or not np.isfinite(qplot2)
+                or not np.isfinite(tsum1)
+                or not np.isfinite(tsum2)
+                or qplot1 == 0
+                or qplot2 == 0
+                or tsum1 == 0
+                or tsum2 == 0
+            ):
+                diagnostics["skipped_pairs_zero_charge"] = int(diagnostics["skipped_pairs_zero_charge"]) + 1
+                continue
+            charges[label1] = max(charges.get(label1, -np.inf), qplot1)
+            charges[label2] = max(charges.get(label2, -np.inf), qplot2)
+
+            fit_records = fit_records_by_pair.get((label1, label2))
+            if fit_records is None:
+                diagnostics["skipped_pairs_missing_fit"] = int(diagnostics["skipped_pairs_missing_fit"]) + 1
+                continue
+            pair_fit_value = evaluate_existing_pair_slewing_fit(
+                fit_records,
+                qsum1=qfit1,
+                qsum2=qfit2,
+            )
+            if pair_fit_value is None:
+                diagnostics["skipped_pairs_missing_fit"] = int(diagnostics["skipped_pairs_missing_fit"]) + 1
+                continue
+            pair_values[(label1, label2)] = pair_fit_value
+            pair_values[(label2, label1)] = -pair_fit_value
+            event_had_valid_pair = True
+
+        if event_had_valid_pair:
+            diagnostics["events_with_valid_pair_correction"] = (
+                int(diagnostics["events_with_valid_pair_correction"]) + 1
+            )
+        active_labels = [label for label, charge in charges.items() if np.isfinite(charge)]
+        if len(active_labels) < 2:
+            continue
+        slewing_values_by_label = _solve_slewing_mean_zero_values(active_labels, pair_values)
+        if len(slewing_values_by_label) < 2:
+            continue
+        event_solutions[row_index] = slewing_values_by_label
+        diagnostics["events_with_successful_mean_zero_solution"] = (
+            int(diagnostics["events_with_successful_mean_zero_solution"]) + 1
+        )
+        for label, value in slewing_values_by_label.items():
+            if np.isfinite(value):
+                per_strip_values[label].append(float(value))
+
+    per_strip_counts = {label: len(values) for label, values in per_strip_values.items()}
+    per_strip_median = {
+        label: float(np.median(values))
+        for label, values in per_strip_values.items()
+        if values
+    }
+    per_strip_std = {
+        label: float(np.std(values, ddof=0))
+        for label, values in per_strip_values.items()
+        if values
+    }
+    diagnostics["per_strip_counts"] = per_strip_counts
+    diagnostics["per_strip_median"] = per_strip_median
+    diagnostics["per_strip_std"] = per_strip_std
+    return event_solutions, diagnostics, pair_residuals_df
+
+def _apply_slewing_solutions_to_dataframe(
+    target_df: pd.DataFrame,
+    event_solutions: dict[object, dict[str, float]],
+    *,
+    application_sign: float,
+    snapshot_changes: bool = True,
+) -> dict[str, object]:
+    updates_by_column: dict[str, list[tuple[object, float]]] = defaultdict(list)
+    applied_values_by_strip: dict[str, list[float]] = defaultdict(list)
+    for row_index, values_by_label in event_solutions.items():
+        if row_index not in target_df.index:
+            continue
+        for label, slewing_value in values_by_label.items():
+            parsed = _task2_parse_strip_label(label)
+            if parsed is None or not np.isfinite(slewing_value):
+                continue
+            plane, strip = parsed
+            column_name = f"T{plane}_T_sum_{strip}"
+            if column_name not in target_df.columns:
+                continue
+            updates_by_column[column_name].append((row_index, float(slewing_value)))
+
+    corrected_count = 0
+    for column_name, updates in updates_by_column.items():
+        valid_indices: list[object] = []
+        valid_deltas: list[float] = []
+        for row_index, slewing_value in updates:
+            try:
+                current_value = target_df.at[row_index, column_name]
+            except (KeyError, ValueError):
+                continue
+            if isinstance(current_value, pd.Series):
+                continue
+            try:
+                current_float = float(current_value)
+            except (TypeError, ValueError):
+                continue
+            if not np.isfinite(current_float) or current_float == 0:
+                continue
+            delta = float(application_sign) * float(slewing_value)
+            if not np.isfinite(delta):
+                continue
+            valid_indices.append(row_index)
+            valid_deltas.append(delta)
+
+        if not valid_indices:
+            continue
+        change_mask = pd.Series(False, index=target_df.index)
+        change_mask.loc[valid_indices] = True
+        if snapshot_changes:
+            snapshot_column_if_changed(target_df, column_name, change_mask)
+        current_values = pd.to_numeric(
+            target_df.loc[valid_indices, column_name],
+            errors="coerce",
+        ).to_numpy(dtype=float)
+        delta_values = np.asarray(valid_deltas, dtype=float)
+        target_df.loc[valid_indices, column_name] = current_values + delta_values
+        corrected_count += len(valid_indices)
+        strip_label = column_name.replace("T", "P", 1).replace("_T_sum_", "s")
+        applied_values_by_strip[strip_label].extend(delta_values.tolist())
+
+    return {
+        "corrected_strip_tsum_values": corrected_count,
+        "per_strip_counts": {
+            label: len(values)
+            for label, values in applied_values_by_strip.items()
+        },
+        "per_strip_median": {
+            label: float(np.median(values))
+            for label, values in applied_values_by_strip.items()
+            if values
+        },
+        "per_strip_std": {
+            label: float(np.std(values, ddof=0))
+            for label, values in applied_values_by_strip.items()
+            if values
+        },
+    }
+
+def _print_slewing_application_diagnostics(
+    context_label: str,
+    diagnostics: dict[str, object],
+) -> None:
+    print(
+        f"{context_label}: slewing application diagnostics "
+        f"events_considered={diagnostics.get('events_considered', 0)} "
+        f"events_with_valid_pair_correction={diagnostics.get('events_with_valid_pair_correction', 0)} "
+        f"events_with_successful_mean_zero_solution={diagnostics.get('events_with_successful_mean_zero_solution', 0)} "
+        f"corrected_strip_tsum_values={diagnostics.get('corrected_strip_tsum_values', 0)} "
+        f"skipped_pairs_zero_charge={diagnostics.get('skipped_pairs_zero_charge', 0)} "
+        f"skipped_pairs_missing_fit={diagnostics.get('skipped_pairs_missing_fit', 0)}"
+    )
+    per_strip_counts = diagnostics.get("per_strip_counts", {})
+    per_strip_median = diagnostics.get("per_strip_median", {})
+    per_strip_std = diagnostics.get("per_strip_std", {})
+    if isinstance(per_strip_counts, dict) and per_strip_counts:
+        for label in sorted(per_strip_counts):
+            median = per_strip_median.get(label, np.nan) if isinstance(per_strip_median, dict) else np.nan
+            std = per_strip_std.get(label, np.nan) if isinstance(per_strip_std, dict) else np.nan
+            print(
+                f"{context_label}: {label} corrections "
+                f"count={per_strip_counts[label]} median={float(median):.6g} std={float(std):.6g}"
+            )
+
+def _choose_slewing_application_sign(
+    calibration_df: pd.DataFrame,
+    event_solutions: dict[object, dict[str, float]],
+    before_pair_residuals_df: pd.DataFrame,
+) -> float:
+    before_summary = _summarize_tsum_pair_residuals(
+        before_pair_residuals_df,
+        "calibration before pair-fit slewing application",
+    )
+    sign_scores: dict[float, float] = {}
+    for application_sign, label in [(-1.0, "T_sum - s_i"), (1.0, "T_sum + s_i")]:
+        trial_df = calibration_df.copy()
+        _apply_slewing_solutions_to_dataframe(
+            trial_df,
+            event_solutions,
+            application_sign=application_sign,
+            snapshot_changes=False,
+        )
+        trial_pair_residuals_df = _build_tsum_pair_residuals(
+            trial_df,
+            y_lookup=y_lookup,
+            z_positions=z_positions,
+            tdiff_to_x=tdiff_to_x,
+            c_mm_ns=c_mm_ns,
+        )
+        trial_summary = _summarize_tsum_pair_residuals(
+            trial_pair_residuals_df,
+            f"calibration after pair-fit slewing application ({label})",
+        )
+        median = float(trial_summary.get("median", np.nan))
+        std = float(trial_summary.get("std", np.nan))
+        score = abs(median) + std if np.isfinite(median) and np.isfinite(std) else np.inf
+        sign_scores[application_sign] = score
+
+    selected_sign = min(sign_scores, key=sign_scores.get)
+    before_median = float(before_summary.get("median", np.nan))
+    before_std = float(before_summary.get("std", np.nan))
+    before_score = abs(before_median) + before_std if np.isfinite(before_median) and np.isfinite(before_std) else np.inf
+    if np.isfinite(before_score) and sign_scores[selected_sign] > before_score:
+        print(
+            "Warning: selected pair-fit slewing application sign does not improve "
+            "the calibration residual score relative to before-slewing residuals."
+        )
+    print(
+        "Selected pair-fit slewing application sign: "
+        f"{'T_sum - s_i' if selected_sign < 0 else 'T_sum + s_i'} "
+        f"(score={sign_scores[selected_sign]:.6g})."
+    )
+    return float(selected_sign)
+
 def plot_slewing_per_strip_from_pair_fit(
     pair_residuals_df: pd.DataFrame,
     slewing_fit_df: pd.DataFrame,
@@ -5402,9 +6042,10 @@ def plot_slewing_per_strip_from_pair_fit(
     if not fit_records_by_pair:
         print("Warning: per-strip slewing diagnostic skipped; no usable pair fit groups.")
         return pd.DataFrame()
+    reference_mode = _task2_slewing_per_strip_reference_mode()
 
     points_by_strip: dict[str, dict[str, list[float]]] = {
-        f"P{plane}s{strip}": {"q": [], "s": []}
+        f"P{plane}s{strip}": {"q": [], "s": [], "reference": []}
         for plane in range(1, 5)
         for strip in range(1, 5)
     }
@@ -5522,24 +6163,46 @@ def plot_slewing_per_strip_from_pair_fit(
 
         reference_label = max(active_labels, key=lambda label: charges[label])
         event_rows: list[dict[str, float | int | str]] = []
-        for label in active_labels:
-            if label == reference_label:
-                slewing_value = 0.0
-            else:
-                pair_key = (label, reference_label)
-                if pair_key not in pair_values:
+        if reference_mode == "mean_zero":
+            slewing_values_by_label = _solve_slewing_mean_zero_values(active_labels, pair_values)
+            if len(slewing_values_by_label) < 2:
+                if event_missing_fit:
+                    skipped_missing_fits += 1
+                else:
+                    skipped_insufficient_active += 1
+                continue
+            reference_label_for_plot = "mean_zero"
+            for label in active_labels:
+                if label not in slewing_values_by_label:
                     continue
-                slewing_value = float(pair_values[pair_key])
-            charge = float(charges[label])
-            event_rows.append(
-                {
-                    "row_index": row_index,
-                    "strip_id": label,
-                    "q_sum": charge,
-                    "slewing_value": slewing_value,
-                    "reference_strip_id": reference_label,
-                }
-            )
+                event_rows.append(
+                    {
+                        "row_index": row_index,
+                        "strip_id": label,
+                        "q_sum": float(charges[label]),
+                        "slewing_value": float(slewing_values_by_label[label]),
+                        "reference_strip_id": reference_label_for_plot,
+                    }
+                )
+        else:
+            for label in active_labels:
+                if label == reference_label:
+                    slewing_value = 0.0
+                else:
+                    pair_key = (label, reference_label)
+                    if pair_key not in pair_values:
+                        continue
+                    slewing_value = float(pair_values[pair_key])
+                charge = float(charges[label])
+                event_rows.append(
+                    {
+                        "row_index": row_index,
+                        "strip_id": label,
+                        "q_sum": charge,
+                        "slewing_value": slewing_value,
+                        "reference_strip_id": reference_label,
+                    }
+                )
 
         if len(event_rows) <= 1:
             if event_missing_fit:
@@ -5557,6 +6220,7 @@ def plot_slewing_per_strip_from_pair_fit(
             s_value = float(point["slewing_value"])
             points_by_strip[strip_id]["q"].append(q_value)
             points_by_strip[strip_id]["s"].append(s_value)
+            points_by_strip[strip_id]["reference"].append(str(point["reference_strip_id"]))
             diagnostic_rows.append(point)
 
     diagnostic_df = pd.DataFrame(diagnostic_rows)
@@ -5571,6 +6235,14 @@ def plot_slewing_per_strip_from_pair_fit(
 
     def _plot_per_strip_figure(*, log_q_axis: bool) -> None:
         global fig_idx
+        reference_labels = [
+            f"P{plane}s{strip}"
+            for plane in range(1, 5)
+            for strip in range(1, 5)
+        ]
+        if reference_mode == "mean_zero":
+            reference_labels = ["mean_zero", *reference_labels]
+        color_map = dict(zip(reference_labels, plt.cm.tab20(np.linspace(0.0, 1.0, len(reference_labels)))))
         fig, axes = plt.subplots(4, 4, figsize=(18, 14), sharex=True, sharey=True, constrained_layout=True)
         for plane in range(1, 5):
             for strip in range(1, 5):
@@ -5578,6 +6250,7 @@ def plot_slewing_per_strip_from_pair_fit(
                 ax = axes[plane - 1, strip - 1]
                 q_values = np.asarray(points_by_strip[strip_id]["q"], dtype=float)
                 s_values = np.asarray(points_by_strip[strip_id]["s"], dtype=float)
+                reference_values = np.asarray(points_by_strip[strip_id]["reference"], dtype=object)
                 fee_effect_values = -s_values
                 valid = (
                     np.isfinite(q_values)
@@ -5589,8 +6262,20 @@ def plot_slewing_per_strip_from_pair_fit(
                     valid &= q_values > 0.0
                 q_values = q_values[valid]
                 fee_effect_values = fee_effect_values[valid]
+                reference_values = reference_values[valid]
                 if q_values.size:
-                    ax.scatter(fee_effect_values, q_values, s=2, alpha=0.25, color="tab:blue")
+                    point_colors = [
+                        color_map.get(str(reference_label), (0.35, 0.35, 0.35, 1.0))
+                        for reference_label in reference_values
+                    ]
+                    ax.scatter(
+                        fee_effect_values,
+                        q_values,
+                        s=2,
+                        alpha=0.25,
+                        color=point_colors,
+                        rasterized=True,
+                    )
                     try:
                         bin_count = min(20, max(4, int(np.sqrt(q_values.size))))
                         bin_edges = np.linspace(
@@ -5625,12 +6310,13 @@ def plot_slewing_per_strip_from_pair_fit(
                     ax.set_ylabel("Q_sum" if not log_q_axis else "Q_sum (log scale)")
 
         fig.suptitle(
-            "Per-strip FEE T_sum effect estimated from fitted pair corrections",
+            "Per-strip FEE T_sum effect estimated from fitted pair corrections "
+            f"({reference_mode})",
             fontsize=14,
         )
         if save_plots:
             q_axis_suffix = "logq" if log_q_axis else "linearq"
-            final_filename = f"{fig_idx}_slewing_per_strip_from_pair_fit_{q_axis_suffix}.png"
+            final_filename = f"{fig_idx}_slewing_per_strip_from_pair_fit_{reference_mode}_{q_axis_suffix}.png"
             fig_idx += 1
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
@@ -5662,6 +6348,230 @@ def plot_slewing_per_strip_from_pair_fit(
         + ", ".join(f"{strip_id}:{count}" for strip_id, count in points_per_strip.items())
     )
     return diagnostic_df
+
+
+def plot_slewing_relative_tsum_vs_qsum_after_correction(
+    source_df: pd.DataFrame,
+    *,
+    context_label: str = "working_df",
+) -> pd.DataFrame:
+    global fig_idx
+    alias = "slewing_relative_tsum_vs_qsum_after_correction"
+    if not task2_plot_requested(alias, essential=True):
+        return pd.DataFrame()
+    if source_df.empty:
+        print("Warning: relative T_sum vs Q_sum slewing diagnostic skipped; empty dataframe.")
+        return pd.DataFrame()
+
+    strip_labels = [
+        f"P{plane}s{strip}"
+        for plane in range(1, 5)
+        for strip in range(1, 5)
+    ]
+    q_columns = [
+        f"Q{plane}_Q_sum_{strip}"
+        for plane in range(1, 5)
+        for strip in range(1, 5)
+    ]
+    t_columns = [
+        f"T{plane}_T_sum_{strip}"
+        for plane in range(1, 5)
+        for strip in range(1, 5)
+    ]
+    missing_columns = [
+        column_name
+        for column_name in [*q_columns, *t_columns]
+        if column_name not in source_df.columns
+    ]
+    if missing_columns:
+        print(
+            "Warning: relative T_sum vs Q_sum slewing diagnostic skipped; "
+            f"missing columns: {missing_columns}."
+        )
+        return pd.DataFrame()
+
+    q_matrix = source_df.loc[:, q_columns].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+    t_matrix = source_df.loc[:, t_columns].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+    valid_strip = (
+        np.isfinite(q_matrix)
+        & np.isfinite(t_matrix)
+        & (q_matrix > 0.0)
+        & (t_matrix != 0.0)
+    )
+    has_reference = valid_strip.any(axis=1)
+    if not np.any(has_reference):
+        print(
+            "Warning: relative T_sum vs Q_sum slewing diagnostic skipped; "
+            "no rows with a valid charged reference strip."
+        )
+        return pd.DataFrame()
+
+    row_positions = np.arange(len(source_df))
+    reference_indices = np.argmax(valid_strip, axis=1)
+    reference_tsum = np.full(len(source_df), np.nan, dtype=float)
+    reference_tsum[has_reference] = t_matrix[row_positions[has_reference], reference_indices[has_reference]]
+    reference_labels = np.asarray(strip_labels, dtype=object)[reference_indices]
+    relative_tsum_matrix = t_matrix - reference_tsum[:, np.newaxis]
+    valid_relative_matrix = valid_strip & has_reference[:, np.newaxis] & np.isfinite(relative_tsum_matrix)
+    all_relative_values = relative_tsum_matrix[valid_relative_matrix]
+    all_relative_values = all_relative_values[np.isfinite(all_relative_values)]
+    if all_relative_values.size:
+        any_relative_outside_clip = bool(np.any((all_relative_values < -5.0) | (all_relative_values > 5.0)))
+        if any_relative_outside_clip:
+            shared_relative_xlim = (-5.0, 5.0)
+        else:
+            x_min = float(np.nanmin(all_relative_values))
+            x_max = float(np.nanmax(all_relative_values))
+            if x_min == x_max:
+                padding = 0.5 if x_min == 0 else 0.05 * abs(x_min)
+                shared_relative_xlim = (x_min - padding, x_max + padding)
+            else:
+                shared_relative_xlim = (x_min, x_max)
+    else:
+        any_relative_outside_clip = False
+        shared_relative_xlim = (-1.0, 1.0)
+
+    diagnostic_rows: list[dict[str, float | int | str]] = []
+    point_counts: dict[str, int] = {}
+    clipped_counts: dict[str, int] = {}
+    median_values: dict[str, float] = {}
+    rng = np.random.default_rng(0)
+    try:
+        max_points_per_strip = int(config.get("slewing_relative_tsum_vs_qsum_max_points_per_strip", 150000))
+    except (TypeError, ValueError):
+        max_points_per_strip = 150000
+    max_points_per_strip = max(max_points_per_strip, 1000)
+
+    fig, axes = plt.subplots(4, 4, figsize=(18, 14), sharex=True, sharey=True, constrained_layout=True)
+    for strip_idx, strip_id in enumerate(strip_labels):
+        plane = strip_idx // 4 + 1
+        strip = strip_idx % 4 + 1
+        ax = axes[plane - 1, strip - 1]
+        strip_valid = has_reference & valid_strip[:, strip_idx]
+        q_values = q_matrix[strip_valid, strip_idx]
+        relative_tsum_values = t_matrix[strip_valid, strip_idx] - reference_tsum[strip_valid]
+        reference_values = reference_labels[strip_valid]
+        finite = np.isfinite(q_values) & np.isfinite(relative_tsum_values) & (q_values > 0.0)
+        q_values = q_values[finite]
+        relative_tsum_values = relative_tsum_values[finite]
+        reference_values = reference_values[finite]
+        point_counts[strip_id] = int(q_values.size)
+        if q_values.size:
+            median_values[strip_id] = float(np.median(relative_tsum_values))
+            outside_clip = (relative_tsum_values < -5.0) | (relative_tsum_values > 5.0)
+            clipped_counts[strip_id] = int(np.sum(outside_clip))
+            inside_indices = np.flatnonzero(~outside_clip)
+            outside_indices = np.flatnonzero(outside_clip)
+            max_outside_points = max_points_per_strip // 2
+            if outside_indices.size > max_outside_points:
+                outside_indices = rng.choice(outside_indices, size=max_outside_points, replace=False)
+            max_inside_points = max(max_points_per_strip - outside_indices.size, 0)
+            if inside_indices.size > max_inside_points:
+                inside_indices = rng.choice(inside_indices, size=max_inside_points, replace=False)
+            if inside_indices.size:
+                ax.scatter(
+                    relative_tsum_values[inside_indices],
+                    q_values[inside_indices],
+                    s=2,
+                    alpha=0.22,
+                    color="tab:blue",
+                    rasterized=True,
+                )
+            if outside_indices.size:
+                clipped_tsum_values = np.clip(relative_tsum_values[outside_indices], -5.0, 5.0)
+                ax.scatter(
+                    clipped_tsum_values,
+                    q_values[outside_indices],
+                    s=4,
+                    alpha=0.55,
+                    color="tab:red",
+                    rasterized=True,
+                )
+            try:
+                trend_mask = ~outside_clip if any_relative_outside_clip else np.ones(q_values.size, dtype=bool)
+                trend_df = pd.DataFrame(
+                    {
+                        "q_sum": q_values[trend_mask],
+                        "relative_tsum": relative_tsum_values[trend_mask],
+                    }
+                )
+                if not trend_df.empty:
+                    n_bins = min(30, max(6, int(np.sqrt(len(trend_df)))))
+                    trend_df["tsum_bin"] = pd.qcut(trend_df["relative_tsum"], q=n_bins, duplicates="drop")
+                    trend = (
+                        trend_df.groupby("tsum_bin", observed=True)
+                        .agg(
+                            relative_tsum_center=("relative_tsum", "median"),
+                            q_sum_median=("q_sum", "median"),
+                        )
+                        .reset_index()
+                        .dropna(subset=["relative_tsum_center", "q_sum_median"])
+                    )
+                    if not trend.empty:
+                        ax.plot(
+                            trend["relative_tsum_center"],
+                            trend["q_sum_median"],
+                            color="black",
+                            linewidth=1.2,
+                            alpha=0.85,
+                        )
+            except (ValueError, TypeError):
+                pass
+            reference_counts = pd.Series(reference_values).value_counts().to_dict()
+            for reference_label, count in reference_counts.items():
+                diagnostic_rows.append(
+                    {
+                        "strip_id": strip_id,
+                        "reference_strip_id": str(reference_label),
+                        "n_points": int(count),
+                        "median_relative_tsum": median_values.get(strip_id, np.nan),
+                    }
+                )
+        else:
+            median_values[strip_id] = float("nan")
+            ax.text(0.5, 0.5, "No valid points", ha="center", va="center", transform=ax.transAxes)
+
+        ax.axvline(0.0, color="black", linestyle=":", linewidth=1.0, alpha=0.8)
+        ax.set_title(f"P{plane}s{strip}")
+        ax.grid(True, alpha=0.25)
+        ax.set_yscale("log")
+        ax.set_xlim(shared_relative_xlim)
+        if plane == 4:
+            ax.set_xlabel("T_sum - first charged strip T_sum")
+        if strip == 1:
+            ax.set_ylabel("Q_sum")
+
+    fig.suptitle(
+        "Post-slewing relative T_sum vs Q_sum "
+        f"({context_label}; event reference = first valid charged strip)",
+        fontsize=14,
+    )
+    if save_plots:
+        final_filename = f"{fig_idx}_slewing_relative_tsum_vs_qsum_after_correction.png"
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        save_plot_figure(
+            save_fig_path,
+            fig=fig,
+            alias=alias,
+            format="png",
+            dpi=150,
+        )
+    if show_plots:
+        plt.show()
+    plt.close(fig)
+
+    events_with_reference = int(np.sum(has_reference))
+    print(
+        "Relative T_sum vs Q_sum post-slewing diagnostic: "
+        f"context={context_label} events_considered={len(source_df)} "
+        f"events_with_reference={events_with_reference} "
+        f"points_by_strip={point_counts} "
+        f"clipped_points_by_strip={clipped_counts} "
+        f"xlim={shared_relative_xlim}"
+    )
+    return pd.DataFrame(diagnostic_rows)
 
 
 def _slewing_delta_t_column(pair_residuals_df: pd.DataFrame) -> str | None:
@@ -5892,6 +6802,7 @@ def plot_slewing_delta_t_centroid_by_qsum_cuts(
         alpha=0.35,
         color="black",
         label="_nolegend_",
+        rasterized=True,
     )
     ax.set_title(
         "Q_sum threshold vs Delta-T centroid "
@@ -5943,6 +6854,7 @@ TASK2_SLEWING_OBSERVABLE_ALIASES: tuple[str, ...] = (
     "slewing_delta_t_vs_qsum2_by_qsum1_bins",
     "slewing_delta_t_vs_qsum2_by_qsum1_bins_fit",
     "slewing_per_strip_from_pair_fit",
+    "slewing_relative_tsum_vs_qsum_after_correction",
     "slewing_delta_t_centroid_by_qsum_cuts",
     "slewing_delta_t_centroid_vs_qsum_cut",
     "slewing",
@@ -6044,6 +6956,27 @@ save_time_slewing_pair_residuals = _coerce_config_bool(
     config.get("save_time_slewing_pair_residuals"),
     default=True,
 )
+joined_analysis_files = _coerce_positive_int_config(
+    config.get("joined_analysis_files"),
+    default=1,
+)
+joined_analysis_time_tolerance_hours = _coerce_positive_float_config(
+    config.get("joined_analysis_time_tolerance_hours"),
+    default=8.0,
+)
+apply_slewing_correction_from_pair_fit = _coerce_config_bool(
+    config.get("apply_slewing_correction_from_pair_fit"),
+    default=False,
+)
+slewing_application_reference_mode = str(
+    config.get("slewing_application_reference_mode", "mean_zero")
+).strip().lower()
+if slewing_application_reference_mode != "mean_zero":
+    print(
+        "Warning: invalid slewing_application_reference_mode="
+        f"{slewing_application_reference_mode!r}; using mean_zero."
+    )
+    slewing_application_reference_mode = "mean_zero"
 if process_only_qa_retry_files:
     print(
         "[QA_ONLY] Enabled by STEP_1 shared config: only files present in the active QA retry list will be processed."
@@ -6214,6 +7147,17 @@ for directory in base_directories.values():
     if directory in (base_directories["base_figure_directory"], base_directories["figure_directory"]):
         continue
     os.makedirs(directory, exist_ok=True)
+
+time_slewing_pair_residuals_directory = os.path.join(
+    base_directories["ancillary_directory"],
+    "TIME_SLEWING_PAIR_RESIDUALS",
+)
+if not save_time_slewing_pair_residuals and os.path.exists(time_slewing_pair_residuals_directory):
+    shutil.rmtree(time_slewing_pair_residuals_directory)
+    print(
+        "Removed TIME_SLEWING_PAIR_RESIDUALS directory because "
+        "save_time_slewing_pair_residuals is false."
+    )
 
 debug_plot_directory = os.path.join(
     base_directories["base_plots_directory"],
@@ -7270,6 +8214,10 @@ if process_only_qa_retry_files:
         f"COMPLETED={len(completed_files)}"
     )
 
+selected_file_source = "user" if user_file_selection else ""
+selected_source_candidates: list[str] = []
+joined_input_records: list[dict[str, str]] = []
+
 if user_file_selection:
     processing_file_path = user_file_path
     file_name = os.path.basename(user_file_path)
@@ -7286,6 +8234,8 @@ else:
         latest_unprocessed = select_latest_candidate(unprocessed_files, station)
         if latest_unprocessed:
             file_name = latest_unprocessed
+            selected_file_source = "unprocessed"
+            selected_source_candidates = list(unprocessed_files)
             unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
             processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
             completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
@@ -7299,6 +8249,8 @@ else:
             latest_processing = select_latest_candidate(processing_files, station)
             if latest_processing:
                 file_name = latest_processing
+                selected_file_source = "processing"
+                selected_source_candidates = list(processing_files)
                 processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
                 completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
 
@@ -7313,6 +8265,8 @@ else:
                 latest_completed = select_latest_candidate(completed_files, station)
                 if latest_completed:
                     file_name = latest_completed
+                    selected_file_source = "completed"
+                    selected_source_candidates = list(completed_files)
                     processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
                     completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
 
@@ -7331,6 +8285,8 @@ else:
         if unprocessed_files:
             print("Selecting a random file in UNPROCESSED...")
             file_name = random.choice(unprocessed_files)
+            selected_file_source = "unprocessed"
+            selected_source_candidates = list(unprocessed_files)
             unprocessed_file_path = os.path.join(base_directories["unprocessed_directory"], file_name)
             processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
             completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
@@ -7342,6 +8298,8 @@ else:
         elif processing_files:
             print("Selecting a random file in PROCESSING...")
             file_name = random.choice(processing_files)
+            selected_file_source = "processing"
+            selected_source_candidates = list(processing_files)
             processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
             completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
 
@@ -7356,6 +8314,8 @@ else:
             if complete_reanalysis:
                 print("Selecting a random file in COMPLETED...")
                 file_name = random.choice(completed_files)
+                selected_file_source = "completed"
+                selected_source_candidates = list(completed_files)
                 completed_file_path = os.path.join(base_directories["completed_directory"], file_name)
                 processing_file_path = os.path.join(base_directories["processing_directory"], file_name)
 
@@ -7370,10 +8330,71 @@ else:
         else:
             _exit_without_status_row("No files to process in UNPROCESSED, PROCESSING, or COMPLETED.")
 
+joined_input_records = [
+    {
+        "file_name": file_name,
+        "processing_file_path": processing_file_path,
+        "completed_file_path": completed_file_path if not user_file_selection else "",
+        "basename_no_ext": file_name.replace("cleaned_", "").replace(".parquet", ""),
+    }
+]
+if (
+    not user_file_selection
+    and joined_analysis_files > 1
+    and selected_file_source in {"unprocessed", "completed"}
+):
+    joined_file_names = _joined_analysis_candidate_names(
+        file_name,
+        selected_source_candidates,
+        station_id=station,
+        max_files=joined_analysis_files,
+        tolerance_hours=joined_analysis_time_tolerance_hours,
+    )
+    source_directory = (
+        base_directories["unprocessed_directory"]
+        if selected_file_source == "unprocessed"
+        else base_directories["completed_directory"]
+    )
+    for joined_file_name in joined_file_names:
+        if joined_file_name == file_name:
+            continue
+        joined_source_path = os.path.join(source_directory, joined_file_name)
+        joined_processing_path = os.path.join(base_directories["processing_directory"], joined_file_name)
+        joined_completed_path = os.path.join(base_directories["completed_directory"], joined_file_name)
+        if not os.path.exists(joined_source_path):
+            print(
+                "Warning: joined analysis candidate disappeared before move; "
+                f"skipping {joined_source_path}."
+            )
+            continue
+        if os.path.exists(joined_processing_path):
+            print(
+                "Warning: joined analysis candidate already exists in PROCESSING; "
+                f"skipping {joined_processing_path}."
+            )
+            continue
+        print(
+            "Moving joined analysis file to PROCESSING: "
+            f"{joined_source_path} -> {joined_processing_path}"
+        )
+        safe_move(joined_source_path, joined_processing_path)
+        joined_input_records.append(
+            {
+                "file_name": joined_file_name,
+                "processing_file_path": joined_processing_path,
+                "completed_file_path": joined_completed_path,
+                "basename_no_ext": joined_file_name.replace("cleaned_", "").replace(".parquet", ""),
+            }
+        )
+else:
+    if joined_analysis_files > 1:
+        print(
+            "Joined analysis not expanded for this selection "
+            f"(source={selected_file_source or 'unknown'}, user_file_selection={user_file_selection})."
+        )
+
 # This is for all cases
 file_path = processing_file_path
-if save_plots:
-    os.makedirs(base_directories["figure_directory"], exist_ok=True)
 
 the_filename = os.path.basename(file_path)
 print(f"File to process: {the_filename}")
@@ -7462,6 +8483,13 @@ if file_station_number != int(station):
     print(f"Moving file '{file_name}' to ERROR directory: {error_file_path}")
     process_file(file_path, error_file_path)
     sys.exit(f"File '{file_name}' does not belong to station {station}. Exiting.")
+for joined_record in joined_input_records:
+    joined_station_number = infer_station_number_from_processing_name(joined_record["file_name"])
+    if joined_station_number != int(station):
+        sys.exit(
+            "Joined analysis file does not belong to selected station: "
+            f"{joined_record['file_name']} station={joined_station_number} expected={station}."
+        )
 
 if status_execution_date is not None:
     update_status_progress(
@@ -7482,13 +8510,43 @@ if limit:
 
 KEY = "df"
 
-# Load dataframe
-working_df = pd.read_parquet(file_path, engine="pyarrow")
-working_df = working_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
-if "event_id" not in working_df.columns:
-    print("Warning: 'event_id' missing in Task 2 input; reconstructing from current row order.")
-    working_df.insert(0, "event_id", np.arange(len(working_df), dtype=np.int64))
-print(f"Cleaned dataframe reloaded from: {file_path}")
+# Load dataframe(s). Joined analysis processes adjacent files together, then
+# writes each source file back to its usual per-file output at the end.
+joined_source_file_column = "__task2_joined_source_file__"
+joined_source_basename_column = "__task2_joined_source_basename__"
+joined_frames: list[pd.DataFrame] = []
+for joined_record in joined_input_records:
+    joined_path = joined_record["processing_file_path"]
+    joined_frame = pd.read_parquet(joined_path, engine="pyarrow")
+    joined_frame = joined_frame.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
+    if "event_id" not in joined_frame.columns:
+        print(
+            "Warning: 'event_id' missing in Task 2 input; reconstructing from "
+            f"current row order for {joined_record['file_name']}."
+        )
+        joined_frame.insert(0, "event_id", np.arange(len(joined_frame), dtype=np.int64))
+    joined_frame.loc[:, joined_source_file_column] = joined_record["file_name"]
+    joined_frame.loc[:, joined_source_basename_column] = joined_record["basename_no_ext"]
+    joined_frames.append(joined_frame)
+    print(f"Cleaned dataframe reloaded from: {joined_path} rows={len(joined_frame)}")
+if not joined_frames:
+    sys.exit("No Task 2 input dataframes were loaded.")
+working_df = pd.concat(joined_frames, ignore_index=True, sort=False)
+joined_analysis_active = len(joined_input_records) > 1
+if joined_analysis_active:
+    print(
+        "Joined analysis active: "
+        f"files={len(joined_input_records)} total_rows={len(working_df)} "
+        f"primary={file_name}"
+    )
+else:
+    working_df = working_df.drop(
+        columns=[joined_source_file_column, joined_source_basename_column],
+        errors="ignore",
+    )
+global_variables["joined_analysis_files_requested"] = int(joined_analysis_files)
+global_variables["joined_analysis_files_used"] = int(len(joined_input_records))
+global_variables["joined_analysis_time_tolerance_hours"] = float(joined_analysis_time_tolerance_hours)
 # print("Columns loaded from parquet:")
 # for col in working_df.columns:
 #     print(f" - {col}")
@@ -7617,9 +8675,12 @@ if datetime_series.empty:
         f"Warning: No valid datetime rows found in {file_name}; moving file to ERROR and skipping."
     )
     if not user_file_selection:
-        error_file_path = os.path.join(base_directories["error_directory"], file_name)
-        print(f"Moving file '{file_name}' to ERROR directory: {error_file_path}")
-        process_file(file_path, error_file_path)
+        for joined_record in joined_input_records:
+            joined_processing_path = joined_record["processing_file_path"]
+            error_file_path = os.path.join(base_directories["error_directory"], joined_record["file_name"])
+            print(f"Moving file '{joined_record['file_name']}' to ERROR directory: {error_file_path}")
+            if os.path.exists(joined_processing_path):
+                process_file(joined_processing_path, error_file_path)
     if status_execution_date is not None:
         update_status_progress(
             csv_path_status,
@@ -9996,7 +11057,7 @@ if (not _defer_tsum_calibration_until_late_slot) and _need_slewing_observables:
                 t = data['travel_time']
 
                 ax = axes[col_idx]
-                ax.scatter(x, t, s=5, alpha=0.6, color='tab:green')
+                ax.scatter(x, t, s=5, alpha=0.6, color='tab:green', rasterized=True)
                 ax.set_title(f"P{p1}S{s1} vs P{p2}S{s2}")
                 ax.set_xlabel("dx (mm)")
                 ax.set_ylabel("travel_time (ns)")
@@ -11593,8 +12654,13 @@ if apply_T_sum_calibration:
     else:
         print("Skipping calibration-sample T_sum filtering and strip zeroing (config disabled).")
 
+slewing_fit_df = pd.DataFrame()
+calibration_slewing_event_solutions: dict[object, dict[str, float]] = {}
+slewing_application_sign = -1.0
+
 if (
     slewing_correction
+    or apply_slewing_correction_from_pair_fit
     or _plot_slewing_pair_delta_t_qsum1_qsum2_contour
     or _plot_slewing_delta_t_vs_qsum2_by_qsum1_bins
     or _plot_slewing_delta_t_vs_qsum2_by_qsum1_bins_fit
@@ -11621,14 +12687,80 @@ if (
     _save_tsum_pair_residuals(time_pair_residuals_df)
     plot_slewing_pair_delta_t_qsum1_qsum2_contours(time_pair_residuals_df)
     plot_slewing_delta_t_vs_qsum2_by_qsum1_bins(time_pair_residuals_df)
-    slewing_fit_df = plot_slewing_delta_t_vs_qsum2_by_qsum1_bins_fit(time_pair_residuals_df)
-    plot_slewing_per_strip_from_pair_fit(time_pair_residuals_df, slewing_fit_df)
-    if slewing_correction:
-        print(
-            "slewing_correction=True: active slewing correction is currently disabled. "
-            "Post-calibration pair-level T_sum residual and charge data were saved "
-            "for slewing studies."
+    _plot_slewing_fit_requested_now = task2_plot_requested(
+        "slewing_delta_t_vs_qsum2_by_qsum1_bins_fit",
+        essential=True,
+    )
+    slewing_fit_df = calculate_slewing_delta_t_vs_qsum2_by_qsum1_bins_fit(
+        time_pair_residuals_df,
+        save_coefficients=not _plot_slewing_fit_requested_now,
+    )
+    if _plot_slewing_fit_requested_now:
+        plot_slewing_delta_t_vs_qsum2_by_qsum1_bins_fit(
+            time_pair_residuals_df,
+            save_coefficients=True,
         )
+    plot_slewing_per_strip_from_pair_fit(time_pair_residuals_df, slewing_fit_df)
+    if apply_slewing_correction_from_pair_fit:
+        if slewing_fit_df.empty:
+            print(
+                "apply_slewing_correction_from_pair_fit=True but no pair-fit "
+                "slewing table is available; skipping event-wise slewing application."
+            )
+        else:
+            (
+                calibration_slewing_event_solutions,
+                calibration_slewing_diagnostics,
+                calibration_slewing_before_pair_residuals_df,
+            ) = _build_pair_fit_slewing_event_solutions(
+                calibration_work_df,
+                slewing_fit_df,
+                context_label="calibration subsample",
+            )
+            if calibration_slewing_event_solutions:
+                slewing_application_sign = _choose_slewing_application_sign(
+                    calibration_work_df,
+                    calibration_slewing_event_solutions,
+                    calibration_slewing_before_pair_residuals_df,
+                )
+                calibration_apply_diagnostics = _apply_slewing_solutions_to_dataframe(
+                    calibration_work_df,
+                    calibration_slewing_event_solutions,
+                    application_sign=slewing_application_sign,
+                )
+                calibration_slewing_diagnostics.update(calibration_apply_diagnostics)
+                _print_slewing_application_diagnostics(
+                    "calibration subsample",
+                    calibration_slewing_diagnostics,
+                )
+                calibration_slewing_after_pair_residuals_df = _build_tsum_pair_residuals(
+                    calibration_work_df,
+                    y_lookup=y_lookup,
+                    z_positions=z_positions,
+                    tdiff_to_x=tdiff_to_x,
+                    c_mm_ns=c_mm_ns,
+                )
+                _summarize_tsum_pair_residuals(
+                    calibration_slewing_after_pair_residuals_df,
+                    "calibration after selected pair-fit slewing application",
+                )
+            else:
+                _print_slewing_application_diagnostics(
+                    "calibration subsample",
+                    calibration_slewing_diagnostics,
+                )
+    if slewing_correction:
+        if apply_slewing_correction_from_pair_fit:
+            print(
+                "slewing_correction=True: event-wise pair-fit slewing application "
+                "was handled by apply_slewing_correction_from_pair_fit."
+            )
+        else:
+            print(
+                "slewing_correction=True: active slewing correction is currently disabled. "
+                "Post-calibration pair-level T_sum residual and charge data were saved "
+                "for slewing studies."
+            )
 
 print("----------------------------------------------------------------------")
 print("--------- Applying deferred calibrations to working_df ---------------")
@@ -11649,6 +12781,31 @@ if apply_T_sum_calibration:
             mask = working_df[column_name] != 0
             snapshot_column_if_changed(working_df, column_name, mask)
             working_df.loc[mask, column_name] += Tsum_cal[i][j]
+
+if apply_slewing_correction_from_pair_fit:
+    if slewing_fit_df.empty:
+        print(
+            "Skipping pair-fit slewing application to working_df: no fitted "
+            "slewing table is available."
+        )
+    else:
+        (
+            working_slewing_event_solutions,
+            working_slewing_diagnostics,
+            _working_slewing_before_pair_residuals_df,
+        ) = _build_pair_fit_slewing_event_solutions(
+            working_df,
+            slewing_fit_df,
+            context_label="working_df",
+        )
+        if working_slewing_event_solutions:
+            working_apply_diagnostics = _apply_slewing_solutions_to_dataframe(
+                working_df,
+                working_slewing_event_solutions,
+                application_sign=slewing_application_sign,
+            )
+            working_slewing_diagnostics.update(working_apply_diagnostics)
+        _print_slewing_application_diagnostics("working_df", working_slewing_diagnostics)
 
 print(
     "Skipping post-application T_dif/T_sum filtering on working_df; "
@@ -11734,6 +12891,11 @@ if crosstalk_removal_and_recalibration:
             mask = working_df[column_name] != 0
             snapshot_column_if_changed(working_df, column_name, mask)
             working_df.loc[mask, column_name] -= crosstalk_pedestal[f'crstlk_pedestal_P{key}s{j+1}']
+
+plot_slewing_relative_tsum_vs_qsum_after_correction(
+    working_df,
+    context_label="working_df_after_deferred_calibrations",
+)
 
 # Drop legacy front/back columns without logging every column
 fb_columns = [col for col in working_df.columns if "_F_" in col or "_B_" in col]
@@ -12277,9 +13439,10 @@ for i, module in enumerate(['P1', 'P2', 'P3', 'P4']):
 # metadata_df.to_csv(csv_path, index=False, float_format='%.5g')
 # print(f'{csv_path} updated with the calibration summary.')
 
+figure_directory = base_directories["figure_directory"]
 if create_pdf:
     print(f"Creating PDF with all plots in {save_pdf_path}")
-    existing_pngs = collect_saved_plot_paths(plot_list, base_directories["figure_directory"])
+    existing_pngs = collect_saved_plot_paths(plot_list, figure_directory)
 
     if _direct_pdf_pages is not None:
         # Direct PDF mode: pages were written incrementally via save_plot_figure.
@@ -12309,13 +13472,8 @@ if create_pdf:
         except OSError as e:
             print(f"Error: {e.filename} - {e.strerror}.")
     
-    # Remove run-specific figure directory if all PNGs were deleted.
-    figure_directory = base_directories["figure_directory"]
-    if os.path.exists(figure_directory):
-        if not os.listdir(figure_directory):
-            os.rmdir(figure_directory)
-        else:
-            print(f"Figure directory not empty, skipping removal: {figure_directory}")
+if os.path.exists(figure_directory):
+    shutil.rmtree(figure_directory)
 _prof["s_pdf_finalize_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
 _finalize_stage_t0 = _t_sec
@@ -13215,6 +14373,7 @@ execution_metadata_row = {
     "param_hash": param_hash_value,
     "data_purity_percentage": round(float(data_purity_percentage), 4),
     "total_execution_time_minutes": round(float(total_execution_time_minutes), 4),
+    "joined_analysis_files_used": int(len(joined_input_records)),
     "analysis_mode": int(global_variables["analysis_mode"]),
     "charge_side_mode": charge_side_mode,
     "charge_front_back_mode": charge_front_back_mode,
@@ -13233,6 +14392,7 @@ metadata_execution_csv_path = save_metadata(
         "param_hash",
         "data_purity_percentage",
         "total_execution_time_minutes",
+        "joined_analysis_files_used",
         "analysis_mode",
         *QA_REPROCESSING_METADATA_KEYS,
         "charge_side_mode",
@@ -13388,25 +14548,57 @@ if track_removed_rows_task2:
 # Ensure no figure handles remain open before persistence/final move.
 plt.close("all")
 
-# Save to HDF5 file
-working_df.to_parquet(OUT_PATH, engine="pyarrow", compression="zstd", index=False)
-print(f"Calibrated dataframe saved to: {OUT_PATH}")
+# Save calibrated dataframe(s). Joined analysis writes one output per original
+# input file while preserving the shared processing/calibration context.
+if joined_analysis_active and joined_source_file_column in working_df.columns:
+    for joined_record in joined_input_records:
+        joined_file_name = joined_record["file_name"]
+        joined_basename = joined_record["basename_no_ext"]
+        joined_out_path = os.path.join(output_directory, f"calibrated_{joined_basename}.parquet")
+        joined_mask = working_df[joined_source_file_column].astype(str).eq(joined_file_name)
+        joined_output_df = working_df.loc[joined_mask].drop(
+            columns=[joined_source_file_column, joined_source_basename_column],
+            errors="ignore",
+        )
+        joined_output_df.to_parquet(
+            joined_out_path,
+            engine="pyarrow",
+            compression="zstd",
+            index=False,
+        )
+        print(
+            "Calibrated joined-analysis dataframe saved to: "
+            f"{joined_out_path} rows={len(joined_output_df)}"
+        )
+else:
+    output_df = working_df.drop(
+        columns=[joined_source_file_column, joined_source_basename_column],
+        errors="ignore",
+    )
+    output_df.to_parquet(OUT_PATH, engine="pyarrow", compression="zstd", index=False)
+    print(f"Calibrated dataframe saved to: {OUT_PATH}")
 _prof["s_output_write_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
 
 # Move the original datafile to COMPLETED -------------------------------------
-print("Moving file to COMPLETED directory...")
+print("Moving file(s) to COMPLETED directory...")
 
 if user_file_selection == False:
-    if os.path.exists(file_path):
-        safe_move(file_path, completed_file_path)
-        now = time.time()
-        os.utime(completed_file_path, (now, now))
-        print("************************************************************")
-        print(f"File moved from\n{file_path}\nto:\n{completed_file_path}")
-        print("************************************************************")
-    else:
-        print(f"Warning: processing file not found for completion move: {file_path}")
+    for joined_record in joined_input_records:
+        joined_processing_path = joined_record["processing_file_path"]
+        joined_completed_path = joined_record["completed_file_path"]
+        if os.path.exists(joined_processing_path):
+            safe_move(joined_processing_path, joined_completed_path)
+            now = time.time()
+            os.utime(joined_completed_path, (now, now))
+            print("************************************************************")
+            print(f"File moved from\n{joined_processing_path}\nto:\n{joined_completed_path}")
+            print("************************************************************")
+        else:
+            print(
+                "Warning: processing file not found for completion move: "
+                f"{joined_processing_path}"
+            )
 
 if status_execution_date is not None:
     update_status_progress(
@@ -13424,3 +14616,22 @@ _prof["execution_timestamp"] = execution_timestamp
 _prof["param_hash"] = param_hash_value
 _prof["total_s"] = round(time.perf_counter() - _prof_t0, 2)
 save_metadata(csv_path_profiling, _prof)
+replicate_joined_metadata_rows(
+    [
+        csv_path,
+        csv_path_specific,
+        csv_path_rate_histogram,
+        csv_path_activation,
+        csv_path_trigger_type,
+        csv_path_calibration,
+        csv_path_filter,
+        csv_path_deep_fiter,
+        csv_path_noise_control,
+        csv_path_naive_efficiency,
+        csv_path_status,
+        csv_path_profiling,
+    ],
+    primary_filename_base=filename_base,
+    joined_input_records=joined_input_records,
+    log_fn=print,
+)

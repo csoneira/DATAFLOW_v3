@@ -6,9 +6,9 @@ event_data_step1_run_matrix:
   already_running_log_seconds: 300
   config_refresh_seconds: 60
   stations:
-    "0": [1, 2, 3]
+    "0": [1, 2, 3, 4]
     # "1": [1, 2, 3, 4, 5]
-    "2": [1, 2, 3]
+    "2": [1, 2, 3, 4]
     # "3": [1, 2, 3, 4, 5]
     # "4": [1, 2, 3, 4, 5]
 
@@ -28,6 +28,8 @@ step_1_overrides:
   keep_all_columns_output: false
   save_removed_channel_values: false
   save_time_slewing_pair_residuals: false
+  joined_analysis_files: 1
+  joined_analysis_time_tolerance_hours: 8
   process_only_qa_retry_files: false
   prioritize_other_than_qa_files: true
 

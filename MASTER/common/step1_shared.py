@@ -19,6 +19,7 @@ from ast import literal_eval
 import builtins
 from collections.abc import Mapping as MappingABC
 import csv
+from datetime import datetime
 import fcntl
 from functools import lru_cache
 import math
@@ -34,7 +35,9 @@ from MASTER.common.config_loader import (
     load_declared_parameter_names,
     load_parameter_overrides,
 )
+from MASTER.common.file_selection import extract_run_datetime_from_name
 from MASTER.common.path_config import get_master_config_root
+from MASTER.common.reprocessing_utils import infer_station_number_from_processing_name
 from MASTER.common.selection_config import load_yaml_mapping
 
 DEFAULT_STATION_CHOICES: Tuple[str, ...] = ("0", "1", "2", "3", "4")
@@ -55,6 +58,8 @@ STEP1_TASK_OVERRIDE_KEYS: Tuple[str, ...] = (
     "prioritize_other_than_qa_files",
     "save_removed_channel_values",
     "save_time_slewing_pair_residuals",
+    "joined_analysis_files",
+    "joined_analysis_time_tolerance_hours",
 )
 STEP1_METADATA_OUTPUT_TYPES: Tuple[str, ...] = (
     "activation",
@@ -1141,6 +1146,158 @@ def _step1_override_value_is_set(value: object) -> bool:
     if isinstance(value, str) and not value.strip():
         return False
     return True
+
+
+def coerce_positive_int_config(value: object, default: int = 1) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= 1 else default
+
+
+def coerce_nonnegative_float_config(value: object, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= 0 else default
+
+
+def select_joined_analysis_file_names(
+    selected_file_name: str,
+    candidate_file_names: Iterable[str],
+    *,
+    station_id: str | int,
+    max_files: int,
+    tolerance_hours: float,
+    selection_order: str = "latest",
+    log_fn: Callable[..., None] | None = None,
+) -> list[str]:
+    """Return selected file plus nearby timestamp-compatible candidates.
+
+    ``tolerance_hours`` is a window constraint relative to the selected file:
+    for normal latest-first processing, extra files must be older than the
+    selected file and no farther away than the configured tolerance; for
+    oldest/FIFO processing, extra files must be newer and within the same
+    tolerance. This keeps every joined file inside the configured time window.
+    """
+    if max_files <= 1:
+        return [selected_file_name]
+    selected_datetime = extract_run_datetime_from_name(selected_file_name)
+    if selected_datetime is None:
+        if log_fn is not None:
+            log_fn(
+                "Joined analysis disabled for this selection: could not parse "
+                f"timestamp from {selected_file_name}."
+            )
+        return [selected_file_name]
+
+    try:
+        station_int = int(str(station_id))
+    except (TypeError, ValueError):
+        station_int = None
+    tolerance = pd.Timedelta(hours=float(tolerance_hours))
+    prefer_older = str(selection_order).strip().lower() not in {"oldest", "fifo", "first"}
+    candidate_rows: list[tuple[pd.Timedelta, str]] = []
+    for candidate_name in candidate_file_names:
+        if candidate_name == selected_file_name:
+            continue
+        if station_int is not None and infer_station_number_from_processing_name(candidate_name) != station_int:
+            continue
+        candidate_datetime = extract_run_datetime_from_name(candidate_name)
+        if candidate_datetime is None:
+            continue
+        delta = pd.Timestamp(selected_datetime) - pd.Timestamp(candidate_datetime)
+        if prefer_older:
+            if delta < pd.Timedelta(0) or delta > tolerance:
+                continue
+        else:
+            if delta > pd.Timedelta(0) or abs(delta) > tolerance:
+                continue
+        candidate_rows.append((abs(delta), candidate_name))
+
+    candidate_rows.sort(key=lambda item: item[0])
+    selected_names = [selected_file_name, *[name for _delta, name in candidate_rows[: max_files - 1]]]
+    selected_names.sort(key=lambda name: extract_run_datetime_from_name(name) or datetime.min)
+    if log_fn is not None:
+        log_fn(
+            "Joined analysis file selection: "
+            f"requested={max_files} selected={len(selected_names)} "
+            f"tolerance_hours={float(tolerance_hours):g} files={selected_names}"
+        )
+    return selected_names
+
+
+def replicate_joined_metadata_rows(
+    metadata_paths: Iterable[str | Path],
+    *,
+    primary_filename_base: str,
+    joined_input_records: Iterable[Mapping[str, object]],
+    log_fn: Callable[..., None] | None = None,
+) -> None:
+    """Copy metadata rows from the primary joined file to each joined input.
+
+    Joined analysis intentionally processes a bunch as one dataframe, so most
+    scalar diagnostics are bunch-level values. The output files are still
+    one-per-input; this helper preserves that same one-row-per-input shape in
+    each metadata CSV by cloning the primary row and changing only
+    ``filename_base``.
+    """
+    records = list(joined_input_records)
+    if len(records) <= 1:
+        return
+    primary_base = str(primary_filename_base or "").strip()
+    target_bases = []
+    for record in records:
+        basename = str(record.get("basename_no_ext", "") or "").strip()
+        if basename and basename != primary_base and basename not in target_bases:
+            target_bases.append(basename)
+    if not primary_base or not target_bases:
+        return
+
+    for metadata_path in metadata_paths:
+        path = Path(metadata_path)
+        if not path.exists() or path.stat().st_size == 0:
+            continue
+        try:
+            metadata_df = pd.read_csv(path)
+        except Exception as exc:
+            if log_fn is not None:
+                log_fn(f"Warning: unable to replicate joined metadata in {path}: {exc}")
+            continue
+        if "filename_base" not in metadata_df.columns:
+            continue
+        source_rows = metadata_df[
+            metadata_df["filename_base"].astype(str).str.strip().eq(primary_base)
+        ].copy()
+        if source_rows.empty:
+            continue
+
+        timestamp_columns = [
+            column_name
+            for column_name in ("execution_timestamp", "execution_date")
+            if column_name in metadata_df.columns and column_name in source_rows.columns
+        ]
+        rows_to_append: list[pd.DataFrame] = []
+        for target_base in target_bases:
+            target_rows = source_rows.copy()
+            target_rows.loc[:, "filename_base"] = target_base
+            for _, source_row in source_rows.iterrows():
+                duplicate_mask = metadata_df["filename_base"].astype(str).str.strip().eq(target_base)
+                for column_name in timestamp_columns:
+                    duplicate_mask &= metadata_df[column_name].astype(str).eq(str(source_row[column_name]))
+                metadata_df = metadata_df.loc[~duplicate_mask].copy()
+            rows_to_append.append(target_rows)
+
+        if rows_to_append:
+            metadata_df = pd.concat([metadata_df, *rows_to_append], ignore_index=True, sort=False)
+            metadata_df.to_csv(path, index=False)
+            if log_fn is not None:
+                log_fn(
+                    "Replicated joined metadata rows: "
+                    f"{path} primary={primary_base} targets={target_bases}"
+                )
 
 
 def _extract_step1_task_overrides(

@@ -17,7 +17,7 @@ plots:
   trigger_types_tracking_and_list: usual
   trigger_types_tracking_and_raw: usual
   trigger_types_definitive_tt_and_raw: usual
-  timtrack_results_hexbin_combination_projections: usual
+  timtrack_results_hexbin_combination_projections: essential
   timtrack_results_scatter_combination_projections: usual
   theta_det_theta_zoom_tracking_tt: usual
   polar_theta_phi_definitive_tt_2d: usual
@@ -28,7 +28,7 @@ plots:
   external_residuals_gaussian: usual
   event_display_sample: usual
   track_consistency_loo_residuals: usual
-  strip_hit_occupancy: essential
+  strip_hit_occupancy: usual
   track_based_efficiency: usual
   total_event_charge_histogram: usual
   track_based_efficiency_tt_stability: usual

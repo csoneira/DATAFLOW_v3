@@ -3,7 +3,78 @@
 ## TASK_1 -> TASK_2
 ### from the ~/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/TASK_2/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet
 
-No parquet files found
+event_id
+datetime
+T1_F_1
+T1_F_2
+T1_F_3
+T1_F_4
+T1_B_1
+T1_B_2
+T1_B_3
+T1_B_4
+Q1_F_1
+Q1_F_2
+Q1_F_3
+Q1_F_4
+Q1_B_1
+Q1_B_2
+Q1_B_3
+Q1_B_4
+T2_F_1
+T2_F_2
+T2_F_3
+T2_F_4
+T2_B_1
+T2_B_2
+T2_B_3
+T2_B_4
+Q2_F_1
+Q2_F_2
+Q2_F_3
+Q2_F_4
+Q2_B_1
+Q2_B_2
+Q2_B_3
+Q2_B_4
+T3_F_1
+T3_F_2
+T3_F_3
+T3_F_4
+T3_B_1
+T3_B_2
+T3_B_3
+T3_B_4
+Q3_F_1
+Q3_F_2
+Q3_F_3
+Q3_F_4
+Q3_B_1
+Q3_B_2
+Q3_B_3
+Q3_B_4
+T4_F_1
+T4_F_2
+T4_F_3
+T4_F_4
+T4_B_1
+T4_B_2
+T4_B_3
+T4_B_4
+Q4_F_1
+Q4_F_2
+Q4_F_3
+Q4_F_4
+Q4_B_1
+Q4_B_2
+Q4_B_3
+Q4_B_4
+raw_tt
+task1_problematic_channel_count
+task1_problematic_channel_resolution_exact
+clean_tt
+raw_to_clean_tt
+param_hash
 
 
 ## TASK_2 -> TASK_3
@@ -94,7 +165,55 @@ clean_to_cal_tt
 ## TASK_3 -> TASK_4
 ### from the ~/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/TASK_4/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet
 
-No parquet files found
+event_id
+datetime
+raw_tt
+task1_problematic_channel_count
+task1_problematic_channel_resolution_exact
+clean_tt
+raw_to_clean_tt
+param_hash
+P1_Q_total_uncal
+P2_Q_total_uncal
+P3_Q_total_uncal
+P4_Q_total_uncal
+task2_problematic_strip_count
+total_problematic_offender_count
+cal_tt
+clean_to_cal_tt
+z_P1
+z_P2
+z_P3
+z_P4
+active_strips_P1
+active_strips_P2
+active_strips_P3
+active_strips_P4
+adj_dis
+P1_Y_final
+P2_Y_final
+P3_Y_final
+P4_Y_final
+P1_T_sum_final
+P1_T_dif_final
+P1_Q_sum_final
+P1_Q_dif_final
+P2_T_sum_final
+P2_T_dif_final
+P2_Q_sum_final
+P2_Q_dif_final
+P3_T_sum_final
+P3_T_dif_final
+P3_Q_sum_final
+P3_Q_dif_final
+P4_T_sum_final
+P4_T_dif_final
+P4_Q_sum_final
+P4_Q_dif_final
+task3_problematic_plane_count
+list_tt
+cal_to_list_tt
+plane_charge_topology_code
 
 
 ## TASK_4 -> TASK_5
