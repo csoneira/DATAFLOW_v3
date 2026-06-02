@@ -229,7 +229,9 @@ TASK2_PLOT_ALIASES: tuple[str, ...] = (
     "slewing_delta_t_vs_qsum2_by_qsum1_bins",
     "slewing_delta_t_vs_qsum2_by_qsum1_bins_fit",
     "slewing_per_strip_from_pair_fit",
+    "slewing_per_channel_polynomial_curves",
     "slewing_relative_tsum_vs_qsum_after_correction",
+    "slewing_relative_tsum_vs_qsum_after_correction_logscale",
     "slewing_delta_t_centroid_by_qsum_cuts",
     "slewing_delta_t_centroid_vs_qsum_cut",
     "stat_window_accumulation",
@@ -423,7 +425,7 @@ def should_drop_calibration_metadata_field(column_name: str) -> bool:
       - filename_base
       - execution_timestamp
       - param_hash
-      - P*_s*_{Q_B,Q_F,Q_FB_coeffs(__N),Q_TDIF_coeffs(__N),Q_sum,T_sum,T_dif,crstlk_*}
+      - P*_s*_{Q_B,Q_F,Q_FB_coeffs(__N),Q_TDIF_coeffs(__N),Q_sum,T_sum,T_dif,T_slew_*,crstlk_*}
     """
     if column_name in ("filename_base", "execution_timestamp", "param_hash"):
         return False
@@ -5954,6 +5956,694 @@ def _print_slewing_application_diagnostics(
                 f"count={per_strip_counts[label]} median={float(median):.6g} std={float(std):.6g}"
             )
 
+def _task2_slewing_application_mode() -> str:
+    mode = str(config.get("slewing_application_mode", "pair_event_solution")).strip().lower()
+    allowed_modes = {"pair_event_solution", "per_channel_polynomial"}
+    if mode not in allowed_modes:
+        print(
+            "Warning: invalid slewing_application_mode="
+            f"{mode!r}; using pair_event_solution."
+        )
+        return "pair_event_solution"
+    return mode
+
+def _task2_slewing_per_channel_degree() -> int:
+    try:
+        degree = int(config.get("slewing_per_channel_poly_degree", 1))
+    except (TypeError, ValueError):
+        degree = 1
+    if degree < 1:
+        print(
+            "Warning: slewing_per_channel_poly_degree must be >= 1; using 1."
+        )
+        return 1
+    return degree
+
+def _task2_slewing_outside_domain_mode() -> str:
+    mode = str(config.get("slewing_per_channel_outside_domain", "clip")).strip().lower()
+    if mode not in {"clip", "skip"}:
+        print(
+            "Warning: invalid slewing_per_channel_outside_domain="
+            f"{mode!r}; using clip."
+        )
+        return "clip"
+    return mode
+
+def _slewing_per_channel_q_coordinate(q_values: np.ndarray) -> np.ndarray:
+    q_values = np.asarray(q_values, dtype=float)
+    if bool(config.get("slewing_use_log_qsum", False)):
+        return np.where(q_values > 0.0, np.log(q_values), np.nan)
+    return q_values
+
+def _evaluate_per_channel_polynomial_slewing(
+    model: dict[str, object],
+    label: str,
+    q_value: float,
+    *,
+    outside_domain_mode: str,
+) -> tuple[float | None, str]:
+    coefficients = model.get("coefficients", {})
+    means = model.get("basis_means", {})
+    domains = model.get("domains", {})
+    degree = int(model.get("degree", 1))
+    if not isinstance(coefficients, dict) or label not in coefficients:
+        return None, "missing_curve"
+    if not isinstance(means, dict) or label not in means:
+        return None, "missing_curve"
+    if not isinstance(domains, dict) or label not in domains:
+        return None, "missing_curve"
+    if not np.isfinite(q_value) or q_value <= 0.0:
+        return None, "invalid_charge"
+
+    x_value = float(_slewing_per_channel_q_coordinate(np.asarray([q_value], dtype=float))[0])
+    if not np.isfinite(x_value):
+        return None, "invalid_charge"
+
+    domain = domains[label]
+    try:
+        x_min = float(domain["min"])
+        x_max = float(domain["max"])
+    except (TypeError, KeyError, ValueError):
+        return None, "missing_curve"
+    if not np.isfinite(x_min) or not np.isfinite(x_max):
+        return None, "missing_curve"
+    if x_value < x_min or x_value > x_max:
+        if outside_domain_mode == "skip":
+            return None, "outside_domain_skipped"
+        x_value = float(np.clip(x_value, x_min, x_max))
+        status = "outside_domain_clipped"
+    else:
+        status = "ok"
+
+    coeff_values = coefficients[label]
+    mean_values = means[label]
+    try:
+        slewing_value = 0.0
+        for power in range(1, degree + 1):
+            coeff = float(coeff_values[power - 1])
+            power_mean = float(mean_values[power])
+            slewing_value += coeff * ((x_value ** power) - power_mean)
+    except (TypeError, KeyError, IndexError, ValueError, FloatingPointError):
+        return None, "missing_curve"
+    if not np.isfinite(slewing_value):
+        return None, "missing_curve"
+    return float(slewing_value), status
+
+def _robust_slewing_width(values: np.ndarray) -> float:
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return float("nan")
+    q25, q75 = np.nanpercentile(values, [25, 75])
+    return float(q75 - q25)
+
+def _print_per_channel_slewing_residual_validation(
+    residuals_before: np.ndarray,
+    residuals_after: np.ndarray,
+    q_min_values: np.ndarray,
+    *,
+    context_label: str,
+) -> None:
+    residuals_before = np.asarray(residuals_before, dtype=float)
+    residuals_after = np.asarray(residuals_after, dtype=float)
+    q_min_values = np.asarray(q_min_values, dtype=float)
+    valid = (
+        np.isfinite(residuals_before)
+        & np.isfinite(residuals_after)
+        & np.isfinite(q_min_values)
+    )
+    if not np.any(valid):
+        print(f"{context_label}: per-channel polynomial validation has no valid residual rows.")
+        return
+    residuals_before = residuals_before[valid]
+    residuals_after = residuals_after[valid]
+    q_min_values = q_min_values[valid]
+    q_split = float(np.nanmedian(q_min_values))
+    low_mask = q_min_values <= q_split
+    high_mask = q_min_values > q_split
+    print(
+        f"{context_label}: per-channel polynomial residual validation "
+        f"n={len(residuals_before)} "
+        f"median_before={float(np.nanmedian(residuals_before)):.6g} "
+        f"median_after={float(np.nanmedian(residuals_after)):.6g} "
+        f"iqr_before={_robust_slewing_width(residuals_before):.6g} "
+        f"iqr_after={_robust_slewing_width(residuals_after):.6g} "
+        f"low_charge_iqr_before={_robust_slewing_width(residuals_before[low_mask]):.6g} "
+        f"low_charge_iqr_after={_robust_slewing_width(residuals_after[low_mask]):.6g} "
+        f"high_charge_iqr_before={_robust_slewing_width(residuals_before[high_mask]):.6g} "
+        f"high_charge_iqr_after={_robust_slewing_width(residuals_after[high_mask]):.6g}"
+    )
+
+def fit_per_channel_polynomial_slewing_model(
+    pair_residuals_df: pd.DataFrame,
+    *,
+    context_label: str,
+) -> tuple[dict[str, object], dict[str, object]]:
+    degree = _task2_slewing_per_channel_degree()
+    diagnostics: dict[str, object] = {
+        "context": context_label,
+        "pair_residual_rows_considered": int(len(pair_residuals_df.index)),
+        "pair_residual_rows_used": 0,
+        "fitted_channels": [],
+        "degree": degree,
+        "charge_coordinate": "log(Q_sum)" if bool(config.get("slewing_use_log_qsum", False)) else "Q_sum",
+        "unknowns": 0,
+        "rank": 0,
+        "residual_norm": np.nan,
+        "rank_deficient": False,
+        "per_channel_counts": {},
+        "per_channel_domain": {},
+    }
+    if pair_residuals_df.empty:
+        print(f"{context_label}: no pair residual rows available for per-channel slewing fit.")
+        return {}, diagnostics
+
+    residual_column = _slewing_delta_t_column(pair_residuals_df)
+    if residual_column is None:
+        print(f"{context_label}: no residual column available for per-channel slewing fit.")
+        return {}, diagnostics
+    q_fit_1_column = _slewing_qsum_column("Q_sum_1")
+    q_fit_2_column = _slewing_qsum_column("Q_sum_2")
+    required_columns = {
+        "label1", "label2", "Q_sum_1", "Q_sum_2",
+        q_fit_1_column, q_fit_2_column, residual_column,
+    }
+    missing_columns = required_columns.difference(pair_residuals_df.columns)
+    if missing_columns:
+        print(
+            f"{context_label}: per-channel slewing fit skipped; missing columns "
+            f"{sorted(missing_columns)}."
+        )
+        return {}, diagnostics
+
+    work_df = pair_residuals_df.loc[:, list(required_columns)].copy()
+    for column in ["Q_sum_1", "Q_sum_2", q_fit_1_column, q_fit_2_column, residual_column]:
+        work_df[column] = pd.to_numeric(work_df[column], errors="coerce")
+    valid = (
+        np.isfinite(work_df["Q_sum_1"])
+        & np.isfinite(work_df["Q_sum_2"])
+        & np.isfinite(work_df[q_fit_1_column])
+        & np.isfinite(work_df[q_fit_2_column])
+        & np.isfinite(work_df[residual_column])
+        & (work_df["Q_sum_1"] > 0.0)
+        & (work_df["Q_sum_2"] > 0.0)
+    )
+    work_df = work_df.loc[valid].copy()
+    if work_df.empty:
+        print(f"{context_label}: no valid event-level pair rows for per-channel slewing fit.")
+        return {}, diagnostics
+
+    x_values_by_label: dict[str, list[float]] = defaultdict(list)
+    for row in work_df.itertuples(index=False):
+        label1 = str(row.label1)
+        label2 = str(row.label2)
+        x_values_by_label[label1].append(float(getattr(row, q_fit_1_column)))
+        x_values_by_label[label2].append(float(getattr(row, q_fit_2_column)))
+
+    basis_means: dict[str, dict[int, float]] = {}
+    domains: dict[str, dict[str, float]] = {}
+    per_channel_counts: dict[str, int] = {}
+    fitted_labels: list[str] = []
+    for label, values in sorted(x_values_by_label.items()):
+        x_values = np.asarray(values, dtype=float)
+        x_values = x_values[np.isfinite(x_values)]
+        if x_values.size < degree + 1:
+            continue
+        fitted_labels.append(label)
+        per_channel_counts[label] = int(x_values.size)
+        basis_means[label] = {
+            power: float(np.mean(x_values ** power))
+            for power in range(1, degree + 1)
+        }
+        domains[label] = {
+            "min": float(np.min(x_values)),
+            "max": float(np.max(x_values)),
+        }
+
+    if len(fitted_labels) < 2:
+        print(f"{context_label}: fewer than two channels have enough hits for per-channel slewing fit.")
+        return {}, diagnostics
+
+    unknown_keys = [
+        (label, power)
+        for label in fitted_labels
+        for power in range(1, degree + 1)
+    ]
+    unknown_index = {key: idx for idx, key in enumerate(unknown_keys)}
+    matrix_rows: list[np.ndarray] = []
+    rhs_values: list[float] = []
+    q_min_for_validation: list[float] = []
+    for row in work_df.itertuples(index=False):
+        label1 = str(row.label1)
+        label2 = str(row.label2)
+        if label1 not in fitted_labels or label2 not in fitted_labels:
+            continue
+        x1 = float(getattr(row, q_fit_1_column))
+        x2 = float(getattr(row, q_fit_2_column))
+        residual_value = float(getattr(row, residual_column))
+        if not np.isfinite(x1) or not np.isfinite(x2) or not np.isfinite(residual_value):
+            continue
+        matrix_row = np.zeros(len(unknown_keys), dtype=float)
+        # The Task 2 residual is T_sum_2 - T_sum_1 - travel_time, so its
+        # charge-dependent part is s_label2(Q2) - s_label1(Q1).
+        for power in range(1, degree + 1):
+            matrix_row[unknown_index[(label2, power)]] += (x2 ** power) - basis_means[label2][power]
+            matrix_row[unknown_index[(label1, power)]] -= (x1 ** power) - basis_means[label1][power]
+        matrix_rows.append(matrix_row)
+        rhs_values.append(residual_value)
+        q_min_for_validation.append(min(float(row.Q_sum_1), float(row.Q_sum_2)))
+
+    if not matrix_rows:
+        print(f"{context_label}: no usable rows remained after channel coverage checks.")
+        return {}, diagnostics
+
+    matrix = np.vstack(matrix_rows)
+    vector = np.asarray(rhs_values, dtype=float)
+    try:
+        solution, lstsq_residuals, rank, singular_values = np.linalg.lstsq(matrix, vector, rcond=None)
+    except np.linalg.LinAlgError:
+        print(f"{context_label}: per-channel polynomial least-squares fit failed.")
+        return {}, diagnostics
+    if not np.all(np.isfinite(solution)):
+        print(f"{context_label}: per-channel polynomial fit produced non-finite coefficients.")
+        return {}, diagnostics
+
+    coefficients: dict[str, list[float]] = {
+        label: [0.0] * degree
+        for label in fitted_labels
+    }
+    for (label, power), idx in unknown_index.items():
+        coefficients[label][power - 1] = float(solution[idx])
+
+    fitted_values = matrix @ solution
+    residuals_after = vector - fitted_values
+    residual_norm = float(np.linalg.norm(residuals_after))
+    rank_deficient = int(rank) < len(unknown_keys)
+    model: dict[str, object] = {
+        "degree": degree,
+        "charge_coordinate": diagnostics["charge_coordinate"],
+        "residual_column": residual_column,
+        "coefficients": coefficients,
+        "basis_means": basis_means,
+        "domains": domains,
+    }
+    partial_residual_points: dict[str, dict[str, list[float]]] = {
+        label: {"q": [], "s": []}
+        for label in fitted_labels
+    }
+    try:
+        max_partial_points_per_channel = int(config.get("slewing_per_channel_curve_max_points_per_channel", 30000))
+    except (TypeError, ValueError):
+        max_partial_points_per_channel = 30000
+    max_partial_points_per_channel = max(max_partial_points_per_channel, 1000)
+    for row in work_df.itertuples(index=False):
+        label1 = str(row.label1)
+        label2 = str(row.label2)
+        if label1 not in fitted_labels or label2 not in fitted_labels:
+            continue
+        q1 = float(row.Q_sum_1)
+        q2 = float(row.Q_sum_2)
+        residual_value = float(getattr(row, residual_column))
+        if not np.isfinite(q1) or not np.isfinite(q2) or not np.isfinite(residual_value):
+            continue
+        s1, status1 = _evaluate_per_channel_polynomial_slewing(
+            model,
+            label1,
+            q1,
+            outside_domain_mode="skip",
+        )
+        s2, status2 = _evaluate_per_channel_polynomial_slewing(
+            model,
+            label2,
+            q2,
+            outside_domain_mode="skip",
+        )
+        if s1 is None or s2 is None or status1 != "ok" or status2 != "ok":
+            continue
+        # Partial residuals project the pair residual R=s2-s1 onto each
+        # channel's fitted curve while keeping the other channel fixed.
+        partial_residual_points[label1]["q"].append(q1)
+        partial_residual_points[label1]["s"].append(float(s2 - residual_value))
+        partial_residual_points[label2]["q"].append(q2)
+        partial_residual_points[label2]["s"].append(float(residual_value + s1))
+
+    rng = np.random.default_rng(0)
+    for label, points in partial_residual_points.items():
+        point_count = len(points["q"])
+        if point_count <= max_partial_points_per_channel:
+            continue
+        keep_indices = rng.choice(
+            np.arange(point_count),
+            size=max_partial_points_per_channel,
+            replace=False,
+        )
+        keep_indices.sort()
+        q_values = np.asarray(points["q"], dtype=float)[keep_indices]
+        s_values = np.asarray(points["s"], dtype=float)[keep_indices]
+        partial_residual_points[label] = {
+            "q": q_values.tolist(),
+            "s": s_values.tolist(),
+        }
+    model["partial_residual_points"] = partial_residual_points
+    diagnostics.update({
+        "pair_residual_rows_used": int(len(vector)),
+        "fitted_channels": fitted_labels,
+        "unknowns": int(len(unknown_keys)),
+        "rank": int(rank),
+        "residual_norm": residual_norm,
+        "rank_deficient": bool(rank_deficient),
+        "per_channel_counts": per_channel_counts,
+        "per_channel_domain": domains,
+    })
+    print(
+        f"{context_label}: per-channel polynomial slewing fit "
+        f"rows_considered={diagnostics['pair_residual_rows_considered']} "
+        f"rows_used={diagnostics['pair_residual_rows_used']} "
+        f"fitted_channels={len(fitted_labels)} degree={degree} "
+        f"charge_coordinate={diagnostics['charge_coordinate']} "
+        f"unknowns={diagnostics['unknowns']} rank={diagnostics['rank']} "
+        f"residual_norm={residual_norm:.6g}"
+    )
+    if rank_deficient:
+        print(
+            f"Warning: {context_label} per-channel polynomial slewing fit is rank deficient "
+            f"(rank={rank}, unknowns={len(unknown_keys)}); using numpy minimum-norm solution."
+        )
+    for label in fitted_labels:
+        domain = domains[label]
+        print(
+            f"{context_label}: {label} per-channel fit hits={per_channel_counts[label]} "
+            f"x_min={domain['min']:.6g} x_max={domain['max']:.6g}"
+        )
+    _print_per_channel_slewing_residual_validation(
+        vector,
+        residuals_after,
+        np.asarray(q_min_for_validation, dtype=float),
+        context_label=context_label,
+    )
+    return model, diagnostics
+
+def apply_per_channel_polynomial_slewing_to_dataframe(
+    target_df: pd.DataFrame,
+    model: dict[str, object],
+    *,
+    context_label: str,
+) -> dict[str, object]:
+    outside_domain_mode = _task2_slewing_outside_domain_mode()
+    diagnostics: dict[str, object] = {
+        "context": context_label,
+        "working_df_hits_corrected": 0,
+        "skipped_invalid_charge_hits": 0,
+        "skipped_missing_curve_hits": 0,
+        "outside_domain_clipped_hits": 0,
+        "outside_domain_skipped_hits": 0,
+        "per_channel_counts": {},
+    }
+    if target_df.empty or not model:
+        print(f"{context_label}: per-channel polynomial slewing application skipped; no model or empty dataframe.")
+        return diagnostics
+
+    corrected_by_label: dict[str, int] = {}
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            label = f"P{plane}s{strip}"
+            q_column = f"Q{plane}_Q_sum_{strip}"
+            t_column = f"T{plane}_T_sum_{strip}"
+            if q_column not in target_df.columns or t_column not in target_df.columns:
+                diagnostics["skipped_missing_curve_hits"] = (
+                    int(diagnostics["skipped_missing_curve_hits"]) + len(target_df.index)
+                )
+                continue
+            q_values = pd.to_numeric(target_df[q_column], errors="coerce")
+            t_values = pd.to_numeric(target_df[t_column], errors="coerce")
+            candidate_mask = np.isfinite(t_values) & (t_values != 0)
+            if not bool(candidate_mask.any()):
+                continue
+
+            valid_indices: list[object] = []
+            correction_values: list[float] = []
+            for row_index, q_value in q_values.loc[candidate_mask].items():
+                current_t = t_values.at[row_index]
+                if not np.isfinite(current_t) or current_t == 0:
+                    continue
+                slewing_value, status = _evaluate_per_channel_polynomial_slewing(
+                    model,
+                    label,
+                    float(q_value),
+                    outside_domain_mode=outside_domain_mode,
+                )
+                if status == "invalid_charge":
+                    diagnostics["skipped_invalid_charge_hits"] = int(diagnostics["skipped_invalid_charge_hits"]) + 1
+                    continue
+                if status == "missing_curve":
+                    diagnostics["skipped_missing_curve_hits"] = int(diagnostics["skipped_missing_curve_hits"]) + 1
+                    continue
+                if status == "outside_domain_skipped":
+                    diagnostics["outside_domain_skipped_hits"] = int(diagnostics["outside_domain_skipped_hits"]) + 1
+                    continue
+                if status == "outside_domain_clipped":
+                    diagnostics["outside_domain_clipped_hits"] = int(diagnostics["outside_domain_clipped_hits"]) + 1
+                if slewing_value is None or not np.isfinite(slewing_value):
+                    diagnostics["skipped_missing_curve_hits"] = int(diagnostics["skipped_missing_curve_hits"]) + 1
+                    continue
+                valid_indices.append(row_index)
+                correction_values.append(float(slewing_value))
+
+            if not valid_indices:
+                continue
+            change_mask = pd.Series(False, index=target_df.index)
+            change_mask.loc[valid_indices] = True
+            snapshot_column_if_changed(target_df, t_column, change_mask)
+            current_values = pd.to_numeric(target_df.loc[valid_indices, t_column], errors="coerce").to_numpy(dtype=float)
+            corrections = np.asarray(correction_values, dtype=float)
+            target_df.loc[valid_indices, t_column] = current_values - corrections
+            corrected_by_label[label] = len(valid_indices)
+            diagnostics["working_df_hits_corrected"] = int(diagnostics["working_df_hits_corrected"]) + len(valid_indices)
+
+    diagnostics["per_channel_counts"] = corrected_by_label
+    print(
+        f"{context_label}: per-channel polynomial slewing application "
+        f"hits_corrected={diagnostics['working_df_hits_corrected']} "
+        f"skipped_invalid_charge_hits={diagnostics['skipped_invalid_charge_hits']} "
+        f"skipped_missing_curve_hits={diagnostics['skipped_missing_curve_hits']} "
+        f"outside_domain_clipped_hits={diagnostics['outside_domain_clipped_hits']} "
+        f"outside_domain_skipped_hits={diagnostics['outside_domain_skipped_hits']} "
+        f"outside_domain_mode={outside_domain_mode}"
+    )
+    for label in sorted(corrected_by_label):
+        print(f"{context_label}: {label} per-channel polynomial corrected_hits={corrected_by_label[label]}")
+    return diagnostics
+
+def store_per_channel_polynomial_slewing_metadata(
+    model: dict[str, object],
+    *,
+    target_metadata: dict[str, object],
+) -> None:
+    coefficients = model.get("coefficients", {}) if isinstance(model, dict) else {}
+    basis_means = model.get("basis_means", {}) if isinstance(model, dict) else {}
+    domains = model.get("domains", {}) if isinstance(model, dict) else {}
+    degree = model.get("degree", None) if isinstance(model, dict) else None
+    charge_coordinate = model.get("charge_coordinate", None) if isinstance(model, dict) else None
+    residual_column = model.get("residual_column", None) if isinstance(model, dict) else None
+    if not isinstance(coefficients, dict):
+        coefficients = {}
+    if not isinstance(basis_means, dict):
+        basis_means = {}
+    if not isinstance(domains, dict):
+        domains = {}
+
+    stored_channels = 0
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            label = f"P{plane}s{strip}"
+            metadata_prefix = f"P{plane}_s{strip}"
+            coeff_values = coefficients.get(label)
+            mean_values = basis_means.get(label)
+            domain_values = domains.get(label)
+            target_metadata[f"{metadata_prefix}_T_slew_coeffs"] = (
+                [float(value) for value in coeff_values]
+                if isinstance(coeff_values, (list, tuple))
+                else None
+            )
+            if isinstance(mean_values, dict):
+                ordered_means: list[float] = []
+                try:
+                    degree_int = int(degree)
+                except (TypeError, ValueError):
+                    degree_int = len(mean_values)
+                for power in range(1, degree_int + 1):
+                    value = mean_values.get(power)
+                    try:
+                        mean_float = float(value)
+                    except (TypeError, ValueError):
+                        mean_float = np.nan
+                    ordered_means.append(mean_float if np.isfinite(mean_float) else np.nan)
+                target_metadata[f"{metadata_prefix}_T_slew_basis_means"] = ordered_means
+            else:
+                target_metadata[f"{metadata_prefix}_T_slew_basis_means"] = None
+            if isinstance(domain_values, dict):
+                try:
+                    target_metadata[f"{metadata_prefix}_T_slew_domain"] = [
+                        float(domain_values["min"]),
+                        float(domain_values["max"]),
+                    ]
+                except (TypeError, KeyError, ValueError):
+                    target_metadata[f"{metadata_prefix}_T_slew_domain"] = None
+            else:
+                target_metadata[f"{metadata_prefix}_T_slew_domain"] = None
+            target_metadata[f"{metadata_prefix}_T_slew_degree"] = degree
+            target_metadata[f"{metadata_prefix}_T_slew_coordinate"] = charge_coordinate
+            target_metadata[f"{metadata_prefix}_T_slew_residual_column"] = residual_column
+            if isinstance(coeff_values, (list, tuple)) and coeff_values:
+                stored_channels += 1
+    print(
+        "Stored per-channel polynomial slewing calibration metadata "
+        f"for {stored_channels} fitted channels."
+    )
+
+def plot_per_channel_polynomial_slewing_curves(
+    model: dict[str, object],
+    *,
+    context_label: str,
+) -> None:
+    global fig_idx
+    alias = "slewing_per_channel_polynomial_curves"
+    if not task2_plot_requested(alias, essential=True):
+        return
+    if not model:
+        print("Warning: per-channel polynomial slewing curve plot skipped; no fitted model.")
+        return
+    coefficients = model.get("coefficients", {})
+    domains = model.get("domains", {})
+    basis_means = model.get("basis_means", {})
+    partial_residual_points = model.get("partial_residual_points", {})
+    if not isinstance(coefficients, dict) or not isinstance(domains, dict) or not coefficients:
+        print("Warning: per-channel polynomial slewing curve plot skipped; empty model coefficients.")
+        return
+
+    outside_domain_mode = _task2_slewing_outside_domain_mode()
+    charge_coordinate = str(model.get("charge_coordinate", "Q_sum"))
+    fig, axes = plt.subplots(4, 4, figsize=(18, 14), sharex=False, sharey=True, constrained_layout=True)
+    curve_count = 0
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            label = f"P{plane}s{strip}"
+            ax = axes[plane - 1, strip - 1]
+            domain = domains.get(label) if isinstance(domains, dict) else None
+            if label not in coefficients or not isinstance(domain, dict):
+                ax.text(0.5, 0.5, "No fitted curve", ha="center", va="center", transform=ax.transAxes)
+                ax.set_title(label)
+                ax.grid(True, alpha=0.2)
+                continue
+            try:
+                x_min = float(domain["min"])
+                x_max = float(domain["max"])
+            except (TypeError, KeyError, ValueError):
+                ax.text(0.5, 0.5, "No fitted curve", ha="center", va="center", transform=ax.transAxes)
+                ax.set_title(label)
+                ax.grid(True, alpha=0.2)
+                continue
+            if not np.isfinite(x_min) or not np.isfinite(x_max) or x_min == x_max:
+                ax.text(0.5, 0.5, "No fitted curve", ha="center", va="center", transform=ax.transAxes)
+                ax.set_title(label)
+                ax.grid(True, alpha=0.2)
+                continue
+
+            point_payload = (
+                partial_residual_points.get(label, {})
+                if isinstance(partial_residual_points, dict)
+                else {}
+            )
+            if isinstance(point_payload, dict):
+                point_q = np.asarray(point_payload.get("q", []), dtype=float)
+                point_s = np.asarray(point_payload.get("s", []), dtype=float)
+                point_valid = np.isfinite(point_q) & np.isfinite(point_s) & (point_q > 0.0)
+                if np.any(point_valid):
+                    ax.scatter(
+                        point_q[point_valid],
+                        point_s[point_valid],
+                        s=2,
+                        alpha=0.14,
+                        color="0.35",
+                        label="partial residuals",
+                        rasterized=True,
+                    )
+
+            x_values = np.linspace(x_min, x_max, 300)
+            if bool(config.get("slewing_use_log_qsum", False)):
+                q_values = np.exp(x_values)
+            else:
+                q_values = x_values
+            curve_values: list[float] = []
+            for q_value in q_values:
+                slewing_value, status = _evaluate_per_channel_polynomial_slewing(
+                    model,
+                    label,
+                    float(q_value),
+                    outside_domain_mode=outside_domain_mode,
+                )
+                curve_values.append(float(slewing_value) if slewing_value is not None and status in {"ok", "outside_domain_clipped"} else np.nan)
+            curve_array = np.asarray(curve_values, dtype=float)
+            valid = np.isfinite(q_values) & np.isfinite(curve_array) & (q_values > 0.0)
+            if not np.any(valid):
+                ax.text(0.5, 0.5, "No fitted curve", ha="center", va="center", transform=ax.transAxes)
+            else:
+                coeff_values = coefficients.get(label, [])
+                mean_values = basis_means.get(label, {}) if isinstance(basis_means, dict) else {}
+                legend_parts: list[str] = []
+                if isinstance(coeff_values, (list, tuple)):
+                    for power, coeff in enumerate(coeff_values, start=1):
+                        try:
+                            coeff_float = float(coeff)
+                            mean_float = float(mean_values.get(power, np.nan)) if isinstance(mean_values, dict) else np.nan
+                        except (TypeError, ValueError):
+                            continue
+                        legend_parts.append(f"a{power}={coeff_float:.3g}, mu{power}={mean_float:.3g}")
+                curve_label = "fit"
+                if legend_parts:
+                    curve_label = "fit: " + "; ".join(legend_parts)
+                ax.plot(
+                    q_values[valid],
+                    curve_array[valid],
+                    color="tab:blue",
+                    linewidth=1.6,
+                    label=curve_label,
+                )
+                ax.axhline(0.0, color="0.25", linestyle=":", linewidth=0.8)
+                curve_count += 1
+            ax.set_title(label)
+            ax.grid(True, alpha=0.2)
+            ax.legend(fontsize="xx-small", loc="best")
+            if plane == 4:
+                ax.set_xlabel("Q_sum")
+            if strip == 1:
+                ax.set_ylabel("s_channel(Q_sum)")
+
+    fig.suptitle(
+        "Per-channel polynomial slewing curves "
+        f"({context_label}; fit coordinate={charge_coordinate})",
+        fontsize=14,
+    )
+    if save_plots:
+        final_filename = f"{fig_idx}_slewing_per_channel_polynomial_curves.png"
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        save_plot_figure(
+            save_fig_path,
+            fig=fig,
+            alias=alias,
+            format="png",
+            dpi=150,
+        )
+    if show_plots:
+        plt.show()
+    plt.close(fig)
+    print(
+        "Per-channel polynomial slewing curve plot: "
+        f"context={context_label} curves_plotted={curve_count}"
+    )
+
 def _choose_slewing_application_sign(
     calibration_df: pd.DataFrame,
     event_solutions: dict[object, dict[str, float]],
@@ -6354,9 +7044,11 @@ def plot_slewing_relative_tsum_vs_qsum_after_correction(
     source_df: pd.DataFrame,
     *,
     context_label: str = "working_df",
+    alias: str = "slewing_relative_tsum_vs_qsum_after_correction",
+    log_q_axis: bool = False,
+    clip_q_axis: bool = True,
 ) -> pd.DataFrame:
     global fig_idx
-    alias = "slewing_relative_tsum_vs_qsum_after_correction"
     if not task2_plot_requested(alias, essential=True):
         return pd.DataFrame()
     if source_df.empty:
@@ -6392,6 +7084,21 @@ def plot_slewing_relative_tsum_vs_qsum_after_correction(
 
     q_matrix = source_df.loc[:, q_columns].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
     t_matrix = source_df.loc[:, t_columns].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+    q_clip_left = float(config.get("slewing_relative_tsum_vs_qsum_qsum_clip_left", 0.0))
+    q_clip_right = float(config.get("slewing_relative_tsum_vs_qsum_qsum_clip_right", 50.0))
+    if not np.isfinite(q_clip_left) or not np.isfinite(q_clip_right) or q_clip_left >= q_clip_right:
+        print(
+            "Warning: invalid slewing_relative_tsum_vs_qsum Q_sum clip "
+            f"range [{q_clip_left}, {q_clip_right}]; using [0, 50]."
+        )
+        q_clip_left = 0.0
+        q_clip_right = 50.0
+    print(
+        "Relative T_sum vs Q_sum post-slewing diagnostic uses physical "
+        f"Q*_Q_sum_* columns with a {'log' if log_q_axis else 'linear'} "
+        f"Q_sum axis; q_clip_enabled={clip_q_axis} "
+        f"q_clip=[{q_clip_left}, {q_clip_right}]."
+    )
     valid_strip = (
         np.isfinite(q_matrix)
         & np.isfinite(t_matrix)
@@ -6434,6 +7141,7 @@ def plot_slewing_relative_tsum_vs_qsum_after_correction(
     diagnostic_rows: list[dict[str, float | int | str]] = []
     point_counts: dict[str, int] = {}
     clipped_counts: dict[str, int] = {}
+    q_clipped_counts: dict[str, int] = {}
     median_values: dict[str, float] = {}
     rng = np.random.default_rng(0)
     try:
@@ -6458,8 +7166,20 @@ def plot_slewing_relative_tsum_vs_qsum_after_correction(
         point_counts[strip_id] = int(q_values.size)
         if q_values.size:
             median_values[strip_id] = float(np.median(relative_tsum_values))
-            outside_clip = (relative_tsum_values < -5.0) | (relative_tsum_values > 5.0)
+            outside_tsum_clip = (relative_tsum_values < -5.0) | (relative_tsum_values > 5.0)
+            outside_q_clip = (
+                (q_values < q_clip_left) | (q_values > q_clip_right)
+                if clip_q_axis
+                else np.zeros(q_values.size, dtype=bool)
+            )
+            outside_clip = outside_tsum_clip | outside_q_clip
             clipped_counts[strip_id] = int(np.sum(outside_clip))
+            q_clipped_counts[strip_id] = int(np.sum(outside_q_clip))
+            plotted_q_values = (
+                np.clip(q_values, q_clip_left, q_clip_right)
+                if clip_q_axis
+                else q_values
+            )
             inside_indices = np.flatnonzero(~outside_clip)
             outside_indices = np.flatnonzero(outside_clip)
             max_outside_points = max_points_per_strip // 2
@@ -6471,7 +7191,7 @@ def plot_slewing_relative_tsum_vs_qsum_after_correction(
             if inside_indices.size:
                 ax.scatter(
                     relative_tsum_values[inside_indices],
-                    q_values[inside_indices],
+                    plotted_q_values[inside_indices],
                     s=2,
                     alpha=0.22,
                     color="tab:blue",
@@ -6481,7 +7201,7 @@ def plot_slewing_relative_tsum_vs_qsum_after_correction(
                 clipped_tsum_values = np.clip(relative_tsum_values[outside_indices], -5.0, 5.0)
                 ax.scatter(
                     clipped_tsum_values,
-                    q_values[outside_indices],
+                    plotted_q_values[outside_indices],
                     s=4,
                     alpha=0.55,
                     color="tab:red",
@@ -6491,7 +7211,7 @@ def plot_slewing_relative_tsum_vs_qsum_after_correction(
                 trend_mask = ~outside_clip if any_relative_outside_clip else np.ones(q_values.size, dtype=bool)
                 trend_df = pd.DataFrame(
                     {
-                        "q_sum": q_values[trend_mask],
+                        "q_sum": plotted_q_values[trend_mask],
                         "relative_tsum": relative_tsum_values[trend_mask],
                     }
                 )
@@ -6534,20 +7254,24 @@ def plot_slewing_relative_tsum_vs_qsum_after_correction(
         ax.axvline(0.0, color="black", linestyle=":", linewidth=1.0, alpha=0.8)
         ax.set_title(f"P{plane}s{strip}")
         ax.grid(True, alpha=0.25)
-        ax.set_yscale("log")
         ax.set_xlim(shared_relative_xlim)
+        if clip_q_axis:
+            ax.set_ylim(q_clip_left, q_clip_right)
+        if log_q_axis:
+            ax.set_yscale("log")
         if plane == 4:
             ax.set_xlabel("T_sum - first charged strip T_sum")
         if strip == 1:
-            ax.set_ylabel("Q_sum")
+            ax.set_ylabel("Q_sum" + (" (log scale)" if log_q_axis else ""))
 
     fig.suptitle(
-        "Post-slewing relative T_sum vs Q_sum "
+        "Post-slewing relative T_sum vs Q_sum"
+        f"{' (log Q axis)' if log_q_axis else ''} "
         f"({context_label}; event reference = first valid charged strip)",
         fontsize=14,
     )
     if save_plots:
-        final_filename = f"{fig_idx}_slewing_relative_tsum_vs_qsum_after_correction.png"
+        final_filename = f"{fig_idx}_{alias}.png"
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
@@ -6569,6 +7293,7 @@ def plot_slewing_relative_tsum_vs_qsum_after_correction(
         f"events_with_reference={events_with_reference} "
         f"points_by_strip={point_counts} "
         f"clipped_points_by_strip={clipped_counts} "
+        f"q_clipped_points_by_strip={q_clipped_counts} "
         f"xlim={shared_relative_xlim}"
     )
     return pd.DataFrame(diagnostic_rows)
@@ -6854,7 +7579,9 @@ TASK2_SLEWING_OBSERVABLE_ALIASES: tuple[str, ...] = (
     "slewing_delta_t_vs_qsum2_by_qsum1_bins",
     "slewing_delta_t_vs_qsum2_by_qsum1_bins_fit",
     "slewing_per_strip_from_pair_fit",
+    "slewing_per_channel_polynomial_curves",
     "slewing_relative_tsum_vs_qsum_after_correction",
+    "slewing_relative_tsum_vs_qsum_after_correction_logscale",
     "slewing_delta_t_centroid_by_qsum_cuts",
     "slewing_delta_t_centroid_vs_qsum_cut",
     "slewing",
@@ -6891,7 +7618,7 @@ _direct_pdf_temp_path: str | None = None
 atexit.register(close_direct_pdf_writer)
 
 CALIBRATION_METADATA_PATTERN = re.compile(
-    r"^P[1-4]_s[1-4]_((?:Q_FB|Q_TDIF)_coeffs(?:__[0-9]+)?|Q_sum|Q_F|Q_B|T_sum|T_dif|crstlk_[A-Za-z0-9_]+)$"
+    r"^P[1-4]_s[1-4]_((?:Q_FB|Q_TDIF)_coeffs(?:__[0-9]+)?|Q_sum|Q_F|Q_B|T_sum|T_dif|T_slew_[A-Za-z0-9_]+|crstlk_[A-Za-z0-9_]+)$"
 )
 # Warning Filters
 warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
@@ -6968,6 +7695,7 @@ apply_slewing_correction_from_pair_fit = _coerce_config_bool(
     config.get("apply_slewing_correction_from_pair_fit"),
     default=False,
 )
+slewing_application_mode = _task2_slewing_application_mode()
 slewing_application_reference_mode = str(
     config.get("slewing_application_reference_mode", "mean_zero")
 ).strip().lower()
@@ -12655,6 +13383,8 @@ if apply_T_sum_calibration:
         print("Skipping calibration-sample T_sum filtering and strip zeroing (config disabled).")
 
 slewing_fit_df = pd.DataFrame()
+per_channel_slewing_model: dict[str, object] = {}
+per_channel_slewing_diagnostics: dict[str, object] = {}
 calibration_slewing_event_solutions: dict[object, dict[str, float]] = {}
 slewing_application_sign = -1.0
 
@@ -12701,7 +13431,20 @@ if (
             save_coefficients=True,
         )
     plot_slewing_per_strip_from_pair_fit(time_pair_residuals_df, slewing_fit_df)
-    if apply_slewing_correction_from_pair_fit:
+    if apply_slewing_correction_from_pair_fit and slewing_application_mode == "per_channel_polynomial":
+        per_channel_slewing_model, per_channel_slewing_diagnostics = fit_per_channel_polynomial_slewing_model(
+            time_pair_residuals_df,
+            context_label="calibration subsample",
+        )
+        store_per_channel_polynomial_slewing_metadata(
+            per_channel_slewing_model,
+            target_metadata=global_variables,
+        )
+        plot_per_channel_polynomial_slewing_curves(
+            per_channel_slewing_model,
+            context_label="calibration subsample",
+        )
+    if apply_slewing_correction_from_pair_fit and slewing_application_mode == "pair_event_solution":
         if slewing_fit_df.empty:
             print(
                 "apply_slewing_correction_from_pair_fit=True but no pair-fit "
@@ -12752,8 +13495,9 @@ if (
     if slewing_correction:
         if apply_slewing_correction_from_pair_fit:
             print(
-                "slewing_correction=True: event-wise pair-fit slewing application "
-                "was handled by apply_slewing_correction_from_pair_fit."
+                "slewing_correction=True: slewing application mode "
+                f"{slewing_application_mode!r} was handled by "
+                "apply_slewing_correction_from_pair_fit."
             )
         else:
             print(
@@ -12781,31 +13525,6 @@ if apply_T_sum_calibration:
             mask = working_df[column_name] != 0
             snapshot_column_if_changed(working_df, column_name, mask)
             working_df.loc[mask, column_name] += Tsum_cal[i][j]
-
-if apply_slewing_correction_from_pair_fit:
-    if slewing_fit_df.empty:
-        print(
-            "Skipping pair-fit slewing application to working_df: no fitted "
-            "slewing table is available."
-        )
-    else:
-        (
-            working_slewing_event_solutions,
-            working_slewing_diagnostics,
-            _working_slewing_before_pair_residuals_df,
-        ) = _build_pair_fit_slewing_event_solutions(
-            working_df,
-            slewing_fit_df,
-            context_label="working_df",
-        )
-        if working_slewing_event_solutions:
-            working_apply_diagnostics = _apply_slewing_solutions_to_dataframe(
-                working_df,
-                working_slewing_event_solutions,
-                application_sign=slewing_application_sign,
-            )
-            working_slewing_diagnostics.update(working_apply_diagnostics)
-        _print_slewing_application_diagnostics("working_df", working_slewing_diagnostics)
 
 print(
     "Skipping post-application T_dif/T_sum filtering on working_df; "
@@ -12892,9 +13611,58 @@ if crosstalk_removal_and_recalibration:
             snapshot_column_if_changed(working_df, column_name, mask)
             working_df.loc[mask, column_name] -= crosstalk_pedestal[f'crstlk_pedestal_P{key}s{j+1}']
 
+if apply_slewing_correction_from_pair_fit:
+    print(
+        f"Applying slewing correction to working_df after deferred charge "
+        f"corrections; mode={slewing_application_mode}; "
+        "charge corrections applied before slewing=True."
+    )
+    if slewing_application_mode == "per_channel_polynomial":
+        if not per_channel_slewing_model:
+            print(
+                "Skipping per-channel polynomial slewing application to working_df: "
+                "no fitted per-channel model is available."
+            )
+        else:
+            apply_per_channel_polynomial_slewing_to_dataframe(
+                working_df,
+                per_channel_slewing_model,
+                context_label="working_df_after_deferred_charge_calibrations",
+            )
+    elif slewing_fit_df.empty:
+        print(
+            "Skipping pair-fit slewing application to working_df: no fitted "
+            "slewing table is available."
+        )
+    else:
+        (
+            working_slewing_event_solutions,
+            working_slewing_diagnostics,
+            _working_slewing_before_pair_residuals_df,
+        ) = _build_pair_fit_slewing_event_solutions(
+            working_df,
+            slewing_fit_df,
+            context_label="working_df_after_deferred_charge_calibrations",
+        )
+        if working_slewing_event_solutions:
+            working_apply_diagnostics = _apply_slewing_solutions_to_dataframe(
+                working_df,
+                working_slewing_event_solutions,
+                application_sign=slewing_application_sign,
+            )
+            working_slewing_diagnostics.update(working_apply_diagnostics)
+        _print_slewing_application_diagnostics("working_df", working_slewing_diagnostics)
+
 plot_slewing_relative_tsum_vs_qsum_after_correction(
     working_df,
     context_label="working_df_after_deferred_calibrations",
+)
+plot_slewing_relative_tsum_vs_qsum_after_correction(
+    working_df,
+    context_label="working_df_after_deferred_calibrations",
+    alias="slewing_relative_tsum_vs_qsum_after_correction_logscale",
+    log_q_axis=True,
+    clip_q_axis=False,
 )
 
 # Drop legacy front/back columns without logging every column
@@ -13409,6 +14177,12 @@ for i, module in enumerate(['P1', 'P2', 'P3', 'P4']):
         global_variables[f'{module}_s{strip}_Q_B'] = QB_pedestal[i][j] if calculate_charge_side else None
         global_variables[f'{module}_s{strip}_T_sum'] = Tsum_cal[i][j] if calculate_T_sum_calibration else None
         global_variables[f'{module}_s{strip}_T_dif'] = Tdiff_cal[i][j] if calculate_T_dif_calibration else None
+        global_variables.setdefault(f'{module}_s{strip}_T_slew_coeffs', None)
+        global_variables.setdefault(f'{module}_s{strip}_T_slew_basis_means', None)
+        global_variables.setdefault(f'{module}_s{strip}_T_slew_domain', None)
+        global_variables.setdefault(f'{module}_s{strip}_T_slew_degree', None)
+        global_variables.setdefault(f'{module}_s{strip}_T_slew_coordinate', None)
+        global_variables.setdefault(f'{module}_s{strip}_T_slew_residual_column', None)
 
 # # Load or initialize metadata DataFrame
 # if os.path.exists(csv_path):

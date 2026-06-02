@@ -13,10 +13,10 @@ complete_reanalysis: false
 stratos_save: false
 # create_plots options: null | debug | usual | essential | all
 # Task 3 plot statuses by alias live in config_plots_task_3.yaml
-create_plots: null
+create_plots: essential
 keep_all_columns_output: false
-joined_analysis_files: 2
-joined_analysis_time_tolerance_hours: 5
+joined_analysis_files: 3
+joined_analysis_time_tolerance_hours: 10
 removed_marker: x
 removed_marker_size: 10
 removed_marker_alpha: 0.9
