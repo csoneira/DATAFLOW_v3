@@ -136,3 +136,16 @@ desktop.ini
 # Internal
 # ----------------------------------------------------------------------
 ARTICLES_AND_THESIS/
+
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+*.root
+*.h5
+*.hdf5
+*.parquet
+*.npy
+*.npz
+OUTPUT*/
+PLOTS*/
+CALIBRATION_OUTPUT*/
