@@ -76,6 +76,7 @@ def plot_acquisition_rate_vs_time_by_acq_tt_with_histograms(
     *,
     title: str,
     accumulation_window_seconds: int = 60,
+    rate_histogram_bins: int = 80,
 ) -> bool:
     required_columns = {"datetime", "acq_tt"}
     if read_df.empty or not required_columns.issubset(read_df.columns):
@@ -128,7 +129,11 @@ def plot_acquisition_rate_vs_time_by_acq_tt_with_histograms(
     all_rates = rates_by_tt.to_numpy(dtype=float).ravel()
     finite_rates = all_rates[np.isfinite(all_rates)]
     max_rate = float(finite_rates.max()) if finite_rates.size else 1.0
-    bin_count = max(8, min(40, int(np.ceil(max_rate)) + 1))
+    try:
+        bin_count = int(rate_histogram_bins)
+    except (TypeError, ValueError):
+        bin_count = 80
+    bin_count = max(8, min(300, bin_count))
     bins = np.linspace(0.0, max(max_rate, 1.0), bin_count)
     if np.unique(bins).size < 2:
         bins = np.array([0.0, 1.0])

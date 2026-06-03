@@ -3613,7 +3613,7 @@ if task5_plot_enabled("polar_theta_phi_definitive_tt_2d_detail_final"):
     phi_right_filter = np.pi
         
     df_filtered = df
-    # tt_values = sorted(df_filtered[CORR_TT_COLUMN].dropna().unique(), key=lambda x: int(x))
+    # tt_values = sorted(df_filtered[POST_TT_COLUMN].dropna().unique(), key=lambda x: int(x))
 
     # tt_values = [13, 12, 23, 34, 123, 124, 134, 234, 1234]
     tt_values = [23, 123, 234, 1234]
@@ -3634,19 +3634,19 @@ if task5_plot_enabled("polar_theta_phi_definitive_tt_2d_detail_final"):
     theta_min, theta_max = theta_left_filter, theta_right_filter    # adjust as needed
     phi_min, phi_max     = phi_left_filter, phi_right_filter        # adjust as needed
     
-    vmax_global = df_filtered.groupby(CORR_TT_COLUMN).apply(lambda df: np.histogram2d(df["theta"], df["phi"], bins=[theta_bins, phi_bins])[0].max()).max()
+    vmax_global = df_filtered.groupby(POST_TT_COLUMN).apply(lambda df: np.histogram2d(df["theta"], df["phi"], bins=[theta_bins, phi_bins])[0].max()).max()
     
     for idx, tt_val in enumerate(tt_values):
         row_idx, col_idx = divmod(idx, ncols)
         ax = axes[row_idx][col_idx]
 
-        df_tt = df_filtered[df_filtered[CORR_TT_COLUMN] == tt_val]
+        df_tt = df_filtered[df_filtered[POST_TT_COLUMN] == tt_val]
         theta_vals = df_tt['theta'].dropna()
         phi_vals = df_tt['phi'].dropna()
 
         # Apply range filtering
         # Apply range filtering
-        df_tt = df_filtered[df_filtered[CORR_TT_COLUMN] == tt_val].copy()
+        df_tt = df_filtered[df_filtered[POST_TT_COLUMN] == tt_val].copy()
         mask = (
             (df_tt['theta'] >= theta_min) & (df_tt['theta'] <= theta_max) &
             (df_tt['phi'] >= phi_min) & (df_tt['phi'] <= phi_max)
@@ -3666,7 +3666,7 @@ if task5_plot_enabled("polar_theta_phi_definitive_tt_2d_detail_final"):
         axes[row_idx][col_idx] = ax  # update reference for consistency
 
         ax.set_facecolor(colors(0.0))  # darkest background in colormap
-        ax.set_title(f'corr_tt = {tt_val}', fontsize=14)
+        ax.set_title(f'post_tt = {tt_val}', fontsize=14)
             
         # Limit in radius in theta_right_filter
         ax.set_ylim(0, theta_right_filter)
@@ -3682,10 +3682,10 @@ if task5_plot_enabled("polar_theta_phi_definitive_tt_2d_detail_final"):
         cb = fig.colorbar(c, ax=ax, pad=0.1)
         cb.ax.hlines(local_max, *cb.ax.get_xlim(), colors='white', linewidth=2, linestyles='dashed')
 
-    plt.suptitle(rf'FINAL. Correction = {correct_angle}. 2D Histogram of $\theta$ vs. $\phi$ for each corr_tt Type', fontsize=16)
+    plt.suptitle(rf'FINAL. Correction = {correct_angle}. 2D Histogram of $\theta$ vs. $\phi$ for each post_tt Type', fontsize=16)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     if save_plots:
-        final_filename = f'{fig_idx}_polar_theta_phi_corr_tt_2D_detail.png'
+        final_filename = f'{fig_idx}_polar_theta_phi_post_tt_2D_detail.png'
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
@@ -3703,18 +3703,18 @@ _t_sec = time.perf_counter()
 if task5_plot_enabled("theta_efficiency_simple_3v4"):
     print("--------------- Simple efficiency vs theta (3v4 planes) -------------")
 
-    if CORR_TT_COLUMN not in df.columns:
-        print(f"Warning: {CORR_TT_COLUMN} column missing, skipping simple efficiency-vs-theta plot.")
+    if POST_TT_COLUMN not in df.columns:
+        print(f"Warning: {POST_TT_COLUMN} column missing, skipping simple efficiency-vs-theta plot.")
     else:
         if "theta" not in df.columns:
             print("Warning: theta column missing, skipping simple efficiency-vs-theta plot.")
             theta_vals_all = None
-            corr_tt_vals = None
+            post_tt_vals = None
         else:
             theta_vals_all = pd.to_numeric(df["theta"], errors="coerce")
-            corr_tt_vals = pd.to_numeric(df[CORR_TT_COLUMN], errors="coerce").fillna(0).astype(int)
+            post_tt_vals = pd.to_numeric(df[POST_TT_COLUMN], errors="coerce").fillna(0).astype(int)
 
-        if theta_vals_all is not None and corr_tt_vals is not None:
+        if theta_vals_all is not None and post_tt_vals is not None:
             right_theta_eff = float(pd.to_numeric(det_theta_right_filter, errors="coerce"))
             if not np.isfinite(right_theta_eff) or right_theta_eff <= 0:
                 right_theta_eff = np.pi / 2.5
@@ -3723,22 +3723,22 @@ if task5_plot_enabled("theta_efficiency_simple_3v4"):
             theta_centers_eff = 0.5 * (bins_theta_eff[:-1] + bins_theta_eff[1:])
 
             theta_np = theta_vals_all.to_numpy(dtype=float, copy=False)
-            corr_np = corr_tt_vals.to_numpy(dtype=int, copy=False)
+            post_tt_np = post_tt_vals.to_numpy(dtype=int, copy=False)
             valid = (
                 np.isfinite(theta_np)
                 & (theta_np >= 0)
                 & (theta_np <= right_theta_eff)
-                & np.isin(corr_np, [1234, 134, 124])
+                & np.isin(post_tt_np, [1234, 134, 124])
             )
             theta_vals_eff = theta_np[valid]
-            corr_tt_eff = corr_np[valid]
+            post_tt_eff = post_tt_np[valid]
 
-            counts_1234, _ = np.histogram(theta_vals_eff[corr_tt_eff == 1234], bins=bins_theta_eff)
-            counts_134, _ = np.histogram(theta_vals_eff[corr_tt_eff == 134], bins=bins_theta_eff)
-            counts_124, _ = np.histogram(theta_vals_eff[corr_tt_eff == 124], bins=bins_theta_eff)
+            counts_1234, _ = np.histogram(theta_vals_eff[post_tt_eff == 1234], bins=bins_theta_eff)
+            counts_134, _ = np.histogram(theta_vals_eff[post_tt_eff == 134], bins=bins_theta_eff)
+            counts_124, _ = np.histogram(theta_vals_eff[post_tt_eff == 124], bins=bins_theta_eff)
 
             if counts_1234.sum() == 0:
-                print("Warning: No corr_tt==1234 events in theta range, skipping simple efficiency-vs-theta plot.")
+                print("Warning: No post_tt==1234 events in theta range, skipping simple efficiency-vs-theta plot.")
             else:
                 eff_2 = np.full_like(theta_centers_eff, np.nan, dtype=float)
                 eff_3 = np.full_like(theta_centers_eff, np.nan, dtype=float)
@@ -4055,7 +4055,7 @@ post_tt_total = len(working_df)
 post_tt_mask = working_df[POST_TT_COLUMN].notna() & (working_df[POST_TT_COLUMN] >= 10)
 working_df = working_df.loc[post_tt_mask].copy()
 record_filter_metric(
-    "corr_tt_lt_10_rows_removed_pct",
+    "post_tt_lt_10_rows_removed_pct",
     post_tt_total - int(post_tt_mask.sum()),
     post_tt_total if post_tt_total else 0,
 )
@@ -4230,7 +4230,7 @@ print(f"Metadata (rate_histogram) CSV updated at: {metadata_rate_histogram_csv_p
 
 prune_redundant_count_metadata(global_variables, log_fn=print)
 trigger_type_prefixes = ("fit_tt", "post_tt", "fit_to_post_tt")
-legacy_trigger_type_prefixes = ("corr_tt", "task5_to_corr_tt", "fit_to_corr_tt")
+legacy_trigger_type_prefixes: tuple[str, ...] = ()
 trigger_type_variables = extract_trigger_type_metadata(
     global_variables,
     trigger_type_prefixes,

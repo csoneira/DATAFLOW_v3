@@ -333,6 +333,14 @@ except (TypeError, ValueError):
     acquisition_rate_accumulation_window_seconds = 60
 if acquisition_rate_accumulation_window_seconds <= 0:
     acquisition_rate_accumulation_window_seconds = 60
+try:
+    acquisition_rate_acq_tt_histogram_bins = int(
+        config.get("acquisition_rate_acq_tt_histogram_bins", 80)
+    )
+except (TypeError, ValueError):
+    acquisition_rate_acq_tt_histogram_bins = 80
+if acquisition_rate_acq_tt_histogram_bins <= 0:
+    acquisition_rate_acq_tt_histogram_bins = 80
 
 update_status_progress(
     csv_path_status,
@@ -398,6 +406,7 @@ if save_plots and task0_plot_enabled("acquisition_rate_vs_time_by_acq_tt_with_hi
         plot_path,
         title=f"Task 0 acquisition rate by acq_tt, {basename_no_ext}",
         accumulation_window_seconds=acquisition_rate_accumulation_window_seconds,
+        rate_histogram_bins=acquisition_rate_acq_tt_histogram_bins,
     )
     if plotted:
         print(f"Task 0 acquisition-rate-by-acq_tt plot saved: {plot_path}", force=True)
