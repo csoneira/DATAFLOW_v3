@@ -8,6 +8,17 @@ import numpy as np
 import pandas as pd
 
 
+def _positive_int(value: object, default: int, minimum: int = 1, maximum: int | None = None) -> int:
+    try:
+        resolved = int(value)
+    except (TypeError, ValueError):
+        resolved = default
+    resolved = max(minimum, resolved)
+    if maximum is not None:
+        resolved = min(maximum, resolved)
+    return resolved
+
+
 def create_rate_vs_time_by_task_tt_with_histograms(
     dataframe: pd.DataFrame,
     *,
@@ -26,7 +37,11 @@ def create_rate_vs_time_by_task_tt_with_histograms(
     if not valid_mask.any():
         return None
 
-    accumulation_window_seconds = max(1, int(accumulation_window_seconds))
+    accumulation_window_seconds = _positive_int(
+        accumulation_window_seconds,
+        default=60,
+        minimum=1,
+    )
     frame = pd.DataFrame(
         {
             "elapsed_s": (
@@ -69,11 +84,12 @@ def create_rate_vs_time_by_task_tt_with_histograms(
     all_rates = rates_by_tt.to_numpy(dtype=float).ravel()
     finite_rates = all_rates[np.isfinite(all_rates)]
     max_rate = float(finite_rates.max()) if finite_rates.size else 1.0
-    try:
-        bin_count = int(rate_histogram_bins)
-    except (TypeError, ValueError):
-        bin_count = 80
-    bin_count = max(8, min(300, bin_count))
+    bin_count = _positive_int(
+        rate_histogram_bins,
+        default=80,
+        minimum=8,
+        maximum=300,
+    )
     bins = np.linspace(0.0, max(max_rate, 1.0), bin_count)
     if np.unique(bins).size < 2:
         bins = np.array([0.0, 1.0])

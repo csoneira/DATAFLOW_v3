@@ -21,7 +21,7 @@ from __future__ import annotations
 """
 Stage 1 Task 1 (RAW-->CLEAN) driver.
 
-The script pulls the next available STAGE_0_to_1 acquisition, applies the full
+The script pulls the next available STAGE_0_TO_1 acquisition, applies the full
 raw cleaning chain (baseline removal, channel checks, derived quantities, and
 pre-selection cuts), and persists the cleaned dataframe for downstream tasks.
 Along the way it maintains the station staging directories, generates QA plots,
@@ -94,6 +94,7 @@ from MASTER.common.plot_utils import (
     pdf_save_rasterized_page,
 )
 from MASTER.common.selection_config import load_selection_for_paths, station_is_selected
+from MASTER.common.step1_rate_plots import create_rate_vs_time_by_task_tt_with_histograms
 from MASTER.common.status_csv import (
     delete_status_row,
     initialize_status_row,
@@ -2680,7 +2681,7 @@ if task_number == 1:
         raw_directory = "STEP_1/TASK_0/OUTPUT_FILES"
         raw_working_directory = task0_output_directory
     else:
-        raw_directory = "STAGE_0_to_1"
+        raw_directory = "STAGE_0_TO_1"
         raw_working_directory = os.path.join(station_directory, raw_directory)
     
 else:
@@ -2866,7 +2867,7 @@ for directory in [raw_directory, unprocessed_directory, processing_directory, co
             now = time.time()
             os.utime(empty_destination_path, (now, now))
 
-# Files to move: in STAGE_0_to_1 but not in UNPROCESSED, PROCESSING, or COMPLETED
+# Files to move: in STAGE_0_TO_1 but not in UNPROCESSED, PROCESSING, or COMPLETED
 raw_files = set(os.listdir(raw_directory))
 
 # Take only files that match the active Task 1 input mode.
@@ -6855,6 +6856,13 @@ replicate_joined_metadata_rows(
         csv_path_deep_fiter,
         csv_path_noise_control,
         csv_path_status,
+        csv_path_profiling,
+    ],
+    primary_filename_base=filename_base,
+    joined_input_records=joined_input_records,
+    log_fn=print,
+)
+atus,
         csv_path_profiling,
     ],
     primary_filename_base=filename_base,

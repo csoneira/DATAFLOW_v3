@@ -482,7 +482,7 @@ def station_inventory_entries(station: str) -> List[Dict[str, str]]:
         count_csv_rows(processed),
     )
 
-    stage0_to_1 = station_dir / "STAGE_0_to_1"
+    stage0_to_1 = station_dir / "STAGE_0_TO_1"
     add_entry(
         "queue_dir",
         stage0_to_1,
@@ -679,7 +679,7 @@ def collect_station_states(
     mark_events(processed_events, "processed_final", str(processed_path))
 
     # Stage 0 to 1 queue
-    stage0_to_1_dir = station_dir / "STAGE_0_to_1"
+    stage0_to_1_dir = station_dir / "STAGE_0_TO_1"
     mark_dir_events(
         collect_dir_events(stage0_to_1_dir),
         "stage0_to_1",

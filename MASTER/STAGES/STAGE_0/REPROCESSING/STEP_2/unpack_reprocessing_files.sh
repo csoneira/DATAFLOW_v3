@@ -373,7 +373,7 @@ completed_uncompressed="${input_directory}/COMPLETED"
 processing_directory="${input_directory}/PROCESSING"
 error_directory="${input_directory}/ERROR"
 metadata_directory="${reprocessing_directory}/METADATA"
-stage0_to_1_directory="${station_directory}/STAGE_0_to_1"
+stage0_to_1_directory="${station_directory}/STAGE_0_TO_1"
 # csv_path="${station_directory}/database_status_${station_code}.csv"
 
 mkdir -p \
@@ -673,7 +673,7 @@ route_dat_outputs() {
         fname=$(basename "$dat_path")
         dest_station=$(extract_station_code_from_name "$fname" 2>/dev/null || true)
         [[ -z "$dest_station" ]] && dest_station="$station_code"
-        destination_dir="${STATIONS_BASE}/MINGO${dest_station}/STAGE_0_to_1"
+        destination_dir="${STATIONS_BASE}/MINGO${dest_station}/STAGE_0_TO_1"
         mkdir -p "$destination_dir"
         if [[ -e "$destination_dir/$fname" ]]; then
             if $unpack_anyway; then
@@ -688,9 +688,9 @@ route_dat_outputs() {
             touch "$destination_dir/$fname"
             moved_any=true
             if [[ "$dest_station" != "$station_code" ]]; then
-                echo "--> Routed $fname to station ${dest_station} STAGE_0_to_1."
+                echo "--> Routed $fname to station ${dest_station} STAGE_0_TO_1."
             else
-                echo "Moved $fname to STAGE_0_to_1."
+                echo "Moved $fname to STAGE_0_TO_1."
                 if $record; then
                     record_ref+=("$fname")
                 fi
@@ -996,7 +996,7 @@ process_single_hld() {
         echo ""
         echo ""
 
-        echo "Moving dat files into STAGE_0_to_1..."
+        echo "Moving dat files into STAGE_0_TO_1..."
         route_dat_outputs new_dat_files
     } 200>"${hld_input_directory}/.unpacker_io.lock"
 
@@ -1036,7 +1036,7 @@ process_single_hld() {
         "STAGE_0/REPROCESSING/STEP_2/INPUT_FILES/COMPLETED"
         "STAGE_0/REPROCESSING/STEP_2/INPUT_FILES/PROCESSING"
         "STAGE_0/REPROCESSING/STEP_2/INPUT_FILES/ERROR"
-        "STAGE_0_to_1"
+        "STAGE_0_TO_1"
     )
 
     local station_loop

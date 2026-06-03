@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from MASTER.common.step1_rate_plots import create_rate_vs_time_by_task_tt_with_histograms
+
 
 def _rate_series_by_window(frame: pd.DataFrame, mask: pd.Series, window_seconds: int) -> pd.Series:
     selected = frame.loc[mask, "elapsed_s"]
@@ -70,101 +72,27 @@ def plot_acquisition_rate_vs_time_by_trigger_type(
     return True
 
 
-def plot_acquisition_rate_vs_time_by_acq_tt_with_histograms(
+def plot_acquisition_rate_vs_time_by_task_tt_with_histograms(
     read_df: pd.DataFrame,
     output_path: str | Path,
     *,
     title: str,
+    tt_column: str = "acq_tt",
     accumulation_window_seconds: int = 60,
     rate_histogram_bins: int = 80,
 ) -> bool:
-    required_columns = {"datetime", "acq_tt"}
-    if read_df.empty or not required_columns.issubset(read_df.columns):
-        return False
-
-    datetimes = pd.to_datetime(read_df["datetime"], errors="coerce")
-    acq_tt_values = pd.to_numeric(read_df["acq_tt"], errors="coerce")
-    valid_mask = datetimes.notna() & acq_tt_values.notna()
-    if not valid_mask.any():
-        return False
-
-    accumulation_window_seconds = max(1, int(accumulation_window_seconds))
-    frame = pd.DataFrame(
-        {
-            "elapsed_s": (
-                datetimes.loc[valid_mask] - datetimes.loc[valid_mask].min()
-            ).dt.total_seconds().astype(int),
-            "acq_tt": acq_tt_values.loc[valid_mask].astype(int),
-        }
+    fig = create_rate_vs_time_by_task_tt_with_histograms(
+        read_df,
+        tt_column=tt_column,
+        title=title,
+        accumulation_window_seconds=accumulation_window_seconds,
+        rate_histogram_bins=rate_histogram_bins,
     )
-    if frame.empty:
-        return False
-
-    frame.loc[:, "window_index"] = (frame["elapsed_s"] // accumulation_window_seconds).astype(int)
-    full_windows = np.arange(int(frame["window_index"].min()), int(frame["window_index"].max()) + 1)
-    rates_by_tt = (
-        frame.groupby(["window_index", "acq_tt"])
-        .size()
-        .unstack(fill_value=0)
-        .reindex(full_windows, fill_value=0)
-        .sort_index(axis=1)
-        .astype(float)
-        / float(accumulation_window_seconds)
-    )
-    if rates_by_tt.empty:
+    if fig is None:
         return False
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    fig, (ax_time, ax_hist) = plt.subplots(
-        1,
-        2,
-        figsize=(14, 5),
-        sharey=True,
-        constrained_layout=True,
-        gridspec_kw={"width_ratios": [4.5, 1.3], "wspace": 0.04},
-    )
-    colors = plt.get_cmap("tab10").colors
-    all_rates = rates_by_tt.to_numpy(dtype=float).ravel()
-    finite_rates = all_rates[np.isfinite(all_rates)]
-    max_rate = float(finite_rates.max()) if finite_rates.size else 1.0
-    try:
-        bin_count = int(rate_histogram_bins)
-    except (TypeError, ValueError):
-        bin_count = 80
-    bin_count = max(8, min(300, bin_count))
-    bins = np.linspace(0.0, max(max_rate, 1.0), bin_count)
-    if np.unique(bins).size < 2:
-        bins = np.array([0.0, 1.0])
-
-    for idx, acq_tt in enumerate(rates_by_tt.columns):
-        rates = rates_by_tt[acq_tt].to_numpy(dtype=float)
-        color = colors[idx % len(colors)]
-        label = f"acq_tt={int(acq_tt)}"
-        ax_time.plot(rates_by_tt.index.to_numpy() * accumulation_window_seconds, rates, linewidth=1.1, label=label, color=color)
-        ax_hist.hist(
-            rates[np.isfinite(rates)],
-            bins=bins,
-            orientation="horizontal",
-            histtype="step",
-            linewidth=1.2,
-            color=color,
-            label=label,
-        )
-
-    ax_time.set_title("Rate versus time")
-    ax_time.set_xlabel("Seconds from first valid acquisition timestamp")
-    ax_time.set_ylabel(f"Rate [Hz], {accumulation_window_seconds}s accumulation")
-    ax_time.grid(True, alpha=0.25)
-    ax_time.legend(loc="best", fontsize=8)
-
-    ax_hist.set_title("Rate histogram")
-    ax_hist.set_xlabel("Windows")
-    ax_hist.grid(True, alpha=0.25, axis="y")
-    ax_hist.tick_params(axis="y", labelleft=False)
-
-    fig.suptitle(title)
     fig.savefig(output_path, dpi=140)
     plt.close(fig)
     return True

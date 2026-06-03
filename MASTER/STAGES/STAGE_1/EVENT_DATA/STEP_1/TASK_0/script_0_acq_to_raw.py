@@ -3,7 +3,7 @@
 """
 Stage 1 Task 0 (ACQ->RAW) driver.
 
-Ingests one acquisition text file from STAGE_0_to_1, preserves the existing
+Ingests one acquisition text file from STAGE_0_TO_1, preserves the existing
 Task 1 raw-line parsing/rejection behavior, splits by trigger type, and writes
 raw parquet files for Task 1.
 """
@@ -66,7 +66,7 @@ from analysis_functions import (
     station_matches_file,
 )
 from plotting_functions import (
-    plot_acquisition_rate_vs_time_by_acq_tt_with_histograms,
+    plot_acquisition_rate_vs_time_by_task_tt_with_histograms,
     plot_acquisition_rate_vs_time_by_trigger_type,
 )
 
@@ -75,7 +75,7 @@ task_number = 0
 STATION_CHOICES = ("0", "1", "2", "3", "4")
 TASK0_PLOT_ALIASES: tuple[str, ...] = (
     "acquisition_rate_vs_time_by_trigger_type",
-    "acquisition_rate_vs_time_by_acq_tt_with_histograms",
+    "acquisition_rate_vs_time_by_task_tt_with_histograms",
 )
 task0_plot_status_by_alias: dict[str, str] = {}
 
@@ -210,7 +210,7 @@ home_path = str(resolve_home_path_from_config(config))
 station_directory = repo_root / "STATIONS" / f"MINGO0{station}"
 base_directory = station_directory / "STAGE_1" / "EVENT_DATA"
 task_directory = base_directory / "STEP_1" / f"TASK_{task_number}"
-raw_directory = station_directory / "STAGE_0_to_1"
+raw_directory = station_directory / "STAGE_0_TO_1"
 
 directories = {
     "unprocessed": task_directory / "INPUT_FILES" / "UNPROCESSED_DIRECTORY",
@@ -334,13 +334,16 @@ except (TypeError, ValueError):
 if acquisition_rate_accumulation_window_seconds <= 0:
     acquisition_rate_accumulation_window_seconds = 60
 try:
-    acquisition_rate_acq_tt_histogram_bins = int(
-        config.get("acquisition_rate_acq_tt_histogram_bins", 80)
+    acquisition_rate_task_tt_histogram_bins = int(
+        config.get(
+            "acquisition_rate_task_tt_histogram_bins",
+            config.get("acquisition_rate_acq_tt_histogram_bins", 80),
+        )
     )
 except (TypeError, ValueError):
-    acquisition_rate_acq_tt_histogram_bins = 80
-if acquisition_rate_acq_tt_histogram_bins <= 0:
-    acquisition_rate_acq_tt_histogram_bins = 80
+    acquisition_rate_task_tt_histogram_bins = 80
+if acquisition_rate_task_tt_histogram_bins <= 0:
+    acquisition_rate_task_tt_histogram_bins = 80
 
 update_status_progress(
     csv_path_status,
@@ -392,7 +395,7 @@ if save_plots and task0_plot_enabled("acquisition_rate_vs_time_by_trigger_type")
     else:
         print("Task 0 acquisition-rate plot skipped: no valid datetime rows.", force=True)
 
-if save_plots and task0_plot_enabled("acquisition_rate_vs_time_by_acq_tt_with_histograms"):
+if save_plots and task0_plot_enabled("acquisition_rate_vs_time_by_task_tt_with_histograms"):
     if figure_directory is None:
         figure_directory = (
             task_directory
@@ -400,19 +403,20 @@ if save_plots and task0_plot_enabled("acquisition_rate_vs_time_by_acq_tt_with_hi
             / "FIGURE_DIRECTORY"
             / f"FIGURES_EXEC_ON_{date_execution}"
         )
-    plot_path = figure_directory / f"acquisition_rate_vs_time_by_acq_tt_with_histograms_{basename_no_ext}.png"
-    plotted = plot_acquisition_rate_vs_time_by_acq_tt_with_histograms(
+    plot_path = figure_directory / f"acquisition_rate_vs_time_by_task_tt_with_histograms_{basename_no_ext}.png"
+    plotted = plot_acquisition_rate_vs_time_by_task_tt_with_histograms(
         read_df,
         plot_path,
         title=f"Task 0 acquisition rate by acq_tt, {basename_no_ext}",
+        tt_column="acq_tt",
         accumulation_window_seconds=acquisition_rate_accumulation_window_seconds,
-        rate_histogram_bins=acquisition_rate_acq_tt_histogram_bins,
+        rate_histogram_bins=acquisition_rate_task_tt_histogram_bins,
     )
     if plotted:
-        print(f"Task 0 acquisition-rate-by-acq_tt plot saved: {plot_path}", force=True)
+        print(f"Task 0 acquisition-rate-by-task-tt plot saved: {plot_path}", force=True)
         saved_plot_paths.append(plot_path)
     else:
-        print("Task 0 acquisition-rate-by-acq_tt plot skipped: no valid acq_tt/datetime rows.", force=True)
+        print("Task 0 acquisition-rate-by-task-tt plot skipped: no valid acq_tt/datetime rows.", force=True)
 
 if create_pdf and saved_plot_paths and figure_directory is not None:
     save_pdf_filename = f"mingo{str(station).zfill(2)}_task0_{basename_no_ext}_{date_execution}.pdf"

@@ -79,7 +79,7 @@ def find_simulated_dat_path(basename_no_ext: str, base_directory: Path) -> Optio
         base_directory / "STEP_1" / "TASK_1" / "INPUT_FILES" / "COMPLETED_DIRECTORY",
         base_directory / "STEP_1" / "TASK_1" / "INPUT_FILES" / "PROCESSING_DIRECTORY",
         base_directory / "STEP_1" / "TASK_1" / "INPUT_FILES" / "UNPROCESSED_DIRECTORY",
-        base_directory / "STAGE_0_to_1",
+        base_directory / "STAGE_0_TO_1",
         SIM_DATA_FILES_DIR,
         SIM_DATA_DIR,
     ]

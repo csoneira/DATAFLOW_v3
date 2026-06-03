@@ -98,6 +98,7 @@ from MASTER.common.plot_utils import (
     pdf_save_rasterized_page,
 )
 from MASTER.common.selection_config import load_selection_for_paths, station_is_selected
+from MASTER.common.step1_rate_plots import create_rate_vs_time_by_task_tt_with_histograms
 from MASTER.common.status_csv import (
     delete_status_row,
     initialize_status_row,
@@ -1305,7 +1306,7 @@ raw_to_list_working_directory = os.path.join(base_directory, f"STEP_1/TASK_{task
 metadata_directory = os.path.join(raw_to_list_working_directory, "METADATA")
 
 if task_number == 1:
-    raw_directory = "STAGE_0_to_1"
+    raw_directory = "STAGE_0_TO_1"
     raw_working_directory = os.path.join(station_directory, raw_directory)
     
 else:
@@ -1382,7 +1383,7 @@ csv_path_deep_fiter = os.path.join(
 csv_path_status = os.path.join(metadata_directory, f"task_{task_number}_metadata_status.csv")
 csv_path_profiling = os.path.join(metadata_directory, f"task_{task_number}_metadata_profiling.csv")
 
-# Move files from STAGE_0_to_1 to STAGE_0_to_1_TO_LIST/STAGE_0_to_1_TO_LIST_FILES/UNPROCESSED,
+# Move files from STAGE_0_TO_1 to STAGE_0_TO_1_TO_LIST/STAGE_0_TO_1_TO_LIST_FILES/UNPROCESSED,
 # ensuring that only files not already in UNPROCESSED, PROCESSING,
 # or COMPLETED are moved:
 
@@ -1425,7 +1426,7 @@ for directory in base_directories.values():
 # status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
 # status_timestamp = append_status_row(status_csv_path)
 
-# Move files from STAGE_0_to_1 to STAGE_0_to_1_TO_LIST/STAGE_0_to_1_TO_LIST_FILES/UNPROCESSED,
+# Move files from STAGE_0_TO_1 to STAGE_0_TO_1_TO_LIST/STAGE_0_TO_1_TO_LIST_FILES/UNPROCESSED,
 # ensuring that only files not already in UNPROCESSED, PROCESSING,
 # or COMPLETED are moved:
 
@@ -1516,7 +1517,7 @@ for directory in [raw_directory, unprocessed_directory, processing_directory, co
             now = time.time()
             os.utime(empty_destination_path, (now, now))
 
-# Files to move: in STAGE_0_to_1 but not in UNPROCESSED, PROCESSING, or COMPLETED
+# Files to move: in STAGE_0_TO_1 but not in UNPROCESSED, PROCESSING, or COMPLETED
 raw_files = set(_expected_input_files(os.listdir(raw_directory)))
 unprocessed_files = set(_expected_input_files(os.listdir(unprocessed_directory)))
 processing_files = set(_expected_input_files(os.listdir(processing_directory)))

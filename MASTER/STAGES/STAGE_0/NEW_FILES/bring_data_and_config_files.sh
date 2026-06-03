@@ -36,7 +36,7 @@ log_error() {
 if [[ ${1:-} =~ ^(-h|--help)$ ]]; then
   cat <<'EOF'
 bring_data_and_config_files.sh
-Synchronises STAGE_0_to_1 event data and configuration files from stations into STAGE_0_to_1.
+Synchronises STAGE_0_TO_1 event data and configuration files from stations into STAGE_0_TO_1.
 
 Usage:
   bring_data_and_config_files.sh <station>
@@ -324,7 +324,7 @@ RSYNC_RSH_CMD="ssh -o BatchMode=yes -o ConnectTimeout=15"
 station_directory="$HOME/DATAFLOW_v3/STATIONS/MINGO0$station"
 config_file_directory="$HOME/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_0/ONLINE_RUN_DICTIONARY/STATION_$station"
 stage0_directory="$station_directory/STAGE_0/NEW_FILES"
-stage0_to_1_directory="$station_directory/STAGE_0_to_1"
+stage0_to_1_directory="$station_directory/STAGE_0_TO_1"
 metadata_directory="$stage0_directory/METADATA"
 raw_directory="$stage0_to_1_directory"
 # Reject list shared with STATIONS/MINGO0*/STAGE_0/NEW_FILES/METADATA/raw_files_brought.csv

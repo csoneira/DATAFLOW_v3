@@ -198,8 +198,8 @@ def find_ground_truth_basenames(station_root: Path) -> set[str]:
     """
     truth: set[str] = set()
 
-    # first location: STAGE_0_to_1/**/*. any file under that tree
-    stage01 = station_root / "STAGE_0_to_1"
+    # first location: STAGE_0_TO_1/**/*. any file under that tree
+    stage01 = station_root / "STAGE_0_TO_1"
     for p in stage01.rglob("*"):
         if p.is_file():
             truth.add(p.stem)
@@ -301,7 +301,7 @@ def main() -> None:
 
     station_root = repo_root / "STATIONS" / "MINGO00"
     stage0_sim_dir = station_root / "STAGE_0" / "SIMULATION"
-    stage01_dir = station_root / "STAGE_0_to_1"
+    stage01_dir = station_root / "STAGE_0_TO_1"
     stage0_sim_dir.mkdir(parents=True, exist_ok=True)
     stage01_dir.mkdir(parents=True, exist_ok=True)
     lock_handle = acquire_lock_or_exit(stage0_sim_dir / LOCK_FILENAME)
