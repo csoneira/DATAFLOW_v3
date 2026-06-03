@@ -11,7 +11,7 @@ systems can be shared unambiguously within the CASTRO collaboration.
 
 Key topics covered in this section include:
 
-- **Mechanical layout.** Reference frames, module numbering, and detector
+- **Mechanical layout.** Reference frames, plane numbering, and detector
   spacing used in Monte Carlo simulations and reconstruction code.
 - **Front-end and trigger electronics.** The interface between RPC pickup strips
   and the TRB3sc digitiser, including biasing, threshold settings, and watchdog

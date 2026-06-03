@@ -2,6 +2,7 @@ plots:
   debug_suite: debug
   usual_suite: usual
   essential_suite: essential
+  acquisition_rate_vs_time_by_task_tt_with_histograms: essential
   strip_activation_matrix_before_after: usual
   streamer_contagion_matrix_strip: usual
   cumulative_distribution_q_ch_before_calibration: usual
@@ -21,7 +22,7 @@ plots:
   grand_figure_q_pedestal_less_zoom_st: usual
   grand_figure_t_dif_cal: usual
   grand_figure_t_dif_cal_st: usual
-  uncalibrated: essential
+  uncalibrated: usual
   total_charge_per_plane_uncalibrated: usual
   calibration_charge_gates: usual
   tsum_spread_histograms_og: usual
@@ -31,28 +32,24 @@ plots:
   calibrated_filtered: usual
   calibration_subsample_uncalibrated_removed_zeroes: usual
   calibration_subsample_calibrated_removed_zeroes: usual
-  calibrated_filtered_removed_zeroes: essential
+  calibrated_filtered_removed_zeroes: usual
   calibrated_filtered_removed_zeroes_st: usual
   dx_vs_tsum: usual
   dx_vs_travel_time: usual
   slewing: usual
   slewing_delta_t_centroid_by_qsum_cuts: usual
-  slewing_delta_t_centroid_vs_qsum_cut: essential
+  slewing_delta_t_centroid_vs_qsum_cut: usual
   slewing_pair_delta_t_qsum1_qsum2_contour: usual
   slewing_delta_t_vs_qsum2_by_qsum1_bins: usual
   slewing_delta_t_vs_qsum2_by_qsum1_bins_fit: false
   slewing_per_strip_from_pair_fit: false
-  slewing_per_channel_polynomial_curves: essential
-  slewing_relative_tsum_vs_qsum_after_correction: essential
-  slewing_relative_tsum_vs_qsum_after_correction_logscale: essential
+  slewing_per_channel_polynomial_curves: usual
+  slewing_relative_tsum_vs_qsum_after_correction: usual
+  slewing_relative_tsum_vs_qsum_after_correction_logscale: usual
   slewing_3d: usual
-  slewing_3d_fitproj: essential
+  slewing_3d_fitproj: usual
   model_validation_simple: usual
   positions_travel_time_tzeros: usual
-  cross_talk_filtering_zoom: usual
-  cross_talk_filtering_zoom_check_no_subs_pedestal: usual
-  cross_talk_filtering_zoom_check: usual
-  cross_talk_filtering_zoom_check_by_tt: usual
   r2_scores: usual
   time_calibrated_filtered_removed_zeroes: usual
   tsum_pair_charge_correlations: usual

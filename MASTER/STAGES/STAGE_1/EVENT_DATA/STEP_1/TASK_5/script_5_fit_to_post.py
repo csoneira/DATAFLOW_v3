@@ -1135,6 +1135,7 @@ TASK5_PLOT_ALIASES: tuple[str, ...] = (
     "debug_suite",
     "usual_suite",
     "essential_suite",
+    "acquisition_rate_vs_time_by_task_tt_with_histograms",
     "charge_fit_tt_1234_per_plane_and_total",
     "theta_phi_definitive_tt_2d",
     "polar_theta_phi_definitive_tt_2d_detail_pre",
@@ -2099,11 +2100,15 @@ if task5_plot_enabled("channel_combination_filter_by_tt"):
         plot_list=plot_list,
     )
 
+
+# ------------
+# DECIDED TO KEEP datetime
+# ------------
 # Change 'Time' column to 'datetime' ------------------------------------------
-if 'Time' in working_df.columns:
-    working_df.rename(columns={'Time': 'datetime'}, inplace=True)
-else:
-    print("Column 'datetime' not found in DataFrame!")
+# if 'Time' in working_df.columns:
+#     working_df.rename(columns={'Time': 'datetime'}, inplace=True)
+# else:
+#     print("Column 'datetime' not found in DataFrame!")
 
 # Original number of events
 original_number_of_events = len(working_df)
@@ -2145,10 +2150,6 @@ apply_task5_plot_catalog_modes()
 # Charge front-back
 
 # Slewing correction
-
-# Time filtering
-
-# Time calibration
 
 # Y position
 
@@ -2409,10 +2410,6 @@ apply_task5_plot_catalog_modes()
 
 # Slewing correction
 
-# Time filtering
-
-# Time calibration
-
 # Y position
 
 # RPC variables
@@ -2663,7 +2660,7 @@ print("----------------------------------------------------------------------")
 # Defining the directories that will store the data
 save_full_filename = f"full_list_events_{save_filename_suffix}.txt"
 save_filename = f"list_events_{save_filename_suffix}.txt"
-save_pdf_filename = f"mingo{str(station).zfill(2)}_task5_{save_filename_suffix}.pdf"
+save_pdf_filename = f"mingo{str(station).zfill(2)}_task5_{basename_no_ext}_{date_execution}.pdf"
 
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
 
@@ -2955,10 +2952,6 @@ apply_task5_plot_catalog_modes()
 # Charge front-back
 
 # Slewing correction
-
-# Time filtering
-
-# Time calibration
 
 # Y position
 
@@ -3935,6 +3928,32 @@ print(df['region'].value_counts())
 
 working_df = df
 
+# Final task-rate plot included in the Task 5 PDF.
+if save_plots and task5_plot_enabled("acquisition_rate_vs_time_by_task_tt_with_histograms"):
+    rate_fig = create_rate_vs_time_by_task_tt_with_histograms(
+        working_df,
+        tt_column=POST_TT_COLUMN,
+        title=f"Task 5 acquisition rate by {POST_TT_COLUMN}, {basename_no_ext}",
+        accumulation_window_seconds=config.get("acquisition_rate_accumulation_window_seconds", 60),
+        rate_histogram_bins=config.get("acquisition_rate_task_tt_histogram_bins", 80),
+        y_limit_left=config.get("acquisition_rate_task_tt_ylim_left", 0),
+        y_limit_right=config.get("acquisition_rate_task_tt_ylim_right", 4),
+    )
+    if rate_fig is not None:
+        final_filename = f"{fig_idx}_acquisition_rate_vs_time_by_task_tt_with_histograms.png"
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        save_plot_figure(
+            save_fig_path,
+            fig=rate_fig,
+            alias="acquisition_rate_vs_time_by_task_tt_with_histograms",
+            dpi=140,
+        )
+        plt.close(rate_fig)
+    else:
+        print(f"Task 5 acquisition-rate-by-task-tt plot skipped: no valid {POST_TT_COLUMN}/datetime rows.")
+
 # -----------------------------------------------------------------------------
 # Create and save the PDF -----------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -4098,11 +4117,14 @@ if VERBOSE:
 data_purity = final_number_of_events / original_number_of_events * 100
 global_variables['purity_of_data_percentage'] = data_purity
 
-# Change 'datetime' column to 'Time' ------------------------------------------
-if 'datetime' in working_df.columns:
-    working_df.rename(columns={'datetime': 'Time'}, inplace=True)
-else:
-    print("Column 'datetime' not found in DataFrame!")
+# ------------
+# DECIDED TO KEEP datetime
+# ------------
+# # Change 'datetime' column to 'Time' ------------------------------------------
+# if 'datetime' in working_df.columns:
+#     working_df.rename(columns={'datetime': 'Time'}, inplace=True)
+# else:
+#     print("Column 'datetime' not found in DataFrame!")
 
 # End of the execution time
 _prof["s_efficiency_s"] = round(time.perf_counter() - _t_sec, 2)

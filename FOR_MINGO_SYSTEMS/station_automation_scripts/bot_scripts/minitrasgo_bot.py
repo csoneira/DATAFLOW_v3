@@ -91,7 +91,7 @@ BOT_COMMAND_SPECS = [
     ("plot_RH", "Plot internal and external humidity"),
     ("plot_asserted_edge_accepted", "Plot TRB asserted, edge, accepted"),
     ("plot_multiplexers", "Plot multiplexer rates"),
-    ("plot_coincidence_modules", "Plot coincidence-module rates"),
+    ("plot_coincidence_planes", "Plot coincidence-plane rates"),
     ("plot_all_trb_rates", "Plot all TRB rates"),
     ("restart_tunnel", "Restart the tunnel"),
     ("gas_weight_measurement", "Log a gas-bottle weight measurement"),
@@ -269,7 +269,7 @@ def send_external_environment(message):
 def send_TRB_rates(message):
         bash_command = "tail /home/rpcuser/logs/clean_rates*"
         output = os.popen(bash_command).read()
-        bot.send_message(message.chat.id, "Date --- Asserted - Edge - Accepted --- Multiplexer 1 - M2 - M3 - M4 --- Coincidence Module 1 - CM2 - CM3 - CM4")
+        bot.send_message(message.chat.id, "Date --- Asserted - Edge - Accepted --- Multiplexer 1 - M2 - M3 - M4 --- Coincidence Plane 1 - CM2 - CM3 - CM4")
         bot.send_message(message.chat.id, output)
 
 # Operation of miniTRASGO ----------------------------------------------------------------
@@ -809,8 +809,8 @@ def plot_multiplexers(message):
     except Exception as e:
         bot.send_message(message.chat.id, f"Error generating multiplexers plot: {str(e)}")
 
-@bot.message_handler(commands=['plot_coincidence_modules'])
-def plot_coincidence_modules(message):
+@bot.message_handler(commands=['plot_coincidence_planes'])
+def plot_coincidence_planes(message):
     try:
         # Get TRB rates data
         trb_bash = f"tail -n {number_of_plot_lines} /home/rpcuser/logs/clean_rates*"
@@ -818,12 +818,12 @@ def plot_coincidence_modules(message):
         
         # Create plot
         plt.figure(figsize=(12, 6))
-        plt.plot(timestamps, cm1, 'r-o', label='Coincidence Module 1', linewidth=2, markersize=4)
-        plt.plot(timestamps, cm2, 'g-o', label='Coincidence Module 2', linewidth=2, markersize=4)
-        plt.plot(timestamps, cm3, 'b-o', label='Coincidence Module 3', linewidth=2, markersize=4)
-        plt.plot(timestamps, cm4, 'm-o', label='Coincidence Module 4', linewidth=2, markersize=4)
+        plt.plot(timestamps, cm1, 'r-o', label='Coincidence Plane 1', linewidth=2, markersize=4)
+        plt.plot(timestamps, cm2, 'g-o', label='Coincidence Plane 2', linewidth=2, markersize=4)
+        plt.plot(timestamps, cm3, 'b-o', label='Coincidence Plane 3', linewidth=2, markersize=4)
+        plt.plot(timestamps, cm4, 'm-o', label='Coincidence Plane 4', linewidth=2, markersize=4)
         
-        plt.title('TRB Rates - Coincidence Modules 1-4', fontsize=14, fontweight='bold')
+        plt.title('TRB Rates - Coincidence Planes 1-4', fontsize=14, fontweight='bold')
         plt.xlabel('Time', fontsize=12)
         plt.ylabel('Rate', fontsize=12)
         plt.legend()
@@ -843,10 +843,10 @@ def plot_coincidence_modules(message):
         plt.close()
         
         # Send plot to telegram
-        bot.send_photo(message.chat.id, buf, caption="TRB Rates - Coincidence Modules 1-4")
+        bot.send_photo(message.chat.id, buf, caption="TRB Rates - Coincidence Planes 1-4")
         
     except Exception as e:
-        bot.send_message(message.chat.id, f"Error generating coincidence modules plot: {str(e)}")
+        bot.send_message(message.chat.id, f"Error generating coincidence planes plot: {str(e)}")
 
 @bot.message_handler(commands=['plot_all_trb_rates'])
 def plot_all_trb_rates(message):
@@ -881,12 +881,12 @@ def plot_all_trb_rates(message):
         ax2.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
         ax2.tick_params(axis='x', rotation=45)
         
-        # Plot 3: Coincidence Modules
-        ax3.plot(timestamps, cm1, 'r-o', label='Coincidence Module 1', linewidth=2, markersize=3)
-        ax3.plot(timestamps, cm2, 'g-o', label='Coincidence Module 2', linewidth=2, markersize=3)
-        ax3.plot(timestamps, cm3, 'b-o', label='Coincidence Module 3', linewidth=2, markersize=3)
-        ax3.plot(timestamps, cm4, 'm-o', label='Coincidence Module 4', linewidth=2, markersize=3)
-        ax3.set_title('TRB Rates - Coincidence Modules 1-4', fontsize=12, fontweight='bold')
+        # Plot 3: Coincidence Planes
+        ax3.plot(timestamps, cm1, 'r-o', label='Coincidence Plane 1', linewidth=2, markersize=3)
+        ax3.plot(timestamps, cm2, 'g-o', label='Coincidence Plane 2', linewidth=2, markersize=3)
+        ax3.plot(timestamps, cm3, 'b-o', label='Coincidence Plane 3', linewidth=2, markersize=3)
+        ax3.plot(timestamps, cm4, 'm-o', label='Coincidence Plane 4', linewidth=2, markersize=3)
+        ax3.set_title('TRB Rates - Coincidence Planes 1-4', fontsize=12, fontweight='bold')
         ax3.set_xlabel('Time', fontsize=10)
         ax3.set_ylabel('Rate', fontsize=10)
         ax3.legend()
@@ -944,7 +944,7 @@ def echo_all(message):
     - /plot_RH: Plot relative humidity (%) data from both internal and external sensors.
     - /plot_asserted_edge_accepted: Plot TRB rates (Asserted, Edge, Accepted).
     - /plot_multiplexers: Plot the rates of all 4 multiplexers.
-    - /plot_coincidence_modules: Plot the rates of all 4 coincidence modules.
+    - /plot_coincidence_planes: Plot the rates of all 4 coincidence planes.
     - /plot_all_trb_rates: View a comprehensive plot with all TRB rates in 3 subplots.
 
     -------------------------------------------

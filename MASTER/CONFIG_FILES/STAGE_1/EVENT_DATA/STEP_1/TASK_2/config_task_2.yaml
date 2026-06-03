@@ -73,5 +73,3 @@ old_timing_method: true
 # Calibration behaviour flags (moved here from config_parameters_task_2.csv)
 validate_pos_cal: true
 interpolate_fast_charge_log_scale: true
-crosstalk_fitting: false
-crosstalk_removal_and_recalibration: false

@@ -34,7 +34,7 @@ Source path:
 
 ![DAQ and electronics internals](/assets/photos/minitrasgo/IMG_1536.JPG)
 
-![RPC module integration](/assets/photos/minitrasgo/IMG_1692.JPG)
+![RPC plane integration](/assets/photos/minitrasgo/IMG_1692.JPG)
 
 Source path:
 - `DOCUMENTATION/docs/assets/photos/minitrasgo/`

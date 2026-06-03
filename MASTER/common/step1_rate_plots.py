@@ -8,6 +8,25 @@ import numpy as np
 import pandas as pd
 
 
+TASK_TT_COLOR_MAP: dict[int, str] = {
+    1: "#1f77b4",
+    2: "#ff7f0e",
+    3: "#2ca02c",
+    4: "#d62728",
+    12: "#9467bd",
+    13: "#8c564b",
+    14: "#e377c2",
+    23: "#7f7f7f",
+    24: "#bcbd22",
+    34: "#17becf",
+    123: "#4e79a7",
+    124: "#f28e2b",
+    134: "#59a14f",
+    234: "#e15759",
+    1234: "#76b7b2",
+}
+
+
 def _positive_int(value: object, default: int, minimum: int = 1, maximum: int | None = None) -> int:
     try:
         resolved = int(value)
@@ -19,6 +38,31 @@ def _positive_int(value: object, default: int, minimum: int = 1, maximum: int | 
     return resolved
 
 
+def _optional_float(value: object) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        resolved = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(resolved):
+        return None
+    return resolved
+
+
+def _task_tt_color(task_tt: int) -> str:
+    if task_tt in TASK_TT_COLOR_MAP:
+        return TASK_TT_COLOR_MAP[task_tt]
+    palette = plt.get_cmap("tab20").colors
+    index = abs(int(task_tt)) % len(palette)
+    color = palette[index]
+    return "#{:02x}{:02x}{:02x}".format(
+        int(round(color[0] * 255)),
+        int(round(color[1] * 255)),
+        int(round(color[2] * 255)),
+    )
+
+
 def create_rate_vs_time_by_task_tt_with_histograms(
     dataframe: pd.DataFrame,
     *,
@@ -26,6 +70,8 @@ def create_rate_vs_time_by_task_tt_with_histograms(
     title: str,
     accumulation_window_seconds: int = 60,
     rate_histogram_bins: int = 80,
+    y_limit_left: object = None,
+    y_limit_right: object = None,
 ) -> plt.Figure | None:
     required_columns = {"datetime", tt_column}
     if dataframe.empty or not required_columns.issubset(dataframe.columns):
@@ -80,24 +126,31 @@ def create_rate_vs_time_by_task_tt_with_histograms(
         constrained_layout=True,
         gridspec_kw={"width_ratios": [4.5, 1.3], "wspace": 0.04},
     )
-    colors = plt.get_cmap("tab10").colors
     all_rates = rates_by_tt.to_numpy(dtype=float).ravel()
     finite_rates = all_rates[np.isfinite(all_rates)]
     max_rate = float(finite_rates.max()) if finite_rates.size else 1.0
+    y_min = _optional_float(y_limit_left)
+    y_max = _optional_float(y_limit_right)
+    if y_min is not None and y_max is not None and y_min >= y_max:
+        y_min = None
+        y_max = None
     bin_count = _positive_int(
         rate_histogram_bins,
         default=80,
         minimum=8,
         maximum=300,
     )
-    bins = np.linspace(0.0, max(max_rate, 1.0), bin_count)
+    hist_min = y_min if y_min is not None else 0.0
+    hist_max = y_max if y_max is not None else max(max_rate, 1.0)
+    bins = np.linspace(hist_min, max(hist_max, hist_min + 1.0), bin_count)
     if np.unique(bins).size < 2:
         bins = np.array([0.0, 1.0])
 
-    for idx, task_tt in enumerate(rates_by_tt.columns):
+    for task_tt in rates_by_tt.columns:
         rates = rates_by_tt[task_tt].to_numpy(dtype=float)
-        color = colors[idx % len(colors)]
-        label = f"{tt_column}={int(task_tt)}"
+        task_tt_int = int(task_tt)
+        color = _task_tt_color(task_tt_int)
+        label = f"{tt_column}={task_tt_int}"
         ax_time.plot(
             rates_by_tt.index.to_numpy() * accumulation_window_seconds,
             rates,
@@ -118,6 +171,8 @@ def create_rate_vs_time_by_task_tt_with_histograms(
     ax_time.set_title("Rate versus time")
     ax_time.set_xlabel("Seconds from first valid task timestamp")
     ax_time.set_ylabel(f"Rate [Hz], {accumulation_window_seconds}s accumulation")
+    if y_min is not None or y_max is not None:
+        ax_time.set_ylim(y_min, y_max)
     ax_time.grid(True, alpha=0.25)
     ax_time.legend(loc="best", fontsize=8)
 

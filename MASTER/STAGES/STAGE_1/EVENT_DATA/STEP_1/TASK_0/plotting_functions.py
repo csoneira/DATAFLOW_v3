@@ -28,7 +28,8 @@ def plot_acquisition_rate_vs_time_by_trigger_type(
     title: str,
     accumulation_window_seconds: int = 60,
 ) -> bool:
-    if read_df.empty or "datetime" not in read_df.columns or "column_6" not in read_df.columns:
+    trigger_column = "acquisition_type" if "acquisition_type" in read_df.columns else "column_6"
+    if read_df.empty or "datetime" not in read_df.columns or trigger_column not in read_df.columns:
         return False
 
     datetimes = pd.to_datetime(read_df["datetime"], errors="coerce")
@@ -37,11 +38,11 @@ def plot_acquisition_rate_vs_time_by_trigger_type(
         return False
 
     accumulation_window_seconds = max(1, int(accumulation_window_seconds))
-    frame = read_df.loc[valid_mask, ["column_6"]].copy()
+    frame = read_df.loc[valid_mask, [trigger_column]].copy()
     frame.loc[:, "elapsed_s"] = (
         datetimes.loc[valid_mask] - datetimes.loc[valid_mask].min()
     ).dt.total_seconds().astype(int)
-    trigger_values = pd.to_numeric(frame["column_6"], errors="coerce")
+    trigger_values = pd.to_numeric(frame[trigger_column], errors="coerce")
 
     series_by_label: list[tuple[str, pd.Series]] = [
         ("all valid", _rate_series_by_window(frame, pd.Series(True, index=frame.index), accumulation_window_seconds)),
@@ -80,6 +81,8 @@ def plot_acquisition_rate_vs_time_by_task_tt_with_histograms(
     tt_column: str = "acq_tt",
     accumulation_window_seconds: int = 60,
     rate_histogram_bins: int = 80,
+    y_limit_left: object = None,
+    y_limit_right: object = None,
 ) -> bool:
     fig = create_rate_vs_time_by_task_tt_with_histograms(
         read_df,
@@ -87,6 +90,8 @@ def plot_acquisition_rate_vs_time_by_task_tt_with_histograms(
         title=title,
         accumulation_window_seconds=accumulation_window_seconds,
         rate_histogram_bins=rate_histogram_bins,
+        y_limit_left=y_limit_left,
+        y_limit_right=y_limit_right,
     )
     if fig is None:
         return False

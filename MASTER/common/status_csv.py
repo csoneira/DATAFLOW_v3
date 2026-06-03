@@ -38,6 +38,8 @@ def _clamp_completion(completion: object) -> float:
         value = float(completion)
     except (TypeError, ValueError):
         value = 0.0
+    if value == -1.0:
+        return -1.0
     return max(0.0, min(1.0, value))
 
 

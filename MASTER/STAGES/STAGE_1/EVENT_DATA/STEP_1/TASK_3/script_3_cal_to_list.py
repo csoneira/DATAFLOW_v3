@@ -1651,6 +1651,7 @@ def apply_task3_plane_combination_filter(
                 plane_key: 0 for plane_key in TASK3_PLANE_KEYS
             },
             "selected_offender_count_by_row": pd.Series(0, index=df_input.index, dtype=int),
+            "resolution_exact_by_row": pd.Series(True, index=df_input.index, dtype=bool),
         }
 
     plane_fail_masks = {
@@ -1714,6 +1715,7 @@ def apply_task3_plane_combination_filter(
     row_detector_failure_any = np.zeros(n_rows, dtype=bool)
     row_plane_failure_any = np.zeros(n_rows, dtype=bool)
     selected_offender_count_by_row = np.zeros(n_rows, dtype=int)
+    resolution_exact_by_row = np.ones(n_rows, dtype=bool)
 
     plane_q_dif_sum_abs = abs(float(plane_q_dif_sum_threshold))
     plane_t_dif_sum_abs = abs(float(plane_t_dif_sum_threshold))
@@ -2013,6 +2015,13 @@ def apply_task3_plane_combination_filter(
             uncovered_edges,
             _task3_plane_order_key,
         )
+        selected_plane_set = set(selected_planes)
+        unresolved_edges = [
+            (plane_a, plane_b, severity)
+            for plane_a, plane_b, severity in edge_list
+            if plane_a not in selected_plane_set and plane_b not in selected_plane_set
+        ]
+        resolution_exact_by_row[row_pos] = len(unresolved_edges) == 0
 
         summary["max_failed_pairs_in_row"] = max(
             summary["max_failed_pairs_in_row"],
@@ -2087,6 +2096,11 @@ def apply_task3_plane_combination_filter(
         selected_offender_count_by_row,
         index=df_input.index,
         dtype=int,
+    )
+    summary["resolution_exact_by_row"] = pd.Series(
+        resolution_exact_by_row,
+        index=df_input.index,
+        dtype=bool,
     )
     return summary
 
@@ -2795,6 +2809,7 @@ pattern_metadata: dict[str, object] = {}
 STATION_CHOICES = ("0", "1", "2", "3", "4")
 TASK3_PLOT_STATUSES: tuple[str, ...] = ("none", "debug", "usual", "essential")
 TASK3_PLOT_ALIASES: tuple[str, ...] = (
+    "acquisition_rate_vs_time_by_task_tt_with_histograms",
     "incoming_parquet_main_columns_debug",
     "active_strip_patterns_overview",
     "multi_strip_pair_diagnostics",
@@ -5306,7 +5321,7 @@ print("----------------------------------------------------------------------")
 # Defining the directories that will store the data
 save_full_filename = f"full_list_events_{save_filename_suffix}.txt"
 save_filename = f"list_events_{save_filename_suffix}.txt"
-save_pdf_filename = f"mingo{str(station).zfill(2)}_task3_{save_filename_suffix}.pdf"
+save_pdf_filename = f"mingo{str(station).zfill(2)}_task3_{basename_no_ext}_{date_execution}.pdf"
 
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
 
@@ -5416,7 +5431,7 @@ active_strip_cols = {}
 for plane_id in range(1, 5):
     cols = [f'Q{plane_id}_Q_sum_{i}' for i in range(1, 5)]
     Q_plane = working_df[cols].values  # shape (N, 4)
-    active_strips_binary = (Q_plane > 1).astype(int)
+    active_strips_binary = (Q_plane > 0).astype(int)
     binary_strings = [''.join(map(str, row)) for row in active_strips_binary]
     active_strip_cols[f'active_strips_P{plane_id}'] = binary_strings
 
@@ -7412,6 +7427,12 @@ working_df.loc[:, "task3_problematic_plane_count"] = (
     .astype(int)
     .to_numpy()
 )
+working_df.loc[:, "task3_problematic_plane_resolution_exact"] = (
+    plane_combination_summary["resolution_exact_by_row"]
+    .reindex(working_df.index, fill_value=True)
+    .astype(bool)
+    .to_numpy()
+)
 
 task1_problematic_channel_count = pd.to_numeric(
     working_df.get(
@@ -7443,6 +7464,13 @@ total_problematic_offender_count = (
 working_df.loc[:, "task1_problematic_channel_count"] = task1_problematic_channel_count.to_numpy()
 working_df.loc[:, "task2_problematic_strip_count"] = task2_problematic_strip_count.to_numpy()
 working_df.loc[:, "task3_problematic_plane_count"] = task3_problematic_plane_count_series.to_numpy()
+for exact_column in (
+    "task1_problematic_channel_resolution_exact",
+    "task2_problematic_strip_resolution_exact",
+    "task3_problematic_plane_resolution_exact",
+):
+    if exact_column in working_df.columns:
+        working_df.loc[:, exact_column] = working_df[exact_column].astype(bool).to_numpy()
 working_df.loc[:, "total_problematic_offender_count"] = (
     total_problematic_offender_count.to_numpy()
 )
@@ -10288,6 +10316,27 @@ if task3_plot_enabled("strip_activation_matrix_before_after"):
         task3_plane_activation_filtered,
         fig_idx,
     )
+
+# Final task-rate plot from the same dataframe population saved by Task 3.
+if save_plots and task3_plot_enabled("acquisition_rate_vs_time_by_task_tt_with_histograms"):
+    rate_fig = create_rate_vs_time_by_task_tt_with_histograms(
+        working_df,
+        tt_column="list_tt",
+        title=f"Task 3 acquisition rate by list_tt, {basename_no_ext}",
+        accumulation_window_seconds=config.get("acquisition_rate_accumulation_window_seconds", 60),
+        rate_histogram_bins=config.get("acquisition_rate_task_tt_histogram_bins", 80),
+        y_limit_left=config.get("acquisition_rate_task_tt_ylim_left", 0),
+        y_limit_right=config.get("acquisition_rate_task_tt_ylim_right", 4),
+    )
+    if rate_fig is not None:
+        final_filename = f"{fig_idx}_acquisition_rate_vs_time_by_task_tt_with_histograms.png"
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        save_plot_figure(save_fig_path, fig=rate_fig, dpi=140)
+        plt.close(rate_fig)
+    else:
+        print("Task 3 acquisition-rate-by-task-tt plot skipped: no valid list_tt/datetime rows.")
 
 finalize_saved_plots_to_pdf()
 _prof["s_pdf_finalize_s"] = round(time.perf_counter() - _t_sec, 2)

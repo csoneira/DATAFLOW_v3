@@ -205,8 +205,24 @@ build_default_queue_order() {
   out_arr=("${execution_pairs[@]}")
 }
 
+station_has_task0_backlog() {
+  local station="$1"
+  local station_tag station_name stage0_dir task0_unprocessed_dir
+  station_tag="$(printf 'mi%02d' "$station")"
+  station_name="MINGO$(printf '%02d' "$station")"
+  stage0_dir="$HOME/DATAFLOW_v3/STATIONS/${station_name}/STAGE_0_TO_1"
+  task0_unprocessed_dir="$HOME/DATAFLOW_v3/STATIONS/${station_name}/STAGE_1/EVENT_DATA/STEP_1/TASK_0/INPUT_FILES/UNPROCESSED_DIRECTORY"
+  if [[ -d "$stage0_dir" ]] && compgen -G "${stage0_dir}/${station_tag}*.dat" >/dev/null; then
+    return 0
+  fi
+  if [[ -d "$task0_unprocessed_dir" ]] && compgen -G "${task0_unprocessed_dir}/${station_tag}*.dat" >/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
 sanitize_queue_file() {
-  local -a default_pairs sanitized
+  local -a default_pairs sanitized prioritized remainder
   build_default_queue_order default_pairs
 
   declare -A valid_map=()
@@ -236,6 +252,20 @@ sanitize_queue_file() {
 
   if [[ ${#sanitized[@]} -eq 0 ]]; then
     sanitized=("${default_pairs[@]}")
+  fi
+
+  prioritized=()
+  remainder=()
+  for pair in "${sanitized[@]}"; do
+    IFS='-' read -r pair_station pair_task <<<"$pair"
+    if [[ "$pair_task" == "0" ]] && station_has_task0_backlog "$pair_station"; then
+      prioritized+=("$pair")
+    else
+      remainder+=("$pair")
+    fi
+  done
+  if [[ ${#prioritized[@]} -gt 0 ]]; then
+    sanitized=("${prioritized[@]}" "${remainder[@]}")
   fi
 
   {
@@ -816,13 +846,22 @@ pipeline_already_running() {
     [[ -z "$line" ]] && continue
     local pid="${line%% *}"
     pid="${pid//[[:space:]]/}"
-    local cmd="${line#* }"
+    local rest="${line#* }"
+    local comm="${rest%% *}"
+    local cmd="${rest#* }"
     [[ -z "$pid" || "$pid" == "$line" ]] && continue
     [[ ! "$pid" =~ ^[0-9]+$ ]] && continue
 
     if pid_is_self_or_ancestor "$pid"; then
       continue
     fi
+    case "$comm" in
+      bash|sh|flock)
+        ;;
+      *)
+        continue
+        ;;
+    esac
     [[ "$cmd" != *"guide_raw_to_corrected.sh"* ]] && continue
 
     if command_targets_station "$cmd" "$target_station"; then
@@ -831,7 +870,7 @@ pipeline_already_running() {
       fi
       return 0
     fi
-  done < <(ps -eo pid=,args=)
+  done < <(ps -eo pid=,comm=,args=)
   return 1
 }
 

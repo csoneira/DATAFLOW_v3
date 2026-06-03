@@ -76,6 +76,8 @@ def _parse_completion(value: object) -> float:
         numeric = float(value)
     except (TypeError, ValueError):
         numeric = 0.0
+    if numeric == -1.0:
+        return -1.0
     return max(0.0, min(1.0, numeric))
 
 
@@ -182,6 +184,8 @@ def load_status_events(
 
 
 def _progress_color(progress: float) -> str:
+    if progress == -1.0:
+        return "#ffffff"
     value = max(0.0, min(1.0, progress))
     if value <= 0.5:
         ratio = value / 0.5 if value > 0 else 0.0
@@ -192,6 +196,10 @@ def _progress_color(progress: float) -> str:
         red = int(255 * (1.0 - ratio))
         green = 255
     return f"#{red:02x}{green:02x}00"
+
+
+def _completion_label(progress: float) -> str:
+    return "no files" if progress == -1.0 else f"{progress:.2f}"
 
 
 def _parse_id_filter(
@@ -375,10 +383,11 @@ class StatusTimelineApp:
         self._draw_timeline()
         self._fill_table()
 
-        active = sum(1 for event in self.events if event.completion < 1.0)
+        no_file = sum(1 for event in self.events if event.completion == -1.0)
+        active = sum(1 for event in self.events if 0.0 <= event.completion < 1.0)
         latest = self.events[-1].execution_time.strftime("%Y-%m-%d %H:%M:%S") if self.events else "-"
         self.status_var.set(
-            f"Rows: {len(self.events)} | Active (<1): {active} | Latest execution: {latest} | "
+            f"Rows: {len(self.events)} | Active (0..1): {active} | No-file: {no_file} | Latest execution: {latest} | "
             f"Last refresh: {now.strftime('%Y-%m-%d %H:%M:%S')}"
         )
         self._schedule_next(int(config["refresh_seconds"]))
@@ -473,8 +482,9 @@ class StatusTimelineApp:
                 outline="#333333",
             )
 
-        for i, marker in enumerate((0.0, 0.25, 0.5, 0.75, 1.0)):
-            lx = right - 265 + i * 52
+        legend_markers = (-1.0, 0.0, 0.25, 0.5, 0.75, 1.0)
+        for i, marker in enumerate(legend_markers):
+            lx = right - 360 + i * 66
             ly = top - 14
             self.canvas.create_rectangle(
                 lx, ly, lx + 12, ly + 12, fill=_progress_color(marker), outline="#333333"
@@ -482,7 +492,7 @@ class StatusTimelineApp:
             self.canvas.create_text(
                 lx + 16,
                 ly + 6,
-                text=f"{marker:g}",
+                text="no files" if marker == -1.0 else f"{marker:g}",
                 anchor="w",
                 font=("TkDefaultFont", 8),
             )
@@ -501,7 +511,7 @@ class StatusTimelineApp:
                     f"MINGO0{event.station}",
                     _format_task_label(event.task, self.task_labels),
                     event.filename_base,
-                    f"{event.completion:.2f}",
+                    _completion_label(event.completion),
                     event.csv_mtime.strftime("%Y-%m-%d %H:%M:%S"),
                 ),
             )
@@ -576,7 +586,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(
                 f"{event.execution_time:%Y-%m-%d %H:%M:%S} "
                 f"M{event.station} {_format_task_label(event.task, task_labels)} {event.filename_base} "
-                f"{event.completion:.2f}"
+                f"{_completion_label(event.completion)}"
             )
         return 0
 

@@ -1683,7 +1683,7 @@ def _detached_vectorized(
         fit_res['det_y']    [g_idx] = yz0
         fit_res['det_theta'][g_idx] = theta
         fit_res['det_phi']  [g_idx] = phi
-        fit_res['det_chi2'] [g_idx] = chi2
+        fit_res['det_chi2_pos'] [g_idx] = chi2
         for k_pl, pid in enumerate(plane_ids):
             fit_res[f'det_res_tdif_{pid}'][g_idx] = res_td[:, k_pl]
             fit_res[f'det_res_ystr_{pid}'][g_idx] = res_y [:, k_pl]
@@ -1692,7 +1692,7 @@ def _detached_vectorized(
         k_slow, b_slow, chi2_slow, res_slow, _ = _batch_slowness(xz0, yz0, d, z_sel, Tsum_g)
         slow_res['det_s']         [g_idx] = k_slow
         slow_res['det_s_ordinate'][g_idx] = b_slow
-        slow_res['chi2_tsum_fit'] [g_idx] = chi2_slow
+        slow_res['det_chi2_tsum'] [g_idx] = chi2_slow
         for k_pl, pid in enumerate(plane_ids):
             slow_res[f'det_res_tsum_{pid}'][g_idx] = res_slow[:, k_pl]
 
@@ -4681,6 +4681,7 @@ TASK4_PLOT_ALIASES: tuple[str, ...] = (
     "debug_suite",
     "usual_suite",
     "essential_suite",
+    "acquisition_rate_vs_time_by_task_tt_with_histograms",
     "flat_values_histogram",
     "detached_timeseries_combo",
     "detached_residuals_combo",
@@ -5858,7 +5859,7 @@ print("----------------------------------------------------------------------")
 # Defining the directories that will store the data
 save_full_filename = f"full_list_events_{save_filename_suffix}.txt"
 save_filename = f"list_events_{save_filename_suffix}.txt"
-save_pdf_filename = f"mingo{str(station).zfill(2)}_task4_{save_filename_suffix}.pdf"
+save_pdf_filename = f"mingo{str(station).zfill(2)}_task4_{basename_no_ext}_{date_execution}.pdf"
 
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
 
@@ -5995,13 +5996,13 @@ n = len(working_df)
 
 # Angular definitions
 fit_cols = (
-    ['det_x', 'det_y', 'det_theta', 'det_phi', 'det_chi2'] +
+    ['det_x', 'det_y', 'det_theta', 'det_phi', 'det_chi2_pos'] +
     [f'det_res_tdif_{p}' for p in range(1, 5)] +
     [f'det_res_ystr_{p}' for p in range(1, 5)]
 )
 
 # Slowness definitions
-slow_cols = ['det_s', 'det_s_ordinate' , 'chi2_tsum_fit'] + [f'det_res_tsum_{p}' for p in range(1, 5)]
+slow_cols = ['det_s', 'det_s_ordinate' , 'det_chi2_tsum'] + [f'det_res_tsum_{p}' for p in range(1, 5)]
 
 # Pre-extract per-plane columns as contiguous numpy arrays (avoids per-event
 # getattr overhead in the detached fitting loop below).
@@ -6048,7 +6049,7 @@ if run_detached_fit:
         all_res['det_ext_res_tdif_2'] = det_ext_res_tdif_arr[:, 1]
         all_res['det_ext_res_tdif_3'] = det_ext_res_tdif_arr[:, 2]
         all_res['det_ext_res_tdif_4'] = det_ext_res_tdif_arr[:, 3]
-        all_res['det_th_chi'] = all_res['det_chi2'] + all_res['chi2_tsum_fit']
+        all_res['det_th_chi'] = all_res['det_chi2_pos'] + all_res['det_chi2_tsum']
         all_res['det_processed_tt'] = det_processed_tt_arr
 
         new_cols = pd.DataFrame(all_res, index=working_df.index)
@@ -7659,7 +7660,10 @@ if create_plots:
         plot_list=plot_list
     )
 
-if create_plots or create_essential_plots:
+if (
+    (create_plots or create_essential_plots)
+    and task4_plot_enabled("trigger_types_definitive_tt_and_raw")
+):
     fig_idx = plot_tt_correlation(
         df=working_df,
         row_label='raw_tt',
@@ -7748,7 +7752,10 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("external_res
 
 # -----------------------------------------------------------------------------------------------------------------------------
 
-if create_plots or create_essential_plots:
+if (
+    (create_plots or create_essential_plots)
+    and task4_plot_enabled("polar_theta_phi_definitive_tt_2d")
+):
     df_filtered = df_plot_ancillary
     # tt_values = sorted(df_filtered['definitive_tt'].dropna().unique(), key=lambda x: int(x))
 
@@ -13618,7 +13625,7 @@ if create_plots:
 del df_plot_ancillary
 gc.collect()
 
-if create_plots:
+if create_plots and task4_plot_enabled("events_per_second_by_plane_cardinality_double_row"):
 
     fig, axes = plt.subplots(2, 3, figsize=(24, 12), sharey=True)
     colors = plt.colormaps['tab10']
@@ -13730,16 +13737,12 @@ print("----------------------------------------------------------------------")
 
 # Save the main columns, relevant for the posterior analysis ------------------
 missing_charge_cols = []
-for module in ['1', '2', '3', '4']:
+for plane in ['1', '2', '3', '4']:
     for strip in range(1, 5):
-        no_crstlk = f'Q{module}_Q_sum_{strip}_no_crstlk'
-        with_crstlk = f'Q{module}_Q_sum_{strip}_with_crstlk'
-        if no_crstlk not in working_df.columns:
-            working_df[no_crstlk] = np.nan
-            missing_charge_cols.append(no_crstlk)
-        if with_crstlk not in working_df.columns:
-            working_df[with_crstlk] = np.nan
-            missing_charge_cols.append(with_crstlk)
+        source_col = f'Q{plane}_Q_sum_{strip}'
+        if source_col not in working_df.columns:
+            working_df[source_col] = np.nan
+            missing_charge_cols.append(source_col)
 
 if missing_charge_cols:
     unique_missing = sorted(set(missing_charge_cols))
@@ -13748,21 +13751,21 @@ if missing_charge_cols:
         + ", ".join(unique_missing)
     )
 
-for i, module in enumerate(['1', '2', '3', '4']):
+for i, plane in enumerate(['1', '2', '3', '4']):
     for j in range(4):
         strip = j + 1
-        working_df[f'Q_P{module}s{strip}'] = working_df[f'Q{module}_Q_sum_{strip}_no_crstlk']
-        working_df[f'Q_P{module}s{strip}_with_crstlk'] = working_df[f'Q{module}_Q_sum_{strip}_with_crstlk']
+        source_col = f'Q{plane}_Q_sum_{strip}'
+        working_df[f'Q_P{plane}s{strip}'] = working_df[source_col]
 
 if self_trigger:
-    for i, module in enumerate(['1', '2', '3', '4']):
+    for i, plane in enumerate(['1', '2', '3', '4']):
         for j in range(4):
             strip = j + 1
-            source_col = f'Q{module}_Q_sum_{strip}'
+            source_col = f'Q{plane}_Q_sum_{strip}'
             if source_col not in working_st_df.columns:
                 working_st_df[source_col] = np.nan
                 print(f"Warning: missing self-trigger charge column; created NaN: {source_col}")
-            working_st_df[f'Q_P{module}s{strip}'] = working_st_df[source_col]
+            working_st_df[f'Q_P{plane}s{strip}'] = working_st_df[source_col]
 
 # Charge checking --------------------------------------------------------------------------------------------------------
 if self_trigger:
@@ -13773,23 +13776,14 @@ if self_trigger:
             for j in range(1, 5):
                 # Get the column name
                 col_name = f"Q_P{i}s{j}"
-                col_name_2 = f"Q_P{i}s{j}_with_crstlk"
                 
                 # Plot the histogram
                 v = working_df[col_name]
                 v = v[v != 0]
-                w = working_df[col_name_2]
-                w = w[w != 0]
                 
-                # For 'no crosstalk' histogram
                 counts_v, bins_v = np.histogram(v, bins=80, range=(0, 40))
                 normalized_v = counts_v / max(counts_v)
-                axs[i-1, j-1].stairs(normalized_v, bins_v, alpha=0.5, label='no crosstalk', color='blue', fill=True)
-
-                # For 'with crosstalk' histogram (if uncommented)
-                # counts_w, bins_w = np.histogram(w, bins=80, range=(0, 40))
-                # normalized_w = counts_w / max(counts_w)
-                # axs[i-1, j-1].stairs(normalized_w, bins_w, alpha=0.5, label='with crosstalk', color='orange', fill=True)
+                axs[i-1, j-1].stairs(normalized_v, bins_v, alpha=0.5, label='event', color='blue', fill=True)
 
                 if self_trigger:
                     x = working_st_df[col_name]
@@ -13829,23 +13823,14 @@ if self_trigger:
             for j in range(1, 5):
                 # Get the column name
                 col_name = f"Q_P{i}s{j}"
-                col_name_2 = f"Q_P{i}s{j}_with_crstlk"
 
                 # Plot the histogram
                 v = plot_def_df[col_name]
                 v = v[v != 0]
-                w = plot_def_df[col_name_2]
-                w = w[w != 0]
                 
-                # For 'no crosstalk' histogram
                 counts_v, bins_v = np.histogram(v, bins=80, range=(0, 40))
                 normalized_v = counts_v / max(counts_v)
-                axs[i-1, j-1].stairs(normalized_v, bins_v, alpha=0.5, label='no crosstalk', color='blue', fill=True)
-
-                # For 'with crosstalk' histogram (if uncommented)
-                # counts_w, bins_w = np.histogram(w, bins=80, range=(0, 40))
-                # normalized_w = counts_w / max(counts_w)
-                # axs[i-1, j-1].stairs(normalized_w, bins_w, alpha=0.5, label='with crosstalk', color='orange', fill=True)
+                axs[i-1, j-1].stairs(normalized_v, bins_v, alpha=0.5, label='event', color='blue', fill=True)
 
                 if self_trigger:
                     x = working_st_df[col_name]
@@ -13991,8 +13976,34 @@ if (
 elif _task4_charge_series is None:
     print("[WARN] TASK_4 total_event_charge_histogram skipped: no usable charge_event source.")
 
+# Final task-rate plot included in the Task 4 PDF.
+if save_plots and task4_plot_enabled("acquisition_rate_vs_time_by_task_tt_with_histograms"):
+    rate_fig = create_rate_vs_time_by_task_tt_with_histograms(
+        working_df,
+        tt_column="fit_tt",
+        title=f"Task 4 acquisition rate by fit_tt, {basename_no_ext}",
+        accumulation_window_seconds=config.get("acquisition_rate_accumulation_window_seconds", 60),
+        rate_histogram_bins=config.get("acquisition_rate_task_tt_histogram_bins", 80),
+        y_limit_left=config.get("acquisition_rate_task_tt_ylim_left", 0),
+        y_limit_right=config.get("acquisition_rate_task_tt_ylim_right", 4),
+    )
+    if rate_fig is not None:
+        final_filename = f"{fig_idx}_acquisition_rate_vs_time_by_task_tt_with_histograms.png"
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        save_plot_figure(
+            save_fig_path,
+            fig=rate_fig,
+            alias="acquisition_rate_vs_time_by_task_tt_with_histograms",
+            dpi=140,
+        )
+        plt.close(rate_fig)
+    else:
+        print("Task 4 acquisition-rate-by-task-tt plot skipped: no valid fit_tt/datetime rows.")
+
 # Force PDF creation when Task 4 plotting is enabled.
-if create_plots:
+if create_plots or create_essential_plots:
     create_pdf = True
 _finalize_stage_t0 = _t_sec
 
@@ -14212,8 +14223,11 @@ upstream_offender_count_cols = [
     col_name
     for col_name in (
         "task1_problematic_channel_count",
+        "task1_problematic_channel_resolution_exact",
         "task2_problematic_strip_count",
+        "task2_problematic_strip_resolution_exact",
         "task3_problematic_plane_count",
+        "task3_problematic_plane_resolution_exact",
     )
     if col_name in working_df.columns
 ]
@@ -14235,8 +14249,6 @@ columns_to_keep = (
         # Strip-level time and charge info (ordered by plane and strip)
         *[f'Q_P{p}s{s}' for p in range(1, 5) for s in range(1, 5)],
         
-        # Strip-level time and charge info with crosstalk
-        # *[f'Q_P{p}s{s}_with_crstlk' for p in range(1, 5) for s in range(1, 5)]
     ]
 )
 

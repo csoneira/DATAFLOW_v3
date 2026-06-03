@@ -142,7 +142,7 @@ def build_document() -> tuple[str, list[str]]:
             lines.append("No parquet files found")
         else:
             sample_files.append(str(sample_file))
-            lines.extend(get_columns(sample_file))
+            lines.extend(sorted(get_columns(sample_file), key=str.casefold))
 
         lines.append("")
         lines.append("")

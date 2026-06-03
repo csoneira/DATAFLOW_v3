@@ -11,7 +11,7 @@ special:
     ylim: [0, 100]
     columns:
       - data_purity_percentage
-      - valid_lines_in_binary_file_percentage
+      - valid_lines_in_file_percentage
       - clean_tt_lt_10_rows_removed_pct
       - channel_qt_mismatch_rows_removed_clean_tt_of_mismatch_pct
       - channel_qt_mismatch_rows_retained_final_of_mismatch_pct

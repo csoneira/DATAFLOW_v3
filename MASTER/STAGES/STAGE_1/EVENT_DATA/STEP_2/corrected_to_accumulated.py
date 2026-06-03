@@ -2650,7 +2650,7 @@ if side_calculations:
         for col in merged_df.columns:
             merged_df[col] = interpolate_fast_charge(merged_df[col])
 
-        # For each module, calculate the total charge per event, then store them in a dataframe
+        # For each plane, calculate the total charge per event, then store them in a dataframe
         total_charge = pd.DataFrame()
         for i in range(1, 5):
             total_charge[f"Q_P{i}"] = merged_df[[f"Q_P{i}s{j}" for j in range(1, 5)]].sum(axis=1)
@@ -2667,10 +2667,10 @@ if side_calculations:
             gridspec_kw={'height_ratios': [4, 1, 1]}
         )
 
-        for idx, module in enumerate(range(1, 5)):
+        for idx, plane in enumerate(range(1, 5)):
 
             # Load and preprocess data
-            data = total_charge[f"Q_P{module}"].dropna().to_numpy().flatten()
+            data = total_charge[f"Q_P{plane}"].dropna().to_numpy().flatten()
             data = data[data != 0] / q_e  # convert to e–
 
             # Histogram
@@ -2691,7 +2691,7 @@ if side_calculations:
             # Store fit results
 
             polya_results = {
-                "module": module,
+                "plane": plane,
                 "theta": theta_fit,
                 "nbar": nbar_fit,
                 "alpha": alpha_fit,
@@ -2733,7 +2733,7 @@ if side_calculations:
             )
             ax1.plot(x_fine, y_model, "r--", label = plot_label)
             ax1.plot(x_fit, y_fit, 'bo', markersize = 2)
-            ax1.set_title(f"Module {module}")
+            ax1.set_title(f"Plane {plane}")
             ax1.legend(fontsize=8)
             ax1.grid(True)
             if idx == 0:
@@ -2801,7 +2801,7 @@ if side_calculations:
         for col in merged_df.columns:
             merged_df[col] = interpolate_fast_charge(merged_df[col])
 
-        # For each module, calculate the total charge per event, then store them in a dataframe
+        # For each plane, calculate the total charge per event, then store them in a dataframe
         total_charge = pd.DataFrame()
         for i in range(1, 5):
             total_charge[f"Q_P{i}"] = merged_df[[f"Q_P{i}s{j}" for j in range(1, 5)]].sum(axis=1)
@@ -2820,10 +2820,10 @@ if side_calculations:
             gridspec_kw={'height_ratios': [4, 1, 1]}
         )
 
-        for idx, module in enumerate(range(1, 5)):
+        for idx, plane in enumerate(range(1, 5)):
 
             # Load and preprocess data
-            data = total_charge[f"Q_P{module}"].dropna().to_numpy().flatten()
+            data = total_charge[f"Q_P{plane}"].dropna().to_numpy().flatten()
             data = data[data != 0] / q_e  # convert to e–
 
             # Histogram
@@ -2862,7 +2862,7 @@ if side_calculations:
             )
             ax1.plot(x_fine, y_model, "r--", label = plot_label)
             ax1.plot(x_fit, y_fit, 'bo', markersize = 2)
-            ax1.set_title(f"Module {module}")
+            ax1.set_title(f"Plane {plane}")
             ax1.legend(fontsize=8)
             ax1.grid(True)
             if idx == 0:
@@ -2924,7 +2924,7 @@ if side_calculations:
         for col in merged_df.columns:
             merged_df[col] = interpolate_fast_charge(merged_df[col])
 
-        # For each module, calculate the total charge per event, then store them in a dataframe
+        # For each plane, calculate the total charge per event, then store them in a dataframe
         total_charge = pd.DataFrame()
         for i in range(1, 5):
             total_charge[f"Q_P{i}"] = merged_df[[f"Q_P{i}s{j}" for j in range(1, 5)]].sum(axis=1)
@@ -2942,10 +2942,10 @@ if side_calculations:
             gridspec_kw={'height_ratios': [4, 1, 1]}
         )
 
-        for idx, module in enumerate(range(1, 5)):
+        for idx, plane in enumerate(range(1, 5)):
 
             # Load and preprocess data
-            data = total_charge[f"Q_P{module}"].dropna().to_numpy().flatten()
+            data = total_charge[f"Q_P{plane}"].dropna().to_numpy().flatten()
             data = data[data != 0] / q_e  # convert to e–
 
             # Histogram
@@ -2985,7 +2985,7 @@ if side_calculations:
             )
             ax1.plot(x_fine, y_model, "r--", label = plot_label)
             ax1.plot(x_fit, y_fit, 'bo', markersize = 2)
-            ax1.set_title(f"Module {module}")
+            ax1.set_title(f"Plane {plane}")
             ax1.legend(fontsize=8)
             ax1.grid(True)
             if idx == 0:
@@ -3053,9 +3053,9 @@ if side_calculations:
         triple_non_adj = {f'triple_M{i}_s{triplet[0]}{triplet[1]}{triplet[2]}': [] for i in range(1, 5) for triplet in [(1,2,4), (1,3,4)]}
         quadruples = {f'quadruple_M{i}_s1234': [] for i in range(1, 5)}
 
-        # Loop over modules
+        # Loop over planes
         for i in range(1, 5):
-            charge_matrix = np.zeros((len(merged_df), 4))  # Stores strip-wise charges for this module
+            charge_matrix = np.zeros((len(merged_df), 4))  # Stores strip-wise charges for this plane
 
             for j in range(1, 5):  # Loop over strips
                 col_name = f"Q_P{i}s{j}"  # Column name
@@ -3203,54 +3203,54 @@ if side_calculations:
         # Initialize dictionary
         real_multiplicities = {}
 
-        # Define modules
-        modules = ["M1", "M2", "M3", "M4"]
+        # Define planes
+        planes = ["M1", "M2", "M3", "M4"]
 
-        # Loop over modules
-        for module in modules:
-            real_multiplicities[f"real_single_{module}_s1"] = pd.concat([
-                rename_columns(globals()[f"single_{module}_s1"], f"single_{module}_s1"),
-                rename_columns(globals()[f"double_{module}_s13"][['Charge1', 'Charge2']], f"double_{module}_s13"),
-                rename_columns(globals()[f"double_{module}_s14"][['Charge1', 'Charge2']], f"double_{module}_s14"),
-                rename_columns(globals()[f"triple_{module}_s134"][['Charge1']], f"triple_{module}_s134")
+        # Loop over planes
+        for plane in planes:
+            real_multiplicities[f"real_single_{plane}_s1"] = pd.concat([
+                rename_columns(globals()[f"single_{plane}_s1"], f"single_{plane}_s1"),
+                rename_columns(globals()[f"double_{plane}_s13"][['Charge1', 'Charge2']], f"double_{plane}_s13"),
+                rename_columns(globals()[f"double_{plane}_s14"][['Charge1', 'Charge2']], f"double_{plane}_s14"),
+                rename_columns(globals()[f"triple_{plane}_s134"][['Charge1']], f"triple_{plane}_s134")
             ], axis=1)
 
-            real_multiplicities[f"real_single_{module}_s2"] = pd.concat([
-                rename_columns(globals()[f"single_{module}_s2"], f"single_{module}_s2"),
-                rename_columns(globals()[f"double_{module}_s24"][['Charge1', 'Charge2']], f"double_{module}_s24")
+            real_multiplicities[f"real_single_{plane}_s2"] = pd.concat([
+                rename_columns(globals()[f"single_{plane}_s2"], f"single_{plane}_s2"),
+                rename_columns(globals()[f"double_{plane}_s24"][['Charge1', 'Charge2']], f"double_{plane}_s24")
             ], axis=1)
 
-            real_multiplicities[f"real_single_{module}_s3"] = pd.concat([
-                rename_columns(globals()[f"single_{module}_s3"], f"single_{module}_s3"),
-                rename_columns(globals()[f"double_{module}_s13"][['Charge1', 'Charge2']], f"double_{module}_s13")
+            real_multiplicities[f"real_single_{plane}_s3"] = pd.concat([
+                rename_columns(globals()[f"single_{plane}_s3"], f"single_{plane}_s3"),
+                rename_columns(globals()[f"double_{plane}_s13"][['Charge1', 'Charge2']], f"double_{plane}_s13")
             ], axis=1)
 
-            real_multiplicities[f"real_single_{module}_s4"] = pd.concat([
-                rename_columns(globals()[f"single_{module}_s4"], f"single_{module}_s4"),
-                rename_columns(globals()[f"double_{module}_s24"][['Charge1', 'Charge2']], f"double_{module}_s24"),
-                rename_columns(globals()[f"double_{module}_s14"][['Charge1', 'Charge2']], f"double_{module}_s14"),
-                rename_columns(globals()[f"triple_{module}_s124"][['Charge3']], f"triple_{module}_s124")
+            real_multiplicities[f"real_single_{plane}_s4"] = pd.concat([
+                rename_columns(globals()[f"single_{plane}_s4"], f"single_{plane}_s4"),
+                rename_columns(globals()[f"double_{plane}_s24"][['Charge1', 'Charge2']], f"double_{plane}_s24"),
+                rename_columns(globals()[f"double_{plane}_s14"][['Charge1', 'Charge2']], f"double_{plane}_s14"),
+                rename_columns(globals()[f"triple_{plane}_s124"][['Charge3']], f"triple_{plane}_s124")
             ], axis=1)
 
             # Doubles adjacent
-            real_multiplicities[f"real_double_{module}_s12"] = pd.concat([
-                rename_columns(globals()[f"double_{module}_s12"], f"double_{module}_s12"),
-                rename_columns(globals()[f"triple_{module}_s124"][['Charge1', 'Charge2']], f"triple_{module}_s124")
+            real_multiplicities[f"real_double_{plane}_s12"] = pd.concat([
+                rename_columns(globals()[f"double_{plane}_s12"], f"double_{plane}_s12"),
+                rename_columns(globals()[f"triple_{plane}_s124"][['Charge1', 'Charge2']], f"triple_{plane}_s124")
             ], axis=1)
 
-            real_multiplicities[f"real_double_{module}_s23"] = rename_columns(globals()[f"double_{module}_s23"], f"double_{module}_s23")
+            real_multiplicities[f"real_double_{plane}_s23"] = rename_columns(globals()[f"double_{plane}_s23"], f"double_{plane}_s23")
 
-            real_multiplicities[f"real_double_{module}_s34"] = pd.concat([
-                rename_columns(globals()[f"double_{module}_s34"], f"double_{module}_s34"),
-                rename_columns(globals()[f"triple_{module}_s134"][['Charge2', 'Charge3']], f"triple_{module}_s134")
+            real_multiplicities[f"real_double_{plane}_s34"] = pd.concat([
+                rename_columns(globals()[f"double_{plane}_s34"], f"double_{plane}_s34"),
+                rename_columns(globals()[f"triple_{plane}_s134"][['Charge2', 'Charge3']], f"triple_{plane}_s134")
             ], axis=1)
 
             # Triples adjacent
-            real_multiplicities[f"real_triple_{module}_s123"] = rename_columns(globals()[f"triple_{module}_s123"], f"triple_{module}_s123")
-            real_multiplicities[f"real_triple_{module}_s234"] = rename_columns(globals()[f"triple_{module}_s234"], f"triple_{module}_s234")
+            real_multiplicities[f"real_triple_{plane}_s123"] = rename_columns(globals()[f"triple_{plane}_s123"], f"triple_{plane}_s123")
+            real_multiplicities[f"real_triple_{plane}_s234"] = rename_columns(globals()[f"triple_{plane}_s234"], f"triple_{plane}_s234")
 
             # Quadruples
-            real_multiplicities[f"real_quadruple_{module}_s1234"] = rename_columns(globals()[f"quadruple_{module}_s1234"], f"quadruple_{module}_s1234")
+            real_multiplicities[f"real_quadruple_{plane}_s1234"] = rename_columns(globals()[f"quadruple_{plane}_s1234"], f"quadruple_{plane}_s1234")
 
         # List the keys
         if VERBOSE:
@@ -3258,15 +3258,15 @@ if side_calculations:
         cases = ["real_single", "real_double", "real_triple", "real_quadruple"]
 
         for case in cases:
-            fig_rows = len(modules)
+            fig_rows = len(planes)
             fig_cols = 0
 
-            # First, compute the max number of columns across all modules (for consistent layout)
+            # First, compute the max number of columns across all planes (for consistent layout)
             max_columns = 0
-            all_combined_dfs = []  # Store the per-module DataFrames
+            all_combined_dfs = []  # Store the per-plane DataFrames
 
-            for module in modules:
-                other_key = f"{case}_{module}"
+            for plane in planes:
+                other_key = f"{case}_{plane}"
                 matching_keys = sorted([key for key in real_multiplicities if key.startswith(f"{other_key}_")])
 
                 if not matching_keys:
@@ -3299,14 +3299,14 @@ if side_calculations:
             if max_columns == 1:
                 axs = [[ax] for ax in axs]
 
-            for a, (module, combined_df) in enumerate(zip(modules, all_combined_dfs)):
+            for a, (plane, combined_df) in enumerate(zip(planes, all_combined_dfs)):
                 if combined_df is None:
                     continue  # Skip missing data
 
                 for i, column in enumerate(combined_df.columns):
                     # axs[a][i].hist(combined_df[column], bins=70, range=(0, 1500), histtype="step", linewidth=1.5, density=False)
                     axs[a][i].hist(combined_df[column], bins=70, range=(0, 100), alpha = 0.6, linewidth=1.5, density=False)
-                    axs[a][i].set_title(f"{module} - {column}")
+                    axs[a][i].set_title(f"{plane} - {column}")
                     axs[a][i].set_xlabel("Charge")
                     axs[a][i].set_ylabel("Frequency")
                     axs[a][i].grid(True)
@@ -3327,42 +3327,42 @@ if side_calculations:
             if show_plots: plt.show()
             plt.close()
 
-        modules = ["M1", "M2", "M3", "M4"]
+        planes = ["M1", "M2", "M3", "M4"]
         sum_real_multiplicities = {}
 
-        for module in modules:
+        for plane in planes:
             # -- DOUBLES -------------------------------------------------
             # s12
-            df_12 = real_multiplicities[f"real_double_{module}_s12"]
+            df_12 = real_multiplicities[f"real_double_{plane}_s12"]
             sum_12 = df_12.sum(axis=1, numeric_only=True)  # Sum of all columns in that DataFrame
-            sum_real_multiplicities[f"sum_real_double_{module}_s12"] = pd.DataFrame({"Charge12": sum_12})
+            sum_real_multiplicities[f"sum_real_double_{plane}_s12"] = pd.DataFrame({"Charge12": sum_12})
 
             # s23
-            df_23 = real_multiplicities[f"real_double_{module}_s23"]
+            df_23 = real_multiplicities[f"real_double_{plane}_s23"]
             sum_23 = df_23.sum(axis=1, numeric_only=True)
-            sum_real_multiplicities[f"sum_real_double_{module}_s23"] = pd.DataFrame({"Charge23": sum_23})
+            sum_real_multiplicities[f"sum_real_double_{plane}_s23"] = pd.DataFrame({"Charge23": sum_23})
 
             # s34
-            df_34 = real_multiplicities[f"real_double_{module}_s34"]
+            df_34 = real_multiplicities[f"real_double_{plane}_s34"]
             sum_34 = df_34.sum(axis=1, numeric_only=True)
-            sum_real_multiplicities[f"sum_real_double_{module}_s34"] = pd.DataFrame({"Charge34": sum_34})
+            sum_real_multiplicities[f"sum_real_double_{plane}_s34"] = pd.DataFrame({"Charge34": sum_34})
 
             # -- TRIPLES -------------------------------------------------
             # s123
-            df_123 = real_multiplicities[f"real_triple_{module}_s123"]
+            df_123 = real_multiplicities[f"real_triple_{plane}_s123"]
             sum_123 = df_123.sum(axis=1, numeric_only=True)
-            sum_real_multiplicities[f"sum_real_triple_{module}_s123"] = pd.DataFrame({"Charge123": sum_123})
+            sum_real_multiplicities[f"sum_real_triple_{plane}_s123"] = pd.DataFrame({"Charge123": sum_123})
 
             # s234
-            df_234 = real_multiplicities[f"real_triple_{module}_s234"]
+            df_234 = real_multiplicities[f"real_triple_{plane}_s234"]
             sum_234 = df_234.sum(axis=1, numeric_only=True)
-            sum_real_multiplicities[f"sum_real_triple_{module}_s234"] = pd.DataFrame({"Charge234": sum_234})
+            sum_real_multiplicities[f"sum_real_triple_{plane}_s234"] = pd.DataFrame({"Charge234": sum_234})
 
             # -- QUADRUPLES ----------------------------------------------
             # s1234
-            df_1234 = real_multiplicities[f"real_quadruple_{module}_s1234"]
+            df_1234 = real_multiplicities[f"real_quadruple_{plane}_s1234"]
             sum_1234 = df_1234.sum(axis=1, numeric_only=True)
-            sum_real_multiplicities[f"sum_real_quadruple_{module}_s1234"] = pd.DataFrame({"Charge1234": sum_1234})
+            sum_real_multiplicities[f"sum_real_quadruple_{plane}_s1234"] = pd.DataFrame({"Charge1234": sum_1234})
 
         sum_real_multiplicities.update({
             k: df for k, df in real_multiplicities.items() if "real_single" in k
@@ -3384,18 +3384,18 @@ if side_calculations:
             combined_multiplicities[new_key] = df
 
         cases = ["real_single", "real_double", "real_triple", "real_quadruple"]
-        modules = ["M1", "M2", "M3", "M4"]
+        planes = ["M1", "M2", "M3", "M4"]
 
         for case in cases:
-            fig_rows = len(modules)
+            fig_rows = len(planes)
             max_columns = 0
             all_combined_dfs = []
 
-            # 1) Identify & combine all DataFrames for each module
-            for module in modules:
+            # 1) Identify & combine all DataFrames for each plane
+            for plane in planes:
                 # We'll look for dictionary keys that start like "real_single_M1_...", etc.
                 # Example: "real_double_M1_s12"
-                prefix = f"{case}_{module}"
+                prefix = f"{case}_{plane}"
                 matching_keys = sorted(k for k in combined_multiplicities if k.startswith(prefix))
 
                 if not matching_keys:
@@ -3403,7 +3403,7 @@ if side_calculations:
                     all_combined_dfs.append(None)
                     continue
 
-                # Concatenate all DataFrames for this module into one big DF (columns side by side)
+                # Concatenate all DataFrames for this plane into one big DF (columns side by side)
                 # combined_df = pd.concat([combined_multiplicities[k] for k in matching_keys], axis=1)
                 seen_columns = set()
                 dfs_unique = []
@@ -3432,16 +3432,16 @@ if side_calculations:
             if max_columns == 1:
                 axs = [[ax] for ax in axs]  # similarly wrap columns
 
-            # 3) Plot each row (module) and column (strips or partial sums)
-            for row_idx, (module, combined_df) in enumerate(zip(modules, all_combined_dfs)):
+            # 3) Plot each row (plane) and column (strips or partial sums)
+            for row_idx, (plane, combined_df) in enumerate(zip(planes, all_combined_dfs)):
                 if combined_df is None:
-                    # No data for this module
+                    # No data for this plane
                     continue
 
                 for col_idx, column_name in enumerate(combined_df.columns):
                     # axs[row_idx][col_idx].hist( combined_df[column_name], bins=70, range=(0, 2000), histtype="step", linewidth=1.5, density=False )
                     axs[row_idx][col_idx].hist( combined_df[column_name], bins=70, range=(0, 100), alpha = 0.6, linewidth=1.5, density=False )
-                    axs[row_idx][col_idx].set_title(f"{module} - {column_name}")
+                    axs[row_idx][col_idx].set_title(f"{plane} - {column_name}")
                     axs[row_idx][col_idx].set_xlabel("Charge")
                     axs[row_idx][col_idx].set_ylabel("Frequency")
                     axs[row_idx][col_idx].grid(True)
@@ -3542,7 +3542,7 @@ if side_calculations:
         plt.close()
 
 
-        # Create a vector of minimum and other of maximum charge for double adjacent detections, for each module
+        # Create a vector of minimum and other of maximum charge for double adjacent detections, for each plane
         # Dictionaries to store min and max charge values for double-adjacent detections
         double_adjacent_P1_min, double_adjacent_P1_max = [], []
         double_adjacent_P2_min, double_adjacent_P2_max = [], []
@@ -3554,9 +3554,9 @@ if side_calculations:
         double_non_adjacent_P3_min, double_non_adjacent_P3_max = [], []
         double_non_adjacent_P4_min, double_non_adjacent_P4_max = [], []
 
-        # Loop over modules
+        # Loop over planes
         for i in range(1, 5):
-            charge_matrix = np.zeros((len(merged_df), 4))  # Stores strip-wise charges for this module
+            charge_matrix = np.zeros((len(merged_df), 4))  # Stores strip-wise charges for this plane
 
             for j in range(1, 5):  # Loop over strips
                     col_name = f"Q_P{i}s{j}"  # Column name
@@ -3630,9 +3630,9 @@ if side_calculations:
         triple_non_adjacent_P3_min, triple_non_adjacent_P3_mid, triple_non_adjacent_P3_max = [], [], []
         triple_non_adjacent_P4_min, triple_non_adjacent_P4_mid, triple_non_adjacent_P4_max = [], [], []
 
-        # Loop over modules
+        # Loop over planes
         for i in range(1, 5):
-            charge_matrix = np.zeros((len(merged_df), 4))  # Stores strip-wise charges for this module
+            charge_matrix = np.zeros((len(merged_df), 4))  # Stores strip-wise charges for this plane
 
             for j in range(1, 5):  # Loop over strips
                 col_name = f"Q_P{i}s{j}"  # Column name
@@ -3701,7 +3701,7 @@ if side_calculations:
 
         # ---------------------------------------------------------------------------------------------------------------------------------
 
-        # Create vectors of charge for single detection, double adjacent detections, triple adjacent detections and quadruple detections for each module
+        # Create vectors of charge for single detection, double adjacent detections, triple adjacent detections and quadruple detections for each plane
         
         # Dictionaries to store charge values for single and quadruple detections
         single_sample_M1, single_sample_M2, single_sample_M3, single_sample_M4 = [], [], [], []
@@ -3710,9 +3710,9 @@ if side_calculations:
         # print(merged_sample_df["processed_tt"])
         merged_sample_df = merged_sample_df[ merged_sample_df["processed_tt"] == 1234 ]
         
-        # Loop over modules
+        # Loop over planes
         for i in range(1, 5):
-            charge_matrix = np.zeros((len(merged_sample_df), 4))  # Stores strip-wise charges for this module
+            charge_matrix = np.zeros((len(merged_sample_df), 4))  # Stores strip-wise charges for this plane
 
             for j in range(1, 5):  # Loop over strips
                 col_name = f"Q_P{i}s{j}"  # Column name
@@ -3757,9 +3757,9 @@ if side_calculations:
         single_M1, single_M2, single_M3, single_M4 = [], [], [], []
         quadruple_M1, quadruple_M2, quadruple_M3, quadruple_M4 = [], [], [], []
 
-        # Loop over modules
+        # Loop over planes
         for i in range(1, 5):
-            charge_matrix = np.zeros((len(merged_df), 4))  # Stores strip-wise charges for this module
+            charge_matrix = np.zeros((len(merged_df), 4))  # Stores strip-wise charges for this plane
 
             for j in range(1, 5):  # Loop over strips
                 col_name = f"Q_P{i}s{j}"  # Column name
@@ -3842,8 +3842,8 @@ if side_calculations:
 
         # PLOT 4. AMOUNT OF STRIPS TRIGGERED --------------------------------------------------------------------------------------------
 
-        # Now count the number of single, double, triple and quadruple detections for each module and histogram it
-        # Create vectors of counts for single, double adjacent, triple adjacent, and quadruple detections for each module
+        # Now count the number of single, double, triple and quadruple detections for each plane and histogram it
+        # Create vectors of counts for single, double adjacent, triple adjacent, and quadruple detections for each plane
 
         df_single_M1_sum = df_single_M1_sum[ df_single_M1_sum > 0 ]
         df_single_M2_sum = df_single_M2_sum[ df_single_M2_sum > 0 ]
@@ -3865,7 +3865,7 @@ if side_calculations:
         df_quadruple_M3_sum = df_quadruple_M3_sum[ df_quadruple_M3_sum > 0 ]
         df_quadruple_M4_sum = df_quadruple_M4_sum[ df_quadruple_M4_sum > 0 ]
 
-        # Compute total counts for normalization per module
+        # Compute total counts for normalization per plane
         total_counts = [
             len(df_single_M1_sum) + len(df_double_adj_M1_sum) + len(df_triple_adj_M1_sum) + len(df_quadruple_M1_sum),
             len(df_single_M2_sum) + len(df_double_adj_M2_sum) + len(df_triple_adj_M2_sum) + len(df_quadruple_M2_sum),
@@ -3873,7 +3873,7 @@ if side_calculations:
             len(df_single_M4_sum) + len(df_double_adj_M4_sum) + len(df_triple_adj_M4_sum) + len(df_quadruple_M4_sum)
         ]
 
-        # Normalize counts relative to the total counts in each module
+        # Normalize counts relative to the total counts in each plane
         single_counts = [
             len(df_single_M1_sum) / total_counts[0],
             len(df_single_M2_sum) / total_counts[1],
@@ -3907,29 +3907,29 @@ if side_calculations:
         # Define the labels for the detection types
         detection_types = ["Single", "Double\nAdjacent", "Triple\nAdjacent", "Quadruple"]
 
-        # Define colors for each module
-        module_colors = ["r", "orange", "g", "b"]  # Module 1: Red, Module 2: Green, Module 3: Blue, Module 4: Magenta
+        # Define colors for each plane
+        plane_colors = ["r", "orange", "g", "b"]  # Plane 1: Red, Plane 2: Green, Plane 3: Blue, Plane 4: Magenta
 
-        # Create a single plot for all modules
+        # Create a single plot for all planes
         fig, ax = plt.subplots(figsize=(5, 4))
 
         # Width for each bar in the grouped bar plot
         bar_width = 0.2
         x = np.arange(len(detection_types))  # X-axis positions
 
-        # Plot each module's normalized counts
+        # Plot each plane's normalized counts
         selected_alpha = 0.6
-        ax.bar(x - 1.5 * bar_width, M1, width=bar_width, color=module_colors[0], alpha=selected_alpha, label="Plane 1")
-        ax.bar(x - 0.5 * bar_width, M2, width=bar_width, color=module_colors[1], alpha=selected_alpha, label="Plane 2")
-        ax.bar(x + 0.5 * bar_width, M3, width=bar_width, color=module_colors[2], alpha=selected_alpha, label="Plane 3")
-        ax.bar(x + 1.5 * bar_width, M4, width=bar_width, color=module_colors[3], alpha=selected_alpha, label="Plane 4")
+        ax.bar(x - 1.5 * bar_width, M1, width=bar_width, color=plane_colors[0], alpha=selected_alpha, label="Plane 1")
+        ax.bar(x - 0.5 * bar_width, M2, width=bar_width, color=plane_colors[1], alpha=selected_alpha, label="Plane 2")
+        ax.bar(x + 0.5 * bar_width, M3, width=bar_width, color=plane_colors[2], alpha=selected_alpha, label="Plane 3")
+        ax.bar(x + 1.5 * bar_width, M4, width=bar_width, color=plane_colors[3], alpha=selected_alpha, label="Plane 4")
 
         # Formatting the plot
         ax.set_xticks(x)
         ax.set_xticklabels(detection_types)
         ax.set_yscale("log")
         ax.set_ylabel("Frequency")
-        # ax.set_title("Detection Type Distribution per Module (Normalized)")
+        # ax.set_title("Detection Type Distribution per Plane (Normalized)")
         ax.legend()
         ax.grid(True, alpha=0.5, zorder=0, axis = "y")
 
@@ -3943,7 +3943,7 @@ if side_calculations:
         plt.gca().yaxis.set_major_formatter(plt.FuncFormatter(custom_formatter))
 
         plt.tight_layout()
-        figure_name = f"barplot_detection_type_distribution_per_module_mingo0{station}"
+        figure_name = f"barplot_detection_type_distribution_per_plane_mingo0{station}"
         if save_plots:
             name_of_file = figure_name
             final_filename = f'{fig_idx}_{name_of_file}.png'
@@ -3960,7 +3960,7 @@ if side_calculations:
         selected_alpha = 0.7
         bin_number = 100 # 250
         right_lim = 4500
-        module_colors = ["r", "orange", "g", "b"]
+        plane_colors = ["r", "orange", "g", "b"]
         n_events = 20000
         bin_edges = np.linspace(0, right_lim, bin_number + 1)
         bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
@@ -3977,8 +3977,8 @@ if side_calculations:
         singles = [df_single_M1_sum, df_single_M2_sum, df_single_M3_sum, df_single_M4_sum]
         singles_sample = [df_single_sample_M1_sum, df_single_sample_M2_sum, df_single_sample_M3_sum, df_single_sample_M4_sum]
         
-        # Step 1: Precompute 1–number_of_particles_bound_up single sums for each module
-        hist_basis_all_modules = []  # [ [H1, H2, ..., H6] for each module ]
+        # Step 1: Precompute 1–number_of_particles_bound_up single sums for each plane
+        hist_basis_all_planes = []  # [ [H1, H2, ..., H6] for each plane ]
 
         number_of_particles_bound_up = 6
 
@@ -3988,34 +3988,34 @@ if side_calculations:
             # Apply a gaussian filter to smooth the data a little bit
             # single_data = gaussian_filter1d(single_data, sigma=1)
             
-            module_hists = []
+            plane_hists = []
             for n in range(1, number_of_particles_bound_up + 1):
                 samples = np.random.choice(single_data, size=(n_events, n), replace=True).sum(axis=1)
                 hist, _ = np.histogram(samples, bins=bin_edges, density=True)
-                module_hists.append(hist)
-            hist_basis_all_modules.append(np.stack(module_hists, axis=1))  # shape: (bins, 6)
+                plane_hists.append(hist)
+            hist_basis_all_planes.append(np.stack(plane_hists, axis=1))  # shape: (bins, 6)
 
 
         # Plotting parameters
         bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-        module_labels = ['M1', 'M2', 'M3', 'M4']
+        plane_labels = ['M1', 'M2', 'M3', 'M4']
         colors = plt.cm.viridis(np.linspace(0, 1, number_of_particles_bound_up))
 
-        # Create one subplot per module
+        # Create one subplot per plane
         fig, axs = plt.subplots(4, 1, figsize=(10, 12), sharex=True)
 
-        for idx, (module_hists, ax) in enumerate(zip(hist_basis_all_modules, axs)):
+        for idx, (plane_hists, ax) in enumerate(zip(hist_basis_all_planes, axs)):
             for n in range(number_of_particles_bound_up):
-                ax.plot(bin_centers, module_hists[:, n], label=f"n={n+1}", color=colors[n])
+                ax.plot(bin_centers, plane_hists[:, n], label=f"n={n+1}", color=colors[n])
             
-            ax.set_title(f"Module {module_labels[idx]} — Charge Distributions from 1 to {number_of_particles_bound_up} Particles")
+            ax.set_title(f"Plane {plane_labels[idx]} — Charge Distributions from 1 to {number_of_particles_bound_up} Particles")
             ax.set_ylabel("Normalized Density")
             ax.grid(True)
             ax.legend(fontsize=6, ncol=4, loc='upper right')
 
         axs[-1].set_xlabel("Summed Charge (fC)")
 
-        plt.suptitle("Generated Histograms Used in NNLS Basis (Per Module)", fontsize=14)
+        plt.suptitle("Generated Histograms Used in NNLS Basis (Per Plane)", fontsize=14)
         plt.tight_layout(rect=[0, 0, 1, 0.96])
         figure_name = f"basis_{number_of_particles_bound_up}_singles"
         if save_plots:
@@ -4036,7 +4036,7 @@ if side_calculations:
                                         columns=["P1", "P2", "P3", "P4"])
                         for dt in detection_types}
 
-        # Accumulate event-weighted contributions per module
+        # Accumulate event-weighted contributions per plane
         component_counts = {
             "P1": np.zeros(number_of_particles_bound_up),
             "P2": np.zeros(number_of_particles_bound_up),
@@ -4049,7 +4049,7 @@ if side_calculations:
             ax_hist = axes[i, 0]   # Left column: histograms and fit
             ax_scatter = axes[i, 1]  # Right column: scatter plot
 
-            for j, (df_in, color, module) in enumerate(zip(df_group, module_colors, ['P1', 'P2', 'P3', 'P4'])):
+            for j, (df_in, color, plane) in enumerate(zip(df_group, plane_colors, ['P1', 'P2', 'P3', 'P4'])):
                 # Real data histogram
                 
                 df_in = np.asarray(df_in)
@@ -4057,26 +4057,26 @@ if side_calculations:
                 
                 counts_df, _ = np.histogram(df_in, bins=bin_edges, density=False)
 
-                # Basis matrix A for this module (bins × 6)
-                A = hist_basis_all_modules[j]
+                # Basis matrix A for this plane (bins × 6)
+                A = hist_basis_all_planes[j]
 
                 # Fit: non-negative least squares
                 coeffs, _ = nnls(A, counts_df)
-                coeff_tables[detection_type].loc[:, module] = coeffs
+                coeff_tables[detection_type].loc[:, plane] = coeffs
                 model = A @ coeffs  # predicted density
                 
-                # Get total number of events for that module and detection type
+                # Get total number of events for that plane and detection type
                 n_events = len(df_in)
                 # Weighted contribution = coeff * n_events
-                component_counts[module] += coeffs * n_events
+                component_counts[plane] += coeffs * n_events
                 
                 # Plot histogram and model
-                ax_hist.plot(bin_centers, counts_df, color=color, linestyle='-', label=f'{module} data')
-                ax_hist.plot(bin_centers, model, color=color, linestyle='--', label=f'{module} fit')
+                ax_hist.plot(bin_centers, counts_df, color=color, linestyle='-', label=f'{plane} data')
+                ax_hist.plot(bin_centers, model, color=color, linestyle='--', label=f'{plane} fit')
 
                 # Coefficients text
                 coeff_text = " + ".join([f"{a:.3f}×S{idx+1}" for idx, a in enumerate(coeffs) if a > 0.001])
-                ax_hist.text(0.02, 0.95 - j * 0.08, f"{module}: {coeff_text}", transform=ax_hist.transAxes,
+                ax_hist.text(0.02, 0.95 - j * 0.08, f"{plane}: {coeff_text}", transform=ax_hist.transAxes,
                             fontsize=8, color=color, verticalalignment='top')
                 
                 # Get positive values
@@ -4094,7 +4094,7 @@ if side_calculations:
 
                 # Plot only if data exists
                 if model.size > 0 and counts_df.size > 0:
-                    ax_scatter.scatter(model, counts_df, label=module, color=color, s=1)
+                    ax_scatter.scatter(model, counts_df, label=plane, color=color, s=1)
                     ax_scatter.plot([min_val, max_val], [min_val, max_val], 'k--', linewidth=1,
                                     label='y = x' if j == 0 else None)
 
@@ -4146,8 +4146,8 @@ if side_calculations:
                 print(df_percent.to_string())  # Forces output in all environments
 
 
-        # Module colors
-        module_colors = ["r", "orange", "g", "b"]
+        # Plane colors
+        plane_colors = ["r", "orange", "g", "b"]
 
         # Create a vertical stack of plots: one per detection type
         fig, axes = plt.subplots(len(coeff_tables_normalized), 1, figsize=(8, 14), sharex=True)
@@ -4161,15 +4161,15 @@ if side_calculations:
             x = np.arange(len(df_percent.index))  # S1 to S6 = positions on x-axis
             width = 0.1
 
-            for j, module in enumerate(df_percent.columns):
-            #   ax.bar(x + j * width, df_percent[module], alpha = 0.7, width=width, label=module, color=module_colors[j])
-                ax.plot(x + j * width, df_percent[module], alpha = 0.7, label=module, color=module_colors[j])
+            for j, plane in enumerate(df_percent.columns):
+            #   ax.bar(x + j * width, df_percent[plane], alpha = 0.7, width=width, label=plane, color=plane_colors[j])
+                ax.plot(x + j * width, df_percent[plane], alpha = 0.7, label=plane, color=plane_colors[j])
 
             ax.set_title(f"{detection_type} - Coefficient Breakdown")
             ax.set_ylabel("Percentage (%)")
             ax.set_xticks(x + width * 1.5)
             ax.set_xticklabels(df_percent.index)
-            ax.legend(title="Module", fontsize=8)
+            ax.legend(title="Plane", fontsize=8)
             ax.set_ylim(0, 100)
             ax.grid(True, alpha=0.4)
 
@@ -4187,27 +4187,27 @@ if side_calculations:
         if show_plots: plt.show()
         plt.close()
 
-        # Now, multiply each coefficient by the total number of events in the module and the type
-        # then sum them all up asnd obtain for each module a coeff. vs total number plot
+        # Now, multiply each coefficient by the total number of events in the plane and the type
+        # then sum them all up asnd obtain for each plane a coeff. vs total number plot
 
         components = [f"S{i}" for i in range(1, number_of_particles_bound_up + 1)]
         x = np.arange(len(components))
         width = 0.1
-        module_colors = ["r", "orange", "g", "b"]
+        plane_colors = ["r", "orange", "g", "b"]
 
         fig, ax = plt.subplots(figsize=(8, 5))
 
-        for j, module in enumerate(component_counts.keys()):
-        #     ax.bar(x + j * width, component_counts[module] / np.sum( component_counts[module] ), width=width,
-        #            label=module, color=module_colors[j], alpha = 0.7)
-            ax.plot(x + j * width, component_counts[module] / np.sum( component_counts[module] ),
-                label=module, color=module_colors[j])
+        for j, plane in enumerate(component_counts.keys()):
+        #     ax.bar(x + j * width, component_counts[plane] / np.sum( component_counts[plane] ), width=width,
+        #            label=plane, color=plane_colors[j], alpha = 0.7)
+            ax.plot(x + j * width, component_counts[plane] / np.sum( component_counts[plane] ),
+                label=plane, color=plane_colors[j])
 
         ax.set_xticks(x + width * 1.5)
         ax.set_xticklabels(components)
         ax.set_ylabel("Total Events (Weighted by Coefficients)")
-        ax.set_title("Total Event Contributions from Sums of 1–6 Singles per Module")
-        ax.legend(title="Module")
+        ax.set_title("Total Event Contributions from Sums of 1–6 Singles per Plane")
+        ax.legend(title="Plane")
         ax.grid(True, alpha=0.4)
         ax.set_yscale("log")
         ax.set_ylim(1e-5, 1.5)
@@ -4260,7 +4260,7 @@ if side_calculations:
         df_quadruple_M3_sum = df_quadruple_M3_sum[ df_quadruple_M3_sum > 0 ]
         df_quadruple_M4_sum = df_quadruple_M4_sum[ df_quadruple_M4_sum > 0 ]
 
-        # Compute total counts for normalization per module
+        # Compute total counts for normalization per plane
         total_counts = [
             len(df_single_M1_sum) + len(df_double_adj_M1_sum) + len(df_triple_adj_M1_sum) + len(df_quadruple_M1_sum),
             len(df_single_M2_sum) + len(df_double_adj_M2_sum) + len(df_triple_adj_M2_sum) + len(df_quadruple_M2_sum),
@@ -4268,7 +4268,7 @@ if side_calculations:
             len(df_single_M4_sum) + len(df_double_adj_M4_sum) + len(df_triple_adj_M4_sum) + len(df_quadruple_M4_sum)
         ]
 
-        # Normalize counts relative to the total counts in each module
+        # Normalize counts relative to the total counts in each plane
         single_counts = [
             len(df_single_M1_sum) / total_counts[0],
             len(df_single_M2_sum) / total_counts[1],
@@ -4390,9 +4390,9 @@ if side_calculations:
         # Initialize dictionaries to store charge distributions
         singles = {f'single_P{i}_s{j}': [] for i in range(1, 5) for j in range(1, 5)}
 
-        # Loop over modules
+        # Loop over planes
         for i in range(1, 5):
-            charge_matrix = np.zeros((len(merged_df), 4))  # Stores strip-wise charges for this module
+            charge_matrix = np.zeros((len(merged_df), 4))  # Stores strip-wise charges for this plane
 
             for j in range(1, 5):  # Loop over strips
                 col_name = f"Q_P{i}s{j}"  # Column name
@@ -4446,9 +4446,9 @@ if side_calculations:
         # Initialize dictionaries to store charge distributions
         singles = {f'single_P{i}_s{j}': [] for i in range(1, 5) for j in range(1, 5)}
 
-        # Loop over modules
+        # Loop over planes
         for i in range(1, 5):
-            charge_matrix = np.zeros((len(merged_df), 4))  # Stores strip-wise charges for this module
+            charge_matrix = np.zeros((len(merged_df), 4))  # Stores strip-wise charges for this plane
 
             for j in range(1, 5):  # Loop over strips
                 col_name = f"Q_P{i}s{j}_with_crstlk"  # Column name
@@ -4651,7 +4651,7 @@ if side_calculations:
             rms = np.sqrt( abs( weighted_squared.sum(axis=1) / df[f"cluster_charge_{i}"].replace(0, np.nan) ) )
             df[f"cluster_rms_{i}"] = rms
 
-        # Aggregate over all modules (i = 1 to 4)
+        # Aggregate over all planes (i = 1 to 4)
         cluster_size_cols = [f"cluster_size_{i}" for i in range(1, 5)]
         cluster_charge_cols = [f"cluster_charge_{i}" for i in range(1, 5)]
         cluster_rms_cols = [f"cluster_rms_{i}" for i in range(1, 5)]
@@ -4660,7 +4660,7 @@ if side_calculations:
         # Mean cluster size
         df["mean_cluster_size"] = df[cluster_size_cols].mean(axis=1)
 
-        # Mean cluster size weighted by module charge
+        # Mean cluster size weighted by plane charge
         charge_sum = df[cluster_charge_cols].sum(axis=1).replace(0, np.nan)
         weighted_cluster_size = (df[cluster_size_cols].values * df[cluster_charge_cols].values).sum(axis=1)
         df["mean_cluster_size_weighted_q"] = weighted_cluster_size / charge_sum
@@ -4671,10 +4671,10 @@ if side_calculations:
         # Maximum RMS
         df["max_cluster_rms"] = df[cluster_rms_cols].max(axis=1)
 
-        # Minimum barycenter (across modules)
+        # Minimum barycenter (across planes)
         df["min_cluster_barycenter"] = df[cluster_barycenter_cols].min(axis=1)
 
-        # Charge-weighted global barycenter across modules
+        # Charge-weighted global barycenter across planes
         numerator = np.zeros(len(df))
         for i in range(1, 5):
             q = df[f"cluster_charge_{i}"]
@@ -4688,9 +4688,9 @@ if side_calculations:
             print(df.columns)
 
         # --- Collect relevant column groups ---
-        per_module_cols = []
+        per_plane_cols = []
         for i in range(1, 5):
-            per_module_cols += [
+            per_plane_cols += [
                 f"cluster_size_{i}",
                 f"cluster_charge_{i}",
                 # f"cluster_max_q_{i}",
@@ -4713,7 +4713,7 @@ if side_calculations:
         ]
 
 
-        all_metrics = per_module_cols
+        all_metrics = per_plane_cols
         all_metrics = sorted(all_metrics)
 
         ncols = 4
@@ -4739,7 +4739,7 @@ if side_calculations:
         plt.tight_layout()
         plt.suptitle("Histograms of Cluster and Event Metrics", fontsize=16, y=1.02)
         if save_plots:
-            name_of_file = 'charge_statistics_per_module'
+            name_of_file = 'charge_statistics_per_plane'
             final_filename = f'{fig_idx}_{name_of_file}.png'
             fig_idx += 1
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
@@ -4971,7 +4971,7 @@ if side_calculations:
                     plt.xticks(x_vals, labels, rotation=90)
                     k += 1
 
-        plt.xlabel("Binary Topology (active modules)")
+        plt.xlabel("Binary Topology (active planes)")
         plt.ylabel("Relative Frequency")
         plt.title("Overlaid Binary Topology Histograms for Charge Windows")
         plt.xticks(rotation=90)
@@ -5752,7 +5752,7 @@ if side_calculations:
         }
 
         # df_polya_fit must contain a column named "plane" holding P1…P4
-        for plane, grp in df_polya_fit.groupby("module"):
+        for plane, grp in df_polya_fit.groupby("plane"):
             assert len(grp) == 1, f"multiple rows for {plane}"
             row = grp.iloc[0]
             for col, key_suffix in required.items():

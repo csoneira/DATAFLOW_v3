@@ -181,6 +181,7 @@ TASK2_PLOT_ALIASES: tuple[str, ...] = (
     "debug_suite",
     "usual_suite",
     "essential_suite",
+    "acquisition_rate_vs_time_by_task_tt_with_histograms",
     "strip_activation_matrix_before_after",
     "streamer_contagion_matrix_strip",
     "cumulative_distribution_q_ch_before_calibration",
@@ -219,10 +220,6 @@ TASK2_PLOT_ALIASES: tuple[str, ...] = (
     "slewing_3d_fitproj",
     "model_validation_simple",
     "positions_travel_time_tzeros",
-    "cross_talk_filtering_zoom",
-    "cross_talk_filtering_zoom_check_no_subs_pedestal",
-    "cross_talk_filtering_zoom_check",
-    "cross_talk_filtering_zoom_check_by_tt",
     "r2_scores",
     "time_calibrated_filtered_removed_zeroes",
     "tsum_pair_charge_correlations",
@@ -426,7 +423,7 @@ def should_drop_calibration_metadata_field(column_name: str) -> bool:
       - filename_base
       - execution_timestamp
       - param_hash
-      - P*_s*_{Q_B,Q_F,Q_FB_coeffs(__N),Q_TDIF_coeffs(__N),Q_sum,T_sum,T_dif,T_slew_*,crstlk_*}
+      - P*_s*_{Q_B,Q_F,Q_FB_coeffs(__N),Q_TDIF_coeffs(__N),Q_sum,T_sum,T_dif,T_slew_*}
     """
     if column_name in ("filename_base", "execution_timestamp", "param_hash"):
         return False
@@ -1577,6 +1574,7 @@ def apply_task2_unified_strip_combination_filter(
                 strip_key: 0 for strip_key in TASK2_STRIP_KEYS
             },
             "selected_offender_count_by_row": pd.Series(0, index=df_input.index, dtype=int),
+            "resolution_exact_by_row": pd.Series(True, index=df_input.index, dtype=bool),
             "relation_stats": relation_stats,
         }
 
@@ -1622,6 +1620,7 @@ def apply_task2_unified_strip_combination_filter(
         for strip_key in TASK2_STRIP_KEYS
     }
     selected_offender_count_by_row = np.zeros(len(df_input), dtype=int)
+    resolution_exact_by_row = np.ones(len(df_input), dtype=bool)
 
     for strip_a, strip_b, relation_type in _iter_task2_strip_relation_pairs(strip_map):
         thresholds = limits_by_relation.get(relation_type)
@@ -1893,6 +1892,13 @@ def apply_task2_unified_strip_combination_filter(
             uncovered_edges,
             _task2_strip_order_key,
         )
+        selected_strip_set = set(selected_strips)
+        unresolved_edges = [
+            (strip_a, strip_b, severity)
+            for strip_a, strip_b, severity in edge_list
+            if strip_a not in selected_strip_set and strip_b not in selected_strip_set
+        ]
+        resolution_exact_by_row[row_pos] = len(unresolved_edges) == 0
 
         summary["max_failed_pairs_in_row"] = max(
             summary["max_failed_pairs_in_row"],
@@ -1972,6 +1978,11 @@ def apply_task2_unified_strip_combination_filter(
         selected_offender_count_by_row,
         index=df_input.index,
         dtype=int,
+    )
+    summary["resolution_exact_by_row"] = pd.Series(
+        resolution_exact_by_row,
+        index=df_input.index,
+        dtype=bool,
     )
     return summary
 
@@ -7579,7 +7590,6 @@ TASK2_PLOT_PREFIX_ALIASES: tuple[tuple[str, str], ...] = (
     ("stat_window_accumulation_", "stat_window_accumulation"),
 )
 TASK2_PLOT_REGEX_ALIASES: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"^\d+_cross_talk_filtering_zoom_check$"), "cross_talk_filtering_zoom_check_by_tt"),
 )
 TASK2_SLEWING_OBSERVABLE_ALIASES: tuple[str, ...] = (
     "timing",
@@ -7631,7 +7641,7 @@ _direct_pdf_temp_path: str | None = None
 atexit.register(close_direct_pdf_writer)
 
 CALIBRATION_METADATA_PATTERN = re.compile(
-    r"^P[1-4]_s[1-4]_((?:Q_FB|Q_TDIF)_coeffs(?:__[0-9]+)?|Q_sum|Q_F|Q_B|T_sum|T_dif|T_slew_[A-Za-z0-9_]+|crstlk_[A-Za-z0-9_]+)$"
+    r"^P[1-4]_s[1-4]_((?:Q_FB|Q_TDIF)_coeffs(?:__[0-9]+)?|Q_sum|Q_F|Q_B|T_sum|T_dif|T_slew_[A-Za-z0-9_]+)$"
 )
 # Warning Filters
 warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
@@ -8283,10 +8293,6 @@ interpolate_fast_charge_Q_clip_max = config["interpolate_fast_charge_Q_clip_max"
 interpolate_fast_charge_num_bins = config["interpolate_fast_charge_num_bins"]
 interpolate_fast_charge_log_scale = config["interpolate_fast_charge_log_scale"]
 
-crosstalk_fitting = config["crosstalk_fitting"]
-crosstalk_removal_and_recalibration = bool(
-    config.get("crosstalk_removal_and_recalibration", crosstalk_fitting)
-)
 charge_share_prefilter = bool(config.get("charge_share_prefilter", True))
 calibration_dataframe_filtering = bool(
     config.get("calibration_dataframe_filtering", True)
@@ -8572,10 +8578,6 @@ slewing_residual_range = config["slewing_residual_range"]
 t_comparison_lim = config["t_comparison_lim"]
 t0_time_cal_lim = config["t0_time_cal_lim"]
 
-crosstalk_fit_mu_max = config["crosstalk_fit_mu_max"]
-crosstalk_fit_sigma_min = config["crosstalk_fit_sigma_min"]
-crosstalk_fit_sigma_max = config["crosstalk_fit_sigma_max"]
-
 slewing_correction_r2_threshold = config["slewing_correction_r2_threshold"]
 
 # -----------------------------------------------------------------------------
@@ -8740,7 +8742,7 @@ FILTER_METRIC_NAMES: tuple[str, ...] = (
     "calibrated_q_sum_rows_affected_pct",
     "front_back_q_dif_rows_affected_pct",
     "calibrated_t_sum_rows_affected_pct",
-    "post_crosstalk_q_sum_rows_affected_pct",
+    "post_charge_q_sum_rows_affected_pct",
     "strip_combination_filter_rows_affected_pct",
     "q_sum_all_zero_rows_removed_pct",
     "data_purity_percentage",
@@ -9689,7 +9691,7 @@ if calibration_work_st_df_qfb is not None:
 # Defining the directories that will store the data
 save_full_filename = f"full_list_events_{save_filename_suffix}.txt"
 save_filename = f"list_events_{save_filename_suffix}.txt"
-save_pdf_filename = f"mingo{str(station).zfill(2)}_task2_{save_filename_suffix}.pdf"
+save_pdf_filename = f"mingo{str(station).zfill(2)}_task2_{basename_no_ext}_{date_execution}.pdf"
 
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
 
@@ -13058,198 +13060,9 @@ if defer_charge_calibration_until_post_time:
 _prof["s_charge_fb_s"] = round(time.perf_counter() - _t_charge_deferred, 2)
 
 print("----------------------------------------------------------------------")
-print("--------------- Cross-talk filtering, will be set to 0 ---------------")
+print("--------------- Legacy charge cross-coupling fit disabled ------------")
 print("----------------------------------------------------------------------")
-
-crosstalk_pedestal = {
-    "crstlk_pedestal_P1s1": 0, "crstlk_pedestal_P1s2": 0, "crstlk_pedestal_P1s3": 0, "crstlk_pedestal_P1s4": 0,
-    "crstlk_pedestal_P2s1": 0, "crstlk_pedestal_P2s2": 0, "crstlk_pedestal_P2s3": 0, "crstlk_pedestal_P2s4": 0,
-    "crstlk_pedestal_P3s1": 0, "crstlk_pedestal_P3s2": 0, "crstlk_pedestal_P3s3": 0, "crstlk_pedestal_P3s4": 0,
-    "crstlk_pedestal_P4s1": 0, "crstlk_pedestal_P4s2": 0, "crstlk_pedestal_P4s3": 0, "crstlk_pedestal_P4s4": 0
-}
-
-crosstalk_limits = {
-    "crstlk_limit_P1s1": 0, "crstlk_limit_P1s2": 0, "crstlk_limit_P1s3": 0, "crstlk_limit_P1s4": 0,
-    "crstlk_limit_P2s1": 0, "crstlk_limit_P2s2": 0, "crstlk_limit_P2s3": 0, "crstlk_limit_P2s4": 0,
-    "crstlk_limit_P3s1": 0, "crstlk_limit_P3s2": 0, "crstlk_limit_P3s3": 0, "crstlk_limit_P3s4": 0,
-    "crstlk_limit_P4s1": 0, "crstlk_limit_P4s2": 0, "crstlk_limit_P4s3": 0, "crstlk_limit_P4s4": 0
-}
-
-crosstalk_mean = {
-    "crstlk_mu_P1s1": 0, "crstlk_mu_P1s2": 0, "crstlk_mu_P1s3": 0, "crstlk_mu_P1s4": 0,
-    "crstlk_mu_P2s1": 0, "crstlk_mu_P2s2": 0, "crstlk_mu_P2s3": 0, "crstlk_mu_P2s4": 0,
-    "crstlk_mu_P3s1": 0, "crstlk_mu_P3s2": 0, "crstlk_mu_P3s3": 0, "crstlk_mu_P3s4": 0,
-    "crstlk_mu_P4s1": 0, "crstlk_mu_P4s2": 0, "crstlk_mu_P4s3": 0, "crstlk_mu_P4s4": 0
-}
-
-crosstalk_std = {
-    "crstlk_sigma_P1s1": 0, "crstlk_sigma_P1s2": 0, "crstlk_sigma_P1s3": 0, "crstlk_sigma_P1s4": 0,
-    "crstlk_sigma_P2s1": 0, "crstlk_sigma_P2s2": 0, "crstlk_sigma_P2s3": 0, "crstlk_sigma_P2s4": 0,
-    "crstlk_sigma_P3s1": 0, "crstlk_sigma_P3s2": 0, "crstlk_sigma_P3s3": 0, "crstlk_sigma_P3s4": 0,
-    "crstlk_sigma_P4s1": 0, "crstlk_sigma_P4s2": 0, "crstlk_sigma_P4s3": 0, "crstlk_sigma_P4s4": 0
-}
-
-crosstalk_ampl = {
-    "crstlk_ampl_P1s1": 0, "crstlk_ampl_P1s2": 0, "crstlk_ampl_P1s3": 0, "crstlk_ampl_P1s4": 0,
-    "crstlk_ampl_P2s1": 0, "crstlk_ampl_P2s2": 0, "crstlk_ampl_P2s3": 0, "crstlk_ampl_P2s4": 0,
-    "crstlk_ampl_P3s1": 0, "crstlk_ampl_P3s2": 0, "crstlk_ampl_P3s3": 0, "crstlk_ampl_P3s4": 0,
-    "crstlk_ampl_P4s1": 0, "crstlk_ampl_P4s2": 0, "crstlk_ampl_P4s3": 0, "crstlk_ampl_P4s4": 0
-}
-
-crosstalk_linear = {
-    "crstlk_mx_b_P1s1": [0, 0], "crstlk_mx_b_P1s2": [0, 0], "crstlk_mx_b_P1s3": [0, 0], "crstlk_mx_b_P1s4": [0, 0],
-    "crstlk_mx_b_P2s1": [0, 0], "crstlk_mx_b_P2s2": [0, 0], "crstlk_mx_b_P2s3": [0, 0], "crstlk_mx_b_P2s4": [0, 0],
-    "crstlk_mx_b_P3s1": [0, 0], "crstlk_mx_b_P3s2": [0, 0], "crstlk_mx_b_P3s3": [0, 0], "crstlk_mx_b_P3s4": [0, 0],
-    "crstlk_mx_b_P4s1": [0, 0], "crstlk_mx_b_P4s2": [0, 0], "crstlk_mx_b_P4s3": [0, 0], "crstlk_mx_b_P4s4": [0, 0]
-}
-
-if crosstalk_removal_and_recalibration:
-
-    # Gaussian + linear function
-    def gaussian_linear(x, a, mu, sigma, m, b):
-        return a * np.exp(-(x - mu) ** 2 / (2 * sigma ** 2)) + m * x + b
-
-    def _fit_crosstalk_one(hist_vals, bin_centers, a_max, mu_min, mu_max, sigma_min, sigma_max):
-        """Thread-safe worker: fit gaussian+linear to one crosstalk histogram."""
-        try:
-            popt, _ = curve_fit(
-                gaussian_linear,
-                bin_centers, hist_vals,
-                p0=[max(hist_vals), 1, 0.75, 0, 0],
-                bounds=([0, mu_min, sigma_min, -np.inf, -np.inf],
-                        [a_max, mu_max, sigma_max, np.inf, np.inf])
-            )
-            a, mu, sigma, m, b = popt
-            return {'a': a, 'mu': mu, 'sigma': sigma, 'm': m, 'b': b}
-        except RuntimeError:
-            return None
-
-    # ── Phase 1: pre-extract histograms and run 16 fits in parallel ───────────
-    crosstalk_one_strip_masks = _task2_plane_one_strip_masks_from_components(calibration_work_df)
-    _ctalk_tasks = []
-    for key in ['1', '2', '3', '4']:
-        for j in range(4):
-            col  = f'Q{key}_Q_sum_{j+1}'
-            y = calibration_work_df[col]
-            one_strip_mask = _task2_prefer_one_strip_mask(
-                crosstalk_one_strip_masks.get(int(key), {}).get(j + 1, np.zeros(len(calibration_work_df), dtype=bool)),
-                label=f"P{key}s{j+1} crosstalk calibration",
-            )
-            data = y[one_strip_mask & (y != 0) & (y > pedestal_left) & (y < pedestal_right)]
-            hist_vals, bin_edges = np.histogram(data, bins=80)
-            bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-            a_max = 2 * max(hist_vals) + 1
-            _ctalk_tasks.append((key, j, hist_vals, bin_centers, a_max))
-
-    _ctalk_results = {}
-    with ThreadPoolExecutor(max_workers=4) as _ctalk_pool:
-        _ctalk_futures = {
-            _ctalk_pool.submit(
-                _fit_crosstalk_one, hv, bc, a_max,
-                pedestal_left, crosstalk_fit_mu_max,
-                crosstalk_fit_sigma_min, crosstalk_fit_sigma_max
-            ): (key, j)
-            for key, j, hv, bc, a_max in _ctalk_tasks
-        }
-        for fut in as_completed(_ctalk_futures):
-            _ckey, _j = _ctalk_futures[fut]
-            _ctalk_results[(_ckey, _j)] = fut.result()
-
-    # ── Phase 2: sequential apply results ────────────────────────────────────
-    for key, j, _, _, _ in _ctalk_tasks:
-        result = _ctalk_results.get((key, j))
-        if result is None:
-            continue
-        a, mu, sigma, m, b = result['a'], result['mu'], result['sigma'], result['m'], result['b']
-        crosstalk_ampl[f'crstlk_ampl_P{key}s{j+1}']         = a
-        crosstalk_mean[f'crstlk_mu_P{key}s{j+1}']           = mu
-        crosstalk_std[f'crstlk_sigma_P{key}s{j+1}']         = sigma
-        crosstalk_linear[f'crstlk_mx_b_P{key}s{j+1}']      = [m, b]
-        crosstalk_pedestal[f'crstlk_pedestal_P{key}s{j+1}'] = mu - 2 * sigma
-        # crosstalk_limits[f'crstlk_limit_P{key}s{j+1}'] = min([mu + 3 * sigma, 1.2])
-        crosstalk_limits[f'crstlk_limit_P{key}s{j+1}']      = mu + 3 * sigma
-    
-    
-    print("\nCrosstalk limit after fitting a gaussian to the peak:")
-    print(_format_dict_for_print(crosstalk_limits))
-    print("\nCrosstalk pedestal after fitting a gaussian to the peak:")
-    print(_format_dict_for_print(crosstalk_pedestal))
-    
-    
-    if create_super_essential_plots:
-        fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
-        axes_Q = axes_Q.flatten()
-
-        for i, key in enumerate(['1', '2', '3', '4']):
-            for j in range(4):
-                col = f'Q{key}_Q_sum_{j+1}'
-                y = calibration_work_df[col]
-                
-                Q_plot_min = 0.8 * Q_clip_min
-                Q_plot_max = 1.4 * Q_clip_max
-                
-                data = y[(y != 0) & (y > Q_plot_min) & (y < Q_plot_max)]
-                
-                hist_vals, bin_edges = np.histogram(data, bins=num_bins)
-                bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-
-                axes_Q[i*4 + j].axvline(crosstalk_pedestal[f'crstlk_pedestal_P{key}s{j+1}'], color='blue', linestyle='--', alpha=0.5)
-                axes_Q[i*4 + j].axvline(crosstalk_limits[f'crstlk_limit_P{key}s{j+1}'], color='blue', linestyle='--', alpha=0.5)
-                
-                a = crosstalk_ampl[f'crstlk_ampl_P{key}s{j+1}']
-                mu = crosstalk_mean[f'crstlk_mu_P{key}s{j+1}']
-                sigma = crosstalk_std[f'crstlk_sigma_P{key}s{j+1}']
-                m, b = crosstalk_linear[f'crstlk_mx_b_P{key}s{j+1}']
-                
-                popt = a, mu, sigma, m, b
-                
-                x_fit = np.linspace(Q_plot_min, Q_plot_max, 500)
-                y_fit = gaussian_linear(x_fit, *popt)
-                axes_Q[i*4 + j].plot(x_fit, y_fit, 'r--', label='Gauss + Linear Fit')
-                
-                axes_Q[i*4 + j].hist(data, bins=num_bins, alpha=0.5, label=f'{col}')
-                axes_Q[i*4 + j].set_title(f'{col}')
-                axes_Q[i*4 + j].legend()
-                axes_Q[i*4 + j].set_xlim([Q_plot_min, Q_plot_max])
-                axes_Q[i*4 + j].set_ylim([0, None])
-                axes_Q[i*4 + j].axvline(0, color='green', linestyle='--', alpha=0.5)
-                
-        # Display a vertical green dashed, alpha = 0.5 line at 0
-        for ax in axes_Q:
-            ax.axvline(0, color='green', linestyle='--', alpha=0.5)
-
-        plt.tight_layout()
-        plt.subplots_adjust(top=0.9)
-        plt.suptitle(f"Cross-talk study for filtering (zoom), mingo0{station}\n{start_time}", fontsize=16)
-        if save_plots:
-            final_filename = f'{fig_idx}_cross_talk_filtering_zoom.png'
-            fig_idx += 1
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            save_plot_figure(save_fig_path, format='png')
-        if show_plots: plt.show()
-        plt.close(fig_Q)
-    
-    # sys.exit("DEBUG EXIT after crosstalk fitting")
-
-    print("----------------------------------------------------------------------")
-    print("------------------- Crosstalk pedestal recalibration -----------------")
-    print("----------------------------------------------------------------------")
-
-    for i, key in enumerate(['1', '2', '3', '4']):
-        for j in range(4):
-            column_name = f'Q{key}_Q_sum_{j+1}'
-            mask = calibration_work_df[column_name] != 0
-            calibration_work_df.loc[mask, column_name] -= crosstalk_pedestal[f'crstlk_pedestal_P{key}s{j+1}']
-    
-    
-    if calibration_work_st_df is not None:
-        for i, key in enumerate(['1', '2', '3', '4']):
-            for j in range(4):
-                mask = calibration_work_st_df[f'Q{key}_Q_sum_{j+1}'] != 0
-                calibration_work_st_df.loc[mask, f'Q{key}_Q_sum_{j+1}'] -= crosstalk_pedestal[f'crstlk_pedestal_P{key}s{j+1}']
-else:
-    print("Skipping crosstalk calibration and recalibration (config disabled).")
+print("Task 2 now leaves Q_sum after front/back charge calibration unchanged.")
 
 if calibration_dataframe_filtering:
     filter_strip_family_inplace(
@@ -13267,13 +13080,13 @@ if calibration_dataframe_filtering:
         )
 
     run_strip_zeroing_stage(
-        "post_crosstalk_q_sum",
+        "post_charge_q_sum",
         calibration_work_df,
     )
     if calibration_work_st_df is not None:
         zero_strip_component_blocks(calibration_work_st_df, self_trigger_mode=True)
 else:
-    print("Skipping calibration-sample post-crosstalk Q_sum filtering and strip zeroing (config disabled).")
+    print("Skipping calibration-sample post-charge Q_sum filtering and strip zeroing (config disabled).")
 
 _need_pre_tsum_offset_pair_residuals = (
     calculate_T_sum_calibration
@@ -13646,14 +13459,6 @@ if apply_Q_TDIF_calibration:
                 corrected_values = np.asarray(corrected_values, dtype=target_dtype)
             working_df.loc[:, qdif_col] = corrected_values
 
-if crosstalk_removal_and_recalibration:
-    for i, key in enumerate(['1', '2', '3', '4']):
-        for j in range(4):
-            column_name = f'Q{key}_Q_sum_{j+1}'
-            mask = working_df[column_name] != 0
-            snapshot_column_if_changed(working_df, column_name, mask)
-            working_df.loc[mask, column_name] -= crosstalk_pedestal[f'crstlk_pedestal_P{key}s{j+1}']
-
 if apply_slewing_correction_from_pair_fit:
     print(
         f"Applying slewing correction to working_df after deferred charge "
@@ -13718,7 +13523,7 @@ elif fb_columns:
         "Task 2 keep_all_columns_output enabled: "
         f"retaining {len(fb_columns)} legacy _F_/_B_ columns."
     )
-_prof["s_crosstalk_s"] = round(time.perf_counter() - _t_sec, 2)
+_prof["s_post_charge_qsum_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
 
 print("----------------------------------------------------------------------")
@@ -14002,6 +13807,12 @@ working_df.loc[:, "task2_problematic_strip_count"] = (
     .astype(int)
     .to_numpy()
 )
+working_df.loc[:, "task2_problematic_strip_resolution_exact"] = (
+    strip_combination_summary["resolution_exact_by_row"]
+    .reindex(working_df.index, fill_value=True)
+    .astype(bool)
+    .to_numpy()
+)
 global_variables["strip_combination_filter_flagged_rows"] = int(
     strip_combination_summary["flagged_rows"]
 )
@@ -14059,6 +13870,18 @@ total_problematic_offender_count = (
 
 working_df.loc[:, "task1_problematic_channel_count"] = task1_problematic_channel_count.to_numpy()
 working_df.loc[:, "task2_problematic_strip_count"] = task2_problematic_strip_count_series.to_numpy()
+if "task1_problematic_channel_resolution_exact" in working_df.columns:
+    working_df.loc[:, "task1_problematic_channel_resolution_exact"] = (
+        working_df["task1_problematic_channel_resolution_exact"]
+        .astype(bool)
+        .to_numpy()
+    )
+if "task2_problematic_strip_resolution_exact" in working_df.columns:
+    working_df.loc[:, "task2_problematic_strip_resolution_exact"] = (
+        working_df["task2_problematic_strip_resolution_exact"]
+        .astype(bool)
+        .to_numpy()
+    )
 working_df.loc[:, "total_problematic_offender_count"] = (
     total_problematic_offender_count.to_numpy()
 )
@@ -14198,34 +14021,28 @@ analysis_date = datetime.now().strftime("%Y-%m-%d")
 print(f"Analysis date and time: {analysis_date}")
 
 # Include pedestal and calibration parameters
-for i, module in enumerate(['P1', 'P2', 'P3', 'P4']):
+for i, plane in enumerate(['P1', 'P2', 'P3', 'P4']):
     for j in range(4):
         strip = j + 1
         
-        global_variables[f'{module}_s{strip}_crstlk_pedestal'] = crosstalk_pedestal[f'crstlk_pedestal_{module}s{strip}']
-        global_variables[f'{module}_s{strip}_crstlk_limit'] = crosstalk_limits[f'crstlk_limit_{module}s{strip}']
-        
         if apply_charge_side:
-            if crosstalk_fitting and crosstalk_removal_and_recalibration:
-                q_sum = (QF_pedestal[i][j] + QB_pedestal[i][j]) / 2 - crosstalk_pedestal[f'crstlk_pedestal_{module}s{strip}']
-            else:
-                q_sum = (QF_pedestal[i][j] + QB_pedestal[i][j]) / 2
+            q_sum = (QF_pedestal[i][j] + QB_pedestal[i][j]) / 2
         else:
             q_sum = None
 
         # Only record values computed in this run (make mode).
         # null and file modes leave the calibration metadata columns empty.
-        global_variables[f'{module}_s{strip}_Q_sum'] = q_sum if calculate_charge_side else None
-        global_variables[f'{module}_s{strip}_Q_F'] = QF_pedestal[i][j] if calculate_charge_side else None
-        global_variables[f'{module}_s{strip}_Q_B'] = QB_pedestal[i][j] if calculate_charge_side else None
-        global_variables[f'{module}_s{strip}_T_sum'] = Tsum_cal[i][j] if calculate_T_sum_calibration else None
-        global_variables[f'{module}_s{strip}_T_dif'] = Tdiff_cal[i][j] if calculate_T_dif_calibration else None
-        global_variables.setdefault(f'{module}_s{strip}_T_slew_coeffs', None)
-        global_variables.setdefault(f'{module}_s{strip}_T_slew_basis_means', None)
-        global_variables.setdefault(f'{module}_s{strip}_T_slew_domain', None)
-        global_variables.setdefault(f'{module}_s{strip}_T_slew_degree', None)
-        global_variables.setdefault(f'{module}_s{strip}_T_slew_coordinate', None)
-        global_variables.setdefault(f'{module}_s{strip}_T_slew_residual_column', None)
+        global_variables[f'{plane}_s{strip}_Q_sum'] = q_sum if calculate_charge_side else None
+        global_variables[f'{plane}_s{strip}_Q_F'] = QF_pedestal[i][j] if calculate_charge_side else None
+        global_variables[f'{plane}_s{strip}_Q_B'] = QB_pedestal[i][j] if calculate_charge_side else None
+        global_variables[f'{plane}_s{strip}_T_sum'] = Tsum_cal[i][j] if calculate_T_sum_calibration else None
+        global_variables[f'{plane}_s{strip}_T_dif'] = Tdiff_cal[i][j] if calculate_T_dif_calibration else None
+        global_variables.setdefault(f'{plane}_s{strip}_T_slew_coeffs', None)
+        global_variables.setdefault(f'{plane}_s{strip}_T_slew_basis_means', None)
+        global_variables.setdefault(f'{plane}_s{strip}_T_slew_domain', None)
+        global_variables.setdefault(f'{plane}_s{strip}_T_slew_degree', None)
+        global_variables.setdefault(f'{plane}_s{strip}_T_slew_coordinate', None)
+        global_variables.setdefault(f'{plane}_s{strip}_T_slew_residual_column', None)
 
 # # Load or initialize metadata DataFrame
 # if os.path.exists(csv_path):
@@ -15361,6 +15178,32 @@ if track_removed_rows_task2:
     print(f"Removed-row tracking parquet saved to: {removed_rows_base}.parquet")
     print(f"Removed-row tracking CSV saved to: {removed_rows_base}.csv")
     print(f"Original-column snapshot parquet saved to: {original_cols_base}.parquet")
+
+# Final task-rate plot from the same dataframe population saved by Task 2.
+if save_plots and task2_plot_enabled("acquisition_rate_vs_time_by_task_tt_with_histograms"):
+    rate_fig = create_rate_vs_time_by_task_tt_with_histograms(
+        working_df,
+        tt_column="cal_tt",
+        title=f"Task 2 acquisition rate by cal_tt, {basename_no_ext}",
+        accumulation_window_seconds=config.get("acquisition_rate_accumulation_window_seconds", 60),
+        rate_histogram_bins=config.get("acquisition_rate_task_tt_histogram_bins", 80),
+        y_limit_left=config.get("acquisition_rate_task_tt_ylim_left", 0),
+        y_limit_right=config.get("acquisition_rate_task_tt_ylim_right", 4),
+    )
+    if rate_fig is not None:
+        final_filename = f"{fig_idx}_acquisition_rate_vs_time_by_task_tt_with_histograms.png"
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        save_plot_figure(
+            save_fig_path,
+            fig=rate_fig,
+            alias="acquisition_rate_vs_time_by_task_tt_with_histograms",
+            dpi=140,
+        )
+        plt.close(rate_fig)
+    else:
+        print("Task 2 acquisition-rate-by-task-tt plot skipped: no valid cal_tt/datetime rows.")
 
 # Ensure no figure handles remain open before persistence/final move.
 plt.close("all")

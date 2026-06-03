@@ -35,9 +35,9 @@ Use daily/periodic diagnostics to detect drift:
 Detailed diagnostics:
 - [Monitoring and QA](../operation/monitoring.md)
 
-![RPC module integration during maintenance](../assets/photos/minitrasgo/IMG_1692.JPG)
+![RPC plane integration during maintenance](../assets/photos/minitrasgo/IMG_1692.JPG)
 
-*Open RPC module during strip and gas-line integration checks.*
+*Open RPC plane during strip and gas-line integration checks.*
 
 ## Safety and handling notes
 

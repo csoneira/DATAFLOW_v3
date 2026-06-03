@@ -3,7 +3,7 @@
 The TRASGO (TRAck reconStructinG bOx) project develops Resistive Plate Chamber
 telescopes for cosmic-ray studies. miniTRASGO is the compact member of this
 family: a cost-effective 0.1 m² muon tracker built from four 30 × 30 cm² multigap
-RPC modules and a DAQ system adapted from the HADES experiment. It monitors
+RPC planes and a DAQ system adapted from the HADES experiment. It monitors
 secondary cosmic rays to investigate solar activity, atmospheric effects, and
 other space-weather phenomena.
 

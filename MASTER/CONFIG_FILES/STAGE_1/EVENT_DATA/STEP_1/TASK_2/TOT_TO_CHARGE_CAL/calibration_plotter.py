@@ -94,9 +94,7 @@ def render_plot(data: CalibrationData, title: str, output_path: Path) -> None:
 
     fig, ax = plt.subplots(figsize=(8, 6))
 
-    crosstalk_x = 1.0
     streamer_x = 100.0
-    crosstalk_color = "tab:purple"
     avalanche_color = "tab:green"
     streamer_color = "tab:red"
 
@@ -142,12 +140,9 @@ def render_plot(data: CalibrationData, title: str, output_path: Path) -> None:
     ax.set_ylim(y_bottom, y_top)
 
     # Threshold guide lines and shaded operating zones.
-    crosstalk_y = float(np.interp(crosstalk_x, widths, charges))
     streamer_y = float(np.interp(streamer_x, widths, charges))
 
-    crosstalk_x_plot = float(np.clip(crosstalk_x, x_axis_min, x_axis_max))
     streamer_x_plot = float(np.clip(streamer_x, x_axis_min, x_axis_max))
-    crosstalk_y_plot = float(np.clip(crosstalk_y, y_bottom, y_top))
     streamer_y_plot = float(np.clip(streamer_y, y_bottom, y_top))
 
     streamer_right_rect = Rectangle(
@@ -183,36 +178,6 @@ def render_plot(data: CalibrationData, title: str, output_path: Path) -> None:
     )
     ax.add_patch(avalanche_rect)
 
-    crosstalk_rect = Rectangle(
-        (x_axis_min, y_bottom),
-        max(crosstalk_x_plot - x_axis_min, 0.0),
-        max(crosstalk_y_plot - y_bottom, 0.0),
-        facecolor=crosstalk_color,
-        alpha=0.15,
-        edgecolor="none",
-        zorder=2,
-    )
-    ax.add_patch(crosstalk_rect)
-
-    ax.plot(
-        [x_axis_min, crosstalk_x_plot],
-        [crosstalk_y_plot, crosstalk_y_plot],
-        color=crosstalk_color,
-        linewidth=1.5,
-        linestyle="--",
-        label="Crosstalk threshold",
-        zorder=3,
-    )
-    ax.plot(
-        [crosstalk_x_plot, crosstalk_x_plot],
-        [y_bottom, crosstalk_y_plot],
-        color=crosstalk_color,
-        linewidth=1.5,
-        linestyle="--",
-        zorder=3,
-        label="_nolegend_",
-    )
-
     ax.plot(
         [x_axis_min, streamer_x_plot],
         [streamer_y_plot, streamer_y_plot],
@@ -241,12 +206,11 @@ def render_plot(data: CalibrationData, title: str, output_path: Path) -> None:
         handles, labels = [], []
     handles.extend(
         [
-            Patch(facecolor=crosstalk_color, alpha=0.15, edgecolor="none", label="Crosstalk region"),
             Patch(facecolor=avalanche_color, alpha=0.12, edgecolor="none", label="Avalanche region"),
             Patch(facecolor=streamer_color, alpha=0.08, edgecolor="none", label="Streamer region"),
         ]
     )
-    labels.extend(["Crosstalk region", "Avalanche region", "Streamer region"])
+    labels.extend(["Avalanche region", "Streamer region"])
     ax.legend(handles, labels, loc="upper left", frameon=True, framealpha=0.92)
 
     plt.tight_layout()

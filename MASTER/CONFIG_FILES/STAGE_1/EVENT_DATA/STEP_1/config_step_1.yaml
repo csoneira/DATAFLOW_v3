@@ -23,13 +23,13 @@ step_1_overrides:
   # Non-empty values override lower-level STEP_1 task configs.
   # Leave a value blank to defer to each TASK_*/config_task_*.yaml.
   # Use create_plots: null to force plots off for all tasks.
-  complete_reanalysis:
-  create_plots:
+  complete_reanalysis: true
+  create_plots: essential
   keep_all_columns_output: true
   save_removed_channel_values: false
   save_time_slewing_pair_residuals: false
-  joined_analysis_files: 1
-  joined_analysis_time_tolerance_hours: 1
+  joined_analysis_files: 5
+  joined_analysis_time_tolerance_hours: 12
   process_only_qa_retry_files: false
   prioritize_other_than_qa_files: true
 

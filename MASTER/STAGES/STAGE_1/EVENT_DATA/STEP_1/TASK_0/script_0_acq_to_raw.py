@@ -41,10 +41,16 @@ from MASTER.common.file_selection import (
     select_latest_candidate,
     sync_unprocessed_with_date_range,
 )
+from MASTER.common.input_file_config import select_input_file_configuration
 from MASTER.common.path_config import get_repo_root, resolve_home_path_from_config
 from MASTER.common.plot_utils import pdf_save_rasterized_page
 from MASTER.common.selection_config import load_selection_for_paths, station_is_selected
-from MASTER.common.status_csv import initialize_status_row, update_status_progress
+from MASTER.common.simulated_data_utils import resolve_simulated_z_positions
+from MASTER.common.status_csv import (
+    initialize_status_row,
+    rename_status_row,
+    update_status_progress,
+)
 from MASTER.common.step1_shared import (
     build_step1_cli_parser,
     build_step1_filtered_print,
@@ -139,6 +145,69 @@ def _write_task0_pdf_from_pngs(plot_paths: list[Path], pdf_path: Path, figure_di
             print(f"Error removing temporary Task 0 PNG '{png_path}': {exc}", force=True)
     if figure_directory.exists():
         shutil.rmtree(figure_directory)
+
+
+def _resolve_station_conf_value(
+    *,
+    config_root: Path,
+    station: str,
+    start_time: object,
+    end_time: object,
+) -> float | None:
+    input_file_config_path = (
+        config_root
+        / "STAGE_0"
+        / "ONLINE_RUN_DICTIONARY"
+        / f"STATION_{station}"
+        / f"input_file_mingo0{station}.csv"
+    )
+    if not input_file_config_path.exists():
+        print(f"Task 0 input configuration file does not exist: {input_file_config_path}", force=True)
+        return None
+    try:
+        input_file = pd.read_csv(input_file_config_path, skiprows=1)
+    except pd.errors.EmptyDataError:
+        print(f"Task 0 input configuration file is empty: {input_file_config_path}", force=True)
+        return None
+    if input_file.empty:
+        print(f"Task 0 input configuration file has no rows: {input_file_config_path}", force=True)
+        return None
+
+    selection_result = select_input_file_configuration(
+        input_file,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    selected_conf = selection_result.selected_conf
+    if selected_conf is None:
+        print("Task 0 found no selectable input configuration row for channel ordering.", force=True)
+        return None
+    try:
+        return float(selected_conf.get("conf"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _apply_task0_raw_channel_ordering(
+    frame: pd.DataFrame,
+    *,
+    station: str,
+    conf_value: float | None,
+) -> bool:
+    if station != "2" or conf_value is None or conf_value >= 2:
+        return False
+    print("Task 0 applying station 2 configuration<2 Plane 4 channel swap.", force=True)
+    plane4_keys = ("T4_F", "T4_B", "Q4_F", "Q4_B")
+    swapped = False
+    for key in plane4_keys:
+        col3 = f"{key}_3"
+        col4 = f"{key}_4"
+        if col3 not in frame.columns or col4 not in frame.columns:
+            print(f"Warning: Task 0 cannot swap missing Plane 4 columns: {col3}, {col4}", force=True)
+            continue
+        frame.loc[:, [col3, col4]] = frame.loc[:, [col4, col3]].to_numpy()
+        swapped = True
+    return swapped
 
 
 CLI_PARSER = build_step1_cli_parser("Run Stage 1 STEP_1 TASK_0 (ACQ->RAW).", STATION_CHOICES)
@@ -298,6 +367,22 @@ if not user_file_selection:
 
     if not candidates_by_source:
         print("No Task 0 acquisition files to process.", force=True)
+        no_file_status_basename = f"__task{task_number}_no_files_station_{station}__"
+        if status_filename_base != no_file_status_basename:
+            renamed = rename_status_row(
+                csv_path_status,
+                filename_base=status_filename_base,
+                execution_date=status_execution_date,
+                new_filename_base=no_file_status_basename,
+            )
+            if renamed:
+                status_filename_base = no_file_status_basename
+        update_status_progress(
+            csv_path_status,
+            filename_base=status_filename_base,
+            execution_date=status_execution_date,
+            completion_fraction=-1.0,
+        )
         sys.exit(0)
 
     file_name, source_path, completed_file_path = candidates_by_source[0]
@@ -318,6 +403,21 @@ if not station_matches_file(file_name, station):
     raise SystemExit(f"File '{file_name}' does not belong to station {station}.")
 
 basename_no_ext = Path(file_name).stem
+if status_filename_base != basename_no_ext:
+    renamed = rename_status_row(
+        csv_path_status,
+        filename_base=status_filename_base,
+        execution_date=status_execution_date,
+        new_filename_base=basename_no_ext,
+    )
+    if renamed:
+        status_filename_base = basename_no_ext
+    else:
+        print(
+            "Warning: unable to rename Task 0 startup status row "
+            f"from {status_filename_base} to {basename_no_ext}.",
+            force=True,
+        )
 execution_timestamp = datetime.now().strftime("%Y-%m-%d_%H.%M.%S")
 date_execution = datetime.now().strftime("%y-%m-%d_%H.%M.%S")
 rejected_file = directories["rejected"] / f"rejected_{basename_no_ext}_{date_execution}.csv"
@@ -335,10 +435,7 @@ if acquisition_rate_accumulation_window_seconds <= 0:
     acquisition_rate_accumulation_window_seconds = 60
 try:
     acquisition_rate_task_tt_histogram_bins = int(
-        config.get(
-            "acquisition_rate_task_tt_histogram_bins",
-            config.get("acquisition_rate_acq_tt_histogram_bins", 80),
-        )
+        config.get("acquisition_rate_task_tt_histogram_bins", 80)
     )
 except (TypeError, ValueError):
     acquisition_rate_task_tt_histogram_bins = 80
@@ -364,14 +461,41 @@ if read_df.empty:
     raise SystemExit("No valid acquisition rows parsed; moved file to ERROR.")
 
 left_limit_time = pd.to_datetime("1-1-2000", format="%d-%m-%Y")
-right_limit_time = pd.to_datetime("1-1-2100", format="%d-%m-%Y")
+right_limit_time = pd.to_datetime("1-1-9999", format="%d-%m-%Y")
 read_df = read_df.loc[read_df["datetime"].between(left_limit_time, right_limit_time)].copy()
 read_df = read_df.rename(columns=raw_channel_rename_map())
-read_df = compute_acq_tt(read_df)
+read_df = read_df.rename(columns={"column_6": "acquisition_type"})
+_, simulated_param_hash = resolve_simulated_z_positions(
+    basename_no_ext,
+    repo_root / "STATIONS" / f"MINGO0{station}" / "STAGE_1" / "EVENT_DATA",
+    dat_path=processing_file_path,
+)
+read_df.loc[:, "param_hash"] = str(simulated_param_hash) if simulated_param_hash else ""
 
-coincidence_mask = read_df["column_6"] == 1
-self_trigger_mask = read_df["column_6"] == 2
+coincidence_mask = read_df["acquisition_type"] == 1
+self_trigger_mask = read_df["acquisition_type"] == 2
 other_trigger_mask = ~(coincidence_mask | self_trigger_mask)
+conf_time_source = read_df.loc[coincidence_mask, "datetime"]
+if conf_time_source.dropna().empty:
+    conf_time_source = read_df["datetime"]
+conf_time_source = pd.to_datetime(conf_time_source, errors="coerce").dropna()
+task0_conf_value = None
+task0_channel_swap_applied = False
+if not conf_time_source.empty:
+    task0_conf_value = _resolve_station_conf_value(
+        config_root=config_root,
+        station=station,
+        start_time=conf_time_source.iloc[0],
+        end_time=conf_time_source.iloc[-1],
+    )
+    task0_channel_swap_applied = _apply_task0_raw_channel_ordering(
+        read_df,
+        station=station,
+        conf_value=task0_conf_value,
+    )
+else:
+    print("Task 0 channel ordering lookup skipped: no valid acquisition timestamps.", force=True)
+read_df = compute_acq_tt(read_df)
 
 saved_plot_paths: list[Path] = []
 figure_directory: Path | None = None
@@ -411,6 +535,8 @@ if save_plots and task0_plot_enabled("acquisition_rate_vs_time_by_task_tt_with_h
         tt_column="acq_tt",
         accumulation_window_seconds=acquisition_rate_accumulation_window_seconds,
         rate_histogram_bins=acquisition_rate_task_tt_histogram_bins,
+        y_limit_left=config.get("acquisition_rate_task_tt_ylim_left", 0),
+        y_limit_right=config.get("acquisition_rate_task_tt_ylim_right", 4),
     )
     if plotted:
         print(f"Task 0 acquisition-rate-by-task-tt plot saved: {plot_path}", force=True)
@@ -426,6 +552,9 @@ if create_pdf and saved_plot_paths and figure_directory is not None:
 
 coincidence_df = read_df.loc[coincidence_mask].copy()
 self_trigger_df = read_df.loc[self_trigger_mask].copy()
+coincidence_df = compute_acq_tt(coincidence_df, "raw_tt")
+if not self_trigger_df.empty:
+    self_trigger_df = compute_acq_tt(self_trigger_df, "raw_tt")
 
 raw_output_path = directories["output"] / f"raw_{basename_no_ext}.parquet"
 selftrigger_output_path = directories["output"] / f"selftrigger_raw_{basename_no_ext}.parquet"
@@ -451,6 +580,7 @@ metadata_row = {
     "execution_timestamp": execution_timestamp,
     "original_input_filename": file_name,
     "acquisition_basename": basename_no_ext,
+    "param_hash": str(simulated_param_hash) if simulated_param_hash else "",
     "coincidence_raw_output_path": str(raw_output_path),
     "selftrigger_raw_output_path": "" if self_trigger_df.empty else str(selftrigger_output_path),
     "total_parsed_rows": int(len(read_df)),
@@ -473,9 +603,13 @@ metadata_row = {
     "self_trigger_event_rate_hz": rate_hz(len(self_trigger_df), self_trigger_duration_seconds),
     "input_valid_line_rate_hz": rate_hz(int(written_lines), total_duration_seconds),
     "total_execution_time_minutes": round(float(execution_time_minutes), 4),
+    "raw_channel_order_conf": "" if task0_conf_value is None else task0_conf_value,
+    "raw_channel_swap_plane4_3_4_applied": bool(task0_channel_swap_applied),
 }
 for acq_tt_value, count in read_df["acq_tt"].value_counts(dropna=False).sort_index().items():
     metadata_row[f"acq_tt_{int(acq_tt_value)}_count"] = int(count)
+for raw_tt_value, count in coincidence_df["raw_tt"].value_counts(dropna=False).sort_index().items():
+    metadata_row[f"raw_tt_{int(raw_tt_value)}_count"] = int(count)
 save_metadata(
     csv_path,
     metadata_row,

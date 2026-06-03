@@ -21,8 +21,8 @@ from __future__ import annotations
 """
 Stage 1 Task 1 (RAW-->CLEAN) driver.
 
-The script pulls the next available STAGE_0_TO_1 acquisition, applies the full
-raw cleaning chain (baseline removal, channel checks, derived quantities, and
+The script pulls the next available Task 0 raw parquet, applies the full raw
+cleaning chain (baseline removal, channel checks, derived quantities, and
 pre-selection cuts), and persists the cleaned dataframe for downstream tasks.
 Along the way it maintains the station staging directories, generates QA plots,
 tracks execution metadata, and emits run-level summaries consumed by the rest
@@ -171,6 +171,7 @@ TASK1_PLOT_ALIASES: tuple[str, ...] = (
     "debug_suite",
     "usual_suite",
     "essential_suite",
+    "acquisition_rate_vs_time_by_task_tt_with_histograms",
     "event_total_charge_raw",
     "raw_tt_overview",
     "channel_histograms_raw",
@@ -181,7 +182,7 @@ TASK1_PLOT_ALIASES: tuple[str, ...] = (
     "channel_contamination_matrix_32",
     "channel_contagion_by_tt",
     "channel_contamination_matrix_32_raw",
-    "channel_contagion_by_tt_raw",
+    "channel_contagion_by_raw_tt",
     "channel_histograms_self_trigger",
     "tsum_spread_histograms_filtered_og",
     "tq_scatter_raw_by_tt",
@@ -2669,20 +2670,14 @@ if task_number == 1:
         and Path(str(selected_input_file)).suffix.lower() == ".parquet"
         and Path(str(selected_input_file)).stem.startswith("raw_")
     )
-    task0_raw_candidates_exist = (
-        os.path.isdir(task0_output_directory)
-        and any(
-            name.startswith("raw_") and name.lower().endswith(".parquet")
-            for name in os.listdir(task0_output_directory)
+    if selected_input_file and not user_selected_raw_parquet:
+        raise SystemExit(
+            "Task 1 now reads Task 0 raw parquet only. "
+            f"Selected input is not raw_*.parquet: {selected_input_file}"
         )
-    )
-    task1_raw_parquet_input = user_selected_raw_parquet or task0_raw_candidates_exist
-    if task1_raw_parquet_input:
-        raw_directory = "STEP_1/TASK_0/OUTPUT_FILES"
-        raw_working_directory = task0_output_directory
-    else:
-        raw_directory = "STAGE_0_TO_1"
-        raw_working_directory = os.path.join(station_directory, raw_directory)
+    task1_raw_parquet_input = True
+    raw_directory = "STEP_1/TASK_0/OUTPUT_FILES"
+    raw_working_directory = task0_output_directory
     
 else:
     task1_raw_parquet_input = False
@@ -2802,10 +2797,7 @@ LEVELS = [
     raw_directory,
 ]
 
-if task1_raw_parquet_input:
-    station_re = re.compile(r'^raw_mi0(\d).*\.parquet$', re.IGNORECASE)
-else:
-    station_re = re.compile(r'^mi0(\d).*\.dat$', re.IGNORECASE)
+station_re = re.compile(r'^raw_mi0(\d).*\.parquet$', re.IGNORECASE)
 
 seen = set()
 for d in LEVELS:
@@ -2816,7 +2808,7 @@ for d in LEVELS:
     current_files = {p.name for p in d.iterdir() if p.is_file()}
 
     # ────────────────────────────────────────────────────────────────
-    # Remove .dat files whose prefix “mi0X” does not match `station`
+    # Remove raw parquet files whose prefix “raw_mi0X” does not match `station`
     # ────────────────────────────────────────────────────────────────
     mismatched = {
         fname for fname in current_files
@@ -2867,20 +2859,15 @@ for directory in [raw_directory, unprocessed_directory, processing_directory, co
             now = time.time()
             os.utime(empty_destination_path, (now, now))
 
-# Files to move: in STAGE_0_TO_1 but not in UNPROCESSED, PROCESSING, or COMPLETED
+# Files to move: Task 0 raw parquet output not already in Task 1 staging.
 raw_files = set(os.listdir(raw_directory))
 
-# Take only files that match the active Task 1 input mode.
-if task1_raw_parquet_input:
-    raw_files = {
-        f
-        for f in raw_files
-        if f.startswith("raw_") and f.lower().endswith(".parquet")
-    }
-    print("raw parquet files are:", raw_files)
-else:
-    raw_files = {f for f in raw_files if f.lower().endswith('.dat')}
-    print("dat files are:", raw_files)
+raw_files = {
+    f
+    for f in raw_files
+    if f.startswith("raw_") and f.lower().endswith(".parquet")
+}
+print("raw parquet files are:", raw_files)
 
 unprocessed_files = set(os.listdir(unprocessed_directory))
 processing_files = set(os.listdir(processing_directory))
@@ -3383,9 +3370,9 @@ CHANNEL_CONTAGION_METADATA_FIELDS: tuple[str, ...] = (
     "mean_off_diagonal_global_clean",
     "max_off_diagonal_global_clean",
     "mean_off_diagonal_interplane_global_clean",
-    "mean_off_diagonal_by_tt_raw",
-    "max_off_diagonal_by_tt_raw",
-    "mean_off_diagonal_interplane_by_tt_raw",
+    "mean_off_diagonal_by_raw_tt",
+    "max_off_diagonal_by_raw_tt",
+    "mean_off_diagonal_interplane_by_raw_tt",
     "mean_off_diagonal_by_tt_clean",
     "max_off_diagonal_by_tt_clean",
     "mean_off_diagonal_interplane_by_tt_clean",
@@ -3460,7 +3447,7 @@ FILTER_METRIC_NAMES: tuple[str, ...] = (
     "plane_combination_filter_rows_with_same_strip_relation_failures_pct",
     "plane_combination_filter_rows_with_same_plane_relation_failures_pct",
     "plane_combination_filter_rows_with_any_relation_failures_pct",
-    "valid_lines_in_binary_file_percentage",
+    "valid_lines_in_file_percentage",
     "data_purity_percentage",
     "clean_tt_lt_10_rows_removed_pct",
 )
@@ -3569,6 +3556,35 @@ if date_ranges:
         print(
             f"[DATE_RANGE] Ignoring {skipped_completed} out-of-range file(s) in COMPLETED_DIRECTORY.",
             force=True,
+        )
+
+if task1_raw_parquet_input:
+    def _task1_raw_parquet_files(file_names: Iterable[str]) -> list[str]:
+        return [
+            name
+            for name in file_names
+            if name.startswith("raw_") and name.lower().endswith(".parquet")
+        ]
+
+    before_counts = (
+        len(unprocessed_files),
+        len(processing_files),
+        len(completed_files),
+    )
+    unprocessed_files = _task1_raw_parquet_files(unprocessed_files)
+    processing_files = _task1_raw_parquet_files(processing_files)
+    completed_files = _task1_raw_parquet_files(completed_files)
+    ignored_counts = (
+        before_counts[0] - len(unprocessed_files),
+        before_counts[1] - len(processing_files),
+        before_counts[2] - len(completed_files),
+    )
+    if any(ignored_counts):
+        print(
+            "Task 1 ignores non-Task-0 raw parquet files in staging: "
+            f"UNPROCESSED={ignored_counts[0]}, "
+            f"PROCESSING={ignored_counts[1]}, "
+            f"COMPLETED={ignored_counts[2]}."
         )
 
 active_qa_retry_basenames: set[str] = set()
@@ -4050,16 +4066,17 @@ for joined_record in joined_input_records:
             joined_read_df = joined_read_df.head(int(limit_number)).copy()
         if "datetime" in joined_read_df.columns:
             joined_read_df["datetime"] = pd.to_datetime(joined_read_df["datetime"], errors="coerce")
-        if "column_6" not in joined_read_df.columns:
-            raise ValueError(f"Task 1 raw parquet is missing column_6: {joined_path}")
+        if "acquisition_type" not in joined_read_df.columns:
+            if "column_6" in joined_read_df.columns:
+                joined_read_df = joined_read_df.rename(columns={"column_6": "acquisition_type"})
+            else:
+                raise ValueError(f"Task 1 raw parquet is missing acquisition_type: {joined_path}")
         joined_read_lines = len(joined_read_df)
         joined_written_lines = len(joined_read_df)
     else:
-        joined_read_df, joined_read_lines, joined_written_lines = _build_task1_input_dataframe(
-            joined_path,
-            rejected_file,
-            EXPECTED_COLUMNS,
-            limit_rows=limit_number if limit else None,
+        raise ValueError(
+            "Task 1 now requires Task 0 raw parquet input; refusing non-raw-parquet file: "
+            f"{joined_path}"
         )
     read_lines += int(joined_read_lines)
     written_lines += int(joined_written_lines)
@@ -4105,7 +4122,7 @@ else:
     print("Warning: input file has zero lines; setting valid line percentage to 0.0.")
 print(f"--> A {valid_lines_in_dat_file:.2f}% of the lines were valid.\n")
 
-global_variables['valid_lines_in_binary_file_percentage'] =  valid_lines_in_dat_file
+global_variables['valid_lines_in_file_percentage'] =  valid_lines_in_dat_file
 
 if task1_plot_enabled("event_total_charge_raw"):
     raw_total_charge_columns = [
@@ -4152,12 +4169,12 @@ read_df = read_df.loc[read_df["datetime"].between(left_limit_time, right_limit_t
 if not pd.api.types.is_datetime64_any_dtype(read_df["datetime"]):
     raise ValueError("The index is not a DatetimeIndex. Check 'datetime' column formatting.")
 
-# Print the count frequency of the values in column_6
-print(read_df['column_6'].value_counts())
-# Take only the rows in which column_6 is equal to 1
+# Print the count frequency of the acquisition types.
+print(read_df["acquisition_type"].value_counts())
+# Take only the rows in which acquisition_type is equal to 1
 
-selected_mask = read_df["column_6"] == 1
-self_trigger_mask = read_df["column_6"] == 2
+selected_mask = read_df["acquisition_type"] == 1
+self_trigger_mask = read_df["acquisition_type"] == 2
 self_trigger = bool(self_trigger_mask.any())  # If self-trigger rows exist, define an indicator as True
 
 raw_data_len = int(selected_mask.sum())
@@ -4323,7 +4340,7 @@ print("----------------------------------------------------------------------")
 # Defining the directories that will store the data
 save_full_filename = f"full_list_events_{save_filename_suffix}.txt"
 save_filename = f"list_events_{save_filename_suffix}.txt"
-save_pdf_filename = f"mingo{str(station).zfill(2)}_task1_{save_filename_suffix}.pdf"
+save_pdf_filename = f"mingo{str(station).zfill(2)}_task1_{basename_no_ext}_{date_execution}.pdf"
 
 save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filename)
 _prof["s_geometry_resolve_s"] = round(time.perf_counter() - _t_geometry_resolve, 2)
@@ -4375,12 +4392,17 @@ task1_join_source_columns = [
     for col in (joined_source_file_column, joined_source_basename_column)
     if col in read_df.columns
 ]
+task1_preserved_raw_columns = [
+    col
+    for col in ("acq_tt", "raw_tt", "param_hash")
+    if col in read_df.columns
+]
 if keep_all_columns_output:
     working_df = read_df.loc[selected_mask].copy()
 else:
     working_df = read_df.loc[
         selected_mask,
-        ["event_id", "datetime", *task1_join_source_columns, *channel_source_columns],
+        ["event_id", "datetime", *task1_join_source_columns, *task1_preserved_raw_columns, *channel_source_columns],
     ].copy()
 working_df = working_df.rename(columns=channel_rename_map)
 # Track rows that later drop out of Task 1 so their original indexed values stay inspectable.
@@ -4405,39 +4427,17 @@ working_df = working_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"
 # for col in working_df.columns:
 #     print(f" - {col}")
 
-if found_matching_conf and conf_value is not None:
-    # --- Conditional swap for station 2, Plane 4: swap channels 2 and 4 ---
-    if conf_value < 2:
-        if station == "2":
-            print("Configuration of the detector is less than 2.")
-            print("Swapping channels that give problems in plane 4.")
-            plane4_keys = ['T4_F', 'T4_B', 'Q4_F', 'Q4_B']
-            for key in plane4_keys:
-                col2 = f'{key}_3'
-                col4 = f'{key}_4'
-                snapshot_original_columns_once(working_df, [col2, col4])
-                working_df[[col2, col4]] = working_df[[col4, col2]].values  # swap columns
-
 if self_trigger:
     if keep_all_columns_output:
         working_st_df = read_df.loc[self_trigger_mask].copy()
     else:
-        working_st_df = read_df.loc[self_trigger_mask, ["event_id", "datetime", *channel_source_columns]].copy()
+        working_st_df = read_df.loc[
+            self_trigger_mask,
+            ["event_id", "datetime", *task1_preserved_raw_columns, *channel_source_columns],
+        ].copy()
     working_st_df = working_st_df.rename(columns=channel_rename_map)
     working_st_df = working_st_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
     
-    if found_matching_conf and conf_value is not None:
-        # --- Conditional swap for station 2, Plane 4: swap channels 2 and 4 ---
-        if conf_value < 2:
-            if station == "2":
-                print("Configuration of the detector is less than 2.")
-                print("Swapping channels that give problems in plane 4.")
-                plane4_keys = ['T4_F', 'T4_B', 'Q4_F', 'Q4_B']
-                for key in plane4_keys:
-                    col2 = f'{key}_3'
-                    col4 = f'{key}_4'
-                    working_st_df[[col2, col4]] = working_st_df[[col4, col2]].values  # swap columns
-
 del read_df
 
 # ----------------------------------------------------------------------------------
@@ -4456,8 +4456,12 @@ for key, idx_range in column_indices.items():
         global_variables[global_var_name] = count
 _prof["s_frame_init_s"] = round(time.perf_counter() - _t_frame_init, 2)
 _t_raw_tt_overview = time.perf_counter()
-# Apply the function to the DataFrame
-working_df = compute_tt(working_df, "raw_tt")
+if "raw_tt" in working_df.columns:
+    working_df.loc[:, "raw_tt"] = pd.to_numeric(working_df["raw_tt"], errors="coerce").fillna(0).astype(int)
+    print("Task 1 using raw_tt provided by Task 0 raw parquet.")
+else:
+    print("Warning: Task 1 input lacks raw_tt; computing fallback raw_tt for backward compatibility.")
+    working_df = compute_tt(working_df, "raw_tt")
 
 raw_tt_counts = working_df["raw_tt"].value_counts()
 
@@ -4472,7 +4476,7 @@ _store_channel_contagion_metrics_variant(
 )
 raw_channel_by_tt_data = _compute_channel_conditional_matrix_for_tt(working_df, "raw_tt", 1234)
 _store_channel_contagion_metrics_variant(
-    "by_tt_raw",
+    "by_raw_tt",
     raw_channel_by_tt_data,
 )
 
@@ -4484,7 +4488,10 @@ for tt_value, count in sorted(raw_tt_counts.items()):
     print(f"  Raw TT {tt_value}: {count} events ({percentage:.2f}%)")
 
 if self_trigger:
-    working_st_df = compute_tt(working_st_df, "raw_tt")
+    if "raw_tt" in working_st_df.columns:
+        working_st_df.loc[:, "raw_tt"] = pd.to_numeric(working_st_df["raw_tt"], errors="coerce").fillna(0).astype(int)
+    else:
+        working_st_df = compute_tt(working_st_df, "raw_tt")
 
 _task1_self_plot_limits = task1_channel_combination_limits_by_relation.get("self", {})
 T_F_left_pre_cal = float(_task1_self_plot_limits.get("t_sum_left", channel_combination_t_sum_left))
@@ -4542,7 +4549,7 @@ if task1_plot_enabled("channel_contamination_matrix_32_raw"):
         save_plots, show_plots, plot_list,
     )
 
-if task1_plot_enabled("channel_contagion_by_tt_raw"):
+if task1_plot_enabled("channel_contagion_by_raw_tt"):
     fig_idx = _plot_channel_contagion_by_tt(
         working_df, "raw_tt", "raw", fig_idx, base_directories["figure_directory"],
         save_plots, show_plots, plot_list,
@@ -4739,7 +4746,7 @@ if task1_plot_enabled("tq_scatter_raw"):
     fig_TQ, axes_TQ = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
     axes_TQ = axes_TQ.flatten()
 
-    # Iterate over each module (T1, T2, T3, T4)
+    # Iterate over each plane (T1, T2, T3, T4)
     for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
         for j in range(4):
             col_F = f'{key}_F_{j+1}'  # Time F column
@@ -5060,7 +5067,7 @@ if task1_plot_enabled("tq_scatter_filtered"):
     fig_TQ, axes_TQ = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
     axes_TQ = axes_TQ.flatten()
 
-    # Iterate over each module (T1, T2, T3, T4)
+    # Iterate over each plane (T1, T2, T3, T4)
     for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
         for j in range(4):
             col_F = f'{key}_F_{j+1}'  # Time F column
@@ -5160,7 +5167,7 @@ if self_trigger:
         fig_TQ, axes_TQ = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
         axes_TQ = axes_TQ.flatten()
 
-        # Iterate over each module (T1, T2, T3, T4)
+        # Iterate over each plane (T1, T2, T3, T4)
         for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
             for j in range(4):
                 col_F = f'{key}_F_{j+1}'  # Time F column
@@ -6427,8 +6434,8 @@ if status_execution_date is not None:
     )
 
 filter_metrics["data_purity_percentage"] = round(float(data_purity_percentage), 4)
-filter_metrics["valid_lines_in_binary_file_percentage"] = round(
-    float(global_variables.get("valid_lines_in_binary_file_percentage", 0.0)),
+filter_metrics["valid_lines_in_file_percentage"] = round(
+    float(global_variables.get("valid_lines_in_file_percentage", 0.0)),
     4,
 )
 filter_row = {
@@ -6692,7 +6699,7 @@ metadata_specific_csv_path = save_metadata(
         or column_name.startswith("raw_channel_pattern_")
         or column_name.startswith("clean_channel_pattern_")
         or is_trigger_type_metadata_column(column_name, trigger_type_prefixes)
-        or column_name == "valid_lines_in_binary_file_percentage"
+        or column_name == "valid_lines_in_file_percentage"
     ),
 )
 print(f"Metadata (specific) CSV updated at: {metadata_specific_csv_path}")
@@ -6781,6 +6788,27 @@ if track_removed_rows and not removed_rows_df.empty:
 elif track_removed_rows:
     print("Removed-row tracking export skipped: no rows were removed.")
 
+# Final task-rate plot from the same dataframe population saved by Task 1.
+if save_plots and task1_plot_enabled("acquisition_rate_vs_time_by_task_tt_with_histograms"):
+    rate_fig = create_rate_vs_time_by_task_tt_with_histograms(
+        working_df,
+        tt_column="raw_tt",
+        title=f"Task 1 acquisition rate by raw_tt, {basename_no_ext}",
+        accumulation_window_seconds=config.get("acquisition_rate_accumulation_window_seconds", 60),
+        rate_histogram_bins=config.get("acquisition_rate_task_tt_histogram_bins", 80),
+        y_limit_left=config.get("acquisition_rate_task_tt_ylim_left", 0),
+        y_limit_right=config.get("acquisition_rate_task_tt_ylim_right", 4),
+    )
+    if rate_fig is not None:
+        final_filename = f"{fig_idx}_acquisition_rate_vs_time_by_task_tt_with_histograms.png"
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        save_plot_figure(save_fig_path, fig=rate_fig, dpi=140)
+        plt.close(rate_fig)
+    else:
+        print("Task 1 acquisition-rate-by-task-tt plot skipped: no valid raw_tt/datetime rows.")
+
 # Ensure no figure handles remain open before persistence/final move.
 plt.close("all")
 
@@ -6856,13 +6884,6 @@ replicate_joined_metadata_rows(
         csv_path_deep_fiter,
         csv_path_noise_control,
         csv_path_status,
-        csv_path_profiling,
-    ],
-    primary_filename_base=filename_base,
-    joined_input_records=joined_input_records,
-    log_fn=print,
-)
-atus,
         csv_path_profiling,
     ],
     primary_filename_base=filename_base,

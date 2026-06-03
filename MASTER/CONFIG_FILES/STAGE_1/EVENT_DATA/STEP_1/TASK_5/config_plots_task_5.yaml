@@ -2,10 +2,11 @@ plots:
   debug_suite: debug
   usual_suite: usual
   essential_suite: essential
+  acquisition_rate_vs_time_by_task_tt_with_histograms: essential
   theta_phi_definitive_tt_2d: usual
   polar_theta_phi_definitive_tt_2d_detail_pre: usual
   polar_theta_phi_definitive_tt_2d_detail_angle_correction: usual
   polar_theta_phi_definitive_tt_2d_detail_final: usual
   theta_efficiency_simple_3v4: usual
   channel_combination_filter_by_tt: usual
-  charge_fit_tt_1234_per_plane_and_total: essential
+  charge_fit_tt_1234_per_plane_and_total: usual

@@ -2,6 +2,7 @@ plots:
   debug_suite: debug
   usual_suite: usual
   essential_suite: essential
+  acquisition_rate_vs_time_by_task_tt_with_histograms: essential
   all_channels_charge: usual
   flat_values_histogram: usual
   detached_timeseries_combo: usual
@@ -17,14 +18,14 @@ plots:
   trigger_types_tracking_and_list: usual
   trigger_types_tracking_and_raw: usual
   trigger_types_definitive_tt_and_raw: usual
-  timtrack_results_hexbin_combination_projections: essential
+  timtrack_results_hexbin_combination_projections: usual
   timtrack_results_scatter_combination_projections: usual
   theta_det_theta_zoom_tracking_tt: usual
   polar_theta_phi_definitive_tt_2d: usual
   polar_theta_phi_tracking_tt_2d: usual
   events_per_second_by_plane_cardinality_double_row: usual
   timtrack_residuals_gaussian: usual
-  tim_th_chi_sigmafit_1234_histogram: essential
+  tim_th_chi_sigmafit_1234_histogram: usual
   external_residuals_gaussian: usual
   event_display_sample: usual
   track_consistency_loo_residuals: usual
@@ -33,7 +34,7 @@ plots:
   total_event_charge_histogram: usual
   track_based_efficiency_tt_stability: usual
   track_based_efficiency_vs_theta: usual
-  track_efficiency_large_plot: essential
+  track_efficiency_large_plot: usual
   timtrack_projection_ellipse_contours: usual
   timtrack_projection_scaled_angle_comparison: usual
   chi2_offender_populations: usual
