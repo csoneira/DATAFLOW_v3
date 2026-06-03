@@ -6,22 +6,22 @@ import pandas as pd
 
 
 RAW_CHANNEL_COLUMN_INDICES = {
-    "T1_F": range(55, 59),
-    "T1_B": range(59, 63),
-    "Q1_F": range(63, 67),
-    "Q1_B": range(67, 71),
-    "T2_F": range(39, 43),
-    "T2_B": range(43, 47),
-    "Q2_F": range(47, 51),
-    "Q2_B": range(51, 55),
-    "T3_F": range(23, 27),
-    "T3_B": range(27, 31),
-    "Q3_F": range(31, 35),
-    "Q3_B": range(35, 39),
-    "T4_F": range(7, 11),
-    "T4_B": range(11, 15),
-    "Q4_F": range(15, 19),
-    "Q4_B": range(19, 23),
+    ("t", 1, "ef"): range(55, 59),
+    ("t", 1, "eb"): range(59, 63),
+    ("q", 1, "ef"): range(63, 67),
+    ("q", 1, "eb"): range(67, 71),
+    ("t", 2, "ef"): range(39, 43),
+    ("t", 2, "eb"): range(43, 47),
+    ("q", 2, "ef"): range(47, 51),
+    ("q", 2, "eb"): range(51, 55),
+    ("t", 3, "ef"): range(23, 27),
+    ("t", 3, "eb"): range(27, 31),
+    ("q", 3, "ef"): range(31, 35),
+    ("q", 3, "eb"): range(35, 39),
+    ("t", 4, "ef"): range(7, 11),
+    ("t", 4, "eb"): range(11, 15),
+    ("q", 4, "ef"): range(15, 19),
+    ("q", 4, "eb"): range(19, 23),
 }
 
 
@@ -36,9 +36,9 @@ def station_matches_file(file_name: str, station: str) -> bool:
 
 def raw_channel_rename_map() -> dict[str, str]:
     rename_map: dict[str, str] = {}
-    for key, idx_range in RAW_CHANNEL_COLUMN_INDICES.items():
+    for (quantity, plane, end), idx_range in RAW_CHANNEL_COLUMN_INDICES.items():
         for strip, col_idx in enumerate(idx_range, start=1):
-            rename_map[f"column_{col_idx}"] = f"{key}_{strip}"
+            rename_map[f"column_{col_idx}"] = f"p{plane}_s{strip}_{end}_{quantity}"
     return rename_map
 
 
@@ -66,20 +66,20 @@ def rate_hz(count: int, duration_seconds_value: int) -> float:
     return round(float(count) / float(duration_seconds_value), 6)
 
 
-def compute_acq_tt(df: pd.DataFrame, column_name: str = "acq_tt") -> pd.DataFrame:
+def compute_tt_task0_acq(df: pd.DataFrame, column_name: str = "tt_task0_acq") -> pd.DataFrame:
     tt_str = pd.Series("", index=df.index, dtype="object")
     for plane in range(1, 5):
         charge_columns = [
             col
             for col in [
-                f"Q{plane}_F_1",
-                f"Q{plane}_F_2",
-                f"Q{plane}_F_3",
-                f"Q{plane}_F_4",
-                f"Q{plane}_B_1",
-                f"Q{plane}_B_2",
-                f"Q{plane}_B_3",
-                f"Q{plane}_B_4",
+                f"p{plane}_s1_ef_q",
+                f"p{plane}_s2_ef_q",
+                f"p{plane}_s3_ef_q",
+                f"p{plane}_s4_ef_q",
+                f"p{plane}_s1_eb_q",
+                f"p{plane}_s2_eb_q",
+                f"p{plane}_s3_eb_q",
+                f"p{plane}_s4_eb_q",
             ]
             if col in df.columns
         ]

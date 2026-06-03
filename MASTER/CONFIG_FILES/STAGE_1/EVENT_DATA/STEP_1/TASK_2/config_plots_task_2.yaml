@@ -54,14 +54,14 @@ plots:
   time_calibrated_filtered_removed_zeroes: usual
   tsum_pair_charge_correlations: usual
   stat_window_accumulation: usual
-  rejected_scatter_clean_tt: usual
+  rejected_scatter_tt_task1_clean: usual
   rejected_scatter_q_sum_zero: usual
-  rejected_scatter_cal_tt: usual
+  rejected_scatter_tt_task2_cal: usual
   charge_front_vs_back: usual
   time_front_vs_back: usual
   channel_matrix_tq: usual
   strip_pair_matrix_by_planepair: usual
   strip_combination_filter_by_tt: usual
-  rejected_histograms_clean_tt: usual
+  rejected_histograms_tt_task1_clean: usual
   rejected_histograms_q_sum_zero: usual
-  rejected_histograms_cal_tt: usual
+  rejected_histograms_tt_task2_cal: usual

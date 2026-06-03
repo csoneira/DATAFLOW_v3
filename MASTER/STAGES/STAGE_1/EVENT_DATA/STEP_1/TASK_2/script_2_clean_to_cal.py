@@ -132,10 +132,13 @@ from MASTER.common.step1_activation import (
 )
 from MASTER.common.step1_shared import (
     add_normalized_count_metadata,
+    add_topology_task1_channel,
+    add_topology_task2_strip,
     add_trigger_type_total_offender_threshold_metadata,
     build_events_per_second_metadata,
     build_step1_cli_parser,
     build_step1_filtered_print,
+    canonicalize_step1_columns,
     collect_columns,
     extract_rate_histogram_metadata,
     extract_trigger_type_metadata,
@@ -233,17 +236,17 @@ TASK2_PLOT_ALIASES: tuple[str, ...] = (
     "slewing_delta_t_centroid_by_qsum_cuts",
     "slewing_delta_t_centroid_vs_qsum_cut",
     "stat_window_accumulation",
-    "rejected_scatter_clean_tt",
+    "rejected_scatter_tt_task1_clean",
     "rejected_scatter_q_sum_zero",
-    "rejected_scatter_cal_tt",
+    "rejected_scatter_tt_task2_cal",
     "charge_front_vs_back",
     "time_front_vs_back",
     "channel_matrix_tq",
     "strip_pair_matrix_by_planepair",
     "strip_combination_filter_by_tt",
-    "rejected_histograms_clean_tt",
+    "rejected_histograms_tt_task1_clean",
     "rejected_histograms_q_sum_zero",
-    "rejected_histograms_cal_tt",
+    "rejected_histograms_tt_task2_cal",
 )
 task2_plot_status_by_alias: dict[str, str] = {}
 
@@ -700,10 +703,10 @@ def _task2_active_strip_matrix_from_raw(df: pd.DataFrame) -> dict[int, np.ndarra
         strip_masks: list[np.ndarray] = []
         for strip in range(1, 5):
             raw_columns = (
-                f"Q{plane}_F_{strip}",
-                f"Q{plane}_B_{strip}",
-                f"T{plane}_F_{strip}",
-                f"T{plane}_B_{strip}",
+                f"p{plane}_s{strip}_ef_q",
+                f"p{plane}_s{strip}_eb_q",
+                f"p{plane}_s{strip}_ef_t",
+                f"p{plane}_s{strip}_eb_t",
             )
             if not all(col in df.columns for col in raw_columns):
                 strip_masks.append(np.zeros(n_rows, dtype=bool))
@@ -789,8 +792,8 @@ def _task2_plane_strip_qsum_from_raw(df: pd.DataFrame, plane: int) -> np.ndarray
     n_rows = len(df)
     strip_qsum: list[np.ndarray] = []
     for strip in range(1, 5):
-        qf_col = f"Q{plane}_F_{strip}"
-        qb_col = f"Q{plane}_B_{strip}"
+        qf_col = f"p{plane}_s{strip}_ef_q"
+        qb_col = f"p{plane}_s{strip}_eb_q"
         if qf_col not in df.columns or qb_col not in df.columns:
             strip_qsum.append(np.zeros(n_rows, dtype=float))
             continue
@@ -999,10 +1002,10 @@ def keep_task2_highest_charge_strip_only_inplace(df: pd.DataFrame) -> None:
 
     strip_indices = np.arange(4)
     raw_family_templates = (
-        "Q{plane}_F_{strip}",
-        "Q{plane}_B_{strip}",
-        "T{plane}_F_{strip}",
-        "T{plane}_B_{strip}",
+        "p{plane}_s{strip}_ef_q",
+        "p{plane}_s{strip}_eb_q",
+        "p{plane}_s{strip}_ef_t",
+        "p{plane}_s{strip}_eb_t",
     )
 
     for plane in range(1, 5):
@@ -1033,44 +1036,44 @@ def apply_task2_charge_side_pedestals_to_components(
     qb_pedestal: np.ndarray,
 ) -> None:
     """Apply charge-side pedestal offsets to Task 2 strip Q_sum/Q_dif columns."""
-    for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
-        for j in range(4):
-            q_dif_col = f'{key}_Q_dif_{j+1}'
-            q_sum_col = f'{key}_Q_sum_{j+1}'
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            q_dif_col = f'p{plane}_s{strip}_qdif'
+            q_sum_col = f'p{plane}_s{strip}_qsum'
             if q_dif_col not in df.columns or q_sum_col not in df.columns:
                 continue
 
             q_dif_mask = df[q_dif_col] != 0
-            df.loc[q_dif_mask, q_dif_col] -= (qf_pedestal[i][j] - qb_pedestal[i][j]) / 2
+            df.loc[q_dif_mask, q_dif_col] -= (qf_pedestal[plane - 1][strip - 1] - qb_pedestal[plane - 1][strip - 1]) / 2
 
             q_sum_mask = df[q_sum_col] != 0
-            df.loc[q_sum_mask, q_sum_col] -= (qf_pedestal[i][j] + qb_pedestal[i][j]) / 2
+            df.loc[q_sum_mask, q_sum_col] -= (qf_pedestal[plane - 1][strip - 1] + qb_pedestal[plane - 1][strip - 1]) / 2
 
 def apply_task2_tdiff_offsets_to_components(
     df: pd.DataFrame,
     tdiff_calibration: np.ndarray,
 ) -> None:
     """Apply T_dif calibration offsets to Task 2 strip component columns."""
-    for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-        for j in range(4):
-            column_name = f'{key}_T_dif_{j+1}'
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            column_name = f'p{plane}_s{strip}_tdif'
             if column_name not in df.columns:
                 continue
             mask = df[column_name] != 0
-            df.loc[mask, column_name] -= tdiff_calibration[i][j]
+            df.loc[mask, column_name] -= tdiff_calibration[plane - 1][strip - 1]
 
 def apply_task2_tsum_offsets_to_components(
     df: pd.DataFrame,
     tsum_calibration: np.ndarray,
 ) -> None:
     """Apply T_sum calibration offsets to Task 2 strip component columns."""
-    for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-        for j in range(4):
-            column_name = f'{key}_T_sum_{j+1}'
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            column_name = f'p{plane}_s{strip}_tsum'
             if column_name not in df.columns:
                 continue
             mask = df[column_name] != 0
-            df.loc[mask, column_name] += tsum_calibration[i][j]
+            df.loc[mask, column_name] += tsum_calibration[plane - 1][strip - 1]
 
 def snapshot_nonzero_mask(df: pd.DataFrame, columns: Iterable[str]) -> tuple[list[str], np.ndarray]:
     """Capture a boolean mask of non-zero values before a zeroing operation."""
@@ -1129,10 +1132,10 @@ def summarize_strip_component_zero_causes(df_input: pd.DataFrame) -> dict[str, o
 
     for plane in range(1, 5):
         for strip in range(1, 5):
-            q_sum = f"Q{plane}_Q_sum_{strip}"
-            q_dif = f"Q{plane}_Q_dif_{strip}"
-            t_sum = f"T{plane}_T_sum_{strip}"
-            t_dif = f"T{plane}_T_dif_{strip}"
+            q_sum = f"p{plane}_s{strip}_qsum"
+            q_dif = f"p{plane}_s{strip}_qdif"
+            t_sum = f"p{plane}_s{strip}_tsum"
+            t_dif = f"p{plane}_s{strip}_tdif"
             if all(col in df_input.columns for col in (q_sum, q_dif, t_sum, t_dif)):
                 strip_labels.append((plane, strip))
                 q_sum_cols.append(q_sum)
@@ -1261,10 +1264,10 @@ def zero_strip_component_blocks(
 
     for plane in range(1, 5):
         for strip in range(1, 5):
-            q_sum = f"Q{plane}_Q_sum_{strip}"
-            q_diff = f"Q{plane}_Q_dif_{strip}"
-            t_sum = f"T{plane}_T_sum_{strip}"
-            t_diff = f"T{plane}_T_dif_{strip}"
+            q_sum = f"p{plane}_s{strip}_qsum"
+            q_diff = f"p{plane}_s{strip}_qdif"
+            t_sum = f"p{plane}_s{strip}_tsum"
+            t_diff = f"p{plane}_s{strip}_tdif"
             if all(col in df.columns for col in (q_sum, q_diff, t_sum, t_diff)):
                 strip_labels.append((plane, strip))
                 q_sum_cols.append(q_sum)
@@ -1471,10 +1474,10 @@ def _task2_strip_component_columns_map(df: pd.DataFrame) -> dict[tuple[int, int]
     for plane in range(1, 5):
         for strip in range(1, 5):
             cols = {
-                "Q_sum": f"Q{plane}_Q_sum_{strip}",
-                "Q_dif": f"Q{plane}_Q_dif_{strip}",
-                "T_sum": f"T{plane}_T_sum_{strip}",
-                "T_dif": f"T{plane}_T_dif_{strip}",
+                "Q_sum": f"p{plane}_s{strip}_qsum",
+                "Q_dif": f"p{plane}_s{strip}_qdif",
+                "T_sum": f"p{plane}_s{strip}_tsum",
+                "T_dif": f"p{plane}_s{strip}_tdif",
             }
             if all(col in df.columns for col in cols.values()):
                 strip_map[(plane, strip)] = cols
@@ -1993,13 +1996,13 @@ def _task2_strip_column_name(plane: int, strip: int, variable_name: str) -> str:
 
 
 def _task2_filter_tt_series(df: pd.DataFrame) -> pd.Series:
-    for candidate in ("cal_tt", "clean_tt", "raw_tt"):
+    for candidate in ("tt_task2_cal", "tt_task1_clean", "tt_task0_raw"):
         if candidate in df.columns:
             return df[candidate].apply(normalize_tt_label).astype(str)
     return pd.Series(["0"] * len(df), index=df.index, dtype=str)
 
 def _task2_tt_column_name(retained_df: pd.DataFrame, removed_df: pd.DataFrame) -> str | None:
-    for candidate in ("clean_tt", "raw_tt"):
+    for candidate in ("tt_task1_clean", "tt_task0_raw"):
         if candidate in retained_df.columns or candidate in removed_df.columns:
             return candidate
     return None
@@ -2987,20 +2990,12 @@ def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[s
         else:
             charge_columns = [
                 col
-                for col in [
-                    f"Q{plane}_F_1",
-                    f"Q{plane}_F_2",
-                    f"Q{plane}_F_3",
-                    f"Q{plane}_F_4",
-                    f"Q{plane}_B_1",
-                    f"Q{plane}_B_2",
-                    f"Q{plane}_B_3",
-                    f"Q{plane}_B_4",
-                    f"Q_P{plane}s1",
-                    f"Q_P{plane}s2",
-                    f"Q_P{plane}s3",
-                    f"Q_P{plane}s4",
-                ]
+                for strip in range(1, 5)
+                for col in (
+                    f"p{plane}_s{strip}_ef_q",
+                    f"p{plane}_s{strip}_eb_q",
+                    f"p{plane}_s{strip}_qsum",
+                )
                 if col in df.columns
             ]
         if charge_columns:
@@ -3014,7 +3009,7 @@ def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[s
 
 def _task2_strip_charge_column_names() -> list[str]:
     return [
-        f"Q{plane}_Q_sum_{strip}"
+        f"p{plane}_s{strip}_qsum"
         for plane in range(1, 5)
         for strip in range(1, 5)
     ]
@@ -3024,7 +3019,7 @@ def _task2_strip_charge_arrays(df: pd.DataFrame) -> tuple[list[str], list[np.nda
     arrays: list[np.ndarray] = []
     for plane in range(1, 5):
         for strip in range(1, 5):
-            column_name = f"Q{plane}_Q_sum_{strip}"
+            column_name = f"p{plane}_s{strip}_qsum"
             if column_name in df.columns:
                 arr = pd.to_numeric(df[column_name], errors="coerce").to_numpy(dtype=float)
             else:
@@ -3033,26 +3028,26 @@ def _task2_strip_charge_arrays(df: pd.DataFrame) -> tuple[list[str], list[np.nda
             arrays.append(arr)
     return labels, arrays
 
-def _task2_cal_tt_columns_map(df: pd.DataFrame) -> dict[int, list[str]]:
+def _task2_tt_task2_cal_columns_map(df: pd.DataFrame) -> dict[int, list[str]]:
     columns_map: dict[int, list[str]] = {}
     for plane in range(1, 5):
         columns_map[plane] = [
-            f"Q{plane}_Q_sum_{strip}" for strip in range(1, 5)
-            if f"Q{plane}_Q_sum_{strip}" in df.columns
+            f"p{plane}_s{strip}_qsum" for strip in range(1, 5)
+            if f"p{plane}_s{strip}_qsum" in df.columns
         ] + [
-            f"Q{plane}_Q_dif_{strip}" for strip in range(1, 5)
-            if f"Q{plane}_Q_dif_{strip}" in df.columns
+            f"p{plane}_s{strip}_qdif" for strip in range(1, 5)
+            if f"p{plane}_s{strip}_qdif" in df.columns
         ] + [
-            f"T{plane}_T_sum_{strip}" for strip in range(1, 5)
-            if f"T{plane}_T_sum_{strip}" in df.columns
+            f"p{plane}_s{strip}_tsum" for strip in range(1, 5)
+            if f"p{plane}_s{strip}_tsum" in df.columns
         ] + [
-            f"T{plane}_T_dif_{strip}" for strip in range(1, 5)
-            if f"T{plane}_T_dif_{strip}" in df.columns
+            f"p{plane}_s{strip}_tdif" for strip in range(1, 5)
+            if f"p{plane}_s{strip}_tdif" in df.columns
         ]
     return columns_map
 
 def compute_task2_strip_tt_series(df: pd.DataFrame) -> pd.Series:
-    tt_df = compute_tt(df, "__task2_strip_tt__", _task2_cal_tt_columns_map(df))
+    tt_df = compute_tt(df, "__task2_strip_tt__", _task2_tt_task2_cal_columns_map(df))
     return pd.to_numeric(tt_df["__task2_strip_tt__"], errors="coerce")
 
 def _format_activation_scalar(value: float | None) -> float | str:
@@ -3441,11 +3436,11 @@ def snapshot_column_if_changed(
 
 def build_task2_strip_component_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Build per-strip T/Q sum and difference columns from raw front/back inputs."""
-    for key in ["T1", "T2", "T3", "T4"]:
-        t_f_cols = [f"{key}_F_{i+1}" for i in range(4)]
-        t_b_cols = [f"{key}_B_{i+1}" for i in range(4)]
-        q_f_cols = [f'{key.replace("T", "Q")}_F_{i+1}' for i in range(4)]
-        q_b_cols = [f'{key.replace("T", "Q")}_B_{i+1}' for i in range(4)]
+    for plane in range(1, 5):
+        t_f_cols = [f"p{plane}_s{strip}_ef_t" for strip in range(1, 5)]
+        t_b_cols = [f"p{plane}_s{strip}_eb_t" for strip in range(1, 5)]
+        q_f_cols = [f"p{plane}_s{strip}_ef_q" for strip in range(1, 5)]
+        q_b_cols = [f"p{plane}_s{strip}_eb_q" for strip in range(1, 5)]
         if not all(col in df.columns for col in (*t_f_cols, *t_b_cols, *q_f_cols, *q_b_cols)):
             continue
 
@@ -3454,11 +3449,11 @@ def build_task2_strip_component_columns(df: pd.DataFrame) -> pd.DataFrame:
         q_f = df.loc[:, q_f_cols].to_numpy(copy=False)
         q_b = df.loc[:, q_b_cols].to_numpy(copy=False)
 
-        for idx in range(4):
-            df.loc[:, f"{key}_T_sum_{idx+1}"] = (t_b[:, idx] + t_f[:, idx]) / 2.0
-            df.loc[:, f"{key}_T_dif_{idx+1}"] = (t_b[:, idx] - t_f[:, idx]) / 2.0
-            df.loc[:, f'{key.replace("T", "Q")}_Q_sum_{idx+1}'] = (q_f[:, idx] + q_b[:, idx]) / 2.0
-            df.loc[:, f'{key.replace("T", "Q")}_Q_dif_{idx+1}'] = (q_f[:, idx] - q_b[:, idx]) / 2.0
+        for strip_idx, strip in enumerate(range(1, 5)):
+            df.loc[:, f"p{plane}_s{strip}_tsum"] = (t_b[:, strip_idx] + t_f[:, strip_idx]) / 2.0
+            df.loc[:, f"p{plane}_s{strip}_tdif"] = (t_b[:, strip_idx] - t_f[:, strip_idx]) / 2.0
+            df.loc[:, f"p{plane}_s{strip}_qsum"] = (q_f[:, strip_idx] + q_b[:, strip_idx]) / 2.0
+            df.loc[:, f"p{plane}_s{strip}_qdif"] = (q_f[:, strip_idx] - q_b[:, strip_idx]) / 2.0
     return df
 
 def filter_task2_calibration_rows_by_strip_t_sum_window(
@@ -3486,7 +3481,7 @@ def filter_task2_calibration_rows_by_strip_t_sum_window(
             active_mask = plane_active[:, strip - 1]
             if not np.any(active_mask):
                 continue
-            t_sum_col = f"T{plane}_T_sum_{strip}"
+            t_sum_col = f"p{plane}_s{strip}_tsum"
             if t_sum_col not in df.columns:
                 continue
             values = pd.to_numeric(df[t_sum_col], errors="coerce").to_numpy(dtype=float)
@@ -4369,7 +4364,7 @@ def record_strip_entries(df: pd.DataFrame, suffix: str) -> None:
     """Store per-plane/strip entry counts using the canonical T_sum columns."""
     for plane in range(1, 5):
         for strip in range(1, 5):
-            colname = f"T{plane}_T_sum_{strip}"
+            colname = f"p{plane}_s{strip}_tsum"
             if colname not in df:
                 continue
             count = int((df[colname] != 0).sum())
@@ -4605,12 +4600,12 @@ def _compute_slew_pair(
     operates on NumPy arrays and simple scalars.
     """
     p1, s1, p2, s2 = pair
-    Q1 = data_arrays.get(f"Q{p1}_Q_sum_{s1}")
-    Q2 = data_arrays.get(f"Q{p2}_Q_sum_{s2}")
-    T1 = data_arrays.get(f"T{p1}_T_sum_{s1}")
-    T2 = data_arrays.get(f"T{p2}_T_sum_{s2}")
-    TD1 = data_arrays.get(f"T{p1}_T_dif_{s1}")
-    TD2 = data_arrays.get(f"T{p2}_T_dif_{s2}")
+    Q1 = data_arrays.get(f"p{p1}_s{s1}_qsum")
+    Q2 = data_arrays.get(f"p{p2}_s{s2}_qsum")
+    T1 = data_arrays.get(f"p{p1}_s{s1}_tsum")
+    T2 = data_arrays.get(f"p{p2}_s{s2}_tsum")
+    TD1 = data_arrays.get(f"p{p1}_s{s1}_tdif")
+    TD2 = data_arrays.get(f"p{p2}_s{s2}_tdif")
     row_index_values = data_arrays.get("__row_index__")
     if Q1 is None or Q2 is None or T1 is None or T2 is None or TD1 is None or TD2 is None:
         return None
@@ -5877,7 +5872,7 @@ def _apply_slewing_solutions_to_dataframe(
             if parsed is None or not np.isfinite(slewing_value):
                 continue
             plane, strip = parsed
-            column_name = f"T{plane}_T_sum_{strip}"
+            column_name = f"p{plane}_s{strip}_tsum"
             if column_name not in target_df.columns:
                 continue
             updates_by_column[column_name].append((row_index, float(slewing_value)))
@@ -6375,8 +6370,8 @@ def apply_per_channel_polynomial_slewing_to_dataframe(
     for plane in range(1, 5):
         for strip in range(1, 5):
             label = f"P{plane}s{strip}"
-            q_column = f"Q{plane}_Q_sum_{strip}"
-            t_column = f"T{plane}_T_sum_{strip}"
+            q_column = f"p{plane}_s{strip}_qsum"
+            t_column = f"p{plane}_s{strip}_tsum"
             if q_column not in target_df.columns or t_column not in target_df.columns:
                 diagnostics["skipped_missing_curve_hits"] = (
                     int(diagnostics["skipped_missing_curve_hits"]) + len(target_df.index)
@@ -7085,12 +7080,12 @@ def plot_slewing_relative_tsum_vs_qsum_after_correction(
         for strip in range(1, 5)
     ]
     q_columns = [
-        f"Q{plane}_Q_sum_{strip}"
+        f"p{plane}_s{strip}_qsum"
         for plane in range(1, 5)
         for strip in range(1, 5)
     ]
     t_columns = [
-        f"T{plane}_T_sum_{strip}"
+        f"p{plane}_s{strip}_tsum"
         for plane in range(1, 5)
         for strip in range(1, 5)
     ]
@@ -8127,8 +8122,8 @@ Q_dif_pre_cal_threshold = config.get("Q_dif_pre_cal_threshold", 20)
 T_sum_left_pre_cal = config.get("T_sum_left_pre_cal", -200)
 T_sum_right_pre_cal = config.get("T_sum_right_pre_cal", -90)
 T_dif_pre_cal_threshold = config.get("T_dif_pre_cal_threshold", 20)
-task2_min_charge_event_share = float(config.get("task2_min_charge_event_share", 0.10))
-task2_min_charge_event_share = float(np.clip(task2_min_charge_event_share, 0.0, 1.0))
+task2_min_event_charge_share = float(config.get("task2_min_event_charge_share", 0.10))
+task2_min_event_charge_share = float(np.clip(task2_min_event_charge_share, 0.0, 1.0))
 calibration_detector_charge_threshold = float(config.get("calibration_detector_charge_threshold", 75.0))
 calibration_plane_charge_threshold = float(config.get("calibration_plane_charge_threshold", 75.0))
 calibration_strip_charge_threshold = float(config.get("calibration_strip_charge_threshold", 75.0))
@@ -8735,7 +8730,7 @@ TT_COLOR_DEFAULT = (0.45, 0.45, 0.45, 1.0)
 TASK2_SELECTED_OFFENDER_CARDINALITY_VALUES: tuple[int, ...] = tuple(range(0, 17))
 
 FILTER_METRIC_NAMES: tuple[str, ...] = (
-    "clean_tt_nan_rows_removed_pct",
+    "tt_task1_clean_nan_rows_removed_pct",
     "precal_strip_window_rows_affected_pct",
     "calibrated_t_dif_rows_affected_pct",
     "calibrated_q_dif_rows_affected_pct",
@@ -8747,7 +8742,7 @@ FILTER_METRIC_NAMES: tuple[str, ...] = (
     "q_sum_all_zero_rows_removed_pct",
     "data_purity_percentage",
     "all_components_zero_rows_removed_pct",
-    "cal_tt_lt_10_rows_removed_pct",
+    "tt_task2_cal_lt_10_rows_removed_pct",
 )
 NOISE_CONTROL_RATE_DENOMINATOR_COLUMN = "count_rate_denominator_seconds"
 TASK2_NOISE_CONTROL_METRIC_NAMES: tuple[str, ...] = tuple(
@@ -9262,6 +9257,9 @@ for joined_record in joined_input_records:
     joined_path = joined_record["processing_file_path"]
     joined_frame = pd.read_parquet(joined_path, engine="pyarrow")
     joined_frame = joined_frame.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
+    joined_frame = canonicalize_step1_columns(joined_frame)
+    joined_frame = add_topology_task1_channel(joined_frame)
+    joined_frame = add_topology_task2_strip(joined_frame)
     if "event_id" not in joined_frame.columns:
         print(
             "Warning: 'event_id' missing in Task 2 input; reconstructing from "
@@ -9316,15 +9314,15 @@ elif simulated_param_hash:
 # All diagnostic plots (rejected-event scatters, front-vs-back, channel matrix) use this.
 task2_unzeroed_snapshot_needed = any(
     (
-        task2_plot_requested("rejected_scatter_clean_tt"),
+        task2_plot_requested("rejected_scatter_tt_task1_clean"),
         task2_plot_requested("rejected_scatter_q_sum_zero"),
-        task2_plot_requested("rejected_scatter_cal_tt"),
+        task2_plot_requested("rejected_scatter_tt_task2_cal"),
         task2_plot_requested("charge_front_vs_back", essential=True),
         task2_plot_requested("time_front_vs_back", essential=True),
         task2_plot_requested("channel_matrix_tq"),
-        task2_plot_requested("rejected_histograms_clean_tt"),
+        task2_plot_requested("rejected_histograms_tt_task1_clean"),
         task2_plot_requested("rejected_histograms_q_sum_zero"),
-        task2_plot_requested("rejected_histograms_cal_tt"),
+        task2_plot_requested("rejected_histograms_tt_task2_cal"),
     )
 )
 working_df_unzeroed = working_df.copy() if task2_unzeroed_snapshot_needed else None
@@ -9341,7 +9339,7 @@ if create_debug_plots:
         for col in working_df.columns
         if any(pattern.match(col) for pattern in incoming_patterns)
     ]
-    main_cols.extend([col for col in ("raw_tt", "clean_tt", "cal_tt") if col in working_df.columns])
+    main_cols.extend([col for col in ("tt_task0_raw", "tt_task1_clean", "tt_task2_cal") if col in working_df.columns])
     # Preserve order while de-duplicating
     seen = set()
     main_cols = [col for col in main_cols if not (col in seen or seen.add(col))]
@@ -9367,42 +9365,42 @@ if status_execution_date is not None:
         param_hash=str(global_variables.get("param_hash", "")),
     )
 
-# Keep clean_tt from Task 1 when present; compute only if missing.
-if "clean_tt" not in working_df.columns:
-    working_df = compute_tt(working_df, "clean_tt")
+# Keep tt_task1_clean from Task 1 when present; compute only if missing.
+if "tt_task1_clean" not in working_df.columns:
+    working_df = compute_tt(working_df, "tt_task1_clean")
 else:
-    snapshot_original_columns_once(working_df, ["clean_tt"])
-    working_df.loc[:, "clean_tt"] = (
-        pd.to_numeric(working_df["clean_tt"], errors="coerce")
+    snapshot_original_columns_once(working_df, ["tt_task1_clean"])
+    working_df.loc[:, "tt_task1_clean"] = (
+        pd.to_numeric(working_df["tt_task1_clean"], errors="coerce")
         .fillna(0)
         .astype(int)
     )
 
-# Remove rows in which clean_tt is NaN (invalid TT)
-if create_debug_plots and "clean_tt" in working_df.columns:
+# Remove rows in which tt_task1_clean is NaN (invalid TT)
+if create_debug_plots and "tt_task1_clean" in working_df.columns:
     debug_fig_idx = plot_debug_histograms(
         working_df,
-        ["clean_tt"],
+        ["tt_task1_clean"],
         thresholds=None,
-        title=f"Task 2 pre-filter: clean_tt NaNs [NON-TUNABLE] (station {station})",
+        title=f"Task 2 pre-filter: tt_task1_clean NaNs [NON-TUNABLE] (station {station})",
         out_dir=debug_plot_directory,
         fig_idx=debug_fig_idx,
     )
-n_before_clean_tt = len(working_df)
-append_removed_rows_from_mask(working_df, working_df["clean_tt"].isna())
-working_df = working_df.dropna(subset=["clean_tt"])
+n_before_tt_task1_clean = len(working_df)
+append_removed_rows_from_mask(working_df, working_df["tt_task1_clean"].isna())
+working_df = working_df.dropna(subset=["tt_task1_clean"])
 record_filter_metric(
-    "clean_tt_nan_rows_removed_pct",
-    n_before_clean_tt - len(working_df),
+    "tt_task1_clean_nan_rows_removed_pct",
+    n_before_tt_task1_clean - len(working_df),
     original_number_of_events if original_number_of_events else 0,
 )
 # Track which indices were removed by each row-dropping filter for diagnostic plots.
-_diag_rejected_clean_tt_idx = (
+_diag_rejected_tt_task1_clean_idx = (
     working_df_unzeroed.index.difference(working_df.index)
     if working_df_unzeroed is not None
     else working_df.index[:0]
 )
-_diag_idx_after_clean_tt = working_df.index.copy()
+_diag_idx_after_tt_task1_clean = working_df.index.copy()
 
 # --- Continue your calibration or analysis code here ---
 # e.g.:
@@ -9936,11 +9934,11 @@ if apply_charge_side:
     print("--------------------------------------------------------------------------")
 
     charge_test_columns = [
-        f"{key}_{side}_{strip}"
-        for key in ("Q1", "Q2", "Q3", "Q4")
-        for side in ("F", "B")
+        f"p{plane}_s{strip}_{endpoint}_q"
+        for plane in range(1, 5)
         for strip in range(1, 5)
-        if f"{key}_{side}_{strip}" in calibration_work_df.columns
+        for endpoint in ("ef", "eb")
+        if f"p{plane}_s{strip}_{endpoint}_q" in calibration_work_df.columns
     ]
     need_charge_test = bool(validate_charge_pedestal_calibration or calibrate_charge_ns_to_fc)
     charge_test = (
@@ -9954,13 +9952,13 @@ if apply_charge_side:
         raw_one_strip_masks = _task2_plane_one_strip_masks_from_raw(calibration_work_df)
         QF_pedestal = []
         for key in ['1', '2', '3', '4']:
-            Q_F_cols = [f'Q{key}_F_{i+1}' for i in range(4)]
+            Q_F_cols = [f'p{key}_s{i+1}_ef_q' for i in range(4)]
             Q_F = calibration_work_df[Q_F_cols].values
 
-            Q_B_cols = [f'Q{key}_B_{i+1}' for i in range(4)]
+            Q_B_cols = [f'p{key}_s{i+1}_eb_q' for i in range(4)]
             Q_B = calibration_work_df[Q_B_cols].values
 
-            T_F_cols = [f'T{key}_F_{i+1}' for i in range(4)]
+            T_F_cols = [f'p{key}_s{i+1}_ef_t' for i in range(4)]
             T_F = calibration_work_df[T_F_cols].values
 
             plane_masks = raw_one_strip_masks.get(int(key), {})
@@ -9982,13 +9980,13 @@ if apply_charge_side:
 
         QB_pedestal = []
         for key in ['1', '2', '3', '4']:
-            Q_F_cols = [f'Q{key}_F_{i+1}' for i in range(4)]
+            Q_F_cols = [f'p{key}_s{i+1}_ef_q' for i in range(4)]
             Q_F = calibration_work_df[Q_F_cols].values
 
-            Q_B_cols = [f'Q{key}_B_{i+1}' for i in range(4)]
+            Q_B_cols = [f'p{key}_s{i+1}_eb_q' for i in range(4)]
             Q_B = calibration_work_df[Q_B_cols].values
 
-            T_B_cols = [f'T{key}_B_{i+1}' for i in range(4)]
+            T_B_cols = [f'p{key}_s{i+1}_eb_t' for i in range(4)]
             T_B = calibration_work_df[T_B_cols].values
 
             plane_masks = raw_one_strip_masks.get(int(key), {})
@@ -10015,15 +10013,15 @@ if apply_charge_side:
     print(QB_pedestal,"\n")
 
     if charge_test is not None:
-        for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
-            for j in range(4):
-                mask = calibration_work_df[f'{key}_F_{j+1}'] != 0
-                charge_test.loc[mask, f'{key}_F_{j+1}'] -= QF_pedestal[i][j]
+        for plane in range(1, 5):
+            for strip in range(1, 5):
+                mask = calibration_work_df[f'p{plane}_s{strip}_ef_q'] != 0
+                charge_test.loc[mask, f'p{plane}_s{strip}_ef_q'] -= QF_pedestal[plane - 1][strip - 1]
 
-        for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
-            for j in range(4):
-                mask = calibration_work_df[f'{key}_B_{j+1}'] != 0
-                charge_test.loc[mask, f'{key}_B_{j+1}'] -= QB_pedestal[i][j]
+        for plane in range(1, 5):
+            for strip in range(1, 5):
+                mask = calibration_work_df[f'p{plane}_s{strip}_eb_q'] != 0
+                charge_test.loc[mask, f'p{plane}_s{strip}_eb_q'] -= QB_pedestal[plane - 1][strip - 1]
 
     
     if validate_charge_pedestal_calibration:
@@ -10035,23 +10033,24 @@ if apply_charge_side:
             fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10), sharex=True)  # Adjust the layout as necessary
             axes_Q = axes_Q.flatten()
 
-            for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
-                for j in range(4):
-                    col_F = f'{key}_F_{j+1}'
-                    col_B = f'{key}_B_{j+1}'
+            for plane in range(1, 5):
+                for strip in range(1, 5):
+                    panel_idx = (plane - 1) * 4 + (strip - 1)
+                    col_F = f'p{plane}_s{strip}_ef_q'
+                    col_B = f'p{plane}_s{strip}_eb_q'
                     y_F = charge_test[col_F]
                     y_B = charge_test[col_B]
                     
                     # Plot histograms with Q-specific clipping and bins
-                    axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
+                    axes_Q[panel_idx].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
                                         bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
-                    axes_Q[i*4 + j].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
+                    axes_Q[panel_idx].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
                                         bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
-                    axes_Q[i*4 + j].set_title(f'{col_F} vs {col_B}')
-                    axes_Q[i*4 + j].legend()
+                    axes_Q[panel_idx].set_title(f'{col_F} vs {col_B}')
+                    axes_Q[panel_idx].legend()
                     
                     if log_scale:
-                        axes_Q[i*4 + j].set_yscale('log')  # For Q values
+                        axes_Q[panel_idx].set_yscale('log')  # For Q values
 
             plt.tight_layout()
             plt.subplots_adjust(top=0.9)
@@ -10076,10 +10075,11 @@ if apply_charge_side:
             fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
             axes_Q = axes_Q.flatten()
             
-            for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
-                for j in range(4):
-                    col_F = f'{key}_F_{j+1}'
-                    col_B = f'{key}_B_{j+1}'
+            for plane in range(1, 5):
+                for strip in range(1, 5):
+                    panel_idx = (plane - 1) * 4 + (strip - 1)
+                    col_F = f'p{plane}_s{strip}_ef_q'
+                    col_B = f'p{plane}_s{strip}_eb_q'
                     y_F = charge_test[col_F]
                     y_B = charge_test[col_B]
                     
@@ -10087,14 +10087,14 @@ if apply_charge_side:
                     Q_clip_max = pedestal_right * 5
                     
                     # Plot histograms with Q-specific clipping and bins
-                    axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
+                    axes_Q[panel_idx].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
                                         bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
-                    axes_Q[i*4 + j].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
+                    axes_Q[panel_idx].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
                                         bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
-                    axes_Q[i*4 + j].set_title(f'{col_F} vs {col_B}')
-                    axes_Q[i*4 + j].legend()
+                    axes_Q[panel_idx].set_title(f'{col_F} vs {col_B}')
+                    axes_Q[panel_idx].legend()
                     # Show between -5 and 5
-                    axes_Q[i*4 + j].set_xlim([Q_clip_min, Q_clip_max])
+                    axes_Q[panel_idx].set_xlim([Q_clip_min, Q_clip_max])
             # Display a vertical green dashed, alpha = 0.5 line at 0
             for ax in axes_Q:
                 ax.axvline(0, color='green', linestyle='--', alpha=0.5)
@@ -10123,10 +10123,11 @@ if apply_charge_side:
             fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
             axes_Q = axes_Q.flatten()
             
-            for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
-                for j in range(4):
-                    col_F = f'{key}_F_{j+1}'
-                    col_B = f'{key}_B_{j+1}'
+            for plane in range(1, 5):
+                for strip in range(1, 5):
+                    panel_idx = (plane - 1) * 4 + (strip - 1)
+                    col_F = f'p{plane}_s{strip}_ef_q'
+                    col_B = f'p{plane}_s{strip}_eb_q'
                     y_F = charge_test[col_F]
                     y_B = charge_test[col_B]
                     
@@ -10134,14 +10135,14 @@ if apply_charge_side:
                     Q_clip_max = pedestal_right * 12
                     
                     # Plot histograms with Q-specific clipping and bins
-                    axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
+                    axes_Q[panel_idx].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
                                         bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
-                    axes_Q[i*4 + j].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
+                    axes_Q[panel_idx].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
                                         bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
-                    axes_Q[i*4 + j].set_title(f'{col_F} vs {col_B}')
-                    axes_Q[i*4 + j].legend()
+                    axes_Q[panel_idx].set_title(f'{col_F} vs {col_B}')
+                    axes_Q[panel_idx].legend()
                     # Show between -5 and 5
-                    axes_Q[i*4 + j].set_xlim([Q_clip_min, Q_clip_max])
+                    axes_Q[panel_idx].set_xlim([Q_clip_min, Q_clip_max])
             # Display a vertical green dashed, alpha = 0.5 line at 0
             for ax in axes_Q:
                 ax.axvline(0, color='green', linestyle='--', alpha=0.5)
@@ -10165,7 +10166,7 @@ if apply_charge_side:
     # ----------------------- Charge calibration from ns to fC -------------------------
     # ----------------------------------------------------------------------------------
 
-    if calibrate_charge_ns_to_fc:
+    if calibrate_charge_ns_to_fc and charge_test is not None:
 
         # Load calibration
         home_path = str(resolve_home_path_from_config(config))
@@ -10184,10 +10185,10 @@ if apply_charge_side:
         
 
         # --- Calibrate and store new columns in working_df ---
-        for key in ['Q1', 'Q2', 'Q3', 'Q4']:
-            for j in range(1, 5):
-                for suffix in ['F', 'B']:
-                    col = f"{key}_{suffix}_{j}"
+        for plane in range(1, 5):
+            for strip in range(1, 5):
+                for endpoint in ("ef", "eb"):
+                    col = f"p{plane}_s{strip}_{endpoint}_q"
                     if col in charge_test.columns:
                         col_fC = f"{col}_fC"
                         raw = charge_test[col]
@@ -10205,11 +10206,12 @@ if apply_charge_side:
             fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))
             axes_Q = axes_Q.flatten()
 
-            for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
-                for j in range(4):
-                    col_F = f'{key}_F_{j+1}_fC'
-                    col_B = f'{key}_B_{j+1}_fC'
-                    ax = axes_Q[i*4 + j]
+            for plane in range(1, 5):
+                for strip in range(1, 5):
+                    panel_idx = (plane - 1) * 4 + (strip - 1)
+                    col_F = f'p{plane}_s{strip}_ef_q_fC'
+                    col_B = f'p{plane}_s{strip}_eb_q_fC'
+                    ax = axes_Q[panel_idx]
 
                     if col_F in charge_test.columns:
                         y_F = charge_test[col_F]
@@ -10266,13 +10268,13 @@ if apply_charge_side:
         # New pedestal calibration for charges ------------------------------------------------
         QF_pedestal_ST = []
         for key in ['1', '2', '3', '4']:
-            Q_F_cols = [f'Q{key}_F_{i+1}' for i in range(4)]
+            Q_F_cols = [f'p{key}_s{i+1}_ef_q' for i in range(4)]
             Q_F = calibration_work_st_df[Q_F_cols].values
         
-            Q_B_cols = [f'Q{key}_B_{i+1}' for i in range(4)]
+            Q_B_cols = [f'p{key}_s{i+1}_eb_q' for i in range(4)]
             Q_B = calibration_work_st_df[Q_B_cols].values
         
-            T_F_cols = [f'T{key}_F_{i+1}' for i in range(4)]
+            T_F_cols = [f'p{key}_s{i+1}_ef_t' for i in range(4)]
             T_F = calibration_work_st_df[T_F_cols].values
         
             QF_pedestal_component = [calibrate_strip_Q_pedestal(Q_F[:,i], T_F[:,i], Q_B[:,i], self_trigger_mode = self_trigger) for i in range(4)]
@@ -10281,13 +10283,13 @@ if apply_charge_side:
 
         QB_pedestal_ST = []
         for key in ['1', '2', '3', '4']:
-            Q_F_cols = [f'Q{key}_F_{i+1}' for i in range(4)]
+            Q_F_cols = [f'p{key}_s{i+1}_ef_q' for i in range(4)]
             Q_F = calibration_work_st_df[Q_F_cols].values
         
-            Q_B_cols = [f'Q{key}_B_{i+1}' for i in range(4)]
+            Q_B_cols = [f'p{key}_s{i+1}_eb_q' for i in range(4)]
             Q_B = calibration_work_st_df[Q_B_cols].values
         
-            T_B_cols = [f'T{key}_B_{i+1}' for i in range(4)]
+            T_B_cols = [f'p{key}_s{i+1}_eb_t' for i in range(4)]
             T_B = calibration_work_st_df[T_B_cols].values
         
             QB_pedestal_component = [calibrate_strip_Q_pedestal(Q_B[:,i], T_B[:,i], Q_F[:,i], self_trigger_mode = self_trigger) for i in range(4)]
@@ -10300,15 +10302,15 @@ if apply_charge_side:
         print(QB_pedestal_ST,"\n")
 
         if charge_test is not None:
-            for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
-                for j in range(4):
-                    mask = calibration_work_st_df[f'{key}_F_{j+1}'] != 0
-                    charge_test.loc[mask, f'{key}_F_{j+1}'] -= QF_pedestal_ST[i][j]
+            for plane in range(1, 5):
+                for strip in range(1, 5):
+                    mask = calibration_work_st_df[f'p{plane}_s{strip}_ef_q'] != 0
+                    charge_test.loc[mask, f'p{plane}_s{strip}_ef_q'] -= QF_pedestal_ST[plane - 1][strip - 1]
 
-            for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
-                for j in range(4):
-                    mask = calibration_work_st_df[f'{key}_B_{j+1}'] != 0
-                    charge_test.loc[mask, f'{key}_B_{j+1}'] -= QB_pedestal_ST[i][j]
+            for plane in range(1, 5):
+                for strip in range(1, 5):
+                    mask = calibration_work_st_df[f'p{plane}_s{strip}_eb_q'] != 0
+                    charge_test.loc[mask, f'p{plane}_s{strip}_eb_q'] -= QB_pedestal_ST[plane - 1][strip - 1]
 
         # Plot histograms of all the pedestal substractions
         if validate_charge_pedestal_calibration:
@@ -10318,23 +10320,24 @@ if apply_charge_side:
                 fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
                 axes_Q = axes_Q.flatten()
             
-                for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
-                    for j in range(4):
-                        col_F = f'{key}_F_{j+1}'
-                        col_B = f'{key}_B_{j+1}'
+                for plane in range(1, 5):
+                    for strip in range(1, 5):
+                        panel_idx = (plane - 1) * 4 + (strip - 1)
+                        col_F = f'p{plane}_s{strip}_ef_q'
+                        col_B = f'p{plane}_s{strip}_eb_q'
                         y_F = charge_test[col_F]
                         y_B = charge_test[col_B]
                     
                         # Plot histograms with Q-specific clipping and bins
-                        axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
+                        axes_Q[panel_idx].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
                                             bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
-                        axes_Q[i*4 + j].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
+                        axes_Q[panel_idx].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
                                             bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
-                        axes_Q[i*4 + j].set_title(f'{col_F} vs {col_B}')
-                        axes_Q[i*4 + j].legend()
+                        axes_Q[panel_idx].set_title(f'{col_F} vs {col_B}')
+                        axes_Q[panel_idx].legend()
                     
                         if log_scale:
-                            axes_Q[i*4 + j].set_yscale('log')  # For Q values
+                            axes_Q[panel_idx].set_yscale('log')  # For Q values
 
                 plt.tight_layout()
                 plt.subplots_adjust(top=0.9)
@@ -10359,10 +10362,11 @@ if apply_charge_side:
                 fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
                 axes_Q = axes_Q.flatten()
             
-                for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
-                    for j in range(4):
-                        col_F = f'{key}_F_{j+1}'
-                        col_B = f'{key}_B_{j+1}'
+                for plane in range(1, 5):
+                    for strip in range(1, 5):
+                        panel_idx = (plane - 1) * 4 + (strip - 1)
+                        col_F = f'p{plane}_s{strip}_ef_q'
+                        col_B = f'p{plane}_s{strip}_eb_q'
                         y_F = charge_test[col_F]
                         y_B = charge_test[col_B]
                     
@@ -10370,14 +10374,14 @@ if apply_charge_side:
                         Q_clip_max = pedestal_right
                     
                         # Plot histograms with Q-specific clipping and bins
-                        axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
+                        axes_Q[panel_idx].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
                                             bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
-                        axes_Q[i*4 + j].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
+                        axes_Q[panel_idx].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
                                             bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
-                        axes_Q[i*4 + j].set_title(f'{col_F} vs {col_B}')
-                        axes_Q[i*4 + j].legend()
+                        axes_Q[panel_idx].set_title(f'{col_F} vs {col_B}')
+                        axes_Q[panel_idx].legend()
                         # Show between -5 and 5
-                        axes_Q[i*4 + j].set_xlim([Q_clip_min, Q_clip_max])
+                        axes_Q[panel_idx].set_xlim([Q_clip_min, Q_clip_max])
                 # Display a vertical green dashed, alpha = 0.5 line at 0
                 for ax in axes_Q:
                     ax.axvline(0, color='green', linestyle='--', alpha=0.5)
@@ -10405,10 +10409,11 @@ if apply_charge_side:
                 fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
                 axes_Q = axes_Q.flatten()
             
-                for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
-                    for j in range(4):
-                        col_F = f'{key}_F_{j+1}'
-                        col_B = f'{key}_B_{j+1}'
+                for plane in range(1, 5):
+                    for strip in range(1, 5):
+                        panel_idx = (plane - 1) * 4 + (strip - 1)
+                        col_F = f'p{plane}_s{strip}_ef_q'
+                        col_B = f'p{plane}_s{strip}_eb_q'
                         y_F = charge_test[col_F]
                         y_B = charge_test[col_B]
                     
@@ -10416,14 +10421,14 @@ if apply_charge_side:
                         Q_clip_max = pedestal_right * 12
                     
                         # Plot histograms with Q-specific clipping and bins
-                        axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
+                        axes_Q[panel_idx].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
                                             bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
-                        axes_Q[i*4 + j].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
+                        axes_Q[panel_idx].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
                                             bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
-                        axes_Q[i*4 + j].set_title(f'{col_F} vs {col_B}')
-                        axes_Q[i*4 + j].legend()
+                        axes_Q[panel_idx].set_title(f'{col_F} vs {col_B}')
+                        axes_Q[panel_idx].legend()
                         # Show between -5 and 5
-                        axes_Q[i*4 + j].set_xlim([Q_clip_min, Q_clip_max])
+                        axes_Q[panel_idx].set_xlim([Q_clip_min, Q_clip_max])
                 # Display a vertical green dashed, alpha = 0.5 line at 0
                 for ax in axes_Q:
                     ax.axvline(0, color='green', linestyle='--', alpha=0.5)
@@ -10464,11 +10469,11 @@ if apply_T_dif_calibration:
     print("----------------------------------------------------------------------")
 
     timing_test_columns = [
-        f"{key}_{side}_{strip}"
-        for key in ("T1", "T2", "T3", "T4")
-        for side in ("F", "B")
+        f"p{plane}_s{strip}_{endpoint}_t"
+        for plane in range(1, 5)
         for strip in range(1, 5)
-        if f"{key}_{side}_{strip}" in calibration_work_df.columns
+        for endpoint in ("ef", "eb")
+        if f"p{plane}_s{strip}_{endpoint}_t" in calibration_work_df.columns
     ]
     pos_test = (
         calibration_work_df.loc[:, timing_test_columns].copy()
@@ -10476,18 +10481,18 @@ if apply_T_dif_calibration:
         else None
     )
     if pos_test is not None:
-        for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-            for j in range(4):
-                pos_test[f'{key}_dif_{j+1}'] = ( pos_test[f'{key}_B_{j+1}'] - pos_test[f'{key}_F_{j+1}'] ) / 2
+        for plane in range(1, 5):
+            for strip in range(1, 5):
+                pos_test[f'p{plane}_s{strip}_tdif'] = ( pos_test[f'p{plane}_s{strip}_eb_t'] - pos_test[f'p{plane}_s{strip}_ef_t'] ) / 2
 
     if calculate_T_dif_calibration:
         raw_one_strip_masks = _task2_plane_one_strip_masks_from_raw(calibration_work_df)
         Tdiff_cal = []
         for key in ['1', '2', '3', '4']:
-            T_F_cols = [f'T{key}_F_{i+1}' for i in range(4)]
+            T_F_cols = [f'p{key}_s{i+1}_ef_t' for i in range(4)]
             T_F = calibration_work_df[T_F_cols].values
 
-            T_B_cols = [f'T{key}_B_{i+1}' for i in range(4)]
+            T_B_cols = [f'p{key}_s{i+1}_eb_t' for i in range(4)]
             T_B = calibration_work_df[T_B_cols].values
 
             plane_masks = raw_one_strip_masks.get(int(key), {})
@@ -10515,12 +10520,13 @@ if apply_T_dif_calibration:
     print(f"\nTime diff. offset (mode={time_dif_calibration_mode}):")
     print(Tdiff_cal, "\n")
 
-    if validate_pos_cal:
+    if validate_pos_cal and pos_test is not None:
 
-        for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-            for j in range(4):
-                mask = pos_test[f'{key}_dif_{j+1}'] != 0
-                pos_test.loc[mask, f'{key}_dif_{j+1}'] -= Tdiff_cal[i][j]
+        for plane in range(1, 5):
+            for strip in range(1, 5):
+                tdif_col = f'p{plane}_s{strip}_tdif'
+                mask = pos_test[tdif_col] != 0
+                pos_test.loc[mask, tdif_col] -= Tdiff_cal[plane - 1][strip - 1]
 
         
         if create_plots:
@@ -10528,24 +10534,25 @@ if apply_T_dif_calibration:
             fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
             axes_Q = axes_Q.flatten()
             
-            for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-                for j in range(4):
-                    col_F = f'{key}_dif_{j+1}'
+            for plane in range(1, 5):
+                for strip in range(1, 5):
+                    panel_idx = (plane - 1) * 4 + (strip - 1)
+                    col_F = f'p{plane}_s{strip}_tdif'
                     y_F = pos_test[col_F]
                     
                     Q_clip_min = -2
                     Q_clip_max = 2
                     
                     # Plot histograms with Q-specific clipping and bins
-                    axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
+                    axes_Q[panel_idx].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
                                         bins=num_bins, alpha=0.5, label=f'{col_F}')
-                    axes_Q[i*4 + j].set_title(f'{col_F}')
-                    axes_Q[i*4 + j].legend()
-                    axes_Q[i*4 + j].set_xlabel('T_diff / ns')
-                    axes_Q[i*4 + j].set_xlim([Q_clip_min, Q_clip_max])
+                    axes_Q[panel_idx].set_title(f'{col_F}')
+                    axes_Q[panel_idx].legend()
+                    axes_Q[panel_idx].set_xlabel('T_diff / ns')
+                    axes_Q[panel_idx].set_xlim([Q_clip_min, Q_clip_max])
                     
                     # if log_scale:
-                    #     axes_Q[i*4 + j].set_yscale('log')  # For Q values
+                    #     axes_Q[panel_idx].set_yscale('log')  # For Q values
                     
                 for ax in axes_Q:
                     ax.axvline(0, color='green', linestyle='--', alpha=0.5)
@@ -10571,11 +10578,11 @@ if apply_T_dif_calibration:
         print("----------------------------------------------------------------------")
 
         pos_test_st_columns = [
-            f"{key}_{side}_{strip}"
-            for key in ("T1", "T2", "T3", "T4")
-            for side in ("F", "B")
+            f"p{plane}_s{strip}_{endpoint}_t"
+            for plane in range(1, 5)
             for strip in range(1, 5)
-            if f"{key}_{side}_{strip}" in calibration_work_st_df.columns
+            for endpoint in ("ef", "eb")
+            if f"p{plane}_s{strip}_{endpoint}_t" in calibration_work_st_df.columns
         ]
         pos_test = (
             calibration_work_st_df.loc[:, pos_test_st_columns].copy()
@@ -10583,15 +10590,15 @@ if apply_T_dif_calibration:
             else None
         )
         if pos_test is not None:
-            for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-                for j in range(4):
-                    pos_test[f'{key}_dif_{j+1}'] = ( pos_test[f'{key}_B_{j+1}'] - pos_test[f'{key}_F_{j+1}'] ) / 2
+            for plane in range(1, 5):
+                for strip in range(1, 5):
+                    pos_test[f'p{plane}_s{strip}_tdif'] = ( pos_test[f'p{plane}_s{strip}_eb_t'] - pos_test[f'p{plane}_s{strip}_ef_t'] ) / 2
         Tdiff_cal_ST = []
         for key in ['1', '2', '3', '4']:
-            T_F_cols = [f'T{key}_F_{i+1}' for i in range(4)]
+            T_F_cols = [f'p{key}_s{i+1}_ef_t' for i in range(4)]
             T_F = calibration_work_st_df[T_F_cols].values
         
-            T_B_cols = [f'T{key}_B_{i+1}' for i in range(4)]
+            T_B_cols = [f'p{key}_s{i+1}_eb_t' for i in range(4)]
             T_B = calibration_work_st_df[T_B_cols].values
         
             Tdiff_cal_component = [calibrate_strip_T_diff(T_F[:,i], T_B[:,i], self_trigger_mode = self_trigger) for i in range(4)]
@@ -10607,12 +10614,13 @@ if apply_T_dif_calibration:
         print(Tdiff_cal_ST, "\n")
 
         validate_pos_cal = True
-        if validate_pos_cal:
+        if validate_pos_cal and pos_test is not None:
 
-            for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-                for j in range(4):
-                    mask = pos_test[f'{key}_dif_{j+1}'] != 0
-                    pos_test.loc[mask, f'{key}_dif_{j+1}'] -= Tdiff_cal_ST[i][j]
+            for plane in range(1, 5):
+                for strip in range(1, 5):
+                    tdif_col = f'p{plane}_s{strip}_tdif'
+                    mask = pos_test[tdif_col] != 0
+                    pos_test.loc[mask, tdif_col] -= Tdiff_cal_ST[plane - 1][strip - 1]
 
             
             if create_plots:
@@ -10620,24 +10628,25 @@ if apply_T_dif_calibration:
                 fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
                 axes_Q = axes_Q.flatten()
             
-                for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-                    for j in range(4):
-                        col_F = f'{key}_dif_{j+1}'
+                for plane in range(1, 5):
+                    for strip in range(1, 5):
+                        panel_idx = (plane - 1) * 4 + (strip - 1)
+                        col_F = f'p{plane}_s{strip}_tdif'
                         y_F = pos_test[col_F]
                     
                         Q_clip_min = -2
                         Q_clip_max = 2
                     
                         # Plot histograms with Q-specific clipping and bins
-                        axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
+                        axes_Q[panel_idx].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
                                             bins=num_bins, alpha=0.5, label=f'{col_F}')
-                        axes_Q[i*4 + j].set_title(f'{col_F}')
-                        axes_Q[i*4 + j].legend()
-                        axes_Q[i*4 + j].set_xlabel('T_diff / ns')
-                        axes_Q[i*4 + j].set_xlim([Q_clip_min, Q_clip_max])
+                        axes_Q[panel_idx].set_title(f'{col_F}')
+                        axes_Q[panel_idx].legend()
+                        axes_Q[panel_idx].set_xlabel('T_diff / ns')
+                        axes_Q[panel_idx].set_xlim([Q_clip_min, Q_clip_max])
                     
                         # if log_scale:
-                        #     axes_Q[i*4 + j].set_yscale('log')  # For Q values
+                        #     axes_Q[panel_idx].set_yscale('log')  # For Q values
                     
                     for ax in axes_Q:
                         ax.axvline(0, color='green', linestyle='--', alpha=0.5)
@@ -10688,13 +10697,13 @@ if calibration_work_df_qfb is not None:
 task2_total_charge_plane_columns: list[str] = []
 for plane_idx in range(1, 5):
     plane_qsum_cols = [
-        f"Q{plane_idx}_Q_sum_{strip_idx}"
+        f"p{plane_idx}_s{strip_idx}_qsum"
         for strip_idx in range(1, 5)
-        if f"Q{plane_idx}_Q_sum_{strip_idx}" in working_df.columns
+        if f"p{plane_idx}_s{strip_idx}_qsum" in working_df.columns
     ]
     if not plane_qsum_cols:
         continue
-    total_col = f"P{plane_idx}_Q_total_uncal"
+    total_col = f"p{plane_idx}_qsum_uncalibrated"
     working_df.loc[:, total_col] = (
         working_df.loc[:, plane_qsum_cols]
         .apply(pd.to_numeric, errors="coerce")
@@ -11086,11 +11095,11 @@ if charge_share_prefilter:
 
     charge_share_summary = apply_task2_min_event_charge_share_filter_inplace(
         calibration_work_df,
-        min_share=task2_min_charge_event_share,
+        min_share=task2_min_event_charge_share,
     )
     print(
         "[task2-charge-share-prefilter] "
-        f"min_share={task2_min_charge_event_share:.3f} "
+        f"min_share={task2_min_event_charge_share:.3f} "
         f"rows_with_low_share={charge_share_summary['rows_with_low_share']} "
         f"strip_blocks_zeroed={charge_share_summary['strip_blocks_zeroed']} "
         f"q_values_zeroed={charge_share_summary['q_values_zeroed']}"
@@ -11099,11 +11108,11 @@ if charge_share_prefilter:
     if calibration_work_df_qfb is not None:
         qfb_charge_share_summary = apply_task2_min_event_charge_share_filter_inplace(
             calibration_work_df_qfb,
-            min_share=task2_min_charge_event_share,
+            min_share=task2_min_event_charge_share,
         )
         print(
             "[task2-charge-share-prefilter][qfb] "
-            f"min_share={task2_min_charge_event_share:.3f} "
+            f"min_share={task2_min_event_charge_share:.3f} "
             f"rows_with_low_share={qfb_charge_share_summary['rows_with_low_share']} "
             f"strip_blocks_zeroed={qfb_charge_share_summary['strip_blocks_zeroed']} "
             f"q_values_zeroed={qfb_charge_share_summary['q_values_zeroed']}"
@@ -11112,11 +11121,11 @@ if charge_share_prefilter:
     if calibration_work_st_df is not None:
         st_charge_share_summary = apply_task2_min_event_charge_share_filter_inplace(
             calibration_work_st_df,
-            min_share=task2_min_charge_event_share,
+            min_share=task2_min_event_charge_share,
         )
         print(
             "[task2-charge-share-prefilter][self-trigger] "
-            f"min_share={task2_min_charge_event_share:.3f} "
+            f"min_share={task2_min_event_charge_share:.3f} "
             f"rows_with_low_share={st_charge_share_summary['rows_with_low_share']} "
             f"strip_blocks_zeroed={st_charge_share_summary['strip_blocks_zeroed']} "
             f"q_values_zeroed={st_charge_share_summary['q_values_zeroed']}"
@@ -11124,11 +11133,11 @@ if charge_share_prefilter:
     if calibration_work_st_df_qfb is not None:
         st_qfb_charge_share_summary = apply_task2_min_event_charge_share_filter_inplace(
             calibration_work_st_df_qfb,
-            min_share=task2_min_charge_event_share,
+            min_share=task2_min_event_charge_share,
         )
         print(
             "[task2-charge-share-prefilter][self-trigger][qfb] "
-            f"min_share={task2_min_charge_event_share:.3f} "
+            f"min_share={task2_min_event_charge_share:.3f} "
             f"rows_with_low_share={st_qfb_charge_share_summary['rows_with_low_share']} "
             f"strip_blocks_zeroed={st_qfb_charge_share_summary['strip_blocks_zeroed']} "
             f"q_values_zeroed={st_qfb_charge_share_summary['q_values_zeroed']}"
@@ -11151,7 +11160,7 @@ if charge_share_prefilter:
 else:
     print(
         "Skipping charge-share prefilter (config disabled); "
-        f"task2_min_charge_event_share={task2_min_charge_event_share:.3f} not applied."
+        f"task2_min_event_charge_share={task2_min_event_charge_share:.3f} not applied."
     )
 
 _prof["s_precal_filter_s"] = round(time.perf_counter() - _t_sec, 2)
@@ -11267,8 +11276,8 @@ if charge_front_back_mode is not None and not defer_charge_calibration_until_pos
     _qfb_tasks = []
     for key in [1, 2, 3, 4]:
         for i in range(4):
-            Q_sum = calibration_work_df[f'Q{key}_Q_sum_{i+1}'].values
-            Q_diff = calibration_work_df[f'Q{key}_Q_dif_{i+1}'].values
+            Q_sum = calibration_work_df[f'p{key}_s{i+1}_qsum'].values
+            Q_diff = calibration_work_df[f'p{key}_s{i+1}_qdif'].values
             one_strip_mask = _task2_prefer_one_strip_mask(
                 qfb_one_strip_masks.get(key, {}).get(i + 1, np.zeros(len(calibration_work_df), dtype=bool)),
                 label=f"P{key}s{i+1} Q_FB calibration",
@@ -11308,7 +11317,7 @@ if charge_front_back_mode is not None and not defer_charge_calibration_until_pos
         coeffs = np.asarray(coeffs, dtype=float)
         print([f"{coeff:.3g}" for coeff in coeffs])
 
-        column_name  = f'Q{key}_Q_dif_{i+1}'
+        column_name  = f'p{key}_s{i+1}_qdif'
         corrected_diff = Q_dif_adj - polynomial(Q_sum_adj, *coeffs)
         qfb_deferred_updates[(key, i + 1)] = (
             np.flatnonzero(np.asarray(cond, dtype=bool)),
@@ -11328,8 +11337,8 @@ if charge_front_back_mode is not None and not defer_charge_calibration_until_pos
         print("SELF TRIGGER Charge front-back correction...")
         for key in [1, 2, 3, 4]:
             for i in range(4):
-                Q_sum = calibration_work_st_df[f'Q{key}_Q_sum_{i+1}'].values
-                Q_diff = calibration_work_st_df[f'Q{key}_Q_dif_{i+1}'].values
+                Q_sum = calibration_work_st_df[f'p{key}_s{i+1}_qsum'].values
+                Q_diff = calibration_work_st_df[f'p{key}_s{i+1}_qdif'].values
 
                 cond = (Q_sum != 0) & (Q_diff != 0)
                 Q_sum_adjusted = Q_sum[cond]
@@ -11351,7 +11360,7 @@ if charge_front_back_mode is not None and not defer_charge_calibration_until_pos
                     if coeffs is None:
                         continue
 
-                column_name = f'Q{key}_Q_dif_{i+1}'
+                column_name = f'p{key}_s{i+1}_qdif'
                 target_dtype = calibration_work_st_df[column_name].dtype
                 corrected_diff = Q_dif_adjusted - polynomial(Q_sum_adjusted, *coeffs)
                 calibration_work_st_df.loc[cond, column_name] = corrected_diff.astype(target_dtype, copy=False)
@@ -12741,8 +12750,8 @@ if defer_charge_calibration_until_post_time:
         _qfb_tasks = []
         for key in [1, 2, 3, 4]:
             for i in range(4):
-                Q_sum = calibration_work_df[f'Q{key}_Q_sum_{i+1}'].values
-                Q_diff = calibration_work_df[f'Q{key}_Q_dif_{i+1}'].values
+                Q_sum = calibration_work_df[f'p{key}_s{i+1}_qsum'].values
+                Q_diff = calibration_work_df[f'p{key}_s{i+1}_qdif'].values
                 one_strip_mask = _task2_prefer_one_strip_mask(
                     qfb_one_strip_masks.get(key, {}).get(i + 1, np.zeros(len(calibration_work_df), dtype=bool)),
                     label=f"P{key}s{i+1} Q_FB calibration (deferred)",
@@ -12754,8 +12763,8 @@ if defer_charge_calibration_until_post_time:
                 Q_sum_fit = Q_sum_adj
                 Q_dif_fit = Q_dif_adj
                 if calibration_work_df_qfb is not None:
-                    Q_sum_qfb = calibration_work_df_qfb[f'Q{key}_Q_sum_{i+1}'].values
-                    Q_diff_qfb = calibration_work_df_qfb[f'Q{key}_Q_dif_{i+1}'].values
+                    Q_sum_qfb = calibration_work_df_qfb[f'p{key}_s{i+1}_qsum'].values
+                    Q_diff_qfb = calibration_work_df_qfb[f'p{key}_s{i+1}_qdif'].values
                     one_strip_mask_qfb = _task2_prefer_one_strip_mask(
                         qfb_one_strip_masks_qfb.get(key, {}).get(i + 1, np.zeros(len(calibration_work_df_qfb), dtype=bool)),
                         label=f"P{key}s{i+1} Q_FB calibration (deferred, qfb)",
@@ -12800,7 +12809,7 @@ if defer_charge_calibration_until_post_time:
                 continue
             coeffs = np.asarray(coeffs, dtype=float)
 
-            column_name = f'Q{key}_Q_dif_{i+1}'
+            column_name = f'p{key}_s{i+1}_qdif'
             corrected_diff = Q_dif_adj - polynomial(Q_sum_adj, *coeffs)
             qfb_deferred_updates[(key, i + 1)] = (
                 np.flatnonzero(np.asarray(cond, dtype=bool)),
@@ -12825,8 +12834,8 @@ if defer_charge_calibration_until_post_time:
             )
             for key in [1, 2, 3, 4]:
                 for i in range(4):
-                    Q_sum = calibration_work_st_df[f'Q{key}_Q_sum_{i+1}'].values
-                    Q_diff = calibration_work_st_df[f'Q{key}_Q_dif_{i+1}'].values
+                    Q_sum = calibration_work_st_df[f'p{key}_s{i+1}_qsum'].values
+                    Q_diff = calibration_work_st_df[f'p{key}_s{i+1}_qdif'].values
 
                     cond = (Q_sum != 0) & (Q_diff != 0)
                     Q_sum_adjusted = Q_sum[cond]
@@ -12835,8 +12844,8 @@ if defer_charge_calibration_until_post_time:
                     Q_sum_fit = Q_sum_adjusted
                     Q_dif_fit = Q_dif_adjusted
                     if calibration_work_st_df_qfb is not None:
-                        Q_sum_qfb = calibration_work_st_df_qfb[f'Q{key}_Q_sum_{i+1}'].values
-                        Q_diff_qfb = calibration_work_st_df_qfb[f'Q{key}_Q_dif_{i+1}'].values
+                        Q_sum_qfb = calibration_work_st_df_qfb[f'p{key}_s{i+1}_qsum'].values
+                        Q_diff_qfb = calibration_work_st_df_qfb[f'p{key}_s{i+1}_qdif'].values
                         one_strip_mask_qfb = _task2_prefer_one_strip_mask(
                             qfb_one_strip_masks_st_qfb.get(key, {}).get(i + 1, np.zeros(len(calibration_work_st_df_qfb), dtype=bool)),
                             label=f"P{key}s{i+1} SELF TRIGGER Q_FB calibration (deferred, qfb)",
@@ -12872,7 +12881,7 @@ if defer_charge_calibration_until_post_time:
                         if coeffs is None:
                             continue
 
-                    column_name = f'Q{key}_Q_dif_{i+1}'
+                    column_name = f'p{key}_s{i+1}_qdif'
                     target_dtype = calibration_work_st_df[column_name].dtype
                     corrected_diff = Q_dif_adjusted - polynomial(Q_sum_adjusted, *coeffs)
                     calibration_work_st_df.loc[cond, column_name] = corrected_diff.astype(target_dtype, copy=False)
@@ -12897,8 +12906,8 @@ if defer_charge_calibration_until_post_time:
         _qtdif_tasks = []
         for key in [1, 2, 3, 4]:
             for i in range(4):
-                tdif_col = f"T{key}_T_dif_{i+1}"
-                qdif_col = f"Q{key}_Q_dif_{i+1}"
+                tdif_col = f"p{key}_s{i+1}_tdif"
+                qdif_col = f"p{key}_s{i+1}_qdif"
                 if tdif_col not in calibration_work_df.columns or qdif_col not in calibration_work_df.columns:
                     continue
 
@@ -12939,7 +12948,7 @@ if defer_charge_calibration_until_post_time:
                         qfb_coeffs = qfb_coefficients.get((key, i + 1))
                         if qfb_coeffs is None:
                             qfb_coeffs = global_variables.get(f"P{key}_s{i+1}_Q_FB_coeffs")
-                        qsum_col = f"Q{key}_Q_sum_{i+1}"
+                        qsum_col = f"p{key}_s{i+1}_qsum"
                         if qfb_coeffs is not None and qsum_col in calibration_work_df_qfb.columns:
                             Q_sum_qfb = pd.to_numeric(calibration_work_df_qfb[qsum_col], errors="coerce").to_numpy(dtype=float)
                             Q_dif_qfb_adj = Q_dif_qfb_adj - polynomial(Q_sum_qfb[cond_qfb], *np.asarray(qfb_coeffs, dtype=float))
@@ -12982,7 +12991,7 @@ if defer_charge_calibration_until_post_time:
                 continue
             coeffs = np.asarray(coeffs, dtype=float)
 
-            qdif_col = f"Q{key}_Q_dif_{i+1}"
+            qdif_col = f"p{key}_s{i+1}_qdif"
             corrected_diff = Q_dif_adj - polynomial(T_dif_adj, *coeffs)
             snapshot_column_if_changed(calibration_work_df, qdif_col, cond)
             new_values = np.asarray(corrected_diff, dtype=float)
@@ -13003,8 +13012,8 @@ if defer_charge_calibration_until_post_time:
             print("SELF TRIGGER Q_dif vs T_dif correction (deferred)...")
             for key in [1, 2, 3, 4]:
                 for i in range(4):
-                    tdif_col = f"T{key}_T_dif_{i+1}"
-                    qdif_col = f"Q{key}_Q_dif_{i+1}"
+                    tdif_col = f"p{key}_s{i+1}_tdif"
+                    qdif_col = f"p{key}_s{i+1}_qdif"
                     if tdif_col not in calibration_work_st_df.columns or qdif_col not in calibration_work_st_df.columns:
                         continue
                     coeffs = qtdif_coefficients.get((key, i + 1))
@@ -13364,38 +13373,38 @@ print("--------- Applying deferred calibrations to working_df ---------------")
 print("----------------------------------------------------------------------")
 
 if apply_T_dif_calibration:
-    for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-        for j in range(4):
-            column_name = f'{key}_T_dif_{j+1}'
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            column_name = f'p{plane}_s{strip}_tdif'
             mask = working_df[column_name] != 0
             snapshot_column_if_changed(working_df, column_name, mask)
-            working_df.loc[mask, column_name] -= Tdiff_cal[i][j]
+            working_df.loc[mask, column_name] -= Tdiff_cal[plane - 1][strip - 1]
 
 if apply_T_sum_calibration:
-    for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-        for j in range(4):
-            column_name = f'{key}_T_sum_{j+1}'
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            column_name = f'p{plane}_s{strip}_tsum'
             mask = working_df[column_name] != 0
             snapshot_column_if_changed(working_df, column_name, mask)
-            working_df.loc[mask, column_name] += Tsum_cal[i][j]
+            working_df.loc[mask, column_name] += Tsum_cal[plane - 1][strip - 1]
 
 print(
     "Skipping post-application T_dif/T_sum filtering on working_df; "
     "timing range cuts are deferred to the final unified filtering stage."
 )
 
-for i, key in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
-    for j in range(4):
-        q_dif_col = f'{key}_Q_dif_{j+1}'
-        q_sum_col = f'{key}_Q_sum_{j+1}'
+for plane in range(1, 5):
+    for strip in range(1, 5):
+        q_dif_col = f'p{plane}_s{strip}_qdif'
+        q_sum_col = f'p{plane}_s{strip}_qsum'
 
         q_dif_mask = working_df[q_dif_col] != 0
         snapshot_column_if_changed(working_df, q_dif_col, q_dif_mask)
-        working_df.loc[q_dif_mask, q_dif_col] -= (QF_pedestal[i][j] - QB_pedestal[i][j]) / 2
+        working_df.loc[q_dif_mask, q_dif_col] -= (QF_pedestal[plane - 1][strip - 1] - QB_pedestal[plane - 1][strip - 1]) / 2
 
         q_sum_mask = working_df[q_sum_col] != 0
         snapshot_column_if_changed(working_df, q_sum_col, q_sum_mask)
-        working_df.loc[q_sum_mask, q_sum_col] -= (QF_pedestal[i][j] + QB_pedestal[i][j]) / 2
+        working_df.loc[q_sum_mask, q_sum_col] -= (QF_pedestal[plane - 1][strip - 1] + QB_pedestal[plane - 1][strip - 1]) / 2
 
 if charge_front_back_mode is not None:
     for key in [1, 2, 3, 4]:
@@ -13407,8 +13416,8 @@ if charge_front_back_mode is not None:
                 continue
             coeffs = np.asarray(coeffs, dtype=float)
 
-            column_name = f'Q{key}_Q_dif_{strip}'
-            q_sum_column_name = f'Q{key}_Q_sum_{strip}'
+            column_name = f'p{key}_s{strip}_qdif'
+            q_sum_column_name = f'p{key}_s{strip}_qsum'
             if column_name not in working_df.columns or q_sum_column_name not in working_df.columns:
                 continue
 
@@ -13435,8 +13444,8 @@ if apply_Q_TDIF_calibration:
                 continue
             coeffs = np.asarray(coeffs, dtype=float)
 
-            tdif_col = f"T{plane}_T_dif_{strip}"
-            qdif_col = f"Q{plane}_Q_dif_{strip}"
+            tdif_col = f"p{plane}_s{strip}_tdif"
+            qdif_col = f"p{plane}_s{strip}_qdif"
             if tdif_col not in working_df.columns or qdif_col not in working_df.columns:
                 continue
 
@@ -13801,13 +13810,13 @@ print(
     f"flagged_rows={strip_combination_summary['flagged_rows']} "
     f"selected_offenders={strip_combination_summary['selected_offender_strips']}"
 )
-working_df.loc[:, "task2_problematic_strip_count"] = (
+working_df.loc[:, "filter_task2_problematic_strip_count"] = (
     strip_combination_summary["selected_offender_count_by_row"]
     .reindex(working_df.index, fill_value=0)
     .astype(int)
     .to_numpy()
 )
-working_df.loc[:, "task2_problematic_strip_resolution_exact"] = (
+working_df.loc[:, "filter_task2_problematic_strip_exact"] = (
     strip_combination_summary["resolution_exact_by_row"]
     .reindex(working_df.index, fill_value=True)
     .astype(bool)
@@ -13850,44 +13859,44 @@ for selected_count in TASK2_SELECTED_OFFENDER_CARDINALITY_VALUES:
 for strip_key, offender_count in strip_combination_summary["selected_offender_counts"].items():
     global_variables[_task2_strip_offender_metric_key(strip_key)] = int(offender_count)
 
-task1_problematic_channel_count = pd.to_numeric(
+filter_task1_problematic_channel_count = pd.to_numeric(
     working_df.get(
-        "task1_problematic_channel_count",
+        "filter_task1_problematic_channel_count",
         pd.Series(index=working_df.index, dtype=float),
     ),
     errors="coerce",
 ).fillna(0).astype(int)
-task2_problematic_strip_count_series = pd.to_numeric(
+filter_task2_problematic_strip_count_series = pd.to_numeric(
     working_df.get(
-        "task2_problematic_strip_count",
+        "filter_task2_problematic_strip_count",
         pd.Series(index=working_df.index, dtype=float),
     ),
     errors="coerce",
 ).fillna(0).astype(int)
-total_problematic_offender_count = (
-    task1_problematic_channel_count + task2_problematic_strip_count_series
+filter_total_problematic_offender_count = (
+    filter_task1_problematic_channel_count + filter_task2_problematic_strip_count_series
 ).astype(int)
 
-working_df.loc[:, "task1_problematic_channel_count"] = task1_problematic_channel_count.to_numpy()
-working_df.loc[:, "task2_problematic_strip_count"] = task2_problematic_strip_count_series.to_numpy()
-if "task1_problematic_channel_resolution_exact" in working_df.columns:
-    working_df.loc[:, "task1_problematic_channel_resolution_exact"] = (
-        working_df["task1_problematic_channel_resolution_exact"]
+working_df.loc[:, "filter_task1_problematic_channel_count"] = filter_task1_problematic_channel_count.to_numpy()
+working_df.loc[:, "filter_task2_problematic_strip_count"] = filter_task2_problematic_strip_count_series.to_numpy()
+if "filter_task1_problematic_channel_exact" in working_df.columns:
+    working_df.loc[:, "filter_task1_problematic_channel_exact"] = (
+        working_df["filter_task1_problematic_channel_exact"]
         .astype(bool)
         .to_numpy()
     )
-if "task2_problematic_strip_resolution_exact" in working_df.columns:
-    working_df.loc[:, "task2_problematic_strip_resolution_exact"] = (
-        working_df["task2_problematic_strip_resolution_exact"]
+if "filter_task2_problematic_strip_exact" in working_df.columns:
+    working_df.loc[:, "filter_task2_problematic_strip_exact"] = (
+        working_df["filter_task2_problematic_strip_exact"]
         .astype(bool)
         .to_numpy()
     )
-working_df.loc[:, "total_problematic_offender_count"] = (
-    total_problematic_offender_count.to_numpy()
+working_df.loc[:, "filter_total_problematic_offender_count"] = (
+    filter_total_problematic_offender_count.to_numpy()
 )
 
-total_problematic_offender_count_counts = (
-    total_problematic_offender_count.value_counts().sort_index()
+filter_total_problematic_offender_count_counts = (
+    filter_total_problematic_offender_count.value_counts().sort_index()
 )
 if _plot_strip_combination_filter_by_tt:
     strip_combination_self_hist_after = collect_task2_strip_combination_histogram_payload(
@@ -14125,7 +14134,7 @@ os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
 # (Here, you would have your data cleaning code before saving)
 # working_df = ...
 
-# Pattern for Q4_Q_sum_3, Q4_Q_sum_4, Q3_Q_sum_3...
+# Pattern for p4_s3_qsum, p4_s4_qsum, p3_s3_qsum...
 Q_SUM_PATTERN = re.compile(r"^Q\d+_Q_sum_\d+$")
 
 # Keep q_sum/all-zero checks as diagnostics only: do not drop rows here.
@@ -14156,57 +14165,58 @@ record_filter_metric(
 
 print(f"Original number of events in the dataframe: {original_number_of_events}")
 
-cal_tt_columns: dict[int, list[str]] = {}
+tt_task2_cal_columns: dict[int, list[str]] = {}
+working_df = add_topology_task2_strip(working_df)
 
 for plane in range(1, 5):
-    cal_tt_columns[plane] = [
-        f"Q{plane}_Q_sum_{strip}" for strip in range(1, 5)
-        if f"Q{plane}_Q_sum_{strip}" in working_df.columns
+    tt_task2_cal_columns[plane] = [
+        f"p{plane}_s{strip}_qsum" for strip in range(1, 5)
+        if f"p{plane}_s{strip}_qsum" in working_df.columns
     ] + [
-        f"Q{plane}_Q_dif_{strip}" for strip in range(1, 5)
-        if f"Q{plane}_Q_dif_{strip}" in working_df.columns
+        f"p{plane}_s{strip}_qdif" for strip in range(1, 5)
+        if f"p{plane}_s{strip}_qdif" in working_df.columns
     ] + [
-        f"T{plane}_T_sum_{strip}" for strip in range(1, 5)
-        if f"T{plane}_T_sum_{strip}" in working_df.columns
+        f"p{plane}_s{strip}_tsum" for strip in range(1, 5)
+        if f"p{plane}_s{strip}_tsum" in working_df.columns
     ] + [
-        f"T{plane}_T_dif_{strip}" for strip in range(1, 5)
-        if f"T{plane}_T_dif_{strip}" in working_df.columns
+        f"p{plane}_s{strip}_tdif" for strip in range(1, 5)
+        if f"p{plane}_s{strip}_tdif" in working_df.columns
     ]
 
-snapshot_original_columns_once(working_df, ["cal_tt"] if "cal_tt" in working_df.columns else [])
-working_df = compute_tt(working_df, "cal_tt", cal_tt_columns)
+snapshot_original_columns_once(working_df, ["tt_task2_cal"] if "tt_task2_cal" in working_df.columns else [])
+working_df = compute_tt(working_df, "tt_task2_cal", tt_task2_cal_columns)
 snapshot_original_columns_once(
     working_df,
-    ["clean_to_cal_tt"] if "clean_to_cal_tt" in working_df.columns else [],
+    ["transferred_task2_clean_to_cal"] if "transferred_task2_clean_to_cal" in working_df.columns else [],
 )
-working_df.loc[:, "clean_to_cal_tt"] = (
-    pd.to_numeric(working_df["clean_tt"], errors="coerce").fillna(0).astype(int).astype(str)
+working_df.loc[:, "transferred_task2_clean_to_cal"] = (
+    pd.to_numeric(working_df["tt_task1_clean"], errors="coerce").fillna(0).astype(int).astype(str)
     + "_"
-    + pd.to_numeric(working_df["cal_tt"], errors="coerce").fillna(0).astype(int).astype(str)
+    + pd.to_numeric(working_df["tt_task2_cal"], errors="coerce").fillna(0).astype(int).astype(str)
 )
 
-cal_tt_total = len(working_df)
-if create_debug_plots and "cal_tt" in working_df.columns:
+tt_task2_cal_total = len(working_df)
+if create_debug_plots and "tt_task2_cal" in working_df.columns:
     debug_fig_idx = plot_debug_histograms(
         working_df,
-        ["cal_tt"],
-        {"cal_tt": [10]},
-        title=f"Task 2 pre-filter: cal_tt >= 10 [NON-TUNABLE] (station {station})",
+        ["tt_task2_cal"],
+        {"tt_task2_cal": [10]},
+        title=f"Task 2 pre-filter: tt_task2_cal >= 10 [NON-TUNABLE] (station {station})",
         out_dir=debug_plot_directory,
         fig_idx=debug_fig_idx,
     )
-cal_tt_mask = working_df["cal_tt"].notna() & (working_df["cal_tt"] >= 10)
-append_removed_rows_from_mask(working_df, ~cal_tt_mask)
-working_df = working_df.loc[cal_tt_mask].copy()
+tt_task2_cal_mask = working_df["tt_task2_cal"].notna() & (working_df["tt_task2_cal"] >= 10)
+append_removed_rows_from_mask(working_df, ~tt_task2_cal_mask)
+working_df = working_df.loc[tt_task2_cal_mask].copy()
 record_filter_metric(
-    "cal_tt_lt_10_rows_removed_pct",
-    cal_tt_total - int(cal_tt_mask.sum()),
-    cal_tt_total if cal_tt_total else 0,
+    "tt_task2_cal_lt_10_rows_removed_pct",
+    tt_task2_cal_total - int(tt_task2_cal_mask.sum()),
+    tt_task2_cal_total if tt_task2_cal_total else 0,
 )
-_diag_rejected_cal_tt_idx = _diag_idx_after_q_sum.difference(working_df.index)
+_diag_rejected_tt_task2_cal_idx = _diag_idx_after_q_sum.difference(working_df.index)
 refresh_global_count_metadata(
     working_df,
-    ("clean_tt", "cal_tt", "clean_to_cal_tt"),
+    ("tt_task1_clean", "tt_task2_cal", "transferred_task2_clean_to_cal"),
 )
 
 task2_final_filter_dry_run_summary = apply_task2_unified_strip_combination_filter(
@@ -14265,7 +14275,7 @@ task2_activation_filtered = store_task2_strip_activation_snapshot(
     scalar_meta=global_variables,
     df=working_df,
     snapshot_label="filtered",
-    tt_series=pd.to_numeric(working_df["cal_tt"], errors="coerce"),
+    tt_series=pd.to_numeric(working_df["tt_task2_cal"], errors="coerce"),
     streamer_high_charge_factor_value=streamer_high_charge_factor,
 )
 if task2_plot_enabled("strip_activation_matrix_before_after"):
@@ -14282,28 +14292,28 @@ if task2_plot_enabled("strip_activation_matrix_before_after"):
 # All use working_df_unzeroed (snapshot taken before any value-zeroing).
 # ─────────────────────────────────────────────────────────────────────────────
 _DIAG_ALIASES = (
-    "rejected_scatter_clean_tt",
+    "rejected_scatter_tt_task1_clean",
     "rejected_scatter_q_sum_zero",
-    "rejected_scatter_cal_tt",
+    "rejected_scatter_tt_task2_cal",
     "charge_front_vs_back",
     "time_front_vs_back",
     "channel_matrix_tq",
     "strip_pair_matrix_by_planepair",
-    "rejected_histograms_clean_tt",
+    "rejected_histograms_tt_task1_clean",
     "rejected_histograms_q_sum_zero",
-    "rejected_histograms_cal_tt",
+    "rejected_histograms_tt_task2_cal",
 )
 _diag_requested = {
-    "rejected_scatter_clean_tt": task2_plot_requested("rejected_scatter_clean_tt"),
+    "rejected_scatter_tt_task1_clean": task2_plot_requested("rejected_scatter_tt_task1_clean"),
     "rejected_scatter_q_sum_zero": task2_plot_requested("rejected_scatter_q_sum_zero"),
-    "rejected_scatter_cal_tt": task2_plot_requested("rejected_scatter_cal_tt"),
+    "rejected_scatter_tt_task2_cal": task2_plot_requested("rejected_scatter_tt_task2_cal"),
     "charge_front_vs_back": task2_plot_requested("charge_front_vs_back", essential=True),
     "time_front_vs_back": task2_plot_requested("time_front_vs_back", essential=True),
     "channel_matrix_tq": task2_plot_requested("channel_matrix_tq"),
     "strip_pair_matrix_by_planepair": task2_plot_requested("strip_pair_matrix_by_planepair"),
-    "rejected_histograms_clean_tt": task2_plot_requested("rejected_histograms_clean_tt"),
+    "rejected_histograms_tt_task1_clean": task2_plot_requested("rejected_histograms_tt_task1_clean"),
     "rejected_histograms_q_sum_zero": task2_plot_requested("rejected_histograms_q_sum_zero"),
-    "rejected_histograms_cal_tt": task2_plot_requested("rejected_histograms_cal_tt"),
+    "rejected_histograms_tt_task2_cal": task2_plot_requested("rejected_histograms_tt_task2_cal"),
 }
 if any(_diag_requested[a] for a in _DIAG_ALIASES):
     _DIAG_MAX_PTS = 5000
@@ -14329,9 +14339,9 @@ if any(_diag_requested[a] for a in _DIAG_ALIASES):
 
     # ── Plot A: rejected-event scatter (mean T_sum vs total Q_sum) ────────────
     _rej_groups = [
-        ("rejected_scatter_clean_tt",  _diag_rejected_clean_tt_idx, "clean_tt NaN"),
+        ("rejected_scatter_tt_task1_clean",  _diag_rejected_tt_task1_clean_idx, "tt_task1_clean NaN"),
         ("rejected_scatter_q_sum_zero", _diag_rejected_q_sum_idx,   "Q_sum all-zero"),
-        ("rejected_scatter_cal_tt",    _diag_rejected_cal_tt_idx,   "cal_tt < 10"),
+        ("rejected_scatter_tt_task2_cal",    _diag_rejected_tt_task2_cal_idx,   "tt_task2_cal < 10"),
     ]
     for _alias, _rej_idx, _reason in _rej_groups:
         if not _diag_requested.get(_alias, False):
@@ -14468,12 +14478,12 @@ if any(_diag_requested[a] for a in _DIAG_ALIASES):
         for _pi_idx in range(1, 5):
             for _pj_idx in range(_pi_idx + 1, 5):
                 _ci_cols = [
-                    f"Q{_pi_idx}_Q_sum_{s}" for s in range(1, 5)
-                    if f"Q{_pi_idx}_Q_sum_{s}" in _df_cm.columns
+                    f"p{_pi_idx}_s{s}_qsum" for s in range(1, 5)
+                    if f"p{_pi_idx}_s{s}_qsum" in _df_cm.columns
                 ]
                 _cj_cols = [
-                    f"Q{_pj_idx}_Q_sum_{s}" for s in range(1, 5)
-                    if f"Q{_pj_idx}_Q_sum_{s}" in _df_cm.columns
+                    f"p{_pj_idx}_s{s}_qsum" for s in range(1, 5)
+                    if f"p{_pj_idx}_s{s}_qsum" in _df_cm.columns
                 ]
                 if not _ci_cols or not _cj_cols:
                     continue
@@ -14524,9 +14534,9 @@ if any(_diag_requested[a] for a in _DIAG_ALIASES):
 
     # ── Plot D: rejected-event per-plane histograms (Q_sum and T_sum) ────────
     _hist_rej_groups = [
-        ("rejected_histograms_clean_tt",  _diag_rejected_clean_tt_idx,  "clean_tt NaN"),
+        ("rejected_histograms_tt_task1_clean",  _diag_rejected_tt_task1_clean_idx,  "tt_task1_clean NaN"),
         ("rejected_histograms_q_sum_zero", _diag_rejected_q_sum_idx,    "Q_sum all-zero"),
-        ("rejected_histograms_cal_tt",    _diag_rejected_cal_tt_idx,    "cal_tt < 10"),
+        ("rejected_histograms_tt_task2_cal",    _diag_rejected_tt_task2_cal_idx,    "tt_task2_cal < 10"),
     ]
     for _halias, _rej_idx, _reason in _hist_rej_groups:
         if not _diag_requested.get(_halias, False):
@@ -14535,8 +14545,8 @@ if any(_diag_requested[a] for a in _DIAG_ALIASES):
         _acc_rows = working_df_unzeroed.drop(index=_rej_idx, errors="ignore")
         _fig, _axes = plt.subplots(4, 2, figsize=(10, 12))
         for _p in range(1, 5):
-            _q_cols = [f"Q{_p}_Q_sum_{s}" for s in range(1, 5) if f"Q{_p}_Q_sum_{s}" in working_df_unzeroed.columns]
-            _t_cols = [f"T{_p}_T_sum_{s}" for s in range(1, 5) if f"T{_p}_T_sum_{s}" in working_df_unzeroed.columns]
+            _q_cols = [f"p{_p}_s{s}_qsum" for s in range(1, 5) if f"p{_p}_s{s}_qsum" in working_df_unzeroed.columns]
+            _t_cols = [f"p{_p}_s{s}_tsum" for s in range(1, 5) if f"p{_p}_s{s}_tsum" in working_df_unzeroed.columns]
             _ax_q = _axes[_p - 1][0]
             _ax_t = _axes[_p - 1][1]
             if _q_cols:
@@ -14918,13 +14928,13 @@ for selected_count in TASK2_SELECTED_OFFENDER_CARDINALITY_VALUES:
         f"strip_combination_filter_rows_with_{selected_count}_selected_offenders_pct"
     ] = round(pct_value, 4)
 
-task2_noise_control_cal_tt = pd.to_numeric(
-    working_df.get("cal_tt", pd.Series(index=working_df.index, dtype=float)),
+task2_noise_control_tt_task2_cal = pd.to_numeric(
+    working_df.get("tt_task2_cal", pd.Series(index=working_df.index, dtype=float)),
     errors="coerce",
 ).fillna(0).astype(int)
 task2_noise_control_selected_offenders = pd.to_numeric(
     working_df.get(
-        "total_problematic_offender_count",
+        "filter_total_problematic_offender_count",
         pd.Series(index=working_df.index, dtype=float),
     ),
     errors="coerce",
@@ -14932,8 +14942,8 @@ task2_noise_control_selected_offenders = pd.to_numeric(
 
 for selected_count_threshold in TASK2_SELECTED_OFFENDER_CARDINALITY_VALUES:
     threshold_mask = task2_noise_control_selected_offenders <= selected_count_threshold
-    threshold_cal_tt = task2_noise_control_cal_tt.loc[threshold_mask]
-    four_plane_count = int((threshold_cal_tt == 1234).sum())
+    threshold_tt_task2_cal = task2_noise_control_tt_task2_cal.loc[threshold_mask]
+    four_plane_count = int((threshold_tt_task2_cal == 1234).sum())
     for plane, missing_trigger in TASK2_THREE_TO_FOUR_MISSING_TRIGGER_BY_PLANE.items():
         metric_key = _task2_noise_control_efficiency_metric_key(
             plane,
@@ -14942,7 +14952,7 @@ for selected_count_threshold in TASK2_SELECTED_OFFENDER_CARDINALITY_VALUES:
         if four_plane_count <= 0:
             noise_control_row[metric_key] = ""
             continue
-        missing_plane_count = int((threshold_cal_tt == missing_trigger).sum())
+        missing_plane_count = int((threshold_tt_task2_cal == missing_trigger).sum())
         noise_control_row[metric_key] = round(
             1.0 - (float(missing_plane_count) / float(four_plane_count)),
             6,
@@ -15049,14 +15059,14 @@ print(f"Metadata (activation) CSV updated at: {metadata_activation_csv_path}")
 # -------------------------------------------------------------------------------
 
 global_variables.update(build_events_per_second_metadata(working_df))
-ensure_global_count_keys(("clean_tt", "cal_tt", "clean_to_cal_tt"))
+ensure_global_count_keys(("tt_task1_clean", "tt_task2_cal", "transferred_task2_clean_to_cal"))
 add_normalized_count_metadata(
     global_variables,
     global_variables.get("events_per_second_total_seconds", 0),
 )
 set_global_rate_from_tt_rates(
     global_variables,
-    preferred_prefixes=("cal_tt", "clean_tt"),
+    preferred_prefixes=("tt_task2_cal", "tt_task1_clean"),
     log_fn=print,
 )
 global_variables["filename_base"] = filename_base
@@ -15071,7 +15081,7 @@ metadata_rate_histogram_csv_path = save_metadata(
 print(f"Metadata (rate_histogram) CSV updated at: {metadata_rate_histogram_csv_path}")
 
 prune_redundant_count_metadata(global_variables, log_fn=print)
-trigger_type_prefixes = ("clean_tt", "cal_tt", "clean_to_cal_tt")
+trigger_type_prefixes = ("tt_task1_clean", "tt_task2_cal", "transferred_task2_clean_to_cal")
 trigger_type_variables = extract_trigger_type_metadata(
     global_variables,
     trigger_type_prefixes,
@@ -15085,7 +15095,7 @@ trigger_type_variables["count_rate_denominator_seconds"] = rate_histogram_variab
 add_trigger_type_total_offender_threshold_metadata(
     trigger_type_variables,
     working_df,
-    stage_tt_columns=("clean_tt", "cal_tt"),
+    stage_tt_columns=("tt_task1_clean", "tt_task2_cal"),
     denominator_seconds=trigger_type_variables["count_rate_denominator_seconds"],
 )
 metadata_trigger_type_csv_path = save_metadata(
@@ -15183,8 +15193,8 @@ if track_removed_rows_task2:
 if save_plots and task2_plot_enabled("acquisition_rate_vs_time_by_task_tt_with_histograms"):
     rate_fig = create_rate_vs_time_by_task_tt_with_histograms(
         working_df,
-        tt_column="cal_tt",
-        title=f"Task 2 acquisition rate by cal_tt, {basename_no_ext}",
+        tt_column="tt_task2_cal",
+        title=f"Task 2 acquisition rate by tt_task2_cal, {basename_no_ext}",
         accumulation_window_seconds=config.get("acquisition_rate_accumulation_window_seconds", 60),
         rate_histogram_bins=config.get("acquisition_rate_task_tt_histogram_bins", 80),
         y_limit_left=config.get("acquisition_rate_task_tt_ylim_left", 0),
@@ -15203,7 +15213,7 @@ if save_plots and task2_plot_enabled("acquisition_rate_vs_time_by_task_tt_with_h
         )
         plt.close(rate_fig)
     else:
-        print("Task 2 acquisition-rate-by-task-tt plot skipped: no valid cal_tt/datetime rows.")
+        print("Task 2 acquisition-rate-by-task-tt plot skipped: no valid tt_task2_cal/datetime rows.")
 
 # Ensure no figure handles remain open before persistence/final move.
 plt.close("all")
@@ -15220,6 +15230,7 @@ if joined_analysis_active and joined_source_file_column in working_df.columns:
             columns=[joined_source_file_column, joined_source_basename_column],
             errors="ignore",
         )
+        joined_output_df = canonicalize_step1_columns(joined_output_df)
         joined_output_df.to_parquet(
             joined_out_path,
             engine="pyarrow",
@@ -15235,6 +15246,7 @@ else:
         columns=[joined_source_file_column, joined_source_basename_column],
         errors="ignore",
     )
+    output_df = canonicalize_step1_columns(output_df)
     output_df.to_parquet(OUT_PATH, engine="pyarrow", compression="zstd", index=False)
     print(f"Calibrated dataframe saved to: {OUT_PATH}")
 _prof["s_output_write_s"] = round(time.perf_counter() - _t_sec, 2)

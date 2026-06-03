@@ -119,11 +119,13 @@ from MASTER.common.step1_activation import (
 )
 from MASTER.common.step1_shared import (
     add_normalized_count_metadata,
+    add_topology_task1_channel,
     add_trigger_type_total_offender_threshold_metadata,
     build_step1_raw_input_dataframe,
     build_events_per_second_metadata,
     build_step1_cli_parser,
     build_step1_filtered_print,
+    canonicalize_step1_columns,
     collect_columns,
     coerce_nonnegative_float_config,
     coerce_positive_int_config,
@@ -173,7 +175,7 @@ TASK1_PLOT_ALIASES: tuple[str, ...] = (
     "essential_suite",
     "acquisition_rate_vs_time_by_task_tt_with_histograms",
     "event_total_charge_raw",
-    "raw_tt_overview",
+    "tt_task0_raw_overview",
     "channel_histograms_raw",
     "tq_scatter_raw",
     "channel_histograms_filtered",
@@ -182,7 +184,7 @@ TASK1_PLOT_ALIASES: tuple[str, ...] = (
     "channel_contamination_matrix_32",
     "channel_contagion_by_tt",
     "channel_contamination_matrix_32_raw",
-    "channel_contagion_by_raw_tt",
+    "channel_contagion_by_tt_task0_raw",
     "channel_histograms_self_trigger",
     "tsum_spread_histograms_filtered_og",
     "tq_scatter_raw_by_tt",
@@ -690,9 +692,10 @@ def collect_task1_channel_qt_map(df_input: pd.DataFrame) -> dict[tuple[int, str,
     channel_map: dict[tuple[int, str, int], dict[str, str]] = {}
     for plane in range(1, 5):
         for side in ("F", "B"):
+            endpoint = "ef" if side == "F" else "eb"
             for strip in range(1, 5):
-                q_col = f"Q{plane}_{side}_{strip}"
-                t_col = f"T{plane}_{side}_{strip}"
+                q_col = f"p{plane}_s{strip}_{endpoint}_q"
+                t_col = f"p{plane}_s{strip}_{endpoint}_t"
                 if q_col in df_input.columns and t_col in df_input.columns:
                     channel_map[(plane, side, strip)] = {"Q": q_col, "T": t_col}
     return channel_map
@@ -863,9 +866,10 @@ def apply_task1_channel_qt_mismatch_filter(
     task1_channel_pairs: list[tuple[str, str]] = []
     for plane in range(1, 5):
         for side in ("F", "B"):
+            endpoint = "ef" if side == "F" else "eb"
             for strip in range(1, 5):
-                q_col = f"Q{plane}_{side}_{strip}"
-                t_col = f"T{plane}_{side}_{strip}"
+                q_col = f"p{plane}_s{strip}_{endpoint}_q"
+                t_col = f"p{plane}_s{strip}_{endpoint}_t"
                 if q_col in df_input.columns and t_col in df_input.columns:
                     task1_channel_pairs.append((q_col, t_col))
 
@@ -1437,7 +1441,7 @@ def apply_task1_plane_combination_filter(
 
 
 def _task1_filter_tt_series(df_input: pd.DataFrame) -> pd.Series:
-    for candidate in ("raw_tt", "clean_tt"):
+    for candidate in ("tt_task0_raw", "tt_task1_clean"):
         if candidate in df_input.columns:
             return df_input[candidate].apply(normalize_tt_label).astype(str)
     return pd.Series(["0"] * len(df_input), index=df_input.index, dtype=str)
@@ -2030,7 +2034,8 @@ def build_task1_channel_pattern_series(df: pd.DataFrame) -> pd.Series:
     """Encode per-event front/back channel occupancy as a deterministic 32-bit string."""
     pattern_arrays: list[np.ndarray] = []
     for plane, strip, side in TASK1_CHANNEL_PATTERN_ORDER:
-        col_name = f"Q{plane}_{side}_{strip}"
+        endpoint = "ef" if str(side).upper() == "F" else "eb"
+        col_name = f"p{plane}_s{strip}_{endpoint}_q"
         if col_name in df.columns:
             values = df[col_name].fillna(0).to_numpy(copy=False)
             bits = np.where(values != 0, "1", "0")
@@ -2475,16 +2480,8 @@ def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[s
         else:
             charge_columns = [
                 col
-                for col in [
-                    f"Q{plane}_F_1",
-                    f"Q{plane}_F_2",
-                    f"Q{plane}_F_3",
-                    f"Q{plane}_F_4",
-                    f"Q{plane}_B_1",
-                    f"Q{plane}_B_2",
-                    f"Q{plane}_B_3",
-                    f"Q{plane}_B_4",
-                ]
+                for strip in range(1, 5)
+                for col in (f"p{plane}_s{strip}_ef_q", f"p{plane}_s{strip}_eb_q")
                 if col in df.columns
             ]
         if charge_columns:
@@ -3370,9 +3367,9 @@ CHANNEL_CONTAGION_METADATA_FIELDS: tuple[str, ...] = (
     "mean_off_diagonal_global_clean",
     "max_off_diagonal_global_clean",
     "mean_off_diagonal_interplane_global_clean",
-    "mean_off_diagonal_by_raw_tt",
-    "max_off_diagonal_by_raw_tt",
-    "mean_off_diagonal_interplane_by_raw_tt",
+    "mean_off_diagonal_by_tt_task0_raw",
+    "max_off_diagonal_by_tt_task0_raw",
+    "mean_off_diagonal_interplane_by_tt_task0_raw",
     "mean_off_diagonal_by_tt_clean",
     "max_off_diagonal_by_tt_clean",
     "mean_off_diagonal_interplane_by_tt_clean",
@@ -3449,7 +3446,7 @@ FILTER_METRIC_NAMES: tuple[str, ...] = (
     "plane_combination_filter_rows_with_any_relation_failures_pct",
     "valid_lines_in_file_percentage",
     "data_purity_percentage",
-    "clean_tt_lt_10_rows_removed_pct",
+    "tt_task1_clean_lt_10_rows_removed_pct",
 )
 NOISE_CONTROL_RATE_DENOMINATOR_COLUMN = "count_rate_denominator_seconds"
 TASK1_NOISE_CONTROL_METRIC_NAMES: tuple[str, ...] = tuple(
@@ -4062,6 +4059,8 @@ for joined_record in joined_input_records:
     )
     if joined_is_task0_raw_parquet:
         joined_read_df = pd.read_parquet(joined_path)
+        joined_read_df = canonicalize_step1_columns(joined_read_df)
+        joined_read_df = add_topology_task1_channel(joined_read_df)
         if limit:
             joined_read_df = joined_read_df.head(int(limit_number)).copy()
         if "datetime" in joined_read_df.columns:
@@ -4130,7 +4129,12 @@ if task1_plot_enabled("event_total_charge_raw"):
         *(f"column_{idx}" for idx in range(31, 39)),
         *(f"column_{idx}" for idx in range(47, 55)),
         *(f"column_{idx}" for idx in range(63, 71)),
-        *(f"Q{plane}_{side}_{strip}" for plane in range(1, 5) for side in ("F", "B") for strip in range(1, 5)),
+        *(
+            f"p{plane}_s{strip}_{endpoint}_q"
+            for plane in range(1, 5)
+            for strip in range(1, 5)
+            for endpoint in ("ef", "eb")
+        ),
     ]
     raw_total_charge_columns = [col for col in raw_total_charge_columns if col in read_df.columns]
     if raw_total_charge_columns:
@@ -4368,9 +4372,12 @@ channel_source_columns: list[str] = []
 channel_rename_map: dict[str, str] = {}
 named_channel_columns: list[str] = []
 for key, idx_range in column_indices.items():
+    quantity = "t" if key.startswith("T") else "q"
+    plane = int(key[1])
+    endpoint = "ef" if key.endswith("_F") else "eb"
     for i, col_idx in enumerate(idx_range, start=1):
         source_column = f"column_{col_idx}"
-        target_column = f"{key}_{i}"
+        target_column = f"p{plane}_s{i}_{endpoint}_{quantity}"
         channel_source_columns.append(source_column)
         channel_rename_map[source_column] = target_column
         named_channel_columns.append(target_column)
@@ -4394,7 +4401,7 @@ task1_join_source_columns = [
 ]
 task1_preserved_raw_columns = [
     col
-    for col in ("acq_tt", "raw_tt", "param_hash")
+    for col in ("tt_task0_acq", "tt_task0_raw", "param_hash")
     if col in read_df.columns
 ]
 if keep_all_columns_output:
@@ -4423,7 +4430,7 @@ if status_execution_date is not None:
 snapshot_original_columns_once(working_df, ["datetime"])
 working_df = working_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
 
-# print("Columns right after initial assignment (before raw_tt computation):")
+# print("Columns right after initial assignment (before tt_task0_raw computation):")
 # for col in working_df.columns:
 #     print(f" - {col}")
 
@@ -4449,21 +4456,26 @@ del read_df
 
 # Count for main dataframe (non-self-trigger)
 for key, idx_range in column_indices.items():
+    quantity = "t" if key.startswith("T") else "q"
+    plane = int(key[1])
+    endpoint = "ef" if key.endswith("_F") else "eb"
     for i in range(1, len(idx_range) + 1):
-        colname = f"{key}_{i}"
+        colname = f"p{plane}_s{i}_{endpoint}_{quantity}"
+        if colname not in working_df.columns:
+            continue
         count = (working_df[colname] != 0).sum()
-        global_var_name = f"{key}_{i}_entries_original"
+        global_var_name = f"{colname}_entries_original"
         global_variables[global_var_name] = count
 _prof["s_frame_init_s"] = round(time.perf_counter() - _t_frame_init, 2)
-_t_raw_tt_overview = time.perf_counter()
-if "raw_tt" in working_df.columns:
-    working_df.loc[:, "raw_tt"] = pd.to_numeric(working_df["raw_tt"], errors="coerce").fillna(0).astype(int)
-    print("Task 1 using raw_tt provided by Task 0 raw parquet.")
+_t_tt_task0_raw_overview = time.perf_counter()
+if "tt_task0_raw" in working_df.columns:
+    working_df.loc[:, "tt_task0_raw"] = pd.to_numeric(working_df["tt_task0_raw"], errors="coerce").fillna(0).astype(int)
+    print("Task 1 using tt_task0_raw provided by Task 0 raw parquet.")
 else:
-    print("Warning: Task 1 input lacks raw_tt; computing fallback raw_tt for backward compatibility.")
-    working_df = compute_tt(working_df, "raw_tt")
+    print("Warning: Task 1 input lacks tt_task0_raw; computing fallback tt_task0_raw for backward compatibility.")
+    working_df = compute_tt(working_df, "tt_task0_raw")
 
-raw_tt_counts = working_df["raw_tt"].value_counts()
+tt_task0_raw_counts = working_df["tt_task0_raw"].value_counts()
 
 raw_channel_patterns = build_task1_channel_pattern_series(working_df)
 store_pattern_rates(pattern_metadata, raw_channel_patterns, "raw_channel_pattern", working_df)
@@ -4474,24 +4486,24 @@ _store_channel_contagion_metrics_variant(
     "global_raw",
     raw_channel_matrix_data,
 )
-raw_channel_by_tt_data = _compute_channel_conditional_matrix_for_tt(working_df, "raw_tt", 1234)
+raw_channel_by_tt_data = _compute_channel_conditional_matrix_for_tt(working_df, "tt_task0_raw", 1234)
 _store_channel_contagion_metrics_variant(
-    "by_raw_tt",
+    "by_tt_task0_raw",
     raw_channel_by_tt_data,
 )
 
-# Print the counts of each raw_tt value and the percentage
+# Print the counts of each tt_task0_raw value and the percentage
 total_events = len(working_df)
 print("Raw TT counts and percentages:")
-for tt_value, count in sorted(raw_tt_counts.items()):
+for tt_value, count in sorted(tt_task0_raw_counts.items()):
     percentage = (count / total_events) * 100
     print(f"  Raw TT {tt_value}: {count} events ({percentage:.2f}%)")
 
 if self_trigger:
-    if "raw_tt" in working_st_df.columns:
-        working_st_df.loc[:, "raw_tt"] = pd.to_numeric(working_st_df["raw_tt"], errors="coerce").fillna(0).astype(int)
+    if "tt_task0_raw" in working_st_df.columns:
+        working_st_df.loc[:, "tt_task0_raw"] = pd.to_numeric(working_st_df["tt_task0_raw"], errors="coerce").fillna(0).astype(int)
     else:
-        working_st_df = compute_tt(working_st_df, "raw_tt")
+        working_st_df = compute_tt(working_st_df, "tt_task0_raw")
 
 _task1_self_plot_limits = task1_channel_combination_limits_by_relation.get("self", {})
 T_F_left_pre_cal = float(_task1_self_plot_limits.get("t_sum_left", channel_combination_t_sum_left))
@@ -4510,19 +4522,19 @@ Q_F_left_pre_cal_ST = Q_F_left_pre_cal
 Q_F_right_pre_cal_ST = Q_F_right_pre_cal
 Q_B_left_pre_cal_ST = Q_B_left_pre_cal
 Q_B_right_pre_cal_ST = Q_B_right_pre_cal
-_prof["s_raw_tt_overview_s"] = round(time.perf_counter() - _t_raw_tt_overview, 2)
+_prof["s_tt_task0_raw_overview_s"] = round(time.perf_counter() - _t_tt_task0_raw_overview, 2)
 
 _debug_plot_filter_group(
     working_df,
-    [col for col in working_df.columns if re.match(r"^[TQ][1-4]_[FB]_[1-4]$", col)] + ["raw_tt"],
+    [col for col in working_df.columns if re.match(r"^[TQ][1-4]_[FB]_[1-4]$", col)] + ["tt_task0_raw"],
     None,
-    "incoming parquet: main channels and raw_tt",
+    "incoming parquet: main channels and tt_task0_raw",
     tag="NON-TUNABLE",
     max_cols_per_fig=20,
 )
 
-if task1_plot_enabled("raw_tt_overview"):
-    event_counts = working_df['raw_tt'].value_counts()
+if task1_plot_enabled("tt_task0_raw_overview"):
+    event_counts = working_df['tt_task0_raw'].value_counts()
 
     plt.figure(figsize=(10, 6))
     event_counts.plot(kind='bar', alpha=0.7)
@@ -4549,16 +4561,16 @@ if task1_plot_enabled("channel_contamination_matrix_32_raw"):
         save_plots, show_plots, plot_list,
     )
 
-if task1_plot_enabled("channel_contagion_by_raw_tt"):
+if task1_plot_enabled("channel_contagion_by_tt_task0_raw"):
     fig_idx = _plot_channel_contagion_by_tt(
-        working_df, "raw_tt", "raw", fig_idx, base_directories["figure_directory"],
+        working_df, "tt_task0_raw", "raw", fig_idx, base_directories["figure_directory"],
         save_plots, show_plots, plot_list,
     )
 
 if self_trigger:
     if task1_plot_enabled("tsum_spread_diagnostics"):
    
-        event_counts = working_st_df['raw_tt'].value_counts()
+        event_counts = working_st_df['tt_task0_raw'].value_counts()
 
         plt.figure(figsize=(10, 6))
         event_counts.plot(kind='bar', alpha=0.7)
@@ -4587,25 +4599,26 @@ if task1_plot_enabled("channel_histograms_raw"):
     fig_T, axes_T = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
     axes_T = axes_T.flatten()
     
-    for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-        for j in range(4):
-            col_F = f'{key}_F_{j+1}'
-            col_B = f'{key}_B_{j+1}'
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            panel_idx = (plane - 1) * 4 + (strip - 1)
+            col_F = f'p{plane}_s{strip}_ef_t'
+            col_B = f'p{plane}_s{strip}_eb_t'
             y_F = working_df[col_F]
             y_B = working_df[col_B]
             
             # Plot histograms with T-specific clipping and bins
-            axes_T[i*4 + j].hist(y_F[(y_F != 0) & (y_F > T_clip_min) & (y_F < T_clip_max)], 
+            axes_T[panel_idx].hist(y_F[(y_F != 0) & (y_F > T_clip_min) & (y_F < T_clip_max)], 
                                  bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
-            axes_T[i*4 + j].hist(y_B[(y_B != 0) & (y_B > T_clip_min) & (y_B < T_clip_max)], 
+            axes_T[panel_idx].hist(y_B[(y_B != 0) & (y_B > T_clip_min) & (y_B < T_clip_max)], 
                                  bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
-            axes_T[i*4 + j].axvline(x=T_F_left_pre_cal, color='red', linestyle='--', label='T_left_pre_cal')
-            axes_T[i*4 + j].axvline(x=T_F_right_pre_cal, color='blue', linestyle='--', label='T_right_pre_cal')
-            axes_T[i*4 + j].set_title(f'{col_F} vs {col_B}')
-            axes_T[i*4 + j].legend()
+            axes_T[panel_idx].axvline(x=T_F_left_pre_cal, color='red', linestyle='--', label='T_left_pre_cal')
+            axes_T[panel_idx].axvline(x=T_F_right_pre_cal, color='blue', linestyle='--', label='T_right_pre_cal')
+            axes_T[panel_idx].set_title(f'{col_F} vs {col_B}')
+            axes_T[panel_idx].legend()
             
             if log_scale:
-                axes_T[i*4 + j].set_yscale('log')  # For T values
+                axes_T[panel_idx].set_yscale('log')  # For T values
 
     plt.tight_layout()
     plt.subplots_adjust(top=0.9)
@@ -4626,25 +4639,26 @@ if task1_plot_enabled("channel_histograms_raw"):
     fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
     axes_Q = axes_Q.flatten()
     
-    for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-        for j in range(4):
-            col_F = f'{key.replace("T", "Q")}_F_{j+1}'
-            col_B = f'{key.replace("T", "Q")}_B_{j+1}'
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            panel_idx = (plane - 1) * 4 + (strip - 1)
+            col_F = f'p{plane}_s{strip}_ef_q'
+            col_B = f'p{plane}_s{strip}_eb_q'
             y_F = working_df[col_F]
             y_B = working_df[col_B]
             
             # Plot histograms with Q-specific clipping and bins
-            axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
+            axes_Q[panel_idx].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
                                  bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
-            axes_Q[i*4 + j].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
+            axes_Q[panel_idx].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
                                  bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
-            axes_Q[i*4 + j].axvline(x=Q_F_left_pre_cal, color='red', linestyle='--', label='Q_left_pre_cal')
-            axes_Q[i*4 + j].axvline(x=Q_F_right_pre_cal, color='blue', linestyle='--', label='Q_right_pre_cal')
-            axes_Q[i*4 + j].set_title(f'{col_F} vs {col_B}')
-            axes_Q[i*4 + j].legend()
+            axes_Q[panel_idx].axvline(x=Q_F_left_pre_cal, color='red', linestyle='--', label='Q_left_pre_cal')
+            axes_Q[panel_idx].axvline(x=Q_F_right_pre_cal, color='blue', linestyle='--', label='Q_right_pre_cal')
+            axes_Q[panel_idx].set_title(f'{col_F} vs {col_B}')
+            axes_Q[panel_idx].legend()
             
             if log_scale:
-                axes_Q[i*4 + j].set_yscale('log')  # For Q values
+                axes_Q[panel_idx].set_yscale('log')  # For Q values
 
     plt.tight_layout()
     plt.subplots_adjust(top=0.9)
@@ -4668,25 +4682,26 @@ if self_trigger:
         fig_T, axes_T = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
         axes_T = axes_T.flatten()
         
-        for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-            for j in range(4):
-                col_F = f'{key}_F_{j+1}'
-                col_B = f'{key}_B_{j+1}'
+        for plane in range(1, 5):
+            for strip in range(1, 5):
+                panel_idx = (plane - 1) * 4 + (strip - 1)
+                col_F = f'p{plane}_s{strip}_ef_t'
+                col_B = f'p{plane}_s{strip}_eb_t'
                 y_F = working_st_df[col_F]
                 y_B = working_st_df[col_B]
                 
                 # Plot histograms with T-specific clipping and bins
-                axes_T[i*4 + j].hist(y_F[(y_F != 0) & (y_F > T_clip_min_ST) & (y_F < T_clip_max_ST)], 
+                axes_T[panel_idx].hist(y_F[(y_F != 0) & (y_F > T_clip_min_ST) & (y_F < T_clip_max_ST)], 
                                     bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
-                axes_T[i*4 + j].hist(y_B[(y_B != 0) & (y_B > T_clip_min_ST) & (y_B < T_clip_max_ST)], 
+                axes_T[panel_idx].hist(y_B[(y_B != 0) & (y_B > T_clip_min_ST) & (y_B < T_clip_max_ST)], 
                                     bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
-                axes_T[i*4 + j].axvline(x=T_F_left_pre_cal_ST, color='red', linestyle='--', label='T_left_pre_cal_ST')
-                axes_T[i*4 + j].axvline(x=T_F_right_pre_cal_ST, color='blue', linestyle='--', label='T_right_pre_cal_ST')
-                axes_T[i*4 + j].set_title(f'{col_F} vs {col_B}')
-                axes_T[i*4 + j].legend()
+                axes_T[panel_idx].axvline(x=T_F_left_pre_cal_ST, color='red', linestyle='--', label='T_left_pre_cal_ST')
+                axes_T[panel_idx].axvline(x=T_F_right_pre_cal_ST, color='blue', linestyle='--', label='T_right_pre_cal_ST')
+                axes_T[panel_idx].set_title(f'{col_F} vs {col_B}')
+                axes_T[panel_idx].legend()
                 
                 if log_scale:
-                    axes_T[i*4 + j].set_yscale('log')  # For T values
+                    axes_T[panel_idx].set_yscale('log')  # For T values
 
         plt.tight_layout()
         plt.subplots_adjust(top=0.9)
@@ -4707,25 +4722,26 @@ if self_trigger:
         fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
         axes_Q = axes_Q.flatten()
         
-        for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-            for j in range(4):
-                col_F = f'{key.replace("T", "Q")}_F_{j+1}'
-                col_B = f'{key.replace("T", "Q")}_B_{j+1}'
+        for plane in range(1, 5):
+            for strip in range(1, 5):
+                panel_idx = (plane - 1) * 4 + (strip - 1)
+                col_F = f'p{plane}_s{strip}_ef_q'
+                col_B = f'p{plane}_s{strip}_eb_q'
                 y_F = working_st_df[col_F]
                 y_B = working_st_df[col_B]
                 
                 # Plot histograms with Q-specific clipping and bins
-                axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min_ST) & (y_F < Q_clip_max_ST)], 
+                axes_Q[panel_idx].hist(y_F[(y_F != 0) & (y_F > Q_clip_min_ST) & (y_F < Q_clip_max_ST)], 
                                     bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
-                axes_Q[i*4 + j].hist(y_B[(y_B != 0) & (y_B > Q_clip_min_ST) & (y_B < Q_clip_max_ST)], 
+                axes_Q[panel_idx].hist(y_B[(y_B != 0) & (y_B > Q_clip_min_ST) & (y_B < Q_clip_max_ST)], 
                                     bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
-                axes_Q[i*4 + j].axvline(x=Q_F_left_pre_cal_ST, color='red', linestyle='--', label='Q_left_pre_cal_ST')
-                axes_Q[i*4 + j].axvline(x=Q_F_right_pre_cal_ST, color='blue', linestyle='--', label='Q_right_pre_cal_ST')
-                axes_Q[i*4 + j].set_title(f'{col_F} vs {col_B}')
-                axes_Q[i*4 + j].legend()
+                axes_Q[panel_idx].axvline(x=Q_F_left_pre_cal_ST, color='red', linestyle='--', label='Q_left_pre_cal_ST')
+                axes_Q[panel_idx].axvline(x=Q_F_right_pre_cal_ST, color='blue', linestyle='--', label='Q_right_pre_cal_ST')
+                axes_Q[panel_idx].set_title(f'{col_F} vs {col_B}')
+                axes_Q[panel_idx].legend()
                 
                 if log_scale:
-                    axes_Q[i*4 + j].set_yscale('log')  # For Q values
+                    axes_Q[panel_idx].set_yscale('log')  # For Q values
 
         plt.tight_layout()
         plt.subplots_adjust(top=0.9)
@@ -4747,16 +4763,17 @@ if task1_plot_enabled("tq_scatter_raw"):
     axes_TQ = axes_TQ.flatten()
 
     # Iterate over each plane (T1, T2, T3, T4)
-    for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-        for j in range(4):
-            col_F = f'{key}_F_{j+1}'  # Time F column
-            col_B = f'{key}_B_{j+1}'  # Time B column
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            panel_idx = (plane - 1) * 4 + (strip - 1)
+            col_F = f'p{plane}_s{strip}_ef_t'  # Time F column
+            col_B = f'p{plane}_s{strip}_eb_t'  # Time B column
             
             y_F = working_df[col_F]  # Time values for front
             y_B = working_df[col_B]  # Time values for back
             
-            charge_col_F = f'{key.replace("T", "Q")}_F_{j+1}'  # Corresponding charge column for front
-            charge_col_B = f'{key.replace("T", "Q")}_B_{j+1}'  # Corresponding charge column for back
+            charge_col_F = f'p{plane}_s{strip}_ef_q'  # Corresponding charge column for front
+            charge_col_B = f'p{plane}_s{strip}_eb_q'  # Corresponding charge column for back
             
             charge_F = working_df[charge_col_F]  # Charge values for front
             charge_B = working_df[charge_col_B]  # Charge values for back
@@ -4766,17 +4783,17 @@ if task1_plot_enabled("tq_scatter_raw"):
             mask_B = (y_B != 0) & (y_B > T_clip_min) & (y_B < T_clip_max) & (charge_B > Q_clip_min) & (charge_B < Q_clip_max)
             
             # Plot scatter plots for Time F vs Charge F and Time B vs Charge B
-            axes_TQ[i*4 + j].scatter(charge_F[mask_F], y_F[mask_F], alpha=0.5, label=f'{col_F} (F)', color='green', s=1)
-            axes_TQ[i*4 + j].scatter(charge_B[mask_B], y_B[mask_B], alpha=0.5, label=f'{col_B} (B)', color='orange', s=1)
+            axes_TQ[panel_idx].scatter(charge_F[mask_F], y_F[mask_F], alpha=0.5, label=f'{col_F} (F)', color='green', s=1)
+            axes_TQ[panel_idx].scatter(charge_B[mask_B], y_B[mask_B], alpha=0.5, label=f'{col_B} (B)', color='orange', s=1)
             
             # Plot threshold lines for time and charge
-            axes_TQ[i*4 + j].axhline(y=T_F_left_pre_cal, color='red', linestyle='--', label='T_left_pre_cal')
-            axes_TQ[i*4 + j].axhline(y=T_F_right_pre_cal, color='blue', linestyle='--', label='T_right_pre_cal')
-            axes_TQ[i*4 + j].axvline(x=Q_F_left_pre_cal, color='red', linestyle='--', label='Q_left_pre_cal')
-            axes_TQ[i*4 + j].axvline(x=Q_F_right_pre_cal, color='blue', linestyle='--', label='Q_right_pre_cal')
+            axes_TQ[panel_idx].axhline(y=T_F_left_pre_cal, color='red', linestyle='--', label='T_left_pre_cal')
+            axes_TQ[panel_idx].axhline(y=T_F_right_pre_cal, color='blue', linestyle='--', label='T_right_pre_cal')
+            axes_TQ[panel_idx].axvline(x=Q_F_left_pre_cal, color='red', linestyle='--', label='Q_left_pre_cal')
+            axes_TQ[panel_idx].axvline(x=Q_F_right_pre_cal, color='blue', linestyle='--', label='Q_right_pre_cal')
             
-            axes_TQ[i*4 + j].set_title(f'{col_F} vs {col_B}')
-            axes_TQ[i*4 + j].legend()
+            axes_TQ[panel_idx].set_title(f'{col_F} vs {col_B}')
+            axes_TQ[panel_idx].legend()
 
     # Adjust the layout and title
     plt.tight_layout()
@@ -4799,37 +4816,38 @@ if task1_plot_enabled("tq_scatter_raw"):
     plt.close(fig_TQ)
 
 if task1_plot_enabled("tq_scatter_raw_by_tt"):
-    _tt_vals = sorted(working_df["raw_tt"].dropna().unique()) if "raw_tt" in working_df.columns else []
+    _tt_vals = sorted(working_df["tt_task0_raw"].dropna().unique()) if "tt_task0_raw" in working_df.columns else []
     for _tt_v in _tt_vals:
-        _tt_sub = working_df[working_df["raw_tt"] == _tt_v]
+        _tt_sub = working_df[working_df["tt_task0_raw"] == _tt_v]
         if len(_tt_sub) < 10:
             continue
         _ttl = normalize_tt_label(_tt_v)
         fig_TQ, axes_TQ = plt.subplots(4, 4, figsize=(20, 10))
         axes_TQ = axes_TQ.flatten()
-        for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-            for j in range(4):
-                col_F = f'{key}_F_{j+1}'
-                col_B = f'{key}_B_{j+1}'
+        for plane in range(1, 5):
+            for strip in range(1, 5):
+                panel_idx = (plane - 1) * 4 + (strip - 1)
+                col_F = f'p{plane}_s{strip}_ef_t'
+                col_B = f'p{plane}_s{strip}_eb_t'
                 y_F = _tt_sub[col_F]
                 y_B = _tt_sub[col_B]
-                charge_col_F = f'{key.replace("T", "Q")}_F_{j+1}'
-                charge_col_B = f'{key.replace("T", "Q")}_B_{j+1}'
+                charge_col_F = f'p{plane}_s{strip}_ef_q'
+                charge_col_B = f'p{plane}_s{strip}_eb_q'
                 charge_F = _tt_sub[charge_col_F]
                 charge_B = _tt_sub[charge_col_B]
                 mask_F = (y_F != 0) & (y_F > T_clip_min) & (y_F < T_clip_max) & (charge_F > Q_clip_min) & (charge_F < Q_clip_max)
                 mask_B = (y_B != 0) & (y_B > T_clip_min) & (y_B < T_clip_max) & (charge_B > Q_clip_min) & (charge_B < Q_clip_max)
-                axes_TQ[i*4 + j].scatter(charge_F[mask_F], y_F[mask_F], alpha=0.5, label=f'{col_F} (F)', color='green', s=1)
-                axes_TQ[i*4 + j].scatter(charge_B[mask_B], y_B[mask_B], alpha=0.5, label=f'{col_B} (B)', color='orange', s=1)
-                axes_TQ[i*4 + j].axhline(y=T_F_left_pre_cal, color='red', linestyle='--', label='T_left_pre_cal')
-                axes_TQ[i*4 + j].axhline(y=T_F_right_pre_cal, color='blue', linestyle='--', label='T_right_pre_cal')
-                axes_TQ[i*4 + j].axvline(x=Q_F_left_pre_cal, color='red', linestyle='--', label='Q_left_pre_cal')
-                axes_TQ[i*4 + j].axvline(x=Q_F_right_pre_cal, color='blue', linestyle='--', label='Q_right_pre_cal')
-                axes_TQ[i*4 + j].set_title(f'{col_F} vs {col_B}')
-                axes_TQ[i*4 + j].legend()
+                axes_TQ[panel_idx].scatter(charge_F[mask_F], y_F[mask_F], alpha=0.5, label=f'{col_F} (F)', color='green', s=1)
+                axes_TQ[panel_idx].scatter(charge_B[mask_B], y_B[mask_B], alpha=0.5, label=f'{col_B} (B)', color='orange', s=1)
+                axes_TQ[panel_idx].axhline(y=T_F_left_pre_cal, color='red', linestyle='--', label='T_left_pre_cal')
+                axes_TQ[panel_idx].axhline(y=T_F_right_pre_cal, color='blue', linestyle='--', label='T_right_pre_cal')
+                axes_TQ[panel_idx].axvline(x=Q_F_left_pre_cal, color='red', linestyle='--', label='Q_left_pre_cal')
+                axes_TQ[panel_idx].axvline(x=Q_F_right_pre_cal, color='blue', linestyle='--', label='Q_right_pre_cal')
+                axes_TQ[panel_idx].set_title(f'{col_F} vs {col_B}')
+                axes_TQ[panel_idx].legend()
         plt.tight_layout()
         plt.subplots_adjust(top=0.9)
-        plt.suptitle(f"Scatter T vs Q [raw_tt={_ttl}, N={len(_tt_sub)}], mingo0{station}\n{start_time}", fontsize=16)
+        plt.suptitle(f"Scatter T vs Q [tt_task0_raw={_ttl}, N={len(_tt_sub)}], mingo0{station}\n{start_time}", fontsize=16)
         if save_plots:
             final_filename = f'{fig_idx}_scatter_plot_TQ_tt{_ttl}.png'
             fig_idx += 1
@@ -4861,7 +4879,7 @@ Q_F_cols = collect_columns(working_df.columns, Q_FRONT_PATTERN)
 Q_B_cols = collect_columns(working_df.columns, Q_BACK_PATTERN)
 channel_pair_plot_reference_columns = [
     col
-    for col in ["raw_tt", *T_F_cols, *T_B_cols, *Q_F_cols, *Q_B_cols]
+    for col in ["tt_task0_raw", *T_F_cols, *T_B_cols, *Q_F_cols, *Q_B_cols]
     if col in working_df.columns
 ]
 channel_pair_plot_reference_df = working_df.loc[:, channel_pair_plot_reference_columns].copy()
@@ -4909,23 +4927,24 @@ if task1_plot_enabled("channel_histograms_filtered"):
     fig_T, axes_T = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
     axes_T = axes_T.flatten()
     
-    for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-        for j in range(4):
-            col_F = f'{key}_F_{j+1}'
-            col_B = f'{key}_B_{j+1}'
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            panel_idx = (plane - 1) * 4 + (strip - 1)
+            col_F = f'p{plane}_s{strip}_ef_t'
+            col_B = f'p{plane}_s{strip}_eb_t'
             y_F = working_df[col_F]
             y_B = working_df[col_B]
             
             # Plot histograms with T-specific clipping and bins
-            axes_T[i*4 + j].hist(y_F[(y_F != 0) & (y_F > T_clip_min) & (y_F < T_clip_max)], 
+            axes_T[panel_idx].hist(y_F[(y_F != 0) & (y_F > T_clip_min) & (y_F < T_clip_max)], 
                                  bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
-            axes_T[i*4 + j].hist(y_B[(y_B != 0) & (y_B > T_clip_min) & (y_B < T_clip_max)], 
+            axes_T[panel_idx].hist(y_B[(y_B != 0) & (y_B > T_clip_min) & (y_B < T_clip_max)], 
                                  bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
-            axes_T[i*4 + j].set_title(f'{col_F} vs {col_B}')
-            axes_T[i*4 + j].legend()
+            axes_T[panel_idx].set_title(f'{col_F} vs {col_B}')
+            axes_T[panel_idx].legend()
             
             if log_scale:
-                axes_T[i*4 + j].set_yscale('log')  # For T values
+                axes_T[panel_idx].set_yscale('log')  # For T values
 
     plt.tight_layout()
     plt.subplots_adjust(top=0.9)
@@ -4946,23 +4965,24 @@ if task1_plot_enabled("channel_histograms_filtered"):
     fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
     axes_Q = axes_Q.flatten()
     
-    for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-        for j in range(4):
-            col_F = f'{key.replace("T", "Q")}_F_{j+1}'
-            col_B = f'{key.replace("T", "Q")}_B_{j+1}'
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            panel_idx = (plane - 1) * 4 + (strip - 1)
+            col_F = f'p{plane}_s{strip}_ef_q'
+            col_B = f'p{plane}_s{strip}_eb_q'
             y_F = working_df[col_F]
             y_B = working_df[col_B]
             
             # Plot histograms with Q-specific clipping and bins
-            axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
+            axes_Q[panel_idx].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
                                  bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
-            axes_Q[i*4 + j].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
+            axes_Q[panel_idx].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
                                  bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
-            axes_Q[i*4 + j].set_title(f'{col_F} vs {col_B}')
-            axes_Q[i*4 + j].legend()
+            axes_Q[panel_idx].set_title(f'{col_F} vs {col_B}')
+            axes_Q[panel_idx].legend()
             
             if log_scale:
-                axes_Q[i*4 + j].set_yscale('log')  # For Q values
+                axes_Q[panel_idx].set_yscale('log')  # For Q values
 
     plt.tight_layout()
     plt.subplots_adjust(top=0.9)
@@ -4984,30 +5004,31 @@ create_super_essential_plots = False
 
 if create_plots or create_super_essential_plots:
 
-    for tt_value in sorted(working_df['raw_tt'].unique()):
-        filtered_df = working_df[working_df['raw_tt'] == tt_value]
+    for tt_value in sorted(working_df['tt_task0_raw'].unique()):
+        filtered_df = working_df[working_df['tt_task0_raw'] == tt_value]
 
         # Create the grand figure for T values
         fig_T, axes_T = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
         axes_T = axes_T.flatten()
         
-        for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-            for j in range(4):
-                col_F = f'{key}_F_{j+1}'
-                col_B = f'{key}_B_{j+1}'
+        for plane in range(1, 5):
+            for strip in range(1, 5):
+                panel_idx = (plane - 1) * 4 + (strip - 1)
+                col_F = f'p{plane}_s{strip}_ef_t'
+                col_B = f'p{plane}_s{strip}_eb_t'
                 y_F = filtered_df[col_F]
                 y_B = filtered_df[col_B]
                 
                 # Plot histograms with T-specific clipping and bins
-                axes_T[i*4 + j].hist(y_F[(y_F != 0) & (y_F > T_clip_min) & (y_F < T_clip_max)], 
+                axes_T[panel_idx].hist(y_F[(y_F != 0) & (y_F > T_clip_min) & (y_F < T_clip_max)], 
                                     bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
-                axes_T[i*4 + j].hist(y_B[(y_B != 0) & (y_B > T_clip_min) & (y_B < T_clip_max)], 
+                axes_T[panel_idx].hist(y_B[(y_B != 0) & (y_B > T_clip_min) & (y_B < T_clip_max)], 
                                     bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
-                axes_T[i*4 + j].set_title(f'{col_F} vs {col_B}')
-                axes_T[i*4 + j].legend()
+                axes_T[panel_idx].set_title(f'{col_F} vs {col_B}')
+                axes_T[panel_idx].legend()
                 
                 if log_scale:
-                    axes_T[i*4 + j].set_yscale('log')  # For T values
+                    axes_T[panel_idx].set_yscale('log')  # For T values
 
         plt.tight_layout()
         plt.subplots_adjust(top=0.9)
@@ -5028,24 +5049,25 @@ if create_plots or create_super_essential_plots:
         fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
         axes_Q = axes_Q.flatten()
         
-        for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-            for j in range(4):
-                col_F = f'{key.replace("T", "Q")}_F_{j+1}'
-                col_B = f'{key.replace("T", "Q")}_B_{j+1}'
+        for plane in range(1, 5):
+            for strip in range(1, 5):
+                panel_idx = (plane - 1) * 4 + (strip - 1)
+                col_F = f'p{plane}_s{strip}_ef_q'
+                col_B = f'p{plane}_s{strip}_eb_q'
                 y_F = filtered_df[col_F]
                 y_B = filtered_df[col_B]
                 
                 # Plot histograms with Q-specific clipping and bins
 
-                axes_Q[i*4 + j].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
+                axes_Q[panel_idx].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
                                     bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
-                axes_Q[i*4 + j].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
+                axes_Q[panel_idx].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
                                     bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
-                axes_Q[i*4 + j].set_title(f'{col_F} vs {col_B}')
-                axes_Q[i*4 + j].legend()
+                axes_Q[panel_idx].set_title(f'{col_F} vs {col_B}')
+                axes_Q[panel_idx].legend()
                 
                 # if log_scale:
-                #     axes_Q[i*4 + j].set_yscale('log')  # For Q values
+                #     axes_Q[panel_idx].set_yscale('log')  # For Q values
 
         plt.tight_layout()
         plt.subplots_adjust(top=0.9)
@@ -5068,16 +5090,17 @@ if task1_plot_enabled("tq_scatter_filtered"):
     axes_TQ = axes_TQ.flatten()
 
     # Iterate over each plane (T1, T2, T3, T4)
-    for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-        for j in range(4):
-            col_F = f'{key}_F_{j+1}'  # Time F column
-            col_B = f'{key}_B_{j+1}'  # Time B column
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            panel_idx = (plane - 1) * 4 + (strip - 1)
+            col_F = f'p{plane}_s{strip}_ef_t'  # Time F column
+            col_B = f'p{plane}_s{strip}_eb_t'  # Time B column
             
             y_F = working_df[col_F]  # Time values for front
             y_B = working_df[col_B]  # Time values for back
             
-            charge_col_F = f'{key.replace("T", "Q")}_F_{j+1}'  # Corresponding charge column for front
-            charge_col_B = f'{key.replace("T", "Q")}_B_{j+1}'  # Corresponding charge column for back
+            charge_col_F = f'p{plane}_s{strip}_ef_q'  # Corresponding charge column for front
+            charge_col_B = f'p{plane}_s{strip}_eb_q'  # Corresponding charge column for back
             
             charge_F = working_df[charge_col_F]  # Charge values for front
             charge_B = working_df[charge_col_B]  # Charge values for back
@@ -5087,17 +5110,17 @@ if task1_plot_enabled("tq_scatter_filtered"):
             mask_B = (y_B != 0) & (y_B > T_clip_min) & (y_B < T_clip_max) & (charge_B > Q_clip_min) & (charge_B < Q_clip_max)
             
             # Plot scatter plots for Time F vs Charge F and Time B vs Charge B
-            axes_TQ[i*4 + j].scatter(charge_F[mask_F], y_F[mask_F], alpha=0.5, label=f'{col_F} (F)', color='green', s=1)
-            axes_TQ[i*4 + j].scatter(charge_B[mask_B], y_B[mask_B], alpha=0.5, label=f'{col_B} (B)', color='orange', s=1)
+            axes_TQ[panel_idx].scatter(charge_F[mask_F], y_F[mask_F], alpha=0.5, label=f'{col_F} (F)', color='green', s=1)
+            axes_TQ[panel_idx].scatter(charge_B[mask_B], y_B[mask_B], alpha=0.5, label=f'{col_B} (B)', color='orange', s=1)
             
             # Plot threshold lines for time and charge
-            axes_TQ[i*4 + j].axhline(y=T_F_left_pre_cal, color='red', linestyle='--', label='T_left_pre_cal')
-            axes_TQ[i*4 + j].axhline(y=T_F_right_pre_cal, color='blue', linestyle='--', label='T_right_pre_cal')
-            axes_TQ[i*4 + j].axvline(x=Q_F_left_pre_cal, color='red', linestyle='--', label='Q_left_pre_cal')
-            axes_TQ[i*4 + j].axvline(x=Q_F_right_pre_cal, color='blue', linestyle='--', label='Q_right_pre_cal')
+            axes_TQ[panel_idx].axhline(y=T_F_left_pre_cal, color='red', linestyle='--', label='T_left_pre_cal')
+            axes_TQ[panel_idx].axhline(y=T_F_right_pre_cal, color='blue', linestyle='--', label='T_right_pre_cal')
+            axes_TQ[panel_idx].axvline(x=Q_F_left_pre_cal, color='red', linestyle='--', label='Q_left_pre_cal')
+            axes_TQ[panel_idx].axvline(x=Q_F_right_pre_cal, color='blue', linestyle='--', label='Q_right_pre_cal')
             
-            axes_TQ[i*4 + j].set_title(f'{col_F} vs {col_B}')
-            axes_TQ[i*4 + j].legend()
+            axes_TQ[panel_idx].set_title(f'{col_F} vs {col_B}')
+            axes_TQ[panel_idx].legend()
 
     # Adjust the layout and title
     plt.tight_layout()
@@ -5120,37 +5143,38 @@ if task1_plot_enabled("tq_scatter_filtered"):
     plt.close(fig_TQ)
 
 if task1_plot_enabled("tq_scatter_filtered_by_tt"):
-    _tt_vals = sorted(working_df["raw_tt"].dropna().unique()) if "raw_tt" in working_df.columns else []
+    _tt_vals = sorted(working_df["tt_task0_raw"].dropna().unique()) if "tt_task0_raw" in working_df.columns else []
     for _tt_v in _tt_vals:
-        _tt_sub = working_df[working_df["raw_tt"] == _tt_v]
+        _tt_sub = working_df[working_df["tt_task0_raw"] == _tt_v]
         if len(_tt_sub) < 10:
             continue
         _ttl = normalize_tt_label(_tt_v)
         fig_TQ, axes_TQ = plt.subplots(4, 4, figsize=(20, 10))
         axes_TQ = axes_TQ.flatten()
-        for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-            for j in range(4):
-                col_F = f'{key}_F_{j+1}'
-                col_B = f'{key}_B_{j+1}'
+        for plane in range(1, 5):
+            for strip in range(1, 5):
+                panel_idx = (plane - 1) * 4 + (strip - 1)
+                col_F = f'p{plane}_s{strip}_ef_t'
+                col_B = f'p{plane}_s{strip}_eb_t'
                 y_F = _tt_sub[col_F]
                 y_B = _tt_sub[col_B]
-                charge_col_F = f'{key.replace("T", "Q")}_F_{j+1}'
-                charge_col_B = f'{key.replace("T", "Q")}_B_{j+1}'
+                charge_col_F = f'p{plane}_s{strip}_ef_q'
+                charge_col_B = f'p{plane}_s{strip}_eb_q'
                 charge_F = _tt_sub[charge_col_F]
                 charge_B = _tt_sub[charge_col_B]
                 mask_F = (y_F != 0) & (y_F > T_clip_min) & (y_F < T_clip_max) & (charge_F > Q_clip_min) & (charge_F < Q_clip_max)
                 mask_B = (y_B != 0) & (y_B > T_clip_min) & (y_B < T_clip_max) & (charge_B > Q_clip_min) & (charge_B < Q_clip_max)
-                axes_TQ[i*4 + j].scatter(charge_F[mask_F], y_F[mask_F], alpha=0.5, label=f'{col_F} (F)', color='green', s=1)
-                axes_TQ[i*4 + j].scatter(charge_B[mask_B], y_B[mask_B], alpha=0.5, label=f'{col_B} (B)', color='orange', s=1)
-                axes_TQ[i*4 + j].axhline(y=T_F_left_pre_cal, color='red', linestyle='--', label='T_left_pre_cal')
-                axes_TQ[i*4 + j].axhline(y=T_F_right_pre_cal, color='blue', linestyle='--', label='T_right_pre_cal')
-                axes_TQ[i*4 + j].axvline(x=Q_F_left_pre_cal, color='red', linestyle='--', label='Q_left_pre_cal')
-                axes_TQ[i*4 + j].axvline(x=Q_F_right_pre_cal, color='blue', linestyle='--', label='Q_right_pre_cal')
-                axes_TQ[i*4 + j].set_title(f'{col_F} vs {col_B}')
-                axes_TQ[i*4 + j].legend()
+                axes_TQ[panel_idx].scatter(charge_F[mask_F], y_F[mask_F], alpha=0.5, label=f'{col_F} (F)', color='green', s=1)
+                axes_TQ[panel_idx].scatter(charge_B[mask_B], y_B[mask_B], alpha=0.5, label=f'{col_B} (B)', color='orange', s=1)
+                axes_TQ[panel_idx].axhline(y=T_F_left_pre_cal, color='red', linestyle='--', label='T_left_pre_cal')
+                axes_TQ[panel_idx].axhline(y=T_F_right_pre_cal, color='blue', linestyle='--', label='T_right_pre_cal')
+                axes_TQ[panel_idx].axvline(x=Q_F_left_pre_cal, color='red', linestyle='--', label='Q_left_pre_cal')
+                axes_TQ[panel_idx].axvline(x=Q_F_right_pre_cal, color='blue', linestyle='--', label='Q_right_pre_cal')
+                axes_TQ[panel_idx].set_title(f'{col_F} vs {col_B}')
+                axes_TQ[panel_idx].legend()
         plt.tight_layout()
         plt.subplots_adjust(top=0.9)
-        plt.suptitle(f"Scatter T vs Q filtered [raw_tt={_ttl}, N={len(_tt_sub)}], mingo0{station}\n{start_time}", fontsize=16)
+        plt.suptitle(f"Scatter T vs Q filtered [tt_task0_raw={_ttl}, N={len(_tt_sub)}], mingo0{station}\n{start_time}", fontsize=16)
         if save_plots:
             final_filename = f'{fig_idx}_scatter_plot_TQ_filtered_tt{_ttl}.png'
             fig_idx += 1
@@ -5168,16 +5192,17 @@ if self_trigger:
         axes_TQ = axes_TQ.flatten()
 
         # Iterate over each plane (T1, T2, T3, T4)
-        for i, key in enumerate(['T1', 'T2', 'T3', 'T4']):
-            for j in range(4):
-                col_F = f'{key}_F_{j+1}'  # Time F column
-                col_B = f'{key}_B_{j+1}'  # Time B column
+        for plane in range(1, 5):
+            for strip in range(1, 5):
+                panel_idx = (plane - 1) * 4 + (strip - 1)
+                col_F = f'p{plane}_s{strip}_ef_t'  # Time F column
+                col_B = f'p{plane}_s{strip}_eb_t'  # Time B column
                 
                 y_F = working_st_df[col_F]  # Time values for front
                 y_B = working_st_df[col_B]  # Time values for back
                 
-                charge_col_F = f'{key.replace("T", "Q")}_F_{j+1}'  # Corresponding charge column for front
-                charge_col_B = f'{key.replace("T", "Q")}_B_{j+1}'  # Corresponding charge column for back
+                charge_col_F = f'p{plane}_s{strip}_ef_q'  # Corresponding charge column for front
+                charge_col_B = f'p{plane}_s{strip}_eb_q'  # Corresponding charge column for back
                 
                 charge_F = working_st_df[charge_col_F]  # Charge values for front
                 charge_B = working_st_df[charge_col_B]  # Charge values for back
@@ -5187,17 +5212,17 @@ if self_trigger:
                 mask_B = (y_B != 0) & (y_B > T_clip_min_ST) & (y_B < T_clip_max_ST) & (charge_B > Q_clip_min_ST) & (charge_B < Q_clip_max_ST)
                 
                 # Plot scatter plots for Time F vs Charge F and Time B vs Charge B
-                axes_TQ[i*4 + j].scatter(charge_F[mask_F], y_F[mask_F], alpha=0.5, label=f'{col_F} (F)', color='green', s=1)
-                axes_TQ[i*4 + j].scatter(charge_B[mask_B], y_B[mask_B], alpha=0.5, label=f'{col_B} (B)', color='orange', s=1)
+                axes_TQ[panel_idx].scatter(charge_F[mask_F], y_F[mask_F], alpha=0.5, label=f'{col_F} (F)', color='green', s=1)
+                axes_TQ[panel_idx].scatter(charge_B[mask_B], y_B[mask_B], alpha=0.5, label=f'{col_B} (B)', color='orange', s=1)
                 
                 # Plot threshold lines for time and charge
-                axes_TQ[i*4 + j].axhline(y=T_F_left_pre_cal_ST, color='red', linestyle='--', label='T_left_pre_cal_ST')
-                axes_TQ[i*4 + j].axhline(y=T_F_right_pre_cal_ST, color='blue', linestyle='--', label='T_right_pre_cal_ST')
-                axes_TQ[i*4 + j].axvline(x=Q_F_left_pre_cal_ST, color='red', linestyle='--', label='Q_left_pre_cal_ST')
-                axes_TQ[i*4 + j].axvline(x=Q_F_right_pre_cal_ST, color='blue', linestyle='--', label='Q_right_pre_cal_ST')
+                axes_TQ[panel_idx].axhline(y=T_F_left_pre_cal_ST, color='red', linestyle='--', label='T_left_pre_cal_ST')
+                axes_TQ[panel_idx].axhline(y=T_F_right_pre_cal_ST, color='blue', linestyle='--', label='T_right_pre_cal_ST')
+                axes_TQ[panel_idx].axvline(x=Q_F_left_pre_cal_ST, color='red', linestyle='--', label='Q_left_pre_cal_ST')
+                axes_TQ[panel_idx].axvline(x=Q_F_right_pre_cal_ST, color='blue', linestyle='--', label='Q_right_pre_cal_ST')
                 
-                axes_TQ[i*4 + j].set_title(f'{col_F} vs {col_B}')
-                axes_TQ[i*4 + j].legend()
+                axes_TQ[panel_idx].set_title(f'{col_F} vs {col_B}')
+                axes_TQ[panel_idx].legend()
 
         plt.tight_layout()
         plt.subplots_adjust(top=0.9)
@@ -5315,8 +5340,8 @@ if _plot_channel_tq_matrix_by_planepair:
     channel_pair_candidate_counts: list[tuple[int, int, int, int, int, int]] = []
 
     for _pi, _pj in pair_list:
-        if "raw_tt" in channel_plot_original_df.columns:
-            _tts_all = channel_plot_original_df["raw_tt"].apply(normalize_tt_label)
+        if "tt_task0_raw" in channel_plot_original_df.columns:
+            _tts_all = channel_plot_original_df["tt_task0_raw"].apply(normalize_tt_label)
             _pmask_all = _tts_all.str.contains(str(_pi)) & _tts_all.str.contains(str(_pj))
             _df_pp_all = channel_plot_original_df.loc[_pmask_all]
         else:
@@ -5328,14 +5353,14 @@ if _plot_channel_tq_matrix_by_planepair:
         # events that actually have non-zero (Q,T) data for at least one
         # channel in the plane-pair. Build the retained preview frame first
         # and then compute the effective count of non-zero channel pairs.
-        if "raw_tt" in channel_plot_final_df.columns:
-            _tts_retained = channel_plot_final_df["raw_tt"].apply(normalize_tt_label)
+        if "tt_task0_raw" in channel_plot_final_df.columns:
+            _tts_retained = channel_plot_final_df["tt_task0_raw"].apply(normalize_tt_label)
             _pmask_retained = _tts_retained.str.contains(str(_pi)) & _tts_retained.str.contains(str(_pj))
             _df_pp1 = channel_plot_final_df.loc[_pmask_retained]
         else:
             _df_pp1 = channel_plot_final_df
-        if "raw_tt" in channel_plot_precombination_df.columns:
-            _tts_precombination = channel_plot_precombination_df["raw_tt"].apply(normalize_tt_label)
+        if "tt_task0_raw" in channel_plot_precombination_df.columns:
+            _tts_precombination = channel_plot_precombination_df["tt_task0_raw"].apply(normalize_tt_label)
             _pmask_precombination = _tts_precombination.str.contains(str(_pi)) & _tts_precombination.str.contains(str(_pj))
             _df_precombination_pp1 = channel_plot_precombination_df.loc[_pmask_precombination]
         else:
@@ -5397,13 +5422,13 @@ if _plot_channel_tq_matrix_by_planepair:
         _df_precombination_s1 = _df_precombination_pp1.reindex(sampled_index).copy()
         _df_original_s1 = _df_pp_all.reindex(sampled_index).copy()
 
-        # Map event plane-combination (normalized raw_tt) to colors for per-point coloring
-        if "raw_tt" in _df_s1.columns:
-            _row_tt = _df_s1["raw_tt"].apply(normalize_tt_label).astype(str)
+        # Map event plane-combination (normalized tt_task0_raw) to colors for per-point coloring
+        if "tt_task0_raw" in _df_s1.columns:
+            _row_tt = _df_s1["tt_task0_raw"].apply(normalize_tt_label).astype(str)
         else:
             _row_tt = pd.Series([f"{_pi}{_pj}"] * len(_df_s1), index=_df_s1.index)
-        if "raw_tt" in _df_precombination_s1.columns:
-            _precombination_row_tt = _df_precombination_s1["raw_tt"].apply(normalize_tt_label).astype(str)
+        if "tt_task0_raw" in _df_precombination_s1.columns:
+            _precombination_row_tt = _df_precombination_s1["tt_task0_raw"].apply(normalize_tt_label).astype(str)
         else:
             _precombination_row_tt = pd.Series([f"{_pi}{_pj}"] * len(_df_precombination_s1), index=_df_precombination_s1.index)
         unique_tts = sorted(set(_row_tt.unique()).union(set(_precombination_row_tt.unique())))
@@ -5882,7 +5907,7 @@ channel_qt_t_only_rows = 0
 channel_qt_front_rows = 0
 channel_qt_back_rows = 0
 channel_qt_mismatch_channels = 0
-channel_qt_removed_clean_tt = 0
+channel_qt_removed_tt_task1_clean = 0
 channel_qt_retained_final = 0
 global_variables["plane_combination_noise_limit_learning_removed_values"] = 0
 global_variables["plane_combination_noise_limit_learning_zeroed_values"] = 0
@@ -5906,6 +5931,17 @@ plane_combination_summary = apply_task1_plane_combination_filter(
     snapshot_originals=snapshot_original_columns_once,
     removed_value_pass_label="plane_combination_filter",
 )
+for component_key, _component_label in TASK1_CHANNEL_COMBINATION_COMPONENT_LABELS:
+    plane_combination_summary.setdefault(f"failed_pair_{component_key}", 0)
+    plane_combination_summary.setdefault(f"rows_failed_{component_key}", 0)
+    plane_combination_summary.setdefault(
+        f"failed_pair_{component_key}_by_relation",
+        {relation_type: 0 for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES},
+    )
+    plane_combination_summary.setdefault(
+        f"rows_failed_{component_key}_by_relation",
+        {relation_type: 0 for relation_type in TASK1_CHANNEL_COMBINATION_RELATION_TYPES},
+    )
 task1_post_channel_qt_summary = apply_task1_channel_qt_mismatch_filter(
     working_df,
     snapshot_originals=snapshot_original_columns_once,
@@ -5954,26 +5990,26 @@ print(
     f"post_rows={task1_post_channel_qt_summary['rows_affected']} "
     f"post_values_zeroed={task1_post_channel_qt_summary['values_zeroed']}"
 )
-working_df.loc[:, "task1_problematic_channel_count"] = (
+working_df.loc[:, "filter_task1_problematic_channel_count"] = (
     plane_combination_summary["selected_offender_count_by_row"]
     .reindex(working_df.index, fill_value=0)
     .astype(int)
     .to_numpy()
 )
-working_df.loc[:, "task1_problematic_channel_resolution_exact"] = (
+working_df.loc[:, "filter_task1_problematic_channel_exact"] = (
     plane_combination_summary["resolution_exact_by_row"]
     .reindex(working_df.index, fill_value=True)
     .astype(bool)
     .to_numpy()
 )
-task1_problematic_channel_count_snapshot = working_df.loc[
+filter_task1_problematic_channel_count_snapshot = working_df.loc[
     :,
-    [col for col in ("datetime", "task1_problematic_channel_count") if col in working_df.columns],
+    [col for col in ("datetime", "filter_task1_problematic_channel_count") if col in working_df.columns],
 ].copy()
-task1_problematic_channel_count_counts = (
+filter_task1_problematic_channel_count_counts = (
     pd.to_numeric(
-        task1_problematic_channel_count_snapshot.get(
-            "task1_problematic_channel_count",
+        filter_task1_problematic_channel_count_snapshot.get(
+            "filter_task1_problematic_channel_count",
             pd.Series(dtype=float),
         ),
         errors="coerce",
@@ -6163,7 +6199,7 @@ global_variables["plane_combination_filter_max_selected_offenders_in_row"] = int
     plane_combination_summary["max_selected_offenders_in_row"]
 )
 for selected_count in TASK1_SELECTED_OFFENDER_CARDINALITY_VALUES:
-    selected_rows = int(task1_problematic_channel_count_counts.get(selected_count, 0))
+    selected_rows = int(filter_task1_problematic_channel_count_counts.get(selected_count, 0))
     global_variables[_task1_selected_offender_cardinality_metric_key(selected_count)] = selected_rows
 for channel_key, offender_count in plane_combination_summary["selected_offender_counts"].items():
     global_variables[_task1_channel_offender_metric_key(channel_key)] = int(offender_count)
@@ -6231,23 +6267,23 @@ if _plot_channel_combination_filter_by_tt:
 print(f"Original number of events in the dataframe: {original_number_of_events}")
 # Compute clean trigger types after channel-only regularization, then drop the
 # final single-plane / null combinations so Task 1 hands off only multi-plane events.
-working_df = compute_tt(working_df, "clean_tt")
-clean_tt_total = len(working_df)
-clean_tt_mask = working_df["clean_tt"].notna() & (working_df["clean_tt"] >= 10)
-channel_qt_removed_clean_tt = int((~clean_tt_mask & row_mismatch_mask.reindex(working_df.index, fill_value=False)).sum())
-append_removed_rows_from_mask(working_df, ~clean_tt_mask)
-working_df = working_df.loc[clean_tt_mask].copy()
+working_df = compute_tt(working_df, "tt_task1_clean")
+tt_task1_clean_total = len(working_df)
+tt_task1_clean_mask = working_df["tt_task1_clean"].notna() & (working_df["tt_task1_clean"] >= 10)
+channel_qt_removed_tt_task1_clean = int((~tt_task1_clean_mask & row_mismatch_mask.reindex(working_df.index, fill_value=False)).sum())
+append_removed_rows_from_mask(working_df, ~tt_task1_clean_mask)
+working_df = working_df.loc[tt_task1_clean_mask].copy()
 record_filter_metric(
-    "clean_tt_lt_10_rows_removed_pct",
-    clean_tt_total - int(clean_tt_mask.sum()),
-    clean_tt_total if clean_tt_total else 0,
+    "tt_task1_clean_lt_10_rows_removed_pct",
+    tt_task1_clean_total - int(tt_task1_clean_mask.sum()),
+    tt_task1_clean_total if tt_task1_clean_total else 0,
 )
 channel_qt_retained_final = int(row_mismatch_mask.reindex(working_df.index, fill_value=False).sum())
 record_activity_metric(
-    "channel_qt_mismatch_rows_removed_clean_tt_of_mismatch_pct",
-    channel_qt_removed_clean_tt,
+    "channel_qt_mismatch_rows_removed_tt_task1_clean_of_mismatch_pct",
+    channel_qt_removed_tt_task1_clean,
     channel_qt_rows_affected,
-    label="mismatch-touched rows later removed by clean_tt filter",
+    label="mismatch-touched rows later removed by tt_task1_clean filter",
 )
 record_activity_metric(
     "channel_qt_mismatch_rows_retained_final_of_mismatch_pct",
@@ -6255,14 +6291,14 @@ record_activity_metric(
     channel_qt_rows_affected,
     label="mismatch-touched rows retained after Task 1",
 )
-working_df.loc[:, "raw_to_clean_tt"] = (
-    pd.to_numeric(working_df["raw_tt"], errors="coerce").fillna(0).astype(int).astype(str)
+working_df.loc[:, "transferred_task1_raw_to_clean"] = (
+    pd.to_numeric(working_df["tt_task0_raw"], errors="coerce").fillna(0).astype(int).astype(str)
     + "_"
-    + pd.to_numeric(working_df["clean_tt"], errors="coerce").fillna(0).astype(int).astype(str)
+    + pd.to_numeric(working_df["tt_task1_clean"], errors="coerce").fillna(0).astype(int).astype(str)
 )
 refresh_global_count_metadata(
     working_df,
-    ("raw_tt", "clean_tt", "raw_to_clean_tt"),
+    ("tt_task0_raw", "tt_task1_clean", "transferred_task1_raw_to_clean"),
 )
 
 task1_final_filter_dry_run_summary = apply_task1_plane_combination_filter(
@@ -6315,7 +6351,7 @@ _store_channel_contagion_metrics_variant(
 )
 _store_channel_contagion_metrics_variant(
     "by_tt_clean",
-    _compute_channel_conditional_matrix_for_tt(working_df, "clean_tt", 1234),
+    _compute_channel_conditional_matrix_for_tt(working_df, "tt_task1_clean", 1234),
 )
 clean_channel_inputs = _compute_channel_contagion_inputs(working_df)
 if clean_channel_matrix_data is not None and clean_channel_inputs is not None:
@@ -6333,9 +6369,9 @@ if clean_channel_matrix_data is not None and clean_channel_inputs is not None:
         clean_channel_given_counts,
         group_ids=[idx // 8 for idx in range(len(clean_channel_labels))],
     )
-    clean_selected_tts, clean_tt_matrices, clean_tt_given_counts, clean_tt_event_counts = (
+    clean_selected_tts, tt_task1_clean_matrices, tt_task1_clean_given_counts, tt_task1_clean_event_counts = (
         compute_conditional_matrices_by_tt(
-            pd.to_numeric(working_df["clean_tt"], errors="coerce").fillna(0).astype(int),
+            pd.to_numeric(working_df["tt_task1_clean"], errors="coerce").fillna(0).astype(int),
             clean_channel_labels,
             [clean_channel_active[:, idx] for idx in range(clean_channel_active.shape[1])],
         )
@@ -6346,13 +6382,13 @@ if clean_channel_matrix_data is not None and clean_channel_inputs is not None:
         clean_channel_labels,
         clean_channel_labels,
         clean_selected_tts,
-        clean_tt_matrices,
-        clean_tt_given_counts,
-        clean_tt_event_counts,
+        tt_task1_clean_matrices,
+        tt_task1_clean_given_counts,
+        tt_task1_clean_event_counts,
     )
     del clean_channel_active
     del clean_channel_matrix
-    del clean_selected_tts, clean_tt_matrices, clean_tt_given_counts, clean_tt_event_counts
+    del clean_selected_tts, tt_task1_clean_matrices, tt_task1_clean_given_counts, tt_task1_clean_event_counts
     gc.collect()
 
 # --- Post-filter (clean) channel contamination matrices ---
@@ -6364,7 +6400,7 @@ if task1_plot_enabled("channel_contamination_matrix_32"):
 
 if task1_plot_enabled("channel_contagion_by_tt"):
     fig_idx = _plot_channel_contagion_by_tt(
-        working_df, "clean_tt", "clean", fig_idx, base_directories["figure_directory"],
+        working_df, "tt_task1_clean", "clean", fig_idx, base_directories["figure_directory"],
         save_plots, show_plots, plot_list,
     )
 
@@ -6492,7 +6528,7 @@ noise_control_row = {
     NOISE_CONTROL_RATE_DENOMINATOR_COLUMN: noise_control_rate_denominator_seconds,
 }
 for selected_count in TASK1_SELECTED_OFFENDER_CARDINALITY_VALUES:
-    raw_count = task1_problematic_channel_count_counts.get(selected_count, 0)
+    raw_count = filter_task1_problematic_channel_count_counts.get(selected_count, 0)
     try:
         raw_count_value = float(raw_count)
     except (TypeError, ValueError):
@@ -6508,20 +6544,20 @@ for selected_count in TASK1_SELECTED_OFFENDER_CARDINALITY_VALUES:
         rate_value,
         6,
     )
-    input_rows_value = float(len(task1_problematic_channel_count_snapshot.index))
+    input_rows_value = float(len(filter_task1_problematic_channel_count_snapshot.index))
     pct_value = 100.0 * raw_count_value / input_rows_value if input_rows_value > 0 else 0.0
     noise_control_row[_task1_selected_offender_cardinality_percent_metric_key(selected_count)] = round(
         pct_value,
         4,
     )
 
-task1_noise_control_clean_tt = pd.to_numeric(
-    working_df.get("clean_tt", pd.Series(index=working_df.index, dtype=float)),
+task1_noise_control_tt_task1_clean = pd.to_numeric(
+    working_df.get("tt_task1_clean", pd.Series(index=working_df.index, dtype=float)),
     errors="coerce",
 ).fillna(0).astype(int)
 task1_noise_control_selected_offenders = pd.to_numeric(
     working_df.get(
-        "task1_problematic_channel_count",
+        "filter_task1_problematic_channel_count",
         pd.Series(index=working_df.index, dtype=float),
     ),
     errors="coerce",
@@ -6529,8 +6565,8 @@ task1_noise_control_selected_offenders = pd.to_numeric(
 
 for selected_count_threshold in task1_noise_control_efficiency_selected_offender_values:
     threshold_mask = task1_noise_control_selected_offenders <= selected_count_threshold
-    threshold_clean_tt = task1_noise_control_clean_tt.loc[threshold_mask]
-    four_plane_count = int((threshold_clean_tt == 1234).sum())
+    threshold_tt_task1_clean = task1_noise_control_tt_task1_clean.loc[threshold_mask]
+    four_plane_count = int((threshold_tt_task1_clean == 1234).sum())
     for plane, missing_trigger in TASK1_THREE_TO_FOUR_MISSING_TRIGGER_BY_PLANE.items():
         metric_key = _task1_noise_control_efficiency_metric_key(
             plane,
@@ -6539,7 +6575,7 @@ for selected_count_threshold in task1_noise_control_efficiency_selected_offender
         if four_plane_count <= 0:
             noise_control_row[metric_key] = ""
             continue
-        missing_plane_count = int((threshold_clean_tt == missing_trigger).sum())
+        missing_plane_count = int((threshold_tt_task1_clean == missing_trigger).sum())
         noise_control_row[metric_key] = round(
             1.0 - (float(missing_plane_count) / float(four_plane_count)),
             6,
@@ -6624,14 +6660,14 @@ print(f"Metadata (pattern) CSV updated at: {metadata_pattern_csv_path}")
 # -------------------------------------------------------------------------------
 
 global_variables.update(events_per_second_meta)
-ensure_global_count_keys(("raw_tt", "clean_tt", "raw_to_clean_tt"))
+ensure_global_count_keys(("tt_task0_raw", "tt_task1_clean", "transferred_task1_raw_to_clean"))
 add_normalized_count_metadata(
     global_variables,
     global_variables.get("events_per_second_total_seconds", 0),
 )
 set_global_rate_from_tt_rates(
     global_variables,
-    preferred_prefixes=("raw_tt", "clean_tt"),
+    preferred_prefixes=("tt_task0_raw", "tt_task1_clean"),
     log_fn=print,
 )
 global_variables["filename_base"] = filename_base
@@ -6646,7 +6682,7 @@ metadata_rate_histogram_csv_path = save_metadata(
 print(f"Metadata (rate_histogram) CSV updated at: {metadata_rate_histogram_csv_path}")
 
 prune_redundant_count_metadata(global_variables, log_fn=print)
-trigger_type_prefixes = ("raw_tt", "clean_tt", "raw_to_clean_tt")
+trigger_type_prefixes = ("tt_task0_raw", "tt_task1_clean", "transferred_task1_raw_to_clean")
 trigger_type_variables = extract_trigger_type_metadata(
     global_variables,
     trigger_type_prefixes,
@@ -6660,7 +6696,7 @@ trigger_type_variables["count_rate_denominator_seconds"] = rate_histogram_variab
 add_trigger_type_total_offender_threshold_metadata(
     trigger_type_variables,
     working_df,
-    stage_tt_columns=("raw_tt", "clean_tt"),
+    stage_tt_columns=("tt_task0_raw", "tt_task1_clean"),
     denominator_seconds=trigger_type_variables["count_rate_denominator_seconds"],
 )
 metadata_trigger_type_csv_path = save_metadata(
@@ -6792,8 +6828,8 @@ elif track_removed_rows:
 if save_plots and task1_plot_enabled("acquisition_rate_vs_time_by_task_tt_with_histograms"):
     rate_fig = create_rate_vs_time_by_task_tt_with_histograms(
         working_df,
-        tt_column="raw_tt",
-        title=f"Task 1 acquisition rate by raw_tt, {basename_no_ext}",
+        tt_column="tt_task0_raw",
+        title=f"Task 1 acquisition rate by tt_task0_raw, {basename_no_ext}",
         accumulation_window_seconds=config.get("acquisition_rate_accumulation_window_seconds", 60),
         rate_histogram_bins=config.get("acquisition_rate_task_tt_histogram_bins", 80),
         y_limit_left=config.get("acquisition_rate_task_tt_ylim_left", 0),
@@ -6807,7 +6843,7 @@ if save_plots and task1_plot_enabled("acquisition_rate_vs_time_by_task_tt_with_h
         save_plot_figure(save_fig_path, fig=rate_fig, dpi=140)
         plt.close(rate_fig)
     else:
-        print("Task 1 acquisition-rate-by-task-tt plot skipped: no valid raw_tt/datetime rows.")
+        print("Task 1 acquisition-rate-by-task-tt plot skipped: no valid tt_task0_raw/datetime rows.")
 
 # Ensure no figure handles remain open before persistence/final move.
 plt.close("all")
@@ -6822,6 +6858,7 @@ if joined_analysis_active and joined_source_file_column in working_df.columns:
             columns=[joined_source_file_column, joined_source_basename_column],
             errors="ignore",
         )
+        joined_output_df = canonicalize_step1_columns(joined_output_df)
         joined_output_df.to_parquet(
             joined_out_path,
             engine="pyarrow",
@@ -6834,6 +6871,7 @@ else:
         columns=[joined_source_file_column, joined_source_basename_column],
         errors="ignore",
     )
+    output_df = canonicalize_step1_columns(output_df)
     output_df.to_parquet(OUT_PATH, engine="pyarrow", compression="zstd", index=False)
     print(f"Cleaned dataframe saved to: {OUT_PATH}")
 _prof["s_output_write_s"] = round(time.perf_counter() - _t_sec, 2)

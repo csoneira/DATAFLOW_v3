@@ -78,7 +78,7 @@ def plot_acquisition_rate_vs_time_by_task_tt_with_histograms(
     output_path: str | Path,
     *,
     title: str,
-    tt_column: str = "acq_tt",
+    tt_column: str = "tt_task0_acq",
     accumulation_window_seconds: int = 60,
     rate_histogram_bins: int = 80,
     y_limit_left: object = None,

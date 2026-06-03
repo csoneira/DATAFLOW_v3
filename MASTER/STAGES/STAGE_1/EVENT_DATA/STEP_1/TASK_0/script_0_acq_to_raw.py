@@ -52,9 +52,11 @@ from MASTER.common.status_csv import (
     update_status_progress,
 )
 from MASTER.common.step1_shared import (
+    add_topology_task1_channel,
     build_step1_cli_parser,
     build_step1_filtered_print,
     build_step1_raw_input_dataframe,
+    canonicalize_step1_columns,
     load_step1_task_plot_catalog,
     load_step1_task_config_bundle,
     resolve_step1_effective_task_config,
@@ -64,7 +66,7 @@ from MASTER.common.step1_shared import (
     validate_step1_input_file_args,
 )
 from analysis_functions import (
-    compute_acq_tt,
+    compute_tt_task0_acq,
     datetime_bounds,
     duration_seconds,
     rate_hz,
@@ -197,16 +199,16 @@ def _apply_task0_raw_channel_ordering(
     if station != "2" or conf_value is None or conf_value >= 2:
         return False
     print("Task 0 applying station 2 configuration<2 Plane 4 channel swap.", force=True)
-    plane4_keys = ("T4_F", "T4_B", "Q4_F", "Q4_B")
     swapped = False
-    for key in plane4_keys:
-        col3 = f"{key}_3"
-        col4 = f"{key}_4"
-        if col3 not in frame.columns or col4 not in frame.columns:
-            print(f"Warning: Task 0 cannot swap missing Plane 4 columns: {col3}, {col4}", force=True)
-            continue
-        frame.loc[:, [col3, col4]] = frame.loc[:, [col4, col3]].to_numpy()
-        swapped = True
+    for quantity in ("t", "q"):
+        for end in ("ef", "eb"):
+            col3 = f"p4_s3_{end}_{quantity}"
+            col4 = f"p4_s4_{end}_{quantity}"
+            if col3 not in frame.columns or col4 not in frame.columns:
+                print(f"Warning: Task 0 cannot swap missing Plane 4 columns: {col3}, {col4}", force=True)
+                continue
+            frame.loc[:, [col3, col4]] = frame.loc[:, [col4, col3]].to_numpy()
+            swapped = True
     return swapped
 
 
@@ -461,7 +463,7 @@ if read_df.empty:
     raise SystemExit("No valid acquisition rows parsed; moved file to ERROR.")
 
 left_limit_time = pd.to_datetime("1-1-2000", format="%d-%m-%Y")
-right_limit_time = pd.to_datetime("1-1-9999", format="%d-%m-%Y")
+right_limit_time = pd.to_datetime("1-1-2200", format="%d-%m-%Y")
 read_df = read_df.loc[read_df["datetime"].between(left_limit_time, right_limit_time)].copy()
 read_df = read_df.rename(columns=raw_channel_rename_map())
 read_df = read_df.rename(columns={"column_6": "acquisition_type"})
@@ -495,7 +497,8 @@ if not conf_time_source.empty:
     )
 else:
     print("Task 0 channel ordering lookup skipped: no valid acquisition timestamps.", force=True)
-read_df = compute_acq_tt(read_df)
+read_df = compute_tt_task0_acq(read_df)
+read_df = add_topology_task1_channel(read_df)
 
 saved_plot_paths: list[Path] = []
 figure_directory: Path | None = None
@@ -531,8 +534,8 @@ if save_plots and task0_plot_enabled("acquisition_rate_vs_time_by_task_tt_with_h
     plotted = plot_acquisition_rate_vs_time_by_task_tt_with_histograms(
         read_df,
         plot_path,
-        title=f"Task 0 acquisition rate by acq_tt, {basename_no_ext}",
-        tt_column="acq_tt",
+        title=f"Task 0 acquisition rate by tt_task0_acq, {basename_no_ext}",
+        tt_column="tt_task0_acq",
         accumulation_window_seconds=acquisition_rate_accumulation_window_seconds,
         rate_histogram_bins=acquisition_rate_task_tt_histogram_bins,
         y_limit_left=config.get("acquisition_rate_task_tt_ylim_left", 0),
@@ -542,7 +545,7 @@ if save_plots and task0_plot_enabled("acquisition_rate_vs_time_by_task_tt_with_h
         print(f"Task 0 acquisition-rate-by-task-tt plot saved: {plot_path}", force=True)
         saved_plot_paths.append(plot_path)
     else:
-        print("Task 0 acquisition-rate-by-task-tt plot skipped: no valid acq_tt/datetime rows.", force=True)
+        print("Task 0 acquisition-rate-by-task-tt plot skipped: no valid tt_task0_acq/datetime rows.", force=True)
 
 if create_pdf and saved_plot_paths and figure_directory is not None:
     save_pdf_filename = f"mingo{str(station).zfill(2)}_task0_{basename_no_ext}_{date_execution}.pdf"
@@ -552,9 +555,21 @@ if create_pdf and saved_plot_paths and figure_directory is not None:
 
 coincidence_df = read_df.loc[coincidence_mask].copy()
 self_trigger_df = read_df.loc[self_trigger_mask].copy()
-coincidence_df = compute_acq_tt(coincidence_df, "raw_tt")
+coincidence_df = compute_tt_task0_acq(coincidence_df, "tt_task0_raw")
+coincidence_df.loc[:, "transferred_task0_acq_to_raw"] = (
+    pd.to_numeric(coincidence_df["tt_task0_acq"], errors="coerce").fillna(0).astype(int).astype(str)
+    + pd.to_numeric(coincidence_df["tt_task0_raw"], errors="coerce").fillna(0).astype(int).astype(str)
+)
+coincidence_df = add_topology_task1_channel(coincidence_df)
+coincidence_df = canonicalize_step1_columns(coincidence_df)
 if not self_trigger_df.empty:
-    self_trigger_df = compute_acq_tt(self_trigger_df, "raw_tt")
+    self_trigger_df = compute_tt_task0_acq(self_trigger_df, "tt_task0_raw")
+    self_trigger_df.loc[:, "transferred_task0_acq_to_raw"] = (
+        pd.to_numeric(self_trigger_df["tt_task0_acq"], errors="coerce").fillna(0).astype(int).astype(str)
+        + pd.to_numeric(self_trigger_df["tt_task0_raw"], errors="coerce").fillna(0).astype(int).astype(str)
+    )
+    self_trigger_df = add_topology_task1_channel(self_trigger_df)
+    self_trigger_df = canonicalize_step1_columns(self_trigger_df)
 
 raw_output_path = directories["output"] / f"raw_{basename_no_ext}.parquet"
 selftrigger_output_path = directories["output"] / f"selftrigger_raw_{basename_no_ext}.parquet"
@@ -606,10 +621,10 @@ metadata_row = {
     "raw_channel_order_conf": "" if task0_conf_value is None else task0_conf_value,
     "raw_channel_swap_plane4_3_4_applied": bool(task0_channel_swap_applied),
 }
-for acq_tt_value, count in read_df["acq_tt"].value_counts(dropna=False).sort_index().items():
-    metadata_row[f"acq_tt_{int(acq_tt_value)}_count"] = int(count)
-for raw_tt_value, count in coincidence_df["raw_tt"].value_counts(dropna=False).sort_index().items():
-    metadata_row[f"raw_tt_{int(raw_tt_value)}_count"] = int(count)
+for tt_task0_acq_value, count in read_df["tt_task0_acq"].value_counts(dropna=False).sort_index().items():
+    metadata_row[f"tt_task0_acq_{int(tt_task0_acq_value)}_count"] = int(count)
+for tt_task0_raw_value, count in coincidence_df["tt_task0_raw"].value_counts(dropna=False).sort_index().items():
+    metadata_row[f"tt_task0_raw_{int(tt_task0_raw_value)}_count"] = int(count)
 save_metadata(
     csv_path,
     metadata_row,

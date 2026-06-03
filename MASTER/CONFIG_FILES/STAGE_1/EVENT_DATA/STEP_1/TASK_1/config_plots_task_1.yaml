@@ -4,7 +4,7 @@ plots:
   essential_suite: essential
   acquisition_rate_vs_time_by_task_tt_with_histograms: essential
   event_total_charge_raw: usual
-  raw_tt_overview: debug
+  tt_task0_raw_overview: debug
   channel_histograms_raw: debug
   tq_scatter_raw: usual
   channel_histograms_filtered: debug
@@ -13,7 +13,7 @@ plots:
   channel_contamination_matrix_32: debug
   channel_contagion_by_tt: debug
   channel_contamination_matrix_32_raw: debug
-  channel_contagion_by_raw_tt: debug
+  channel_contagion_by_tt_task0_raw: debug
   channel_histograms_self_trigger: debug
   tsum_spread_histograms_filtered_og: debug
   tq_scatter_raw_by_tt: usual

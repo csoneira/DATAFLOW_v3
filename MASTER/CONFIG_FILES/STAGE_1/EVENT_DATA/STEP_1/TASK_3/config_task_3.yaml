@@ -21,19 +21,19 @@ removed_marker: x
 removed_marker_size: 10
 removed_marker_alpha: 0.9
 filter_parameter_config_csv: config_filter_parameters_task_3.csv
-# list_tt_qsum_pair_plot_mode options: hexbin | scatter
-list_tt_qsum_pair_plot_mode: scatter
-# Plot-only cap for the Task 3 list_tt Q_sum lower-triangular figure.
-list_tt_qsum_pair_plot_charge_cap: null
+# tt_task3_list_qsum_pair_plot_mode options: hexbin | scatter
+tt_task3_list_qsum_pair_plot_mode: scatter
+# Plot-only cap for the Task 3 tt_task3_list Q_sum lower-triangular figure.
+tt_task3_list_qsum_pair_plot_charge_cap: null
 # Threshold grid for charge-filtered diagnostics.
 # mode: manual | auto (alias: quantile)
 # auto mode builds thresholds from 0 to Q(quantile) using N linearly spaced steps.
-list_tt_charge_threshold_mode: auto
-list_tt_charge_threshold_auto_quantile: 95
-list_tt_charge_threshold_auto_steps: 10
+tt_task3_list_charge_threshold_mode: auto
+tt_task3_list_charge_threshold_auto_quantile: 95
+tt_task3_list_charge_threshold_auto_steps: 10
 # Optional manual cap applied to threshold generation and charge-range plots.
-# You can set a global value with list_tt_charge_limit, and/or station-specific overrides here.
-list_tt_charge_limit_by_station:
+# You can set a global value with tt_task3_list_charge_limit, and/or station-specific overrides here.
+tt_task3_list_charge_limit_by_station:
   mingo00: 150
   mingo01: 150
 # Charge asymmetry (Q_diff/Q_sum) x-axis controls:
@@ -43,7 +43,7 @@ charge_asymmetry_x_abs_max: null
 charge_asymmetry_x_low_quantile: 0.5
 charge_asymmetry_x_high_quantile: 99.5
 # Manual fallback / optional explicit grid.
-list_tt_charge_thresholds: [0, 5, 10, 20, 50]
+tt_task3_list_charge_thresholds: [0, 5, 10, 20, 50]
 limit_number: null
 y_new_method: false
 # Fixed Q_sum boundary for topology coding:

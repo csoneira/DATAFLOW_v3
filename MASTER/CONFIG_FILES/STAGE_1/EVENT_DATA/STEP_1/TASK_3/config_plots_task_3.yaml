@@ -11,7 +11,7 @@ plots:
   tdiff_pattern_sigma_vs_charge: usual
   tdiff_pattern_sigma1_charge_surface: debug
   tdiff_pattern_sigma2_charge_surface: debug
-  y_position_by_cal_tt: usual
+  y_position_by_tt_task2_cal: usual
   strip_variable_pairgrid: usual
   self_trigger_strip_variable_pairgrid: usual
   rpc_variables_hexbin: usual
@@ -26,14 +26,14 @@ plots:
   filtered_rpc_tsum_vs_qsum_hexbin: usual
   filtered_rpc_variables_hexbin: usual
   prefilter_qsum_nonzero_debug: debug
-  prefilter_list_tt_debug: debug
-  list_tt_qsum_pairgrid: usual
+  prefilter_tt_task3_list_debug: debug
+  tt_task3_list_qsum_pairgrid: usual
   all_events_charge_threshold_population: usual
-  source_list_tt_charge_threshold_population: usual
-  list_tt_transition_matrices: usual
-  list_tt_retention_curves: usual
-  list_tt_minimum_charge_distributions: usual
-  list_tt_empirical_efficiency_vs_threshold: usual
+  source_tt_task3_list_charge_threshold_population: usual
+  tt_task3_list_transition_matrices: usual
+  tt_task3_list_retention_curves: usual
+  tt_task3_list_minimum_charge_distributions: usual
+  tt_task3_list_empirical_efficiency_vs_threshold: usual
   full_topology_threshold_retention: usual
   full_topology_exact_retention: usual
   full_topology_class_fraction: usual

@@ -132,6 +132,7 @@ from MASTER.common.step1_shared import (
     build_events_per_second_metadata,
     build_step1_cli_parser,
     build_step1_filtered_print,
+    canonicalize_step1_columns,
     coerce_nonnegative_float_config,
     coerce_positive_int_config,
     extract_chi2_four_plane_metadata,
@@ -176,19 +177,19 @@ from plotting_functions import (
 )
 
 task_number = 4
-TASK4_PRIMARY_TT_COLUMN = "fit_tt"
+TASK4_PRIMARY_TT_COLUMN = "tt_task4_fit"
 TASK4_EXTENSION_TT_COLUMNS: dict[int, list[str]] = {
     i_plane: [
-        f"P{i_plane}_T_sum_final",
-        f"P{i_plane}_T_dif_final",
-        f"P{i_plane}_Q_sum_final",
-        f"P{i_plane}_Q_dif_final",
-        f"P{i_plane}_Y_final",
+        f"p{i_plane}_tsum",
+        f"p{i_plane}_tdif",
+        f"p{i_plane}_qsum",
+        f"p{i_plane}_qdif",
+        f"p{i_plane}_ypos",
     ]
     for i_plane in range(1, 5)
 }
 TASK4_EVENT_ATOMIC_COLUMNS: tuple[str, ...] = (
-    "charge_event",
+    "event_charge",
     "x",
     "y",
     "s",
@@ -337,7 +338,7 @@ def close_direct_pdf_writer() -> None:
 def _resolve_task4_total_event_charge_series(
     df: pd.DataFrame,
 ) -> tuple[pd.Series | None, str | None]:
-    for charge_column in ("charge_event", "tim_charge_event"):
+    for charge_column in ("event_charge", "tim_event_charge"):
         if charge_column not in df.columns:
             continue
         candidate = pd.to_numeric(df[charge_column], errors="coerce")
@@ -346,7 +347,7 @@ def _resolve_task4_total_event_charge_series(
 
     plane_sum_columns = [
         column_name
-        for column_name in ("P1_Q_sum_final", "P2_Q_sum_final", "P3_Q_sum_final", "P4_Q_sum_final")
+        for column_name in ("p1_qsum", "p2_qsum", "p3_qsum", "p4_qsum")
         if column_name in df.columns
     ]
     if plane_sum_columns:
@@ -363,7 +364,7 @@ def _resolve_task4_total_event_charge_series(
     strip_columns = [
         column_name
         for column_name in df.columns
-        if re.fullmatch(r"Q_P[1-4]s[1-4]", str(column_name))
+        if re.fullmatch(r"p[1-4]_s[1-4]_qsum", str(column_name))
     ]
     if strip_columns:
         candidate = (
@@ -931,66 +932,62 @@ def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[s
         else:
             charge_columns = [
                 col
-                for col in [
-                    f"Q{plane}_F_1",
-                    f"Q{plane}_F_2",
-                    f"Q{plane}_F_3",
-                    f"Q{plane}_F_4",
-                    f"Q{plane}_B_1",
-                    f"Q{plane}_B_2",
-                    f"Q{plane}_B_3",
-                    f"Q{plane}_B_4",
-                ]
+                for strip in range(1, 5)
+                for col in (f"p{plane}_s{strip}_ef_q", f"p{plane}_s{strip}_eb_q")
                 if col in df.columns
             ]
         if charge_columns:
             has_charge = df.loc[:, charge_columns].ne(0).any(axis=1)
             tt_str = tt_str.where(~has_charge, tt_str + str(plane))
-    df.loc[:, column_name] = tt_str.replace("", "0").astype(int)
+    tt_values = tt_str.replace("", "0").astype(int)
+    target_dtype = df[column_name].dtype if column_name in df.columns else None
+    if target_dtype is not None and pd.api.types.is_integer_dtype(target_dtype):
+        tt_values = np.asarray(tt_values, dtype=target_dtype)
+    df.loc[:, column_name] = tt_values
     return df
 
-def compute_fit_tt_from_charge(df: pd.DataFrame) -> pd.Series:
+def compute_tt_task4_fit_from_charge(df: pd.DataFrame) -> pd.Series:
     """
-    Compute fit_tt from observed plane activity, constrained by list_tt.
+    Compute tt_task4_fit from observed plane activity, constrained by tt_task3_list.
 
-    A plane can only be active in fit_tt if it was already active in list_tt
+    A plane can only be active in tt_task4_fit if it was already active in tt_task3_list
     (keep-or-diminish rule). Plane activity is then validated from charge-like
     observables; this intentionally avoids extension/projection-only occupancy.
     """
-    charge_threshold = _task4_parse_optional_float(config.get("fit_tt_plane_charge_threshold"))
+    charge_threshold = _task4_parse_optional_float(config.get("tt_task4_fit_plane_charge_threshold"))
     if charge_threshold is None:
         charge_threshold = 0.0
 
-    list_tt_series: pd.Series | None = None
-    if "list_tt" in df.columns:
-        list_tt_series = pd.to_numeric(df["list_tt"], errors="coerce").fillna(0).astype(int)
-    elif "processed_tt" in df.columns:
-        list_tt_series = pd.to_numeric(df["processed_tt"], errors="coerce").fillna(0).astype(int)
+    tt_task3_list_series: pd.Series | None = None
+    if "tt_task3_list" in df.columns:
+        tt_task3_list_series = pd.to_numeric(df["tt_task3_list"], errors="coerce").fillna(0).astype(int)
+    elif "tt_task3_list" in df.columns:
+        tt_task3_list_series = pd.to_numeric(df["tt_task3_list"], errors="coerce").fillna(0).astype(int)
 
-    if list_tt_series is not None:
-        list_tt_labels = list_tt_series.astype(str)
+    if tt_task3_list_series is not None:
+        tt_task3_list_labels = tt_task3_list_series.astype(str)
     else:
-        list_tt_labels = pd.Series("", index=df.index, dtype="object")
+        tt_task3_list_labels = pd.Series("", index=df.index, dtype="object")
 
     tt_str = pd.Series("", index=df.index, dtype="object")
     for plane in range(1, 5):
-        if list_tt_series is not None:
-            allowed_by_list_tt = list_tt_labels.str.contains(str(plane), regex=False)
+        if tt_task3_list_series is not None:
+            allowed_by_tt_task3_list = tt_task3_list_labels.str.contains(str(plane), regex=False)
         else:
-            allowed_by_list_tt = pd.Series(True, index=df.index)
+            allowed_by_tt_task3_list = pd.Series(True, index=df.index)
 
         candidate_columns: list[str] = [
             col_name
             for col_name in (
                 f"charge_{plane}",
                 f"tim_charge_{plane}",
-                f"P{plane}_Q_sum_final",
+                f"p{plane}_qsum",
             )
             if col_name in df.columns
         ]
         if not candidate_columns:
             candidate_columns = [
-                f"Q_P{plane}s{strip}" for strip in range(1, 5) if f"Q_P{plane}s{strip}" in df.columns
+                f"p{plane}_s{strip}_qsum" for strip in range(1, 5) if f"p{plane}_s{strip}_qsum" in df.columns
             ]
         if not candidate_columns:
             continue
@@ -1001,7 +998,7 @@ def compute_fit_tt_from_charge(df: pd.DataFrame) -> pd.Series:
             .fillna(0.0)
         )
         has_charge = charge_values.gt(float(charge_threshold)).any(axis=1)
-        plane_active = allowed_by_list_tt & has_charge
+        plane_active = allowed_by_tt_task3_list & has_charge
         tt_str = tt_str.where(~plane_active, tt_str + str(plane))
     return tt_str.replace("", "0").astype(int)
 
@@ -1024,15 +1021,25 @@ def get_task4_tt_series(df_input: pd.DataFrame, preferred: str | None = None) ->
 def refresh_task4_trigger_columns(
     df_input: pd.DataFrame,
 ) -> pd.DataFrame:
-    df_output = compute_tt(df_input, "extension_tt", TASK4_EXTENSION_TT_COLUMNS)
-    fit_tt_series = compute_fit_tt_from_charge(df_output)
-    df_output.loc[:, TASK4_PRIMARY_TT_COLUMN] = fit_tt_series
+    df_output = df_input.copy()
+    if "tt_task3_list" not in df_output.columns:
+        df_output = compute_tt(df_output, "tt_task3_list", TASK4_EXTENSION_TT_COLUMNS)
+    else:
+        df_output.loc[:, "tt_task3_list"] = (
+            pd.to_numeric(df_output["tt_task3_list"], errors="coerce")
+            .fillna(0)
+            .astype(int)
+        )
+    tt_task4_fit_series = compute_tt_task4_fit_from_charge(df_output)
+    if TASK4_PRIMARY_TT_COLUMN in df_output.columns and pd.api.types.is_integer_dtype(df_output[TASK4_PRIMARY_TT_COLUMN].dtype):
+        tt_task4_fit_series = np.asarray(tt_task4_fit_series, dtype=df_output[TASK4_PRIMARY_TT_COLUMN].dtype)
+    df_output.loc[:, TASK4_PRIMARY_TT_COLUMN] = tt_task4_fit_series
     return df_output
 
 def _resolve_task4_track_efficiency_fiducial_cfg(config_obj: Mapping[str, object]) -> dict[str, object]:
     return {
-        "charge_event_left": _task4_get_optional_config_float(config_obj, "fiducial_charge_event_left"),
-        "charge_event_right": _task4_get_optional_config_float(config_obj, "fiducial_charge_event_right"),
+        "event_charge_left": _task4_get_optional_config_float(config_obj, "fiducial_event_charge_left"),
+        "event_charge_right": _task4_get_optional_config_float(config_obj, "fiducial_event_charge_right"),
         # "x_left": _task4_get_optional_config_float(
         #     config_obj,
         #     "fiducial_x_left",
@@ -1077,8 +1084,8 @@ def _task4_resolve_region_bounds(
 
 def _task4_track_efficiency_fiducial_is_active(cfg_fiducial: Mapping[str, object]) -> bool:
     scalar_keys = (
-        "charge_event_left",
-        "charge_event_right",
+        "event_charge_left",
+        "event_charge_right",
         # "x_left",
         # "x_right",
         "theta_left_deg",
@@ -1274,8 +1281,8 @@ def initialize_task4_runtime_context(
             "ext_res_ystr_filter": cfg["ext_res_ystr_filter"],
             "ext_res_tsum_filter": cfg["ext_res_tsum_filter"],
             "ext_res_tdif_filter": cfg["ext_res_tdif_filter"],
-            "delta_s_left": cfg.get("delta_s_left", -0.0003),
-            "delta_s_right": cfg.get("delta_s_right", 0.0003),
+            "event_s_err_left": cfg.get("event_s_err_left", -0.0003),
+            "event_s_err_right": cfg.get("event_s_err_right", 0.0003),
             "coincidence_window_cal_ns": cfg["coincidence_window_cal_ns"],
             "coincidence_window_cal_number_of_points": cfg["coincidence_window_cal_number_of_points"],
             "beta": cfg["beta"],
@@ -1558,7 +1565,7 @@ def record_filter_metric(name: str, removed: float, total: float) -> None:
 
 def record_residual_sigmas(df: pd.DataFrame) -> None:
     """Fit Gaussian sigmas for residual columns per track combination and plane."""
-    tt_col = "list_tt" if "list_tt" in df.columns else "processed_tt"
+    tt_col = "tt_task3_list" if "tt_task3_list" in df.columns else "tt_task3_list"
     if tt_col not in df.columns:
         return
 
@@ -2136,7 +2143,7 @@ def apply_task4_final_filter(
             "input_rows": 0,
             "rows_affected": 0,
             "values_zeroed": 0,
-            "rows_failed_fit_tt_min": 0,
+            "rows_failed_tt_task4_fit_min": 0,
             "rows_failed_nonzero_required": 0,
             "pre_event_rows_affected": 0,
             "pre_event_values_zeroed": 0,
@@ -2149,7 +2156,7 @@ def apply_task4_final_filter(
         "input_rows": input_rows,
         "rows_affected": 0,
         "values_zeroed": 0,
-        "rows_failed_fit_tt_min": 0,
+        "rows_failed_tt_task4_fit_min": 0,
         "rows_failed_nonzero_required": 0,
         "pre_event_rows_affected": 0,
         "pre_event_values_zeroed": 0,
@@ -2199,16 +2206,16 @@ def apply_task4_final_filter(
         task4_pre_event_block_summary["values_zeroed"]
     )
 
-    fit_tt_min = TASK4_FINAL_FIT_TT_MIN
-    fit_tt_series = get_task4_tt_series(working, preferred=TASK4_PRIMARY_TT_COLUMN)
-    fit_tt_pass = fit_tt_series >= fit_tt_min
-    fit_tt_fail = ~fit_tt_pass.to_numpy(dtype=bool, copy=False)
-    summary["rows_failed_fit_tt_min"] = int(fit_tt_fail.sum())
-    final_mask &= ~fit_tt_fail
-    fail_reason_parts[fit_tt_fail] = np.where(
-        fail_reason_parts[fit_tt_fail] == "",
-        f"fit_tt<{fit_tt_min}",
-        fail_reason_parts[fit_tt_fail] + f";fit_tt<{fit_tt_min}",
+    tt_task4_fit_min = TASK4_FINAL_FIT_TT_MIN
+    tt_task4_fit_series = get_task4_tt_series(working, preferred=TASK4_PRIMARY_TT_COLUMN)
+    tt_task4_fit_pass = tt_task4_fit_series >= tt_task4_fit_min
+    tt_task4_fit_fail = ~tt_task4_fit_pass.to_numpy(dtype=bool, copy=False)
+    summary["rows_failed_tt_task4_fit_min"] = int(tt_task4_fit_fail.sum())
+    final_mask &= ~tt_task4_fit_fail
+    fail_reason_parts[tt_task4_fit_fail] = np.where(
+        fail_reason_parts[tt_task4_fit_fail] == "",
+        f"tt_task4_fit<{tt_task4_fit_min}",
+        fail_reason_parts[tt_task4_fit_fail] + f";tt_task4_fit<{tt_task4_fit_min}",
     )
 
     required_nonzero_cols = [col for col in TASK4_EVENT_ATOMIC_COLUMNS if col in working.columns]
@@ -2284,9 +2291,9 @@ def apply_task4_final_filter(
     )
     event_variable_specs = (
         (
-            "charge_event",
-            "event_combination_detector_charge_event_left",
-            "event_combination_detector_charge_event_right",
+            "event_charge",
+            "event_combination_detector_event_charge_left",
+            "event_combination_detector_event_charge_right",
             _task4_config_float(config, "charge_plot_limit_left", default=0.0),
             _task4_config_float(
                 config,
@@ -2627,14 +2634,14 @@ def _required_track_efficiency_hit_columns():
 def _extract_track_efficiency_hit_arrays(df_plot, tdiff_to_x):
     x_hits = np.column_stack(
         [
-            pd.to_numeric(df_plot[f"P{plane}_T_dif_final"], errors="coerce").to_numpy(dtype=float)
+            pd.to_numeric(df_plot[f"p{plane}_tdif"], errors="coerce").to_numpy(dtype=float)
             * float(tdiff_to_x)
             for plane in range(1, 5)
         ]
     )
     y_hits = np.column_stack(
         [
-            pd.to_numeric(df_plot[f"P{plane}_Y_final"], errors="coerce").to_numpy(dtype=float)
+            pd.to_numeric(df_plot[f"p{plane}_ypos"], errors="coerce").to_numpy(dtype=float)
             for plane in range(1, 5)
         ]
     )
@@ -2922,7 +2929,7 @@ def _compute_track_based_efficiency_payload(
         "pool_source": "",
     }
 
-    trigger_source = "fit_tt"
+    trigger_source = "tt_task4_fit"
     payload["trigger_source"] = trigger_source
     pool_source = trigger_source
     payload["pool_source"] = pool_source
@@ -2931,7 +2938,7 @@ def _compute_track_based_efficiency_payload(
     missing = [col for col in required if col not in df_plot.columns]
     if missing:
         if trigger_source in missing:
-            payload["reason"] = "missing_fit_tt"
+            payload["reason"] = "missing_tt_task4_fit"
         else:
             payload["reason"] = f"missing_required_columns:{','.join(missing)}"
         return payload
@@ -3036,7 +3043,7 @@ def _compute_track_based_efficiency_payload(
             z_arr,
             plane - 1,
         )
-        # Denominator/numerator are both defined from fit_tt combinations:
+        # Denominator/numerator are both defined from tt_task4_fit combinations:
         # pool in {3-plane,1234}, fired in {1234}.
         pool_mask = np.isin(pool_tt_all, plane_pool_tt[plane]) & projection["valid"]
         if int(np.sum(pool_mask)) < int(cfg_eff["min_pool_events"]):
@@ -3079,8 +3086,8 @@ def _compute_track_based_efficiency_payload(
             & (y_pred >= y_left)
             & (y_pred <= y_right)
         )
-        charge_left = cfg_fiducial.get("charge_event_left", None)
-        charge_right = cfg_fiducial.get("charge_event_right", None)
+        charge_left = cfg_fiducial.get("event_charge_left", None)
+        charge_right = cfg_fiducial.get("event_charge_right", None)
         if charge_left is not None or charge_right is not None:
             charge_pass = np.isfinite(charge_pred)
             if charge_left is not None:
@@ -3417,7 +3424,7 @@ def _format_task4_simulated_efficiency_title_line(sim_efficiencies_percent) -> s
 def _resolve_track_efficiency_four_plane_fiducial_index(
     payload,
     *,
-    fit_tt_1234_index: pd.Index | None = None,
+    tt_task4_fit_1234_index: pd.Index | None = None,
 ) -> pd.Index:
     if not isinstance(payload, dict):
         return pd.Index([])
@@ -3442,8 +3449,8 @@ def _resolve_track_efficiency_four_plane_fiducial_index(
     for accepted_index in accepted_indices[1:]:
         fiducial_index = fiducial_index.intersection(accepted_index, sort=False)
 
-    if fit_tt_1234_index is not None:
-        fiducial_index = fiducial_index.intersection(pd.Index(fit_tt_1234_index), sort=False)
+    if tt_task4_fit_1234_index is not None:
+        fiducial_index = fiducial_index.intersection(pd.Index(tt_task4_fit_1234_index), sort=False)
     return fiducial_index
 
 def _resolve_track_efficiency_representative(plane_result):
@@ -3749,11 +3756,11 @@ def _build_robust_efficiency_row(
             plateau_eff = float(len(plateau_fired_index) / len(plane_plateau_accepted_indices[plane]))
         row[f"eff{plane}_plateau"] = plateau_eff
 
-    fit_tt_1234_index = None
-    if "fit_tt" in df_events.columns:
-        tt_values = pd.to_numeric(df_events["fit_tt"], errors="coerce").to_numpy(dtype=float)
-        fit_tt_1234_index = pd.Index(df_events.index[tt_values == 1234.0])
-        n_events_1234 = int(len(fit_tt_1234_index))
+    tt_task4_fit_1234_index = None
+    if "tt_task4_fit" in df_events.columns:
+        tt_values = pd.to_numeric(df_events["tt_task4_fit"], errors="coerce").to_numpy(dtype=float)
+        tt_task4_fit_1234_index = pd.Index(df_events.index[tt_values == 1234.0])
+        n_events_1234 = int(len(tt_task4_fit_1234_index))
     else:
         n_events_1234 = None
 
@@ -3769,9 +3776,9 @@ def _build_robust_efficiency_row(
 
     robust_union_index = None
     robust_intersection_index = None
-    if fit_tt_1234_index is not None and plane_fiducial_accepted_indices:
+    if tt_task4_fit_1234_index is not None and plane_fiducial_accepted_indices:
         robust_indices = [
-            accepted_index.intersection(fit_tt_1234_index, sort=False)
+            accepted_index.intersection(tt_task4_fit_1234_index, sort=False)
             for accepted_index in plane_fiducial_accepted_indices.values()
         ]
         robust_union_index = robust_indices[0]
@@ -3798,7 +3805,7 @@ def _build_robust_efficiency_row(
         row["four_plane_robust_count_intersection"] = np.nan
         row["four_plane_robust_hz_intersection"] = np.nan
 
-    if fit_tt_1234_index is not None and len(plane_fiducial_accepted_indices) == 4 and robust_intersection_index is not None:
+    if tt_task4_fit_1234_index is not None and len(plane_fiducial_accepted_indices) == 4 and robust_intersection_index is not None:
         n_events_four_plane_robust = int(len(robust_intersection_index))
         row["four_plane_robust_count"] = n_events_four_plane_robust
         row["four_plane_robust_hz"] = float(n_events_four_plane_robust / denom) if denom > 0.0 else np.nan
@@ -3953,7 +3960,7 @@ def _build_projection_ellipse_diagnostic_payload(
     if tt_col is None:
         return {
             "available": False,
-            "reason": "missing_fit_tt",
+            "reason": "missing_tt_task4_fit",
             "config": cfg,
             "projection_source": "missing",
             "tt_results": {},
@@ -4323,20 +4330,20 @@ def _make_offender_hist_bins(
     return np.linspace(left, right, nbins)
 
 def _resolve_total_offender_counts(df_input: pd.DataFrame) -> tuple[np.ndarray | None, str]:
-    if "total_problematic_offender_count" in df_input.columns:
+    if "filter_total_problematic_offender_count" in df_input.columns:
         counts = pd.to_numeric(
-            df_input["total_problematic_offender_count"],
+            df_input["filter_total_problematic_offender_count"],
             errors="coerce",
         ).to_numpy(dtype=float)
         counts = np.clip(counts, 0.0, None)
-        return counts, "total_problematic_offender_count"
+        return counts, "filter_total_problematic_offender_count"
 
     component_columns = [
         column_name
         for column_name in (
-            "task1_problematic_channel_count",
-            "task2_problematic_strip_count",
-            "task3_problematic_plane_count",
+            "filter_task1_problematic_channel_count",
+            "filter_task2_problematic_strip_count",
+            "filter_task3_problematic_plane_count",
         )
         if column_name in df_input.columns
     ]
@@ -4533,27 +4540,27 @@ def _build_offender_zigzag_payload(
         "y",
         "theta",
         "phi",
-        "P1_T_dif_final",
-        "P2_T_dif_final",
-        "P3_T_dif_final",
-        "P4_T_dif_final",
-        "P1_Y_final",
-        "P2_Y_final",
-        "P3_Y_final",
-        "P4_Y_final",
+        "p1_tdif",
+        "p2_tdif",
+        "p3_tdif",
+        "p4_tdif",
+        "p1_ypos",
+        "p2_ypos",
+        "p3_ypos",
+        "p4_ypos",
     )
     if not all(column_name in df_input.columns for column_name in required):
         return {}
 
     path_x_all = np.column_stack(
         [
-            pd.to_numeric(df_input[f"P{plane}_T_dif_final"], errors="coerce").to_numpy(dtype=float)
+            pd.to_numeric(df_input[f"p{plane}_tdif"], errors="coerce").to_numpy(dtype=float)
             for plane in range(1, 5)
         ]
     ) * float(tdiff_to_x)
     path_y_all = np.column_stack(
         [
-            pd.to_numeric(df_input[f"P{plane}_Y_final"], errors="coerce").to_numpy(dtype=float)
+            pd.to_numeric(df_input[f"p{plane}_ypos"], errors="coerce").to_numpy(dtype=float)
             for plane in range(1, 5)
         ]
     )
@@ -4698,9 +4705,9 @@ TASK4_PLOT_ALIASES: tuple[str, ...] = (
     "trigger_types_definitive_tt_and_raw",
     "timtrack_results_hexbin_combination_projections",
     "timtrack_results_scatter_combination_projections",
-    "theta_det_theta_zoom_tracking_tt",
+    "theta_det_theta_zoom_tt_task4_fit",
     "polar_theta_phi_definitive_tt_2d",
-    "polar_theta_phi_tracking_tt_2d",
+    "polar_theta_phi_tt_task4_fit_2d",
     "events_per_second_by_plane_cardinality_double_row",
     "timtrack_residuals_gaussian",
     "tim_th_chi_sigmafit_1234_histogram",
@@ -4726,7 +4733,6 @@ TASK4_PLOT_ALIASES: tuple[str, ...] = (
     "event_display_sample_3fold",
     "chi2_charge_populations_3fold",
     "chi2_residuals_populations_3fold",
-    "adj_dis_comparison",
 )
 task4_plot_status_by_alias: dict[str, str] = {}
 _TRACK_EFF_REPRESENTATIVE_LINESTYLE = (0, (10, 3))
@@ -5599,6 +5605,7 @@ for joined_record in joined_input_records:
     joined_path = joined_record["processing_file_path"]
     joined_frame = pd.read_parquet(joined_path, engine="pyarrow")
     joined_frame = joined_frame.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
+    joined_frame = canonicalize_step1_columns(joined_frame)
     if "event_id" not in joined_frame.columns:
         print(
             "Warning: 'event_id' missing in Task 4 input; reconstructing from "
@@ -5659,26 +5666,26 @@ print(f"Listed dataframe reloaded from: {file_path}")
 # print("Columns loaded from parquet:")
 # for col in working_df.columns:
 #     print(f" - {col}")
-# Backward compatibility: if old original_tt exists but raw_tt is missing, reuse it.
-if "raw_tt" not in working_df.columns and "original_tt" in working_df.columns:
-    working_df = working_df.rename(columns={"original_tt": "raw_tt"})
-# Backward compatibility: if clean_tt is missing but preprocessed_tt exists, reuse it.
-if "clean_tt" not in working_df.columns and "preprocessed_tt" in working_df.columns:
-    working_df = working_df.rename(columns={"preprocessed_tt": "clean_tt"})
+# Backward compatibility: if old original_tt exists but tt_task0_raw is missing, reuse it.
+if "tt_task0_raw" not in working_df.columns and "original_tt" in working_df.columns:
+    working_df = working_df.rename(columns={"original_tt": "tt_task0_raw"})
+# Backward compatibility: if tt_task1_clean is missing but prett_task3_list exists, reuse it.
+if "tt_task1_clean" not in working_df.columns and "prett_task3_list" in working_df.columns:
+    working_df = working_df.rename(columns={"prett_task3_list": "tt_task1_clean"})
 
 if create_debug_plots:
     main_cols: list[str] = []
     for i_plane in range(1, 5):
         main_cols.extend(
             [
-                f"P{i_plane}_T_sum_final",
-                f"P{i_plane}_T_dif_final",
-                f"P{i_plane}_Q_sum_final",
-                f"P{i_plane}_Q_dif_final",
-                f"P{i_plane}_Y_final",
+                f"p{i_plane}_tsum",
+                f"p{i_plane}_tdif",
+                f"p{i_plane}_qsum",
+                f"p{i_plane}_qdif",
+                f"p{i_plane}_ypos",
             ]
         )
-    main_cols.extend(["raw_tt", "clean_tt", "cal_tt", "list_tt"])
+    main_cols.extend(["tt_task0_raw", "tt_task1_clean", "tt_task2_cal", "tt_task3_list"])
     main_cols = [col for col in main_cols if col in working_df.columns]
     if main_cols:
         debug_fig_idx = plot_debug_histograms(
@@ -5695,24 +5702,24 @@ if create_debug_plots:
 # 0 -> regular analysis
 # 1 -> repeated, careful analysis
 
-# Keep list_tt from Task 3 when present; compute only if missing.
-if "list_tt" not in working_df.columns:
-    working_df = compute_tt(working_df, "list_tt", TASK4_EXTENSION_TT_COLUMNS)
+# Keep tt_task3_list from Task 3 when present; compute only if missing.
+if "tt_task3_list" not in working_df.columns:
+    working_df = compute_tt(working_df, "tt_task3_list", TASK4_EXTENSION_TT_COLUMNS)
 else:
-    working_df.loc[:, "list_tt"] = (
-        pd.to_numeric(working_df["list_tt"], errors="coerce")
+    working_df.loc[:, "tt_task3_list"] = (
+        pd.to_numeric(working_df["tt_task3_list"], errors="coerce")
         .fillna(0)
         .astype(int)
     )
-list_tt_counts_initial = working_df["list_tt"].value_counts()
-for tt_value, count in list_tt_counts_initial.items():
+tt_task3_list_counts_initial = working_df["tt_task3_list"].value_counts()
+for tt_value, count in tt_task3_list_counts_initial.items():
     tt_label = normalize_tt_label(tt_value)
-    global_variables[f"list_tt_{tt_label}_count"] = int(count)
-working_df["processed_tt"] = working_df["list_tt"].astype(int)
+    global_variables[f"tt_task3_list_{tt_label}_count"] = int(count)
+working_df["tt_task3_list"] = working_df["tt_task3_list"].astype(int)
 
-# Ensure cal_tt is present for downstream correlations
-if "cal_tt" not in working_df.columns:
-    working_df["cal_tt"] = working_df["processed_tt"]
+# Ensure tt_task2_cal is present for downstream correlations
+if "tt_task2_cal" not in working_df.columns:
+    working_df["tt_task2_cal"] = working_df["tt_task3_list"]
 
 # List all names of columns
 
@@ -5782,7 +5789,7 @@ FILTER_METRIC_NAMES: tuple[str, ...] = (
     "final_filter_rows_removed_pct",
     "data_purity_percentage",
     "all_components_zero_rows_removed_pct",
-    "fit_tt_lt_10_rows_removed_pct",
+    "tt_task4_fit_lt_10_rows_removed_pct",
 )
 
 reprocessing_parameters = pd.DataFrame()
@@ -5886,7 +5893,7 @@ if z_positions_from_task3 is not None and not np.all(z_positions_from_task3 == 0
     z_positions = z_positions_from_task3
     found_matching_conf = True
     z_source = "task3_parquet_z_columns"
-    print("Using z_positions from TASK_3 parquet columns (z_P1..z_P4).")
+    print("Using z_positions from TASK_3 parquet columns (z_p1..z_p4).")
 elif simulated_z_positions is not None:
     z_positions = np.array(simulated_z_positions, dtype=float)
     found_matching_conf = True
@@ -5965,10 +5972,10 @@ print(
 )
 
 # Save the z_positions in the metadata file
-global_variables['z_P1'] =  z_positions[0]
-global_variables['z_P2'] =  z_positions[1]
-global_variables['z_P3'] =  z_positions[2]
-global_variables['z_P4'] =  z_positions[3]
+global_variables['z_p1'] =  z_positions[0]
+global_variables['z_p2'] =  z_positions[1]
+global_variables['z_p3'] =  z_positions[2]
+global_variables['z_p4'] =  z_positions[3]
 
 globals().update(
     initialize_task4_runtime_context(
@@ -6006,10 +6013,10 @@ slow_cols = ['det_s', 'det_s_ordinate' , 'det_chi2_tsum'] + [f'det_res_tsum_{p}'
 
 # Pre-extract per-plane columns as contiguous numpy arrays (avoids per-event
 # getattr overhead in the detached fitting loop below).
-_det_Q    = np.column_stack([working_df[f'P{p}_Q_sum_final'].to_numpy(dtype=float) for p in range(1, nplan + 1)])
-_det_Tdif = np.column_stack([working_df[f'P{p}_T_dif_final'].to_numpy(dtype=float) for p in range(1, nplan + 1)])
-_det_Y    = np.column_stack([working_df[f'P{p}_Y_final'].to_numpy(dtype=float)     for p in range(1, nplan + 1)])
-_det_Tsum = np.column_stack([working_df[f'P{p}_T_sum_final'].to_numpy(dtype=float) for p in range(1, nplan + 1)])
+_det_Q    = np.column_stack([working_df[f'p{p}_qsum'].to_numpy(dtype=float) for p in range(1, nplan + 1)])
+_det_Tdif = np.column_stack([working_df[f'p{p}_tdif'].to_numpy(dtype=float) for p in range(1, nplan + 1)])
+_det_Y    = np.column_stack([working_df[f'p{p}_ypos'].to_numpy(dtype=float)     for p in range(1, nplan + 1)])
+_det_Tsum = np.column_stack([working_df[f'p{p}_tsum'].to_numpy(dtype=float) for p in range(1, nplan + 1)])
 
 # Alternative analysis starts -----------------------------------------------
 if run_detached_fit:
@@ -6024,7 +6031,7 @@ if run_detached_fit:
         det_ext_res_ystr_arr = np.full((n, 4), np.nan, dtype=float)
         det_ext_res_tsum_arr = np.full((n, 4), np.nan, dtype=float)
         det_ext_res_tdif_arr = np.full((n, 4), np.nan, dtype=float)
-        det_processed_tt_arr = working_df.get("list_tt", pd.Series([0]*n)).astype(int).to_numpy()
+        det_tt_task3_list_arr = working_df.get("tt_task3_list", pd.Series([0]*n)).astype(int).to_numpy()
         
         _detached_vectorized(
             _det_Q, _det_Tdif, _det_Y, _det_Tsum,
@@ -6050,7 +6057,7 @@ if run_detached_fit:
         all_res['det_ext_res_tdif_3'] = det_ext_res_tdif_arr[:, 2]
         all_res['det_ext_res_tdif_4'] = det_ext_res_tdif_arr[:, 3]
         all_res['det_th_chi'] = all_res['det_chi2_pos'] + all_res['det_chi2_tsum']
-        all_res['det_processed_tt'] = det_processed_tt_arr
+        all_res['det_tt_task3_list'] = det_tt_task3_list_arr
 
         new_cols = pd.DataFrame(all_res, index=working_df.index)
         dupes = new_cols.columns.intersection(working_df.columns)
@@ -6123,13 +6130,13 @@ for p in range(1, 5):
 
 if create_plots:
     # Detached method plots (per combination)
-    if "det_processed_tt" in working_df.columns and "datetime" in working_df.columns:
+    if "det_tt_task3_list" in working_df.columns and "datetime" in working_df.columns:
         for combo in TRACK_COMBINATIONS:
             try:
                 combo_int = int(combo)
             except ValueError:
                 continue
-            subset = working_df[working_df["det_processed_tt"] == combo_int]
+            subset = working_df[working_df["det_tt_task3_list"] == combo_int]
             if subset.empty:
                 continue
             plot_ts_with_side_hist(
@@ -6176,15 +6183,15 @@ print(f"{ntrk} events to be fitted")
 
 timtrack_results = [
     'tim_x', 'tim_xp', 'tim_y', 'tim_yp', 'tim_t0', 'tim_s',
-    'tim_th_chi', 'tim_res_y', 'tim_res_ts', 'tim_res_td', 'tim_list_tt',
+    'tim_th_chi', 'tim_res_y', 'tim_res_ts', 'tim_res_td', 'tim_tt_task3_list',
     'tim_res_ystr_1', 'tim_res_ystr_2', 'tim_res_ystr_3', 'tim_res_ystr_4',
     'tim_res_tsum_1', 'tim_res_tsum_2', 'tim_res_tsum_3', 'tim_res_tsum_4',
     'tim_res_tdif_1', 'tim_res_tdif_2', 'tim_res_tdif_3', 'tim_res_tdif_4',
     'tim_ext_res_ystr_1', 'tim_ext_res_ystr_2', 'tim_ext_res_ystr_3', 'tim_ext_res_ystr_4',
     'tim_ext_res_tsum_1', 'tim_ext_res_tsum_2', 'tim_ext_res_tsum_3', 'tim_ext_res_tsum_4',
     'tim_ext_res_tdif_1', 'tim_ext_res_tdif_2', 'tim_ext_res_tdif_3', 'tim_ext_res_tdif_4',
-    'tim_charge_1', 'tim_charge_2', 'tim_charge_3', 'tim_charge_4', 'tim_charge_event',
-    "tim_iterations", "tim_conv_distance", 'tim_converged'
+    'tim_p1_qsum', 'tim_p2_qsum', 'tim_p3_qsum', 'tim_p4_qsum', 'tim_event_charge',
+    "tim_timtrack_iterations", "tim_timtrack_conv_distance", 'tim_timtrack_converged'
 ]
 
 missing_tim_cols = {col: 0.0 for col in timtrack_results if col not in working_df.columns}
@@ -6193,12 +6200,12 @@ if missing_tim_cols:
 
 # Pre-extract per-plane columns for TimTrack (avoids per-event getattr overhead).
 # _tt_vsig is constant for every plane/event so it is allocated once here.
-_tt_Q    = np.column_stack([working_df[f'P{p}_Q_sum_final'].to_numpy(dtype=float) for p in range(1, nplan + 1)])
-_tt_Tsum = np.column_stack([working_df[f'P{p}_T_sum_final'].to_numpy(dtype=float) for p in range(1, nplan + 1)])
-_tt_Tdif = np.column_stack([working_df[f'P{p}_T_dif_final'].to_numpy(dtype=float) for p in range(1, nplan + 1)])
-_tt_Y    = np.column_stack([working_df[f'P{p}_Y_final'].to_numpy(dtype=float)     for p in range(1, nplan + 1)])
+_tt_Q    = np.column_stack([working_df[f'p{p}_qsum'].to_numpy(dtype=float) for p in range(1, nplan + 1)])
+_tt_Tsum = np.column_stack([working_df[f'p{p}_tsum'].to_numpy(dtype=float) for p in range(1, nplan + 1)])
+_tt_Tdif = np.column_stack([working_df[f'p{p}_tdif'].to_numpy(dtype=float) for p in range(1, nplan + 1)])
+_tt_Y    = np.column_stack([working_df[f'p{p}_ypos'].to_numpy(dtype=float)     for p in range(1, nplan + 1)])
 _tt_vsig = [anc_sy, anc_sts, anc_std]
-# Pre-computed weight array for _fmk_and_va (constant for all events/planes/iterations)
+# Pre-computed weight array for _fmk_and_va (constant for all events/planes/timtrack_iterations)
 _w_arr  = np.array([1.0 / anc_sy**2, 1.0 / anc_sts**2, 1.0 / anc_std**2], dtype=float)
 _sc_val = sc
 _z_pos_arr = np.asarray(z_positions, dtype=float)
@@ -6237,7 +6244,7 @@ if run_detached_fit and all(
 else:
     print("TimTrack warm-start disabled (detached seed columns unavailable).")
 
-# TimTrack thin profiling breakdown (accumulated across all TT iterations)
+# TimTrack thin profiling breakdown (accumulated across all TT timtrack_iterations)
 _tt_intro_s = 0.0
 _tt_main_fit_s = 0.0
 _tt_residual_s = 0.0
@@ -6249,9 +6256,9 @@ _tt_events_total = 0
 _tt_events_with_2plus_planes = 0
 _tt_events_loo_eligible = 0
 _tt_events_loo_processed = 0
-_tt_mainfit_iterations_total = 0
+_tt_mainfit_timtrack_iterations_total = 0
 _tt_loo_refits_total = 0
-_tt_loo_iterations_total = 0
+_tt_loo_timtrack_iterations_total = 0
 
 # TimTrack starts ------------------------------------------------------
 if not run_timtrack_fit:
@@ -6271,17 +6278,17 @@ for iteration in range(repeat + 1):
     ext_res_tsum_arr = np.full((n_rows, 4), np.nan, dtype=float)
     ext_res_tdif_arr = np.full((n_rows, 4), np.nan, dtype=float)
 
-    charge_event_arr = np.zeros(n_rows, dtype=float)
-    iterations_arr = np.zeros(n_rows, dtype=np.int32)
-    conv_distance_arr = np.full(n_rows, np.nan, dtype=float)
-    converged_arr = np.zeros(n_rows, dtype=np.int8)
-    if "list_tt" in working_df.columns:
-        processed_tt_arr = pd.to_numeric(
-            working_df["list_tt"],
+    event_charge_arr = np.zeros(n_rows, dtype=float)
+    timtrack_iterations_arr = np.zeros(n_rows, dtype=np.int32)
+    timtrack_conv_distance_arr = np.full(n_rows, np.nan, dtype=float)
+    timtrack_converged_arr = np.zeros(n_rows, dtype=np.int8)
+    if "tt_task3_list" in working_df.columns:
+        tt_task3_list_arr = pd.to_numeric(
+            working_df["tt_task3_list"],
             errors="coerce",
         ).fillna(0).to_numpy(dtype=np.int32)
     else:
-        processed_tt_arr = np.zeros(n_rows, dtype=np.int32)
+        tt_task3_list_arr = np.zeros(n_rows, dtype=np.int32)
 
     th_chi_arr = np.full(n_rows, np.nan, dtype=float)
     x_arr = np.full(n_rows, np.nan, dtype=float)
@@ -6339,14 +6346,14 @@ for iteration in range(repeat + 1):
         )
         plane_idx_arr = np.flatnonzero(_valid_plane_mask)
         if plane_idx_arr.size > 0:
-            charge_event = float(np.sum(_q_row[plane_idx_arr], dtype=float))
+            event_charge = float(np.sum(_q_row[plane_idx_arr], dtype=float))
             plane_idx_4 = plane_idx_arr[plane_idx_arr < 4]
             if plane_idx_4.size > 0:
                 charge_arr[pos, plane_idx_4] = _q_row[plane_idx_4]
         else:
-            charge_event = 0.0
+            event_charge = 0.0
         _tt_intro_s += time.perf_counter() - _tt_t
-        charge_event_arr[pos] = charge_event
+        event_charge_arr[pos] = event_charge
 
         # FITTING -----------------------------------------------------------------------
         if plane_idx_arr.size <= 1:
@@ -6356,7 +6363,7 @@ for iteration in range(repeat + 1):
             yp_arr[pos] = np.nan
             t0_arr[pos] = np.nan
             s_arr[pos] = np.nan
-            conv_distance_arr[pos] = np.nan
+            timtrack_conv_distance_arr[pos] = np.nan
             th_chi_arr[pos] = np.nan
             continue
         _tt_events_with_2plus_planes += 1
@@ -6429,13 +6436,13 @@ for iteration in range(repeat + 1):
             vs0 = vs
             vs, merr_diag = _solve_fn(mk, va)
             dist = _fmahd_fn(npar, vs, vs0, merr_diag)
-        _tt_mainfit_iterations_total += int(istp)
+        _tt_mainfit_timtrack_iterations_total += int(istp)
         _tt_main_fit_s += time.perf_counter() - _tt_t
 
         if istp >= _iter_max_f or dist >= _cocut_f:
-            converged_arr[pos] = 1
-        iterations_arr[pos] = istp
-        conv_distance_arr[pos] = dist
+            timtrack_converged_arr[pos] = 1
+        timtrack_iterations_arr[pos] = istp
+        timtrack_conv_distance_arr[pos] = dist
 
         vsf = vs
         fitted += 1
@@ -6521,7 +6528,7 @@ for iteration in range(repeat + 1):
                         )
                         vs_loo = _solve_only_fn(mk_loo, va_loo)
                         _tt_loo_refits_total += 1
-                        _tt_loo_iterations_total += 1
+                        _tt_loo_timtrack_iterations_total += 1
                         y_res = vs_loo[2] - _y_row[plane_idx_ref]
                         ts_res = (vs_loo[4] + _half_lenx_ss) - _ts_row[plane_idx_ref]
                         td_res = (vs_loo[0] * ss) - _td_row[plane_idx_ref]
@@ -6569,7 +6576,7 @@ for iteration in range(repeat + 1):
                             dist_loo = _fmahd_fn(npar, vs, vs0, merr_diag)
 
                         _tt_loo_refits_total += 1
-                        _tt_loo_iterations_total += int(istp_loo)
+                        _tt_loo_timtrack_iterations_total += int(istp_loo)
                         y_res = vs[2] - y_ref
                         ts_res = (vs[4] + _half_lenx_ss) - ts_ref
                         td_res = (vs[0] * ss) - td_ref
@@ -6592,11 +6599,11 @@ for iteration in range(repeat + 1):
         working_df[f'tim_ext_res_tsum_{col_suffix}'] = ext_res_tsum_arr[:, plane_idx]
         working_df[f'tim_ext_res_tdif_{col_suffix}'] = ext_res_tdif_arr[:, plane_idx]
 
-    working_df['tim_charge_event'] = charge_event_arr
-    working_df['tim_iterations'] = iterations_arr
-    working_df['tim_conv_distance'] = conv_distance_arr
-    working_df['tim_converged'] = converged_arr
-    working_df['tim_list_tt'] = processed_tt_arr
+    working_df['tim_event_charge'] = event_charge_arr
+    working_df['tim_timtrack_iterations'] = timtrack_iterations_arr
+    working_df['tim_timtrack_conv_distance'] = timtrack_conv_distance_arr
+    working_df['tim_timtrack_converged'] = timtrack_converged_arr
+    working_df['tim_tt_task3_list'] = tt_task3_list_arr
 
     working_df['tim_th_chi'] = th_chi_arr
     working_df['tim_x'] = x_arr
@@ -6620,7 +6627,7 @@ for iteration in range(repeat + 1):
 # ------------------------------------------------------------------------------------
 
 # Set the label to integer -----------------------------------------------------------
-working_df["processed_tt"] = working_df["processed_tt"].astype(np.int32, copy=False)
+working_df["tt_task3_list"] = working_df["tt_task3_list"].astype(np.int32, copy=False)
 theta_vals, phi_vals = calculate_angles(working_df["tim_xp"], working_df["tim_yp"])
 
 # TimTrack-prefixed variables already exist; just ensure angles are set.
@@ -6650,14 +6657,14 @@ for p in range(1, 5):
     if f"charge_{p}" not in working_df.columns:
         working_df[f"charge_{p}"] = working_df.get(f"tim_charge_{p}", 0)
 
-if "charge_event" not in working_df.columns:
-    working_df["charge_event"] = working_df.get("tim_charge_event", 0)
-if "iterations" not in working_df.columns:
-    working_df["iterations"] = working_df.get("tim_iterations", 0)
-if "conv_distance" not in working_df.columns:
-    working_df["conv_distance"] = working_df.get("tim_conv_distance", 0)
-if "converged" not in working_df.columns:
-    working_df["converged"] = working_df.get("tim_converged", 0)
+if "event_charge" not in working_df.columns:
+    working_df["event_charge"] = working_df.get("tim_event_charge", 0)
+if "timtrack_iterations" not in working_df.columns:
+    working_df["timtrack_iterations"] = working_df.get("tim_timtrack_iterations", 0)
+if "timtrack_conv_distance" not in working_df.columns:
+    working_df["timtrack_conv_distance"] = working_df.get("tim_timtrack_conv_distance", 0)
+if "timtrack_converged" not in working_df.columns:
+    working_df["timtrack_converged"] = working_df.get("tim_timtrack_converged", 0)
 
 for p in range(1, 5):
     if f"tim_res_ystr_{p}" not in working_df.columns:
@@ -6675,14 +6682,14 @@ for p in range(1, 5):
 
 #%%
 
-if create_plots and "processed_tt" in working_df.columns and "datetime" in working_df.columns:
+if create_plots and "tt_task3_list" in working_df.columns and "datetime" in working_df.columns:
     print("In")
     for combo in TRACK_COMBINATIONS:
         try:
             combo_int = int(combo)
         except ValueError:
             continue
-        subset = working_df[working_df["processed_tt"] == combo_int]
+        subset = working_df[working_df["tt_task3_list"] == combo_int]
         if subset.empty:
             continue
         plot_ts_with_side_hist(
@@ -6789,14 +6796,14 @@ if combined_columns:
 # Defrag after all combined-column writes are complete
 working_df = working_df.copy()
 
-if "delta_s" not in working_df.columns:
+if "event_s_err" not in working_df.columns:
     det_s_vals = pd.to_numeric(working_df.get("det_s"), errors="coerce") if "det_s" in working_df.columns else None
     tim_s_vals = pd.to_numeric(working_df.get("tim_s"), errors="coerce") if "tim_s" in working_df.columns else None
     combo_s_vals = pd.to_numeric(working_df.get("s"), errors="coerce") if "s" in working_df.columns else None
     if det_s_vals is not None and tim_s_vals is not None:
-        working_df["delta_s"] = det_s_vals - tim_s_vals
+        working_df["event_s_err"] = det_s_vals - tim_s_vals
     elif det_s_vals is not None and combo_s_vals is not None:
-        working_df["delta_s"] = det_s_vals - combo_s_vals
+        working_df["event_s_err"] = det_s_vals - combo_s_vals
 
 if create_debug_plots:
     def _emit_param_debug(param_label, columns, thresholds, *, tag="tunable"):
@@ -6930,7 +6937,7 @@ _task4_make_combined_residuals = (
 )
 if (
     (_task4_make_combined_timeseries or _task4_make_combined_residuals)
-    and "processed_tt" in working_df.columns
+    and "tt_task3_list" in working_df.columns
     and "datetime" in working_df.columns
 ):
     for combo in TRACK_COMBINATIONS:
@@ -6938,7 +6945,7 @@ if (
             combo_int = int(combo)
         except ValueError:
             continue
-        subset = working_df[working_df["processed_tt"] == combo_int]
+        subset = working_df[working_df["tt_task3_list"] == combo_int]
         if subset.empty:
             continue
         if _task4_make_combined_timeseries:
@@ -6990,7 +6997,7 @@ if timeseries_and_fits or _task4_make_hist_core_errs_combined or _task4_make_his
                 combo_int = int(combo)
             except ValueError:
                 continue
-            subset = ts_core[ts_core['processed_tt'] == combo_int]
+            subset = ts_core[ts_core['tt_task3_list'] == combo_int]
             if subset.empty:
                 continue
             combo_subsets.append((combo, subset))
@@ -7180,16 +7187,16 @@ _prof["tt_events_total_n"] = int(_tt_events_total)
 _prof["tt_events_with_2plus_planes_n"] = int(_tt_events_with_2plus_planes)
 _prof["tt_events_loo_eligible_n"] = int(_tt_events_loo_eligible)
 _prof["tt_events_loo_processed_n"] = int(_tt_events_loo_processed)
-_prof["tt_mainfit_iterations_total_n"] = int(_tt_mainfit_iterations_total)
+_prof["tt_mainfit_timtrack_iterations_total_n"] = int(_tt_mainfit_timtrack_iterations_total)
 _prof["tt_loo_refits_total_n"] = int(_tt_loo_refits_total)
-_prof["tt_loo_iterations_total_n"] = int(_tt_loo_iterations_total)
+_prof["tt_loo_timtrack_iterations_total_n"] = int(_tt_loo_timtrack_iterations_total)
 _prof["tt_mainfit_iter_per_event"] = (
-    float(_tt_mainfit_iterations_total) / float(_tt_events_with_2plus_planes)
+    float(_tt_mainfit_timtrack_iterations_total) / float(_tt_events_with_2plus_planes)
     if _tt_events_with_2plus_planes > 0
     else np.nan
 )
 _prof["tt_loo_iter_per_refit"] = (
-    float(_tt_loo_iterations_total) / float(_tt_loo_refits_total)
+    float(_tt_loo_timtrack_iterations_total) / float(_tt_loo_refits_total)
     if _tt_loo_refits_total > 0
     else np.nan
 )
@@ -7273,7 +7280,7 @@ if np.any(valid_track):
             if planes_hit:
                 tracking_vals[idx] = int("".join(planes_hit))
 
-tracking_df = pd.DataFrame({'tracking_tt': tracking_vals}, index=working_df.index)
+tracking_df = pd.DataFrame({'tt_task4_projected': tracking_vals}, index=working_df.index)
 working_df = working_df.drop(columns=tracking_df.columns.intersection(working_df.columns), errors='ignore')
 working_df = working_df.join(tracking_df)
 working_df = working_df.copy()
@@ -7284,10 +7291,10 @@ working_df = working_df.copy()
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 
-fit_tt_values = [234, 123, 34, 1234, 23, 12, 124, 134, 24, 13, 14]
+tt_task4_fit_values = [234, 123, 34, 1234, 23, 12, 124, 134, 24, 13, 14]
 # Pre-seed metadata keys so CSVs always include all fit outputs, even if a
 # specific combination has no data in this run.
-for _tt in fit_tt_values:
+for _tt in tt_task4_fit_values:
     global_variables.setdefault(f"sigmoid_width_{_tt}", np.nan)
     global_variables.setdefault(f"background_slope_{_tt}", np.nan)
     global_variables.setdefault(f"sigmoid_amplitude_{_tt}", np.nan)
@@ -7308,31 +7315,42 @@ if time_window_fitting:
     )
     half_widths = 0.5 * widths
     width_chunk_size = 32
-    fit_tt_arr = get_task4_tt_series(
+    tt_task4_fit_arr = get_task4_tt_series(
         working_df,
         preferred=TASK4_PRIMARY_TT_COLUMN,
     ).to_numpy(dtype=np.int32, copy=False)
-    t_sum_cols = [col for col in working_df.columns if "_T_sum_" in col]
+    t_sum_cols = [
+        f"p{plane}_tsum"
+        for plane in range(1, 5)
+        if f"p{plane}_tsum" in working_df.columns
+    ]
+    if not t_sum_cols:
+        t_sum_cols = [
+            f"p{plane}_s{strip}_tsum"
+            for plane in range(1, 5)
+            for strip in range(1, 5)
+            if f"p{plane}_s{strip}_tsum" in working_df.columns
+        ]
     t_sum_all = (
         working_df[t_sum_cols].to_numpy(dtype=float, copy=False)
         if t_sum_cols
         else np.empty((len(working_df), 0), dtype=float)
     )
 
-    for fit_tt_value in fit_tt_values:
-        mask = fit_tt_arr == fit_tt_value
+    for tt_task4_fit_value in tt_task4_fit_values:
+        mask = tt_task4_fit_arr == tt_task4_fit_value
         n_selected = int(np.count_nonzero(mask))
 
         if n_selected > 0:
-            print(f"\nProcessing fit_tt: {fit_tt_value} with {n_selected} events.")
+            print(f"\nProcessing tt_task4_fit: {tt_task4_fit_value} with {n_selected} events.")
         t_sum_data = t_sum_all[mask]
         if t_sum_data.size == 0:
-            print(f"\n[Warning] Skipping fit_tt {fit_tt_value}: no _T_sum_ columns.")
+            print(f"\n[Warning] Skipping tt_task4_fit {tt_task4_fit_value}: no canonical tsum columns.")
             continue
         
         nonzero_rows = np.any(t_sum_data != 0, axis=1)
         if not np.any(nonzero_rows):
-            print(f"\n[Warning] Skipping fit_tt {fit_tt_value}: no non-zero T_sum data.")
+            print(f"\n[Warning] Skipping tt_task4_fit {tt_task4_fit_value}: no non-zero T_sum data.")
             continue
 
         nonzero_mask = t_sum_data != 0
@@ -7364,7 +7382,7 @@ if time_window_fitting:
             denom = float(np.max(counts_per_width))
             if not np.isfinite(denom) or denom <= 0:
                 denom = 1.0
-        global_variables[f'fit_normalization_{fit_tt_value}'] = denom
+        global_variables[f'fit_normalization_{tt_task4_fit_value}'] = denom
         counts_per_width_norm = counts_per_width / denom
 
         # # Define model function: signal (logistic) + linear background
@@ -7388,7 +7406,7 @@ if time_window_fitting:
         counts_clean = counts_per_width_norm[valid_mask]
         
         if len(counts_clean) == 0 or len(widths_clean) == 0:
-            print(f"[Warning] Skipping fit_tt {fit_tt_value}: no valid data.")
+            print(f"[Warning] Skipping tt_task4_fit {tt_task4_fit_value}: no valid data.")
             continue
         
         # Then fit
@@ -7401,20 +7419,20 @@ if time_window_fitting:
                 maxfev=10000,
             )
         except RuntimeError as exc:
-            print(f"[Warning] Fit failed for fit_tt {fit_tt_value}: {exc}")
-            global_variables[f'sigmoid_width_{fit_tt_value}'] = np.nan
-            global_variables[f'background_slope_{fit_tt_value}'] = np.nan
-            global_variables[f'sigmoid_amplitude_{fit_tt_value}'] = np.nan
-            global_variables[f'sigmoid_center_{fit_tt_value}'] = np.nan
+            print(f"[Warning] Fit failed for tt_task4_fit {tt_task4_fit_value}: {exc}")
+            global_variables[f'sigmoid_width_{tt_task4_fit_value}'] = np.nan
+            global_variables[f'background_slope_{tt_task4_fit_value}'] = np.nan
+            global_variables[f'sigmoid_amplitude_{tt_task4_fit_value}'] = np.nan
+            global_variables[f'sigmoid_center_{tt_task4_fit_value}'] = np.nan
             continue
                 
         S_fit, w0_fit, tau_fit, B_fit = popt
-        print(f"fit_tt {fit_tt_value} - Fit parameters:\n  Signal amplitude S = {S_fit:.4f}\n  Transition center w0 = {w0_fit:.4f} ns\n  Transition width τ = {tau_fit:.4f} ns\n  Background slope B = {B_fit:.6f} per ns")
+        print(f"tt_task4_fit {tt_task4_fit_value} - Fit parameters:\n  Signal amplitude S = {S_fit:.4f}\n  Transition center w0 = {w0_fit:.4f} ns\n  Transition width τ = {tau_fit:.4f} ns\n  Background slope B = {B_fit:.6f} per ns")
 
-        global_variables[f'sigmoid_width_{fit_tt_value}'] = tau_fit
-        global_variables[f'background_slope_{fit_tt_value}'] = B_fit
-        global_variables[f'sigmoid_amplitude_{fit_tt_value}'] = S_fit
-        global_variables[f'sigmoid_center_{fit_tt_value}'] = w0_fit
+        global_variables[f'sigmoid_width_{tt_task4_fit_value}'] = tau_fit
+        global_variables[f'background_slope_{tt_task4_fit_value}'] = B_fit
+        global_variables[f'sigmoid_amplitude_{tt_task4_fit_value}'] = S_fit
+        global_variables[f'sigmoid_center_{tt_task4_fit_value}'] = w0_fit
 
        
         if create_plots:
@@ -7449,7 +7467,7 @@ if time_window_fitting:
             ax_fill.set_ylim(y_min, 1)
             # ax_fill.set_yticks([0.25, 0.5, 0.75, 1.0])
             ax_fill.legend(loc="upper right")
-            ax_fill.set_title(f"Estimated Signal and Background Fractions per Window Width, fit_tt = {fit_tt_value}")
+            ax_fill.set_title(f"Estimated Signal and Background Fractions per Window Width, tt_task4_fit = {tt_task4_fit_value}")
             plt.setp(ax_fill.get_xticklabels(), visible=False)
             ax_main.scatter(widths, counts_per_width_norm, label='Normalized average count in window')
             ax_main.plot(w_fit, f_fit, 'k--', label='Signal + background fit')
@@ -7462,7 +7480,7 @@ if time_window_fitting:
             ax_main.legend()
             
             if save_plots:
-                name_of_file = f'stat_window_accumulation_{fit_tt_value}'
+                name_of_file = f'stat_window_accumulation_{tt_task4_fit_value}'
                 final_filename = f'{fig_idx}_{name_of_file}.png'
                 fig_idx += 1
                 save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
@@ -7524,22 +7542,22 @@ working_df, task4_final_filter_rejected_df, task4_final_filter_summary = apply_t
 )
 task4_final_filter_applied = True
 
-fit_tt_total = int(task4_final_filter_summary.get("input_rows", len(working_df)))
-fit_tt_removed = int(task4_final_filter_summary.get("rows_failed_fit_tt_min", 0))
-baseline_events = original_number_of_events if original_number_of_events else fit_tt_total
+tt_task4_fit_total = int(task4_final_filter_summary.get("input_rows", len(working_df)))
+tt_task4_fit_removed = int(task4_final_filter_summary.get("rows_failed_tt_task4_fit_min", 0))
+baseline_events = original_number_of_events if original_number_of_events else tt_task4_fit_total
 record_filter_metric(
-    "fit_tt_lt_10_rows_removed_pct",
-    fit_tt_removed,
-    fit_tt_total if fit_tt_total else 0,
+    "tt_task4_fit_lt_10_rows_removed_pct",
+    tt_task4_fit_removed,
+    tt_task4_fit_total if tt_task4_fit_total else 0,
 )
 record_filter_metric(
     "final_filter_rows_removed_pct",
     int(task4_final_filter_summary.get("rows_affected", 0)),
-    fit_tt_total if fit_tt_total else 0,
+    tt_task4_fit_total if tt_task4_fit_total else 0,
 )
 record_filter_metric(
     "low_tt_zeroed_event_pct",
-    fit_tt_removed,
+    tt_task4_fit_removed,
     baseline_events if baseline_events else 0,
 )
 record_filter_metric(
@@ -7623,9 +7641,9 @@ if create_reject_plots and not task4_final_filter_rejected_df.empty:
 if create_plots:
     fig_idx = plot_tt_correlation(
         df=working_df,
-        row_label='raw_tt',
-        col_label='list_tt',
-        title='Event counts per (raw_tt, list_tt) combination',
+        row_label='tt_task0_raw',
+        col_label='tt_task3_list',
+        title='Event counts per (tt_task0_raw, tt_task3_list) combination',
         filename_suffix='trigger_types_raw_and_list',
         fig_idx=fig_idx,
         base_dir=base_directories["figure_directory"],
@@ -7636,9 +7654,9 @@ if create_plots:
 
     fig_idx = plot_tt_correlation(
         df=working_df,
-        row_label='tracking_tt',
-        col_label='list_tt',
-        title='Event counts per (tracking_tt, list_tt) combination',
+        row_label='tt_task4_fit',
+        col_label='tt_task3_list',
+        title='Event counts per (tt_task4_fit, tt_task3_list) combination',
         filename_suffix='trigger_types_tracking_and_list',
         fig_idx=fig_idx,
         base_dir=base_directories["figure_directory"],
@@ -7649,9 +7667,9 @@ if create_plots:
 
     fig_idx = plot_tt_correlation(
         df=working_df,
-        row_label='tracking_tt',
-        col_label='raw_tt',
-        title='Event counts per (tracking_tt, raw_tt) combination',
+        row_label='tt_task4_fit',
+        col_label='tt_task0_raw',
+        title='Event counts per (tt_task4_fit, tt_task0_raw) combination',
         filename_suffix='trigger_types_tracking_and_raw',
         fig_idx=fig_idx,
         base_dir=base_directories["figure_directory"],
@@ -7666,10 +7684,10 @@ if (
 ):
     fig_idx = plot_tt_correlation(
         df=working_df,
-        row_label='raw_tt',
+        row_label='tt_task0_raw',
         col_label=task4_plot_tt_column,
-        title=f'Event counts per (raw_tt, {task4_plot_tt_column}) combination',
-        filename_suffix='trigger_types_fit_tt_and_raw',
+        title=f'Event counts per (tt_task0_raw, {task4_plot_tt_column}) combination',
+        filename_suffix='trigger_types_tt_task4_fit_and_raw',
         fig_idx=fig_idx,
         base_dir=base_directories["figure_directory"],
         show_plots=show_plots,
@@ -7678,7 +7696,7 @@ if (
     )
 
 print("----------------------------------------------------------------------")
-for tt_col in ("raw_tt", "clean_tt", "cal_tt", "list_tt", "tracking_tt", "fit_tt"):
+for tt_col in ("tt_task0_raw", "tt_task1_clean", "tt_task2_cal", "tt_task3_list", "tt_task4_fit", "tt_task4_fit"):
     if tt_col in working_df.columns:
         try:
             print(f"Unique {tt_col} values:", sorted(working_df[tt_col].unique()))
@@ -7691,11 +7709,11 @@ print("----------------------- Calculating some stuff -----------------------")
 print("----------------------------------------------------------------------")
 
 base_cond = (
-    (working_df["charge_1"] < charge_plot_limit_right)
-    & (working_df["charge_2"] < charge_plot_limit_right)
-    & (working_df["charge_3"] < charge_plot_limit_right)
-    & (working_df["charge_4"] < charge_plot_limit_right)
-    & (working_df["charge_event"] > charge_plot_limit_left)
+    (working_df["p1_qsum"] < charge_plot_limit_right)
+    & (working_df["p2_qsum"] < charge_plot_limit_right)
+    & (working_df["p3_qsum"] < charge_plot_limit_right)
+    & (working_df["p4_qsum"] < charge_plot_limit_right)
+    & (working_df["event_charge"] > charge_plot_limit_left)
 )
 df_plot_ancillary = working_df.loc[base_cond].copy()
 
@@ -7831,7 +7849,7 @@ if (
     )
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     if save_plots:
-        final_filename = f'{fig_idx}_polar_theta_phi_fit_tt_2D.png'
+        final_filename = f'{fig_idx}_polar_theta_phi_tt_task4_fit_2D.png'
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
@@ -7845,9 +7863,9 @@ if (
 # Z on vertical axis; equal mm scale so real detector proportions are visible
 # ---------------------------------------------------------------------------
 if (create_essential_plots or create_plots) and task4_plot_enabled("event_display_sample"):
-    _evd_y_cols = [f"P{p}_Y_final" for p in range(1, 5)]
-    _evd_td_cols = [f"P{p}_T_dif_final" for p in range(1, 5)]
-    _evd_q_cols = [f"P{p}_Q_sum_final" for p in range(1, 5)]
+    _evd_y_cols = [f"p{p}_ypos" for p in range(1, 5)]
+    _evd_td_cols = [f"p{p}_tdif" for p in range(1, 5)]
+    _evd_q_cols = [f"p{p}_qsum" for p in range(1, 5)]
     _evd_have = all(c in df_plot_ancillary.columns for c in _evd_y_cols + _evd_td_cols + _evd_q_cols)
     _evd_have_track = all(c in df_plot_ancillary.columns for c in ("x", "y", "xp", "yp"))
     if _evd_have and _evd_have_track:
@@ -8072,15 +8090,15 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("track_consis
 # Strip hit occupancy: 2D hit map per plane (X from T_dif, Y from Y_final)
 # ---------------------------------------------------------------------------
 if (create_essential_plots or create_plots) and task4_plot_enabled("strip_hit_occupancy"):
-    _occ_y_cols = [f"P{p}_Y_final" for p in range(1, 5)]
-    _occ_td_cols = [f"P{p}_T_dif_final" for p in range(1, 5)]
+    _occ_y_cols = [f"p{p}_ypos" for p in range(1, 5)]
+    _occ_td_cols = [f"p{p}_tdif" for p in range(1, 5)]
     _occ_have = all(c in df_plot_ancillary.columns for c in _occ_y_cols + _occ_td_cols)
     if _occ_have:
         fig, axes = plt.subplots(1, 4, figsize=(16, 4), squeeze=False)
         for pp in range(4):
             ax = axes[0][pp]
-            y_hits = pd.to_numeric(df_plot_ancillary[f"P{pp + 1}_Y_final"], errors="coerce")
-            x_hits = pd.to_numeric(df_plot_ancillary[f"P{pp + 1}_T_dif_final"], errors="coerce") * tdiff_to_x
+            y_hits = pd.to_numeric(df_plot_ancillary[f"p{pp + 1}_ypos"], errors="coerce")
+            x_hits = pd.to_numeric(df_plot_ancillary[f"p{pp + 1}_tdif"], errors="coerce") * tdiff_to_x
             mask_occ = y_hits.notna() & x_hits.notna() & (y_hits != 0) & (x_hits != 0)
             x_hits = x_hits[mask_occ]
             y_hits = y_hits[mask_occ]
@@ -8167,7 +8185,7 @@ if is_simulated_file and track_efficiency_reference_param_hash:
         ]
 track_efficiency_four_plane_fiducial_index: pd.Index | None = None
 if bool(efficiency_metadata_payload.get("available", False)) and task4_plot_tt_column in df_efficiency_source.columns:
-    _fit_tt_1234_index = pd.Index(
+    _tt_task4_fit_1234_index = pd.Index(
         df_efficiency_source.index[
             pd.to_numeric(df_efficiency_source[task4_plot_tt_column], errors="coerce")
             .fillna(0)
@@ -8176,7 +8194,7 @@ if bool(efficiency_metadata_payload.get("available", False)) and task4_plot_tt_c
     )
     track_efficiency_four_plane_fiducial_index = _resolve_track_efficiency_four_plane_fiducial_index(
         efficiency_metadata_payload,
-        fit_tt_1234_index=_fit_tt_1234_index,
+        tt_task4_fit_1234_index=_tt_task4_fit_1234_index,
     )
 
 if (create_essential_plots or create_plots) and task4_plot_enabled("tim_th_chi_sigmafit_1234_histogram"):
@@ -8196,15 +8214,15 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("tim_th_chi_s
 track_efficiency_simulation_title_line = _format_task4_simulated_efficiency_title_line(
     track_efficiency_simulated_efficiencies_percent
 )
-if {"fit_tt", "list_tt"}.issubset(df_efficiency_source.columns):
-    _fit_tt_counts = pd.to_numeric(df_efficiency_source["fit_tt"], errors="coerce").fillna(0).astype(int).value_counts()
-    _list_tt_counts = pd.to_numeric(df_efficiency_source["list_tt"], errors="coerce").fillna(0).astype(int).value_counts()
-    global_variables["efficiency_source_fit_tt_1234_count"] = int(_fit_tt_counts.get(1234, 0))
-    global_variables["efficiency_source_list_tt_1234_count"] = int(_list_tt_counts.get(1234, 0))
+if {"tt_task4_fit", "tt_task3_list"}.issubset(df_efficiency_source.columns):
+    _tt_task4_fit_counts = pd.to_numeric(df_efficiency_source["tt_task4_fit"], errors="coerce").fillna(0).astype(int).value_counts()
+    _tt_task3_list_counts = pd.to_numeric(df_efficiency_source["tt_task3_list"], errors="coerce").fillna(0).astype(int).value_counts()
+    global_variables["efficiency_source_tt_task4_fit_1234_count"] = int(_tt_task4_fit_counts.get(1234, 0))
+    global_variables["efficiency_source_tt_task3_list_1234_count"] = int(_tt_task3_list_counts.get(1234, 0))
     print(
         "[track_based_efficiency] source counts: "
-        f"fit_tt_1234={int(_fit_tt_counts.get(1234, 0))} "
-        f"list_tt_1234={int(_list_tt_counts.get(1234, 0))}"
+        f"tt_task4_fit_1234={int(_tt_task4_fit_counts.get(1234, 0))} "
+        f"tt_task3_list_1234={int(_tt_task3_list_counts.get(1234, 0))}"
     )
 if not bool(efficiency_metadata_payload.get("available", False)):
     print(
@@ -8513,7 +8531,7 @@ if (
                 color="0.82",
                 bbox={"boxstyle": "round", "facecolor": "0.12", "edgecolor": "0.4", "alpha": 0.9},
             )
-            _ax.set_title(f"fit_tt = {_tt_label}", fontsize=10)
+            _ax.set_title(f"tt_task4_fit = {_tt_label}", fontsize=10)
             _ax.set_facecolor("0.05")
             _ax.set_aspect("equal", adjustable="box")
             continue
@@ -8576,7 +8594,7 @@ if (
         _ax.set_xlim(float(_result.get("plot_x_min", projection_ellipse_cfg["x_min"])), float(_result.get("plot_x_max", projection_ellipse_cfg["x_max"])))
         _ax.set_ylim(float(_result.get("plot_y_min", projection_ellipse_cfg["y_min"])), float(_result.get("plot_y_max", projection_ellipse_cfg["y_max"])))
         _ax.set_aspect("equal", adjustable="box")
-        _ax.set_title(f"fit_tt = {_tt_label}", fontsize=10)
+        _ax.set_title(f"tt_task4_fit = {_tt_label}", fontsize=10)
         _ax.text(
             0.02,
             0.98,
@@ -8624,7 +8642,7 @@ if (
         frameon=False,
     )
     _projection_fig.suptitle(
-        "TimTrack projection contours with ellipse fit by fit_tt\n"
+        "TimTrack projection contours with ellipse fit by tt_task4_fit\n"
         "Solid contours = smoothed xp/yp density at fixed peak fractions; dashed ellipses = matched elliptical-Gaussian family\n"
         f"{task4_efficiency_vector_title_line}",
         fontsize=11,
@@ -8805,7 +8823,7 @@ if (
 
             _scaled_axes[0][0].legend(fontsize=8, loc="upper right")
             _scaled_fig.suptitle(
-                "Original vs xproj-scaled projection/angle distributions by fit_tt\n"
+                "Original vs xproj-scaled projection/angle distributions by tt_task4_fit\n"
                 f"One row per plane combination; one global xproj scale is applied to all rows: {_global_scale_factor:.3f} "
                 f"({projection_scaling_summary.get('global_method', 'weighted_mean_by_n_points')})\n"
                 f"{task4_efficiency_vector_title_line}",
@@ -8827,12 +8845,12 @@ if (
             plt.close(_scaled_fig)
 
 # ---------------------------------------------------------------------------
-# Track-based efficiency: all events vs. tt-unchanged (raw_tt == list_tt)
+# Track-based efficiency: all events vs. tt-unchanged (tt_task0_raw == tt_task3_list)
 # Same telescope method as above; 1D efficiency vs projected Y and X.
-# Two curves per subplot: "all" and "unchanged" (raw_tt == list_tt).
+# Two curves per subplot: "all" and "unchanged" (tt_task0_raw == tt_task3_list).
 # ---------------------------------------------------------------------------
 if (create_essential_plots or create_plots) and task4_plot_enabled("track_based_efficiency_tt_stability"):
-    _tts_cols_need = tuple(_required_track_efficiency_hit_columns()) + ("fit_tt", "raw_tt", "list_tt")
+    _tts_cols_need = tuple(_required_track_efficiency_hit_columns()) + ("tt_task4_fit", "tt_task0_raw", "tt_task3_list")
     _tts_have = all(c in df_efficiency_source.columns for c in _tts_cols_need)
     if _tts_have:
         z_arr_tts = np.asarray(z_positions, dtype=float)
@@ -8847,10 +8865,10 @@ if (create_essential_plots or create_plots) and task4_plot_enabled("track_based_
         fig, axes = plt.subplots(3, 4, figsize=(18, 13), squeeze=False)
 
         x_hits_tts, y_hits_tts = _extract_track_efficiency_hit_arrays(df_efficiency_source, tdiff_to_x)
-        dtt_all_tts = pd.to_numeric(df_efficiency_source["fit_tt"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
-        raw_tt_tts = pd.to_numeric(df_efficiency_source["raw_tt"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
-        list_tt_tts = pd.to_numeric(df_efficiency_source["list_tt"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
-        unchanged_mask_tts = (raw_tt_tts == list_tt_tts)
+        dtt_all_tts = pd.to_numeric(df_efficiency_source["tt_task4_fit"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
+        tt_task0_raw_tts = pd.to_numeric(df_efficiency_source["tt_task0_raw"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
+        tt_task3_list_tts = pd.to_numeric(df_efficiency_source["tt_task3_list"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
+        unchanged_mask_tts = (tt_task0_raw_tts == tt_task3_list_tts)
 
         n_x_bins_tts = 15
         n_y_bins_tts = 20
@@ -9357,3457 +9375,9 @@ if (
 # cols = 4 test planes.  Right marginal: chi2 histogram (horizontal, log count,
 # shared Y).  Bottom marginal: charge histogram (log count, shared X per col).
 # Hexbin (log-norm) per panel so density is visible even at large N.
-# -----------------------------------------------------------------------------
-_OFFENDER_PLOT_DEFS = (
-    ("task1_problematic_channel_count", "Task 1 channel offenders", "task1"),
-    ("task2_problematic_strip_count", "Task 2 strip offenders", "task2"),
-    ("task3_problematic_plane_count", "Task 3 plane offenders", "task3"),
-)
-_OFFENDER_FOCUS_TTS = OFFENDER_FOCUS_TTS_CFG
-_OFFENDER_EXACT_COUNT_CAP = 5
-_OFFENDER_ZERO_COLOR = "#1f77b4"
-_OFFENDER_NONZERO_COLOR = "#d62728"
-if (create_essential_plots or create_plots) and task4_plot_enabled("chi2_offender_populations"):
-    _offender_required = ("tim_th_chi",)
-    _offender_missing = [
-        _col_name
-        for _col_name in _offender_required + tuple(_col for _col, _, _ in _OFFENDER_PLOT_DEFS)
-        if _col_name not in df_plot_ancillary.columns
-    ]
-    if _offender_missing:
-        print(
-            "[chi2_offender_populations] required columns not found, skipping: "
-            + ", ".join(_offender_missing)
-        )
-    else:
-        _offender_chi_raw = np.clip(
-            pd.to_numeric(df_plot_ancillary["tim_th_chi"], errors="coerce").to_numpy(dtype=float),
-            0.0,
-            None,
-        )
-        _offender_chi_log = np.log1p(_offender_chi_raw)
-        _offender_chi_finite = _offender_chi_log[np.isfinite(_offender_chi_log)]
-        _offender_xmax = (
-            float(np.nanpercentile(_offender_chi_finite, 99.5))
-            if _offender_chi_finite.size > 0
-            else 1.0
-        )
-        if not np.isfinite(_offender_xmax) or _offender_xmax <= 0:
-            _offender_xmax = 1.0
-        _offender_bins = np.linspace(0.0, _offender_xmax, 60)
-        _offender_zero_color = "#1f77b4"
-        _offender_nonzero_color = "#d62728"
-        _offender_zero_label = "0 offenders"
-        _offender_nonzero_label = ">0 offenders"
+# Adjacent/dispersed topology comparison removed with obsolete topology split column.
 
-        _offender_fig, _offender_axes = plt.subplots(
-            2,
-            len(_OFFENDER_PLOT_DEFS),
-            figsize=(5.8 * len(_OFFENDER_PLOT_DEFS), 8.2),
-            squeeze=False,
-            sharex="col",
-        )
-        _offender_fig.suptitle(
-            r"Task 4 fit quality by upstream offender count" + "\n"
-            + r"Comparison uses $\log(1+\mathrm{tim\_th\_chi})$ for events with exactly 0 offenders versus >0 offenders"
-            + "\n"
-            + task4_efficiency_vector_title_line,
-            fontsize=10,
-        )
-
-        for _offender_idx, (_offender_col, _offender_label, _) in enumerate(_OFFENDER_PLOT_DEFS):
-            _offender_counts = pd.to_numeric(
-                df_plot_ancillary[_offender_col],
-                errors="coerce",
-            ).fillna(0).to_numpy(dtype=float)
-            _offender_valid = np.isfinite(_offender_chi_log) & np.isfinite(_offender_counts)
-            _offender_zero_mask = _offender_valid & (_offender_counts == 0)
-            _offender_nonzero_mask = _offender_valid & (_offender_counts > 0)
-
-            _hist_ax = _offender_axes[0][_offender_idx]
-            _cdf_ax = _offender_axes[1][_offender_idx]
-
-            for _mask, _color, _label in (
-                (_offender_zero_mask, _offender_zero_color, _offender_zero_label),
-                (_offender_nonzero_mask, _offender_nonzero_color, _offender_nonzero_label),
-            ):
-                _values = _offender_chi_log[_mask]
-                if _values.size == 0:
-                    continue
-                _hist_ax.hist(
-                    _values,
-                    bins=_offender_bins,
-                    density=True,
-                    alpha=0.45,
-                    color=_color,
-                    histtype="stepfilled",
-                    label=f"{_label} (n={_values.size:,})",
-                )
-                _sorted_values = np.sort(_values)
-                _cdf_ax.step(
-                    _sorted_values,
-                    np.arange(1, _sorted_values.size + 1, dtype=float) / _sorted_values.size,
-                    where="post",
-                    color=_color,
-                    lw=1.8,
-                    label=f"{_label} (median={np.median(_values):.3f})",
-                )
-
-            _zero_n = int(np.count_nonzero(_offender_zero_mask))
-            _nonzero_n = int(np.count_nonzero(_offender_nonzero_mask))
-            _summary_lines = [
-                f"zero n={_zero_n:,}",
-                f"nonzero n={_nonzero_n:,}",
-            ]
-            if _zero_n > 0:
-                _summary_lines.append(
-                    f"zero median={float(np.median(_offender_chi_log[_offender_zero_mask])):.3f}"
-                )
-            if _nonzero_n > 0:
-                _summary_lines.append(
-                    f"nonzero median={float(np.median(_offender_chi_log[_offender_nonzero_mask])):.3f}"
-                )
-            _hist_ax.text(
-                0.02,
-                0.98,
-                "\n".join(_summary_lines),
-                transform=_hist_ax.transAxes,
-                va="top",
-                ha="left",
-                fontsize=7,
-                bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.75, "edgecolor": "0.8"},
-            )
-            _hist_ax.set_title(_offender_label, fontsize=9)
-            _hist_ax.set_ylabel("density", fontsize=8)
-            _hist_ax.set_xlim(0.0, _offender_xmax)
-            _hist_ax.grid(True, alpha=0.25)
-            _hist_ax.tick_params(labelsize=7)
-            if _offender_idx == 0:
-                _hist_ax.legend(fontsize=7, loc="upper right")
-
-            _cdf_ax.set_xlim(0.0, _offender_xmax)
-            _cdf_ax.set_ylim(0.0, 1.0)
-            _cdf_ax.set_xlabel(r"$\log(1+\mathrm{tim\_th\_chi})$", fontsize=8)
-            _cdf_ax.set_ylabel("ECDF", fontsize=8)
-            _cdf_ax.grid(True, alpha=0.25)
-            _cdf_ax.tick_params(labelsize=7)
-            if _offender_idx == 0:
-                _cdf_ax.legend(fontsize=7, loc="lower right")
-
-        _offender_fig.tight_layout(rect=(0, 0, 1, 0.95))
-        if save_plots:
-            _offender_fn = f"{fig_idx}_chi2_offender_populations.png"
-            fig_idx += 1
-            _offender_path = os.path.join(base_directories["figure_directory"], _offender_fn)
-            plot_list.append(_offender_path)
-            save_plot_figure(_offender_path, format="png", alias="chi2_offender_populations")
-        if show_plots:
-            plt.show()
-        plt.close(_offender_fig)
-
-if (create_essential_plots or create_plots) and task4_plot_enabled("offender_angle_populations"):
-    _offender_angle_required = (task4_plot_tt_column, "theta", "phi")
-    _offender_angle_missing = [
-        _col_name for _col_name in _offender_angle_required if _col_name not in df_plot_ancillary.columns
-    ]
-    _offender_total_counts, _offender_total_source = _resolve_total_offender_counts(df_plot_ancillary)
-    if _offender_total_counts is None:
-        _offender_angle_missing.append(
-            "total_problematic_offender_count or task{1,2,3}_problematic_*_count"
-        )
-    if _offender_angle_missing:
-        print(
-            "[offender_angle_populations] required columns not found, skipping: "
-            + ", ".join(_offender_angle_missing)
-        )
-    else:
-        _offender_tt_labels = _build_offender_tt_labels(df_plot_ancillary[task4_plot_tt_column])
-        _offender_focus_tts = _resolve_offender_focus_tts(_offender_tt_labels)
-        if not _offender_focus_tts:
-            print("[offender_angle_populations] no fit_tt combinations available, skipping.")
-        else:
-            _offender_theta_deg = np.degrees(
-                pd.to_numeric(df_plot_ancillary["theta"], errors="coerce").to_numpy(dtype=float)
-            )
-            _offender_phi_deg = np.degrees(
-                pd.to_numeric(df_plot_ancillary["phi"], errors="coerce").to_numpy(dtype=float)
-            )
-            _offender_focus_mask = np.isin(_offender_tt_labels, _offender_focus_tts)
-            _theta_bins = np.linspace(
-                OFFENDER_THETA_MIN_DEG,
-                OFFENDER_THETA_MAX_DEG,
-                55,
-            )
-            _phi_bins = _make_offender_hist_bins(
-                _offender_phi_deg[_offender_focus_mask],
-                (
-                    float(np.degrees(phi_left_filter)),
-                    float(np.degrees(phi_right_filter)),
-                ),
-            )
-            _offender_valid_angles = (
-                np.isfinite(_offender_theta_deg)
-                & np.isfinite(_offender_phi_deg)
-                & (_offender_theta_deg >= OFFENDER_THETA_MIN_DEG)
-                & (_offender_theta_deg <= OFFENDER_THETA_MAX_DEG)
-            )
-            _offender_thresholds = np.asarray(OFFENDER_TOTAL_CUMULATIVE_THRESHOLDS, dtype=int)
-
-            _angle_fig, _angle_axes = plt.subplots(
-                2,
-                len(_offender_focus_tts),
-                figsize=(4.0 * len(_offender_focus_tts), 7.0),
-                squeeze=False,
-                sharey="row",
-            )
-            _angle_fig.suptitle(
-                "Total offender cumulative populations by fit_tt\n"
-                + "Each column keeps the same plane combination and compares cumulative thresholds "
-                + "(0, <=1, <=2, ... total offenders)\n"
-                + f"Total source: {_offender_total_source}\n"
-                + task4_efficiency_vector_title_line,
-                fontsize=10,
-            )
-
-            for _tt_idx, _tt_label in enumerate(_offender_focus_tts):
-                _tt_mask = (_offender_tt_labels == _tt_label) & _offender_valid_angles
-
-                _plot_offender_cumulative_hist_panel(
-                    _angle_axes[0][_tt_idx],
-                    _offender_theta_deg[_tt_mask],
-                    _offender_total_counts[_tt_mask],
-                    _offender_thresholds,
-                    _theta_bins,
-                    x_label=r"$\theta$ (deg)",
-                    panel_title=f"TT {_tt_label}",
-                    show_legend=_tt_idx == 0,
-                )
-                _plot_offender_cumulative_hist_panel(
-                    _angle_axes[1][_tt_idx],
-                    _offender_phi_deg[_tt_mask],
-                    _offender_total_counts[_tt_mask],
-                    _offender_thresholds,
-                    _phi_bins,
-                    x_label=r"$\phi$ (deg)",
-                )
-                _angle_axes[0][_tt_idx].set_ylabel(r"$\theta$ density", fontsize=8)
-                _angle_axes[1][_tt_idx].set_ylabel(r"$\phi$ density", fontsize=8)
-
-            _angle_fig.tight_layout(rect=(0, 0, 1, 0.94))
-            if save_plots:
-                _angle_fn = f"{fig_idx}_offender_angle_populations_total.png"
-                fig_idx += 1
-                _angle_path = os.path.join(base_directories["figure_directory"], _angle_fn)
-                plot_list.append(_angle_path)
-                save_plot_figure(_angle_path, format="png", alias="offender_angle_populations")
-            if show_plots:
-                plt.show()
-            plt.close(_angle_fig)
-
-if (create_essential_plots or create_plots) and task4_plot_enabled("offender_kinematics_populations"):
-    _offender_kin_required = (task4_plot_tt_column, "x", "y", "charge_event", "s")
-    _offender_kin_missing = [
-        _col_name
-        for _col_name in _offender_kin_required + tuple(_col for _col, _, _ in _OFFENDER_PLOT_DEFS)
-        if _col_name not in df_plot_ancillary.columns
-    ]
-    if _offender_kin_missing:
-        print(
-            "[offender_kinematics_populations] required columns not found, skipping: "
-            + ", ".join(_offender_kin_missing)
-        )
-    else:
-        _offender_tt_labels = _build_offender_tt_labels(df_plot_ancillary[task4_plot_tt_column])
-        _offender_focus_tts = _resolve_offender_focus_tts(_offender_tt_labels)
-        if not _offender_focus_tts:
-            print("[offender_kinematics_populations] no fit_tt combinations available, skipping.")
-        else:
-            _offender_focus_mask = np.isin(_offender_tt_labels, _offender_focus_tts)
-            _offender_x = pd.to_numeric(df_plot_ancillary["x"], errors="coerce").to_numpy(dtype=float)
-            _offender_y = pd.to_numeric(df_plot_ancillary["y"], errors="coerce").to_numpy(dtype=float)
-            _offender_s = pd.to_numeric(df_plot_ancillary["s"], errors="coerce").to_numpy(dtype=float)
-            _offender_charge_log = np.log10(
-                1.0
-                + np.clip(
-                    pd.to_numeric(df_plot_ancillary["charge_event"], errors="coerce").to_numpy(dtype=float),
-                    0.0,
-                    None,
-                )
-            )
-            _offender_observable_specs = (
-                (
-                    "x",
-                    _offender_x,
-                    "x (mm)",
-                    _make_offender_hist_bins(_offender_x[_offender_focus_mask], (-1.0, 1.0)),
-                ),
-                (
-                    "y",
-                    _offender_y,
-                    "y (mm)",
-                    _make_offender_hist_bins(_offender_y[_offender_focus_mask], (-1.0, 1.0)),
-                ),
-                (
-                    "s",
-                    _offender_s,
-                    "s",
-                    _make_offender_hist_bins(_offender_s[_offender_focus_mask], (0.0, 1.0)),
-                ),
-                (
-                    "charge_event_log10",
-                    _offender_charge_log,
-                    r"$\log_{10}(1+\mathrm{charge\_event})$",
-                    _make_offender_hist_bins(
-                        _offender_charge_log[_offender_focus_mask],
-                        (0.0, 1.0),
-                        force_zero_left=True,
-                    ),
-                ),
-            )
-
-            for _offender_col, _offender_label, _offender_slug in _OFFENDER_PLOT_DEFS:
-                _offender_counts = pd.to_numeric(
-                    df_plot_ancillary[_offender_col],
-                    errors="coerce",
-                ).fillna(0).to_numpy(dtype=float)
-                _observable_valid = np.isfinite(_offender_counts)
-
-                _kin_fig, _kin_axes = plt.subplots(
-                    len(_offender_observable_specs),
-                    len(_offender_focus_tts),
-                    figsize=(4.0 * len(_offender_focus_tts), 2.45 * len(_offender_observable_specs) + 0.9),
-                    squeeze=False,
-                    sharey="row",
-                )
-                _kin_fig.suptitle(
-                    f"{_offender_label}: reconstructed observables by fit_tt\n"
-                    "Same plane combinations are compared separately to expose offender-driven shifts\n"
-                    + task4_efficiency_vector_title_line,
-                    fontsize=10,
-                )
-
-                for _row_idx, (_, _observable_values, _observable_label, _observable_bins) in enumerate(_offender_observable_specs):
-                    _observable_valid_row = _observable_valid & np.isfinite(_observable_values)
-                    for _tt_idx, _tt_label in enumerate(_offender_focus_tts):
-                        _tt_mask = _offender_tt_labels == _tt_label
-                        _zero_mask = _observable_valid_row & _tt_mask & (_offender_counts == 0)
-                        _nonzero_mask = _observable_valid_row & _tt_mask & (_offender_counts > 0)
-                        _plot_offender_hist_panel(
-                            _kin_axes[_row_idx][_tt_idx],
-                            _observable_values[_zero_mask],
-                            _observable_values[_nonzero_mask],
-                            _observable_bins,
-                            x_label=_observable_label,
-                            panel_title=f"TT {_tt_label}" if _row_idx == 0 else "",
-                            show_legend=_row_idx == 0 and _tt_idx == 0,
-                        )
-                        _kin_axes[_row_idx][_tt_idx].set_ylabel("density", fontsize=8)
-
-                _kin_fig.tight_layout(rect=(0, 0, 1, 0.95))
-                if save_plots:
-                    _kin_fn = f"{fig_idx}_offender_kinematics_populations_{_offender_slug}.png"
-                    fig_idx += 1
-                    _kin_path = os.path.join(base_directories["figure_directory"], _kin_fn)
-                    plot_list.append(_kin_path)
-                    save_plot_figure(_kin_path, format="png", alias="offender_kinematics_populations")
-                if show_plots:
-                    plt.show()
-                plt.close(_kin_fig)
-
-if (create_essential_plots or create_plots) and task4_plot_enabled("offender_tt_balance"):
-    _offender_balance_required = (task4_plot_tt_column, "tim_th_chi")
-    _offender_balance_missing = [
-        _col_name
-        for _col_name in _offender_balance_required + tuple(_col for _col, _, _ in _OFFENDER_PLOT_DEFS)
-        if _col_name not in df_plot_ancillary.columns
-    ]
-    if _offender_balance_missing:
-        print(
-            "[offender_tt_balance] required columns not found, skipping: "
-            + ", ".join(_offender_balance_missing)
-        )
-    else:
-        _offender_tt_labels = _build_offender_tt_labels(df_plot_ancillary[task4_plot_tt_column])
-        _offender_focus_tts = _resolve_offender_focus_tts(_offender_tt_labels)
-        if not _offender_focus_tts:
-            print("[offender_tt_balance] no fit_tt combinations available, skipping.")
-        else:
-            _offender_x_positions = np.arange(len(_offender_focus_tts), dtype=float)
-            _offender_chi_log = np.log1p(
-                np.clip(
-                    pd.to_numeric(df_plot_ancillary["tim_th_chi"], errors="coerce").to_numpy(dtype=float),
-                    0.0,
-                    None,
-                )
-            )
-            _offender_stack_colors = plt.cm.viridis(
-                np.linspace(0.12, 0.92, _OFFENDER_EXACT_COUNT_CAP + 1)
-            )
-
-            _balance_fig, _balance_axes = plt.subplots(
-                2,
-                len(_OFFENDER_PLOT_DEFS),
-                figsize=(6.1 * len(_OFFENDER_PLOT_DEFS), 8.4),
-                squeeze=False,
-            )
-            _balance_fig.suptitle(
-                "Upstream offender composition by fit_tt\n"
-                "Top: exact offender-count fractions capped at 5+   |   Bottom: median "
-                + r"$\log(1+\mathrm{tim\_th\_chi})$"
-                + " for 0 offenders versus >0 offenders\n"
-                + task4_efficiency_vector_title_line,
-                fontsize=10,
-            )
-
-            for _offender_idx, (_offender_col, _offender_label, _) in enumerate(_OFFENDER_PLOT_DEFS):
-                _offender_counts = pd.to_numeric(
-                    df_plot_ancillary[_offender_col],
-                    errors="coerce",
-                ).fillna(0).to_numpy(dtype=float)
-                _stack_ax = _balance_axes[0][_offender_idx]
-                _median_ax = _balance_axes[1][_offender_idx]
-
-                _totals = np.zeros(len(_offender_focus_tts), dtype=float)
-                _nonzero_frac = np.full(len(_offender_focus_tts), np.nan, dtype=float)
-                _zero_medians = np.full(len(_offender_focus_tts), np.nan, dtype=float)
-                _nonzero_medians = np.full(len(_offender_focus_tts), np.nan, dtype=float)
-
-                _bottom = np.zeros(len(_offender_focus_tts), dtype=float)
-                for _level in range(_OFFENDER_EXACT_COUNT_CAP + 1):
-                    _fractions = np.zeros(len(_offender_focus_tts), dtype=float)
-                    for _tt_idx, _tt_label in enumerate(_offender_focus_tts):
-                        _tt_mask = (_offender_tt_labels == _tt_label) & np.isfinite(_offender_counts)
-                        _totals[_tt_idx] = float(np.count_nonzero(_tt_mask))
-                        if _totals[_tt_idx] <= 0:
-                            continue
-                        if _level < _OFFENDER_EXACT_COUNT_CAP:
-                            _level_mask = _tt_mask & (_offender_counts == _level)
-                        else:
-                            _level_mask = _tt_mask & (_offender_counts >= _OFFENDER_EXACT_COUNT_CAP)
-                        _fractions[_tt_idx] = float(np.count_nonzero(_level_mask)) / _totals[_tt_idx]
-                    if not np.any(_fractions > 0):
-                        continue
-                    _legend_label = (
-                        f"{_level}"
-                        if _level < _OFFENDER_EXACT_COUNT_CAP
-                        else f"{_OFFENDER_EXACT_COUNT_CAP}+"
-                    )
-                    _stack_ax.bar(
-                        _offender_x_positions,
-                        _fractions,
-                        bottom=_bottom,
-                        width=0.72,
-                        color=_offender_stack_colors[_level],
-                        label=_legend_label,
-                    )
-                    _bottom += _fractions
-
-                for _tt_idx, _tt_label in enumerate(_offender_focus_tts):
-                    _tt_mask = (_offender_tt_labels == _tt_label) & np.isfinite(_offender_counts)
-                    if _totals[_tt_idx] <= 0:
-                        continue
-                    _nonzero_frac[_tt_idx] = float(np.count_nonzero(_tt_mask & (_offender_counts > 0))) / _totals[_tt_idx]
-                    _zero_values = _offender_chi_log[_tt_mask & (_offender_counts == 0) & np.isfinite(_offender_chi_log)]
-                    _nonzero_values = _offender_chi_log[_tt_mask & (_offender_counts > 0) & np.isfinite(_offender_chi_log)]
-                    if _zero_values.size > 0:
-                        _zero_medians[_tt_idx] = float(np.median(_zero_values))
-                    if _nonzero_values.size > 0:
-                        _nonzero_medians[_tt_idx] = float(np.median(_nonzero_values))
-                    _stack_ax.text(
-                        _offender_x_positions[_tt_idx],
-                        1.02,
-                        f">0={100.0 * _nonzero_frac[_tt_idx]:.1f}%",
-                        ha="center",
-                        va="bottom",
-                        fontsize=7,
-                    )
-
-                _stack_ax.set_title(_offender_label, fontsize=9)
-                _stack_ax.set_ylim(0.0, 1.12)
-                _stack_ax.set_ylabel("fraction", fontsize=8)
-                _stack_ax.set_xticks(_offender_x_positions)
-                _stack_ax.set_xticklabels(
-                    [f"{_tt}\n(n={int(_total):,})" for _tt, _total in zip(_offender_focus_tts, _totals)]
-                )
-                _stack_ax.tick_params(labelsize=7)
-                _stack_ax.grid(True, alpha=0.2, axis="y")
-                if _offender_idx == 0:
-                    _stack_ax.legend(
-                        title="exact offenders",
-                        fontsize=7,
-                        title_fontsize=7,
-                        loc="upper left",
-                        ncol=2,
-                    )
-
-                _median_ax.plot(
-                    _offender_x_positions,
-                    _zero_medians,
-                    marker="o",
-                    lw=1.6,
-                    color=_OFFENDER_ZERO_COLOR,
-                    label="0 offenders",
-                )
-                _median_ax.plot(
-                    _offender_x_positions,
-                    _nonzero_medians,
-                    marker="s",
-                    lw=1.6,
-                    color=_OFFENDER_NONZERO_COLOR,
-                    label=">0 offenders",
-                )
-                _median_ax.set_ylabel(r"median $\log(1+\chi^2)$", fontsize=8)
-                _median_ax.set_xticks(_offender_x_positions)
-                _median_ax.set_xticklabels([f"{_tt}" for _tt in _offender_focus_tts])
-                _median_ax.tick_params(labelsize=7)
-                _median_ax.grid(True, alpha=0.25)
-                if _offender_idx == 0:
-                    _median_ax.legend(fontsize=7, loc="upper left")
-
-            _balance_fig.tight_layout(rect=(0, 0, 1, 0.95))
-            if save_plots:
-                _balance_fn = f"{fig_idx}_offender_tt_balance.png"
-                fig_idx += 1
-                _balance_path = os.path.join(base_directories["figure_directory"], _balance_fn)
-                plot_list.append(_balance_path)
-                save_plot_figure(_balance_path, format="png", alias="offender_tt_balance")
-            if show_plots:
-                plt.show()
-            plt.close(_balance_fig)
-
-if (create_essential_plots or create_plots) and task4_plot_enabled("offender_zigzag_populations"):
-    _offender_zigzag_required = (task4_plot_tt_column, "task1_problematic_channel_count")
-    _offender_zigzag_missing = [
-        _col_name
-        for _col_name in _offender_zigzag_required
-        if _col_name not in df_plot_ancillary.columns
-    ]
-    if _offender_zigzag_missing:
-        print(
-            "[offender_zigzag_populations] required columns not found, skipping: "
-            + ", ".join(_offender_zigzag_missing)
-        )
-    else:
-        _offender_tt_labels = _build_offender_tt_labels(df_plot_ancillary[task4_plot_tt_column])
-        _offender_zigzag_payload = _build_offender_zigzag_payload(df_plot_ancillary, _offender_tt_labels)
-        _offender_zigzag_tts = tuple(
-            tt_label
-            for tt_label in _resolve_offender_focus_tts(_offender_tt_labels)
-            if tt_label in _offender_zigzag_payload
-        )
-        if not _offender_zigzag_tts:
-            print("[offender_zigzag_populations] no valid zig-zag payloads for configured fit_tt values, skipping.")
-        else:
-            _task1_offender_counts_all = pd.to_numeric(
-                df_plot_ancillary["task1_problematic_channel_count"],
-                errors="coerce",
-            ).to_numpy(dtype=float)
-            _thresholds = np.asarray(OFFENDER_TASK1_CUMULATIVE_THRESHOLDS, dtype=int)
-            _zigzag_summary: dict[str, dict[str, np.ndarray]] = {}
-            _zigzag_ratio_ylim = 1.0
-            _zigzag_proj_ylim = 1.0
-            _zigzag_count_ylim = 1.0
-
-            for _tt_label in _offender_zigzag_tts:
-                _payload = _offender_zigzag_payload[_tt_label]
-                _tt_counts = _task1_offender_counts_all[_payload["row_mask"]]
-                _valid_count_mask = np.isfinite(_tt_counts)
-                _ratio_median = np.full(_thresholds.shape, np.nan, dtype=float)
-                _ratio_p90 = np.full(_thresholds.shape, np.nan, dtype=float)
-                _proj_median = np.full(_thresholds.shape, np.nan, dtype=float)
-                _proj_p90 = np.full(_thresholds.shape, np.nan, dtype=float)
-                _selected_counts = np.zeros(_thresholds.shape, dtype=float)
-
-                for _thr_idx, _threshold in enumerate(_thresholds):
-                    _thr_mask = _valid_count_mask & (_tt_counts <= float(_threshold))
-                    _selected_counts[_thr_idx] = int(np.count_nonzero(_thr_mask))
-                    if _selected_counts[_thr_idx] < 5:
-                        continue
-                    _ratio_sel = _payload["zigzag_ratio"][_thr_mask]
-                    _proj_sel = _payload["projected_excess"][_thr_mask]
-                    _ratio_median[_thr_idx] = float(np.nanmedian(_ratio_sel))
-                    _ratio_p90[_thr_idx] = float(np.nanpercentile(_ratio_sel, 90.0))
-                    _proj_median[_thr_idx] = float(np.nanmedian(_proj_sel))
-                    _proj_p90[_thr_idx] = float(np.nanpercentile(_proj_sel, 90.0))
-
-                _base_count = max(int(np.nanmax(_selected_counts)), 1)
-                _zigzag_summary[_tt_label] = {
-                    "ratio_median": _ratio_median,
-                    "ratio_p90": _ratio_p90,
-                    "proj_median": _proj_median,
-                    "proj_p90": _proj_p90,
-                    "counts": _selected_counts,
-                    "fraction_pct": 100.0 * _selected_counts / float(_base_count),
-                    "base_count": np.asarray([_base_count], dtype=float),
-                }
-                _ratio_valid = np.concatenate(
-                    [
-                        _ratio_median[np.isfinite(_ratio_median)],
-                        _ratio_p90[np.isfinite(_ratio_p90)],
-                    ]
-                )
-                _proj_valid = np.concatenate(
-                    [
-                        _proj_median[np.isfinite(_proj_median)],
-                        _proj_p90[np.isfinite(_proj_p90)],
-                    ]
-                )
-                if _ratio_valid.size > 0:
-                    _zigzag_ratio_ylim = max(_zigzag_ratio_ylim, float(np.nanmax(_ratio_valid)))
-                if _proj_valid.size > 0:
-                    _zigzag_proj_ylim = max(_zigzag_proj_ylim, float(np.nanmax(_proj_valid)))
-                _zigzag_count_ylim = max(_zigzag_count_ylim, float(np.nanmax(_selected_counts)))
-
-            _zigzag_ratio_ylim = max(1.0, 1.05 * _zigzag_ratio_ylim)
-            _zigzag_proj_ylim = max(1.0, 1.10 * _zigzag_proj_ylim)
-            _zigzag_count_ylim = max(5.0, 1.10 * _zigzag_count_ylim)
-
-            _zigzag_fig, _zigzag_axes = plt.subplots(
-                3,
-                len(_offender_zigzag_tts),
-                figsize=(4.4 * len(_offender_zigzag_tts), 9.0),
-                squeeze=False,
-                sharex="col",
-            )
-            _zigzag_fig.suptitle(
-                "Task 1 cumulative offender thresholds versus zig-zag geometry by fit_tt\n"
-                "Each point uses the population with task1_problematic_channel_count <= N, so the comparison keeps the same plane combination\n"
-                + task4_efficiency_vector_title_line,
-                fontsize=10,
-            )
-
-            for _tt_idx, _tt_label in enumerate(_offender_zigzag_tts):
-                _summary = _zigzag_summary[_tt_label]
-                _ax_ratio = _zigzag_axes[0][_tt_idx]
-                _ax_proj = _zigzag_axes[1][_tt_idx]
-                _ax_count = _zigzag_axes[2][_tt_idx]
-                _base_count = int(_summary["base_count"][0])
-
-                _ax_ratio.plot(
-                    _thresholds,
-                    _summary["ratio_median"],
-                    color="C0",
-                    marker="o",
-                    lw=1.8,
-                    label="median",
-                )
-                _ax_ratio.plot(
-                    _thresholds,
-                    _summary["ratio_p90"],
-                    color="C1",
-                    marker="s",
-                    lw=1.4,
-                    label="p90",
-                )
-                _ax_ratio.axhline(1.0, color="0.45", lw=0.8, ls="--", alpha=0.6)
-                _ax_ratio.set_ylim(0.0, _zigzag_ratio_ylim)
-                _ax_ratio.set_ylabel("straight / zig-zag", fontsize=8)
-                _ax_ratio.set_title(f"TT {_tt_label}  (base n={_base_count:,})", fontsize=9)
-                _ax_ratio.grid(True, alpha=0.25)
-                _ax_ratio.tick_params(labelsize=7)
-                if _tt_idx == 0:
-                    _ax_ratio.legend(fontsize=7, loc="lower right")
-
-                _ax_proj.plot(
-                    _thresholds,
-                    _summary["proj_median"],
-                    color="C3",
-                    marker="o",
-                    lw=1.8,
-                    label="median",
-                )
-                _ax_proj.plot(
-                    _thresholds,
-                    _summary["proj_p90"],
-                    color="C4",
-                    marker="s",
-                    lw=1.4,
-                    label="p90",
-                )
-                _ax_proj.set_ylim(0.0, _zigzag_proj_ylim)
-                _ax_proj.set_ylabel("projected zig-zag excess (mm)", fontsize=8)
-                _ax_proj.grid(True, alpha=0.25)
-                _ax_proj.tick_params(labelsize=7)
-                if _tt_idx == 0:
-                    _ax_proj.legend(fontsize=7, loc="upper left")
-
-                _ax_count.plot(
-                    _thresholds,
-                    _summary["counts"],
-                    color="0.20",
-                    marker="o",
-                    lw=1.8,
-                    label="n",
-                )
-                _ax_count.set_ylim(0.0, _zigzag_count_ylim)
-                _ax_count.set_ylabel("selected events", fontsize=8)
-                _ax_count.set_xlabel(r"Task 1 offenders threshold  $N$  for count $\leq N$", fontsize=8)
-                _ax_count.set_xticks(_thresholds)
-                _ax_count.grid(True, alpha=0.25)
-                _ax_count.tick_params(labelsize=7)
-                _ax_frac = _ax_count.twinx()
-                _ax_frac.plot(
-                    _thresholds,
-                    _summary["fraction_pct"],
-                    color="C2",
-                    marker="^",
-                    lw=1.3,
-                    alpha=0.85,
-                    label="retained %",
-                )
-                _ax_frac.set_ylim(0.0, 105.0)
-                _ax_frac.set_ylabel("retained (%)", fontsize=8)
-                _ax_frac.tick_params(labelsize=7, colors="C2")
-                if _tt_idx == 0:
-                    _ax_count.legend(fontsize=7, loc="lower right")
-                    _ax_frac.legend(fontsize=7, loc="center right")
-
-            _zigzag_fig.tight_layout(rect=(0, 0, 1, 0.95))
-            if save_plots:
-                _zigzag_fn = f"{fig_idx}_offender_zigzag_populations.png"
-                fig_idx += 1
-                _zigzag_path = os.path.join(base_directories["figure_directory"], _zigzag_fn)
-                plot_list.append(_zigzag_path)
-                save_plot_figure(_zigzag_path, format="png", alias="offender_zigzag_populations")
-            if show_plots:
-                plt.show()
-            plt.close(_zigzag_fig)
-
-if (create_essential_plots or create_plots) and task4_plot_enabled("chi2_charge_populations"):
-    _chi2pop_need = ("tim_th_chi", "charge_event",
-                     "charge_1", "charge_2", "charge_3", "charge_4",
-                     task4_plot_tt_column)
-    _chi2pop_have = all(c in df_plot_ancillary.columns for c in _chi2pop_need)
-    if not _chi2pop_have:
-        print("[chi2_charge_populations] required columns not found, skipping.")
-    else:
-        _plane_pool_tt = {1: [234, 1234], 2: [134, 1234], 3: [124, 1234], 4: [123, 1234]}
-        _tel_planes    = {1: [2, 3, 4],   2: [1, 3, 4],   3: [1, 2, 4],   4: [1, 2, 3]}
-        _3pl_tt        = {1: 234, 2: 134, 3: 124, 4: 123}
-        _pop_cmaps     = ["Blues", "Reds"]
-        _pop_colors    = ["steelblue", "tomato"]
-        _pop_labels    = ["Missed  (3-fold: test plane not fired)", "Hit  (4-fold: all planes fired)"]
-
-        # Pre-compute numpy arrays once for the whole ancillary frame
-        _chi2_log_all = np.log1p(np.clip(
-            df_plot_ancillary["tim_th_chi"].values.astype(float), 0.0, None
-        ))
-        _qev_all    = df_plot_ancillary["charge_event"].values.astype(float)
-        _def_tt_arr = df_plot_ancillary[task4_plot_tt_column].values.astype(float)
-
-        _q_min_by_tp  = {}
-        _q_asym_by_tp = {}
-        for _p in [1, 2, 3, 4]:
-            _tq  = np.column_stack([df_plot_ancillary[f"charge_{q}"].values.astype(float)
-                                    for q in _tel_planes[_p]])
-            _qmn = np.nanmin(_tq, axis=1)
-            _qmx = np.nanmax(_tq, axis=1)
-            _den = _qmx + _qmn
-            _q_min_by_tp[_p]  = _qmn
-            _q_asym_by_tp[_p] = np.where(_den > 0, (_qmx - _qmn) / _den, np.nan)
-
-        # Global chi2 Y limit — same across all scatter panels for easy comparison
-        _chi2_finite = _chi2_log_all[np.isfinite(_chi2_log_all) & (_chi2_log_all > 0)]
-        _global_chi2_ylim = float(np.nanpercentile(_chi2_finite, 99.5)) if _chi2_finite.size > 0 else 5.0
-
-        _metrics = [
-            ("charge_event", "Total charge (a.u.)"),
-            ("min_q_tel",    "Min telescope-plane charge (a.u.)"),
-            ("q_asym",       r"Charge asymmetry  $(q_\mathrm{max}-q_\mathrm{min})/(q_\mathrm{max}+q_\mathrm{min})$"),
-        ]
-
-        for _mi, (_metric_key, _metric_label) in enumerate(_metrics):
-            # GridSpec: 3 rows × 5 cols
-            #   rows 0-1 = missed/hit scatter;  row 2 = charge marginal histograms
-            #   cols 0-3 = test planes;  col 4 = chi2 marginal histogram (spans rows 0-1)
-            fig_cp = plt.figure(figsize=(20, 12))
-            gs_cp  = GridSpec(
-                3, 5, figure=fig_cp,
-                width_ratios=[3, 3, 3, 3, 1.1],
-                height_ratios=[3, 3, 1.1],
-                hspace=0.07, wspace=0.10,
-            )
-            fig_cp.suptitle(
-                rf"$\chi^2$ vs {_metric_label} — population diagnostics" + "\n"
-                "Top row: missed (3-fold)  |  Bottom row: hit (4-fold)  |  "
-                "Right: χ² marginal (all planes)  |  Bottom: charge marginal",
-                fontsize=9,
-            )
-
-            _ref_y_ax  = None     # shared chi2 Y axis across all 8 scatter panels
-            _col_x_ref = {}       # per-column shared X axis (charge metric)
-            _chi2_miss_pool = []  # for right marginal histogram
-            _chi2_hit_pool  = []
-
-            for _pi, _p in enumerate([1, 2, 3, 4]):
-                _pool_idx = np.where(np.isin(_def_tt_arr, _plane_pool_tt[_p]))[0]
-                if _pool_idx.size == 0:
-                    continue
-
-                _chi2_p = _chi2_log_all[_pool_idx]
-                _xd_p   = (
-                    _qev_all[_pool_idx]          if _metric_key == "charge_event"
-                    else _q_min_by_tp[_p][_pool_idx]  if _metric_key == "min_q_tel"
-                    else _q_asym_by_tp[_p][_pool_idx]
-                )
-                _tt_p      = _def_tt_arr[_pool_idx]
-                _miss_sel  = _tt_p == _3pl_tt[_p]
-                _hit_sel   = _tt_p == 1234
-
-                # X limit: 99.5th percentile of the full pool (both populations)
-                _valid_pool = np.isfinite(_xd_p) & np.isfinite(_chi2_p)
-                _xlim_p = (float(np.nanpercentile(_xd_p[_valid_pool], 99.5))
-                           if _valid_pool.sum() > 0 else 1.0)
-
-                for _ri, (_sel, _lbl, _cmap) in enumerate(zip(
-                    [_miss_sel, _hit_sel], _pop_labels, _pop_cmaps
-                )):
-                    _sharey = _ref_y_ax
-                    _sharex = _col_x_ref.get(_pi)
-                    ax_sc = fig_cp.add_subplot(gs_cp[_ri, _pi], sharey=_sharey, sharex=_sharex)
-                    if _ref_y_ax is None:
-                        _ref_y_ax = ax_sc
-                    if _pi not in _col_x_ref:
-                        _col_x_ref[_pi] = ax_sc
-
-                    _valid = _sel & np.isfinite(_xd_p) & np.isfinite(_chi2_p)
-                    if _valid.sum() >= 5:
-                        ax_sc.hexbin(
-                            _xd_p[_valid], _chi2_p[_valid],
-                            gridsize=30, cmap=_cmap, bins="log", mincnt=1,
-                            extent=(0, _xlim_p, 0, _global_chi2_ylim),
-                        )
-                        (_chi2_miss_pool if _ri == 0 else _chi2_hit_pool).append(_chi2_p[_valid])
-
-                    # Title: only top row (missed) carries the plane + count info
-                    if _ri == 0:
-                        ax_sc.set_title(
-                            f"Test P{_p}  (pool tt∈{_plane_pool_tt[_p]})\n"
-                            f"missed={int(_miss_sel.sum()):,}   hit={int(_hit_sel.sum()):,}",
-                            fontsize=7,
-                        )
-                    if _pi == 0:
-                        ax_sc.set_ylabel(
-                            r"$\log(1+\chi^2)$" + f"\n[{_lbl.split('  ')[0]}]", fontsize=7
-                        )
-                    plt.setp(ax_sc.get_xticklabels(), visible=False)
-                    ax_sc.tick_params(labelsize=6)
-
-                # Lock X limit for this column (affects all shared-X axes)
-                _col_x_ref[_pi].set_xlim(0, _xlim_p)
-
-                # Bottom charge histogram — shared X with scatter column
-                ax_qh = fig_cp.add_subplot(gs_cp[2, _pi], sharex=_col_x_ref[_pi])
-                _bins_q = np.linspace(0, _xlim_p, 60)
-                for _sel, _col in [(_miss_sel, _pop_colors[0]), (_hit_sel, _pop_colors[1])]:
-                    _valid_q = _sel & np.isfinite(_xd_p)
-                    if _valid_q.sum() > 0:
-                        ax_qh.hist(_xd_p[_valid_q], bins=_bins_q,
-                                   color=_col, alpha=0.55, histtype="stepfilled")
-                ax_qh.set_yscale("log")
-                ax_qh.set_xlabel(_metric_label, fontsize=7)
-                if _pi == 0:
-                    ax_qh.set_ylabel("count", fontsize=7)
-                ax_qh.tick_params(labelsize=6, axis="x", rotation=25)
-                ax_qh.tick_params(labelsize=6, axis="y")
-
-            # Lock shared chi2 Y axis
-            if _ref_y_ax is not None:
-                _ref_y_ax.set_ylim(0, _global_chi2_ylim)
-
-            # Right chi2 marginal histograms — one per population row, shared Y with scatter
-            _bins_chi2 = np.linspace(0, _global_chi2_ylim, 60)
-            _chi2h_ref_ax = None
-            for _ri, (_pool_list, _col, _lbl) in enumerate(zip(
-                [_chi2_miss_pool, _chi2_hit_pool],
-                _pop_colors,
-                ["missed", "hit"],
-            )):
-                ax_chi2h = fig_cp.add_subplot(
-                    gs_cp[_ri, 4],
-                    sharey=_ref_y_ax,
-                    sharex=_chi2h_ref_ax,
-                )
-                if _chi2h_ref_ax is None:
-                    _chi2h_ref_ax = ax_chi2h
-                _arr = np.concatenate(_pool_list) if _pool_list else np.array([])
-                _arr = _arr[np.isfinite(_arr)]
-                if _arr.size > 0:
-                    ax_chi2h.hist(_arr, bins=_bins_chi2, orientation="horizontal",
-                                  color=_col, alpha=0.65, histtype="stepfilled")
-                ax_chi2h.set_xscale("log")
-                ax_chi2h.set_title(rf"$\chi^2$ marginal [{_lbl}]", fontsize=7)
-                if _ri == 1:
-                    ax_chi2h.set_xlabel("count (log)", fontsize=7)
-                ax_chi2h.tick_params(labelsize=6)
-                plt.setp(ax_chi2h.get_yticklabels(), visible=False)
-                plt.setp(ax_chi2h.get_xticklabels(), visible=(_ri == 1))
-
-            if save_plots:
-                _chi2pop_fn = f"{fig_idx}_chi2_charge_populations_m{_mi + 1}.png"
-                fig_idx += 1
-                _chi2pop_path = os.path.join(base_directories["figure_directory"], _chi2pop_fn)
-                plot_list.append(_chi2pop_path)
-                save_plot_figure(_chi2pop_path, format="png", alias="chi2_charge_populations")
-            if show_plots:
-                plt.show()
-            plt.close()
-
-# ---------------------------------------------------------------------------
-# Chi2 residual populations: 4-fold LOO decomposition and derived statistics
-# ---------------------------------------------------------------------------
-if (create_essential_plots or create_plots) and task4_plot_enabled("chi2_residuals_populations"):
-    _chi2res_required = (
-        task4_plot_tt_column,
-        "charge_event",
-        "tim_th_chi",
-        "tim_ext_res_ystr_1", "tim_ext_res_ystr_2", "tim_ext_res_ystr_3", "tim_ext_res_ystr_4",
-        "tim_ext_res_tdif_1", "tim_ext_res_tdif_2", "tim_ext_res_tdif_3", "tim_ext_res_tdif_4",
-        "charge_1", "charge_2", "charge_3", "charge_4",
-    )
-    _chi2res_have = all(_chi2res_col in df_plot_ancillary.columns for _chi2res_col in _chi2res_required)
-    if not _chi2res_have:
-        print("[chi2_residuals_populations] required columns not found, skipping.")
-    else:
-        _chi2res_def_tt = df_plot_ancillary[task4_plot_tt_column].values.astype(float)
-        _chi2res_charge_event_all = df_plot_ancillary["charge_event"].values.astype(float)
-        _chi2res_tim_th_chi_all = np.clip(
-            df_plot_ancillary["tim_th_chi"].values.astype(float), 0.0, None
-        )
-        _chi2res_ext_y_all = np.column_stack([
-            df_plot_ancillary[f"tim_ext_res_ystr_{_chi2res_p}"].values.astype(float)
-            for _chi2res_p in range(1, 5)
-        ])
-        _chi2res_ext_x_all = np.column_stack([
-            df_plot_ancillary[f"tim_ext_res_tdif_{_chi2res_p}"].values.astype(float)
-            for _chi2res_p in range(1, 5)
-        ]) * float(tdiff_to_x)
-        _chi2res_charge_plane_all = np.column_stack([
-            df_plot_ancillary[f"charge_{_chi2res_p}"].values.astype(float)
-            for _chi2res_p in range(1, 5)
-        ])
-
-        _chi2res_mask_4fold = _chi2res_def_tt == 1234.0
-        _chi2res_mask_finite = (
-            np.isfinite(_chi2res_charge_event_all)
-            & np.isfinite(_chi2res_tim_th_chi_all)
-            & np.isfinite(_chi2res_ext_y_all).all(axis=1)
-            & np.isfinite(_chi2res_ext_x_all).all(axis=1)
-            & np.isfinite(_chi2res_charge_plane_all).all(axis=1)
-        )
-        _chi2res_mask_keep = _chi2res_mask_4fold & _chi2res_mask_finite
-        _chi2res_mask_tim_4fold = _chi2res_mask_4fold & np.isfinite(_chi2res_tim_th_chi_all)
-        _chi2res_tim_th_chi_4fold = _chi2res_tim_th_chi_all[_chi2res_mask_tim_4fold]
-        _chi2res_log_tim_th_chi_4fold = np.log1p(_chi2res_tim_th_chi_4fold)
-        _chi2res_pop_limit_log = 2.2
-        _chi2res_pop_limit_chi = float(np.expm1(_chi2res_pop_limit_log))
-        _chi2res_have_angles = all(
-            _chi2res_col in df_plot_ancillary.columns for _chi2res_col in ("theta", "phi")
-        )
-        if _chi2res_have_angles:
-            _chi2res_theta_all = pd.to_numeric(
-                df_plot_ancillary["theta"], errors="coerce"
-            ).values.astype(float)
-            _chi2res_phi_all = pd.to_numeric(
-                df_plot_ancillary["phi"], errors="coerce"
-            ).values.astype(float)
-            _chi2res_mask_angle_4fold = (
-                _chi2res_mask_tim_4fold
-                & np.isfinite(_chi2res_theta_all)
-                & np.isfinite(_chi2res_phi_all)
-            )
-            _chi2res_theta_4fold_deg = np.degrees(_chi2res_theta_all[_chi2res_mask_angle_4fold])
-            _chi2res_phi_4fold_deg = np.degrees(_chi2res_phi_all[_chi2res_mask_angle_4fold])
-            _chi2res_log_tim_th_chi_angle = np.log1p(_chi2res_tim_th_chi_all[_chi2res_mask_angle_4fold])
-
-        _chi2res_have_main_residuals = all(
-            _chi2res_col in df_plot_ancillary.columns
-            for _chi2res_col in (
-                "tim_res_ystr_1", "tim_res_ystr_2", "tim_res_ystr_3", "tim_res_ystr_4",
-                "tim_res_tsum_1", "tim_res_tsum_2", "tim_res_tsum_3", "tim_res_tsum_4",
-                "tim_res_tdif_1", "tim_res_tdif_2", "tim_res_tdif_3", "tim_res_tdif_4",
-                "charge_event", "tim_th_chi",
-            )
-        )
-        if _chi2res_have_main_residuals:
-            _chi2res_main_y_all = np.column_stack([
-                df_plot_ancillary[f"tim_res_ystr_{_chi2res_p}"].values.astype(float)
-                for _chi2res_p in range(1, 5)
-            ])
-            _chi2res_main_ts_all = np.column_stack([
-                df_plot_ancillary[f"tim_res_tsum_{_chi2res_p}"].values.astype(float)
-                for _chi2res_p in range(1, 5)
-            ])
-            _chi2res_main_td_all = np.column_stack([
-                df_plot_ancillary[f"tim_res_tdif_{_chi2res_p}"].values.astype(float)
-                for _chi2res_p in range(1, 5)
-            ])
-            _chi2res_mask_main = (
-                _chi2res_mask_4fold
-                & np.isfinite(_chi2res_charge_event_all)
-                & np.isfinite(_chi2res_tim_th_chi_all)
-                & np.isfinite(_chi2res_main_y_all).all(axis=1)
-                & np.isfinite(_chi2res_main_ts_all).all(axis=1)
-                & np.isfinite(_chi2res_main_td_all).all(axis=1)
-            )
-            _chi2res_main_plane = (
-                (_chi2res_main_y_all[_chi2res_mask_main] / anc_sy) ** 2
-                + (_chi2res_main_ts_all[_chi2res_mask_main] / anc_sts) ** 2
-                + (_chi2res_main_td_all[_chi2res_mask_main] / anc_std) ** 2
-            )
-            _chi2res_main_plane = np.clip(_chi2res_main_plane, 0.0, None)
-            _chi2res_main_chi_sum = np.sum(_chi2res_main_plane, axis=1)
-            _chi2res_main_chi_max = np.max(_chi2res_main_plane, axis=1)
-            _chi2res_main_chi_std = np.std(_chi2res_main_plane, axis=1)
-            _chi2res_main_chi_max_over_sum = _chi2res_main_chi_max / (_chi2res_main_chi_sum + 1e-9)
-            _chi2res_main_max_abs_res_ystr = np.max(
-                np.abs(_chi2res_main_y_all[_chi2res_mask_main]), axis=1
-            )
-            _chi2res_main_max_abs_res_tsum = np.max(
-                np.abs(_chi2res_main_ts_all[_chi2res_mask_main]), axis=1
-            )
-            _chi2res_main_max_abs_res_tdif = np.max(
-                np.abs(_chi2res_main_td_all[_chi2res_mask_main]), axis=1
-            )
-            _chi2res_main_log_sum = np.log1p(_chi2res_main_chi_sum)
-            _chi2res_main_log_std = np.log1p(_chi2res_main_chi_std)
-            _chi2res_main_log_tim = np.log1p(_chi2res_tim_th_chi_all[_chi2res_mask_main])
-            _chi2res_main_charge = _chi2res_charge_event_all[_chi2res_mask_main]
-            if _chi2res_have_angles:
-                _chi2res_main_theta_deg = np.degrees(_chi2res_theta_all[_chi2res_mask_main])
-        _chi2res_have_slowness = "s" in df_plot_ancillary.columns
-        if _chi2res_have_slowness:
-            _chi2res_s_all = pd.to_numeric(
-                df_plot_ancillary["s"], errors="coerce"
-            ).values.astype(float)
-
-        _chi2res_have_path_metrics = all(
-            _chi2res_col in df_plot_ancillary.columns
-            for _chi2res_col in (
-                "P1_T_dif_final", "P2_T_dif_final", "P3_T_dif_final", "P4_T_dif_final",
-                "P1_Y_final", "P2_Y_final", "P3_Y_final", "P4_Y_final",
-                "x", "y", "theta", "phi", "charge_event", "tim_th_chi",
-            )
-        )
-        if _chi2res_have_path_metrics:
-            _chi2res_path_x_all = np.column_stack([
-                df_plot_ancillary[f"P{_chi2res_p}_T_dif_final"].values.astype(float)
-                for _chi2res_p in range(1, 5)
-            ]) * float(tdiff_to_x)
-            _chi2res_path_y_all = np.column_stack([
-                df_plot_ancillary[f"P{_chi2res_p}_Y_final"].values.astype(float)
-                for _chi2res_p in range(1, 5)
-            ])
-            _chi2res_x0_all = pd.to_numeric(
-                df_plot_ancillary["x"], errors="coerce"
-            ).values.astype(float)
-            _chi2res_y0_all = pd.to_numeric(
-                df_plot_ancillary["y"], errors="coerce"
-            ).values.astype(float)
-            _chi2res_theta_fit_all = pd.to_numeric(
-                df_plot_ancillary["theta"], errors="coerce"
-            ).values.astype(float)
-            _chi2res_phi_fit_all = pd.to_numeric(
-                df_plot_ancillary["phi"], errors="coerce"
-            ).values.astype(float)
-            _chi2res_tan_theta_all = np.tan(_chi2res_theta_fit_all)
-            _chi2res_xp_fit_all = _chi2res_tan_theta_all * np.cos(_chi2res_phi_fit_all)
-            _chi2res_yp_fit_all = _chi2res_tan_theta_all * np.sin(_chi2res_phi_fit_all)
-            _chi2res_z_arr = np.asarray(z_positions, dtype=float)
-            _chi2res_z_order = np.argsort(_chi2res_z_arr)
-            _chi2res_z_sorted = _chi2res_z_arr[_chi2res_z_order]
-            _chi2res_path_x_sorted_all = _chi2res_path_x_all[:, _chi2res_z_order]
-            _chi2res_path_y_sorted_all = _chi2res_path_y_all[:, _chi2res_z_order]
-            _chi2res_path_dx_all = np.diff(_chi2res_path_x_sorted_all, axis=1)
-            _chi2res_path_dy_all = np.diff(_chi2res_path_y_sorted_all, axis=1)
-            _chi2res_path_dz = np.diff(_chi2res_z_sorted).astype(float)
-            _chi2res_zigx_all = np.sum(
-                np.sqrt(
-                    _chi2res_path_dx_all ** 2
-                    + _chi2res_path_dz[None, :] ** 2
-                ),
-                axis=1,
-            )
-            _chi2res_zigy_all = np.sum(
-                np.sqrt(
-                    _chi2res_path_dy_all ** 2
-                    + _chi2res_path_dz[None, :] ** 2
-                ),
-                axis=1,
-            )
-            _chi2res_meas_path_all = np.sum(
-                np.sqrt(
-                    _chi2res_path_dx_all ** 2
-                    + _chi2res_path_dy_all ** 2
-                    + _chi2res_path_dz[None, :] ** 2
-                ),
-                axis=1,
-            )
-            _chi2res_z_first = float(_chi2res_z_sorted[0])
-            _chi2res_z_last = float(_chi2res_z_sorted[-1])
-            _chi2res_fit_x_first_all = _chi2res_x0_all + _chi2res_xp_fit_all * _chi2res_z_first
-            _chi2res_fit_y_first_all = _chi2res_y0_all + _chi2res_yp_fit_all * _chi2res_z_first
-            _chi2res_fit_x_last_all = _chi2res_x0_all + _chi2res_xp_fit_all * _chi2res_z_last
-            _chi2res_fit_y_last_all = _chi2res_y0_all + _chi2res_yp_fit_all * _chi2res_z_last
-            _chi2res_fit_dx_all = np.sqrt(
-                (_chi2res_fit_x_last_all - _chi2res_fit_x_first_all) ** 2
-                + (_chi2res_z_last - _chi2res_z_first) ** 2
-            )
-            _chi2res_fit_dy_all = np.sqrt(
-                (_chi2res_fit_y_last_all - _chi2res_fit_y_first_all) ** 2
-                + (_chi2res_z_last - _chi2res_z_first) ** 2
-            )
-            _chi2res_fit_length_all = np.sqrt(
-                (_chi2res_fit_x_last_all - _chi2res_fit_x_first_all) ** 2
-                + (_chi2res_fit_y_last_all - _chi2res_fit_y_first_all) ** 2
-                + (_chi2res_z_last - _chi2res_z_first) ** 2
-            )
-            _chi2res_mask_path = (
-                _chi2res_mask_4fold
-                & np.isfinite(_chi2res_path_x_sorted_all).all(axis=1)
-                & np.isfinite(_chi2res_path_y_sorted_all).all(axis=1)
-                & np.isfinite(_chi2res_x0_all)
-                & np.isfinite(_chi2res_y0_all)
-                & np.isfinite(_chi2res_theta_fit_all)
-                & np.isfinite(_chi2res_phi_fit_all)
-                & np.isfinite(_chi2res_xp_fit_all)
-                & np.isfinite(_chi2res_yp_fit_all)
-                & np.isfinite(_chi2res_charge_event_all)
-                & np.isfinite(_chi2res_tim_th_chi_all)
-                & np.isfinite(_chi2res_meas_path_all)
-                & np.isfinite(_chi2res_fit_length_all)
-                & (_chi2res_meas_path_all > 0)
-            )
-            _chi2res_path_theta_deg = np.degrees(_chi2res_theta_fit_all[_chi2res_mask_path])
-            _chi2res_path_charge = _chi2res_charge_event_all[_chi2res_mask_path]
-            _chi2res_path_log_tim = np.log1p(_chi2res_tim_th_chi_all[_chi2res_mask_path])
-            _chi2res_meas_path = _chi2res_meas_path_all[_chi2res_mask_path]
-            _chi2res_fit_length = _chi2res_fit_length_all[_chi2res_mask_path]
-            _chi2res_zigzag_ratio = _chi2res_fit_length / (_chi2res_meas_path + 1e-9)
-            _chi2res_zigzag_excess = np.clip(_chi2res_meas_path - _chi2res_fit_length, 0.0, None)
-            _chi2res_costh_path = np.clip(np.cos(_chi2res_theta_fit_all[_chi2res_mask_path]), 1e-6, None)
-            _chi2res_projected_excess = _chi2res_zigzag_excess * _chi2res_costh_path
-            _chi2res_projected_meas_path = _chi2res_meas_path * _chi2res_costh_path
-            _chi2res_projected_fit_length = _chi2res_fit_length * _chi2res_costh_path
-            _chi2res_zigx = _chi2res_zigx_all[_chi2res_mask_path]
-            _chi2res_zigy = _chi2res_zigy_all[_chi2res_mask_path]
-            _chi2res_fit_dx = _chi2res_fit_dx_all[_chi2res_mask_path]
-            _chi2res_fit_dy = _chi2res_fit_dy_all[_chi2res_mask_path]
-            _chi2res_zigzag_ratio_x = np.where(
-                _chi2res_zigx > 1e-9,
-                _chi2res_fit_dx / (_chi2res_zigx + 1e-9),
-                1.0,
-            )
-            _chi2res_zigzag_ratio_y = np.where(
-                _chi2res_zigy > 1e-9,
-                _chi2res_fit_dy / (_chi2res_zigy + 1e-9),
-                1.0,
-            )
-
-        if int(_chi2res_mask_keep.sum()) < 5:
-            print("[chi2_residuals_populations] not enough valid 4-fold LOO events, skipping.")
-        else:
-            _chi2res_charge_event = _chi2res_charge_event_all[_chi2res_mask_keep]
-            _chi2res_tim_th_chi = _chi2res_tim_th_chi_all[_chi2res_mask_keep]
-            _chi2res_ext_y = _chi2res_ext_y_all[_chi2res_mask_keep]
-            _chi2res_ext_x = _chi2res_ext_x_all[_chi2res_mask_keep]
-            _chi2res_charge_plane = _chi2res_charge_plane_all[_chi2res_mask_keep]
-
-            _chi2res_loo_plane = (_chi2res_ext_y / anc_sy) ** 2 + (_chi2res_ext_x / anc_sx) ** 2
-            _chi2res_loo_plane = np.clip(_chi2res_loo_plane, 0.0, None)
-            _chi2res_loo_sum = np.sum(_chi2res_loo_plane, axis=1)
-            _chi2res_loo_max = np.max(_chi2res_loo_plane, axis=1)
-            _chi2res_loo_std = np.std(_chi2res_loo_plane, axis=1)
-            _chi2res_loo_max_over_sum = _chi2res_loo_max / (_chi2res_loo_sum + 1e-9)
-            _chi2res_logloo_plane = np.log1p(_chi2res_loo_plane)
-            _chi2res_log_tim_th_chi = np.log1p(_chi2res_tim_th_chi)
-            _chi2res_n = int(_chi2res_loo_plane.shape[0])
-
-            _chi2res_charge_plane_finite = _chi2res_charge_plane[
-                np.isfinite(_chi2res_charge_plane) & (_chi2res_charge_plane >= 0)
-            ]
-            _chi2res_charge_event_finite = _chi2res_charge_event[
-                np.isfinite(_chi2res_charge_event) & (_chi2res_charge_event >= 0)
-            ]
-            _chi2res_logloo_plane_finite = _chi2res_logloo_plane[np.isfinite(_chi2res_logloo_plane)]
-
-            _chi2res_charge_plane_xlim = (
-                float(np.nanpercentile(_chi2res_charge_plane_finite, 99.5))
-                if _chi2res_charge_plane_finite.size > 0 else 1.0
-            )
-            _chi2res_charge_event_xlim = (
-                float(np.nanpercentile(_chi2res_charge_event_finite, 99.5))
-                if _chi2res_charge_event_finite.size > 0 else 1.0
-            )
-            _chi2res_logloo_ylim = (
-                float(np.nanpercentile(_chi2res_logloo_plane_finite, 99.5))
-                if _chi2res_logloo_plane_finite.size > 0 else 1.0
-            )
-            _chi2res_charge_plane_xlim = max(_chi2res_charge_plane_xlim, 1.0)
-            _chi2res_charge_event_xlim = max(_chi2res_charge_event_xlim, 1.0)
-            _chi2res_logloo_ylim = max(_chi2res_logloo_ylim, 1.0)
-
-            _chi2res_fig_planes = plt.figure(figsize=(16, 18))
-            _chi2res_gs_planes = GridSpec(
-                8, 2, figure=_chi2res_fig_planes,
-                width_ratios=[5.6, 1.5],
-                height_ratios=[1.0, 4.0] * 4,
-                hspace=0.16, wspace=0.10,
-            )
-            _chi2res_fig_planes.suptitle(
-                "chi2_residuals_populations — 4-fold LOO per-plane decomposition\n"
-                "No plane-combination mixing: fit_tt = 1234 only  |  "
-                r"Main panel: charge$_p$ vs $\log(1+\mathrm{LOO}\ \chi^2_p)$  |  "
-                "Top: charge marginal  |  Right: LOO marginal",
-                fontsize=10,
-            )
-            _chi2res_plane_x_ref = None
-            _chi2res_plane_y_ref = None
-
-            for _chi2res_plane_idx, _chi2res_p in enumerate([1, 2, 3, 4]):
-                _chi2res_plane_base = 2 * _chi2res_plane_idx
-                _chi2res_plane_charge = _chi2res_charge_plane[:, _chi2res_plane_idx]
-                _chi2res_plane_loo = _chi2res_loo_plane[:, _chi2res_plane_idx]
-                _chi2res_plane_logloo = _chi2res_logloo_plane[:, _chi2res_plane_idx]
-                _chi2res_plane_valid = (
-                    np.isfinite(_chi2res_plane_charge)
-                    & np.isfinite(_chi2res_plane_loo)
-                    & np.isfinite(_chi2res_plane_logloo)
-                    & (_chi2res_plane_charge >= 0)
-                )
-
-                _chi2res_ax_charge = _chi2res_fig_planes.add_subplot(
-                    _chi2res_gs_planes[_chi2res_plane_base, 0],
-                    sharex=_chi2res_plane_x_ref,
-                )
-                _chi2res_ax_main = _chi2res_fig_planes.add_subplot(
-                    _chi2res_gs_planes[_chi2res_plane_base + 1, 0],
-                    sharex=_chi2res_plane_x_ref,
-                    sharey=_chi2res_plane_y_ref,
-                )
-                _chi2res_ax_loo = _chi2res_fig_planes.add_subplot(
-                    _chi2res_gs_planes[_chi2res_plane_base + 1, 1],
-                    sharey=_chi2res_ax_main,
-                )
-                _chi2res_ax_empty = _chi2res_fig_planes.add_subplot(
-                    _chi2res_gs_planes[_chi2res_plane_base, 1]
-                )
-                _chi2res_ax_empty.axis("off")
-
-                if _chi2res_plane_x_ref is None:
-                    _chi2res_plane_x_ref = _chi2res_ax_main
-                if _chi2res_plane_y_ref is None:
-                    _chi2res_plane_y_ref = _chi2res_ax_main
-
-                if int(_chi2res_plane_valid.sum()) >= 5:
-                    _chi2res_ax_main.hexbin(
-                        _chi2res_plane_charge[_chi2res_plane_valid],
-                        _chi2res_plane_logloo[_chi2res_plane_valid],
-                        gridsize=35,
-                        cmap="viridis",
-                        bins="log",
-                        mincnt=1,
-                        extent=(0, _chi2res_charge_plane_xlim, 0, _chi2res_logloo_ylim),
-                    )
-                    _chi2res_ax_charge.hist(
-                        _chi2res_plane_charge[_chi2res_plane_valid],
-                        bins=np.linspace(0, _chi2res_charge_plane_xlim, 60),
-                        color=f"C{_chi2res_plane_idx}",
-                        alpha=0.65,
-                        histtype="stepfilled",
-                    )
-                    _chi2res_ax_loo.hist(
-                        _chi2res_plane_logloo[_chi2res_plane_valid],
-                        bins=np.linspace(0, _chi2res_logloo_ylim, 60),
-                        orientation="horizontal",
-                        color=f"C{_chi2res_plane_idx}",
-                        alpha=0.65,
-                        histtype="stepfilled",
-                    )
-                else:
-                    _chi2res_ax_main.text(
-                        0.5, 0.5, "no data",
-                        ha="center", va="center",
-                        transform=_chi2res_ax_main.transAxes, fontsize=9,
-                    )
-
-                _chi2res_ax_charge.set_yscale("log")
-                _chi2res_ax_charge.set_xlim(0, _chi2res_charge_plane_xlim)
-                _chi2res_ax_main.set_xlim(0, _chi2res_charge_plane_xlim)
-                _chi2res_ax_main.set_ylim(0, _chi2res_logloo_ylim)
-                _chi2res_ax_charge.set_title(
-                    f"Plane {_chi2res_p}  |  n={int(_chi2res_plane_valid.sum()):,}",
-                    fontsize=9,
-                )
-                _chi2res_ax_charge.set_ylabel("count", fontsize=8)
-                _chi2res_ax_main.set_ylabel(
-                    rf"P{_chi2res_p}: $\log(1+\mathrm{{LOO}}\ \chi^2_p)$",
-                    fontsize=8,
-                )
-                _chi2res_ax_main.grid(True, alpha=0.25)
-                _chi2res_ax_main.tick_params(labelsize=7)
-                _chi2res_ax_charge.tick_params(labelsize=7)
-                _chi2res_ax_loo.tick_params(labelsize=7)
-                _chi2res_ax_loo.set_xscale("log")
-                _chi2res_ax_loo.set_xlabel("count", fontsize=8)
-                if _chi2res_plane_idx == 3:
-                    _chi2res_ax_main.set_xlabel("Plane charge (a.u.)", fontsize=8)
-                else:
-                    plt.setp(_chi2res_ax_main.get_xticklabels(), visible=False)
-                plt.setp(_chi2res_ax_charge.get_xticklabels(), visible=False)
-                plt.setp(_chi2res_ax_loo.get_yticklabels(), visible=False)
-
-            plt.tight_layout(rect=[0, 0, 1, 0.97])
-            if save_plots:
-                _chi2res_filename = f"{fig_idx}_chi2_residuals_populations_loo_planes.png"
-                fig_idx += 1
-                _chi2res_save_path = os.path.join(base_directories["figure_directory"], _chi2res_filename)
-                plot_list.append(_chi2res_save_path)
-                save_plot_figure(_chi2res_save_path, format="png", alias="chi2_residuals_populations")
-            if show_plots:
-                plt.show()
-            plt.close()
-
-            _chi2res_abs_stat_defs = [
-                ("loo_chi2_sum", _chi2res_loo_sum, "LOO total inconsistency"),
-                ("loo_chi2_max", _chi2res_loo_max, "Strongest single-plane outlier"),
-                ("loo_chi2_std", _chi2res_loo_std, "Inter-plane heterogeneity"),
-            ]
-            _chi2res_fig_stats = plt.figure(figsize=(19, 16))
-            _chi2res_gs_stats = GridSpec(
-                6, 3, figure=_chi2res_fig_stats,
-                width_ratios=[5.4, 1.5, 2.4],
-                height_ratios=[1.0, 4.0] * 3,
-                hspace=0.22, wspace=0.14,
-            )
-            _chi2res_fig_stats.suptitle(
-                "chi2_residuals_populations — 4-fold derived LOO statistics\n"
-                "Each row: charge_event relation, charge marginal, stat marginal, and comparison against tim_th_chi",
-                fontsize=10,
-            )
-            _chi2res_stats_x_ref = None
-
-            for _chi2res_stat_idx, (_chi2res_stat_name, _chi2res_stat_values, _chi2res_stat_desc) in enumerate(_chi2res_abs_stat_defs):
-                _chi2res_stat_base = 2 * _chi2res_stat_idx
-                _chi2res_stat_values = np.clip(_chi2res_stat_values, 0.0, None)
-                _chi2res_stat_log = np.log1p(_chi2res_stat_values)
-                _chi2res_stat_valid = (
-                    np.isfinite(_chi2res_charge_event)
-                    & np.isfinite(_chi2res_stat_values)
-                    & np.isfinite(_chi2res_stat_log)
-                    & (_chi2res_charge_event >= 0)
-                )
-                _chi2res_stat_ylim = (
-                    float(np.nanpercentile(_chi2res_stat_log[_chi2res_stat_valid], 99.5))
-                    if int(_chi2res_stat_valid.sum()) > 0 else 1.0
-                )
-                _chi2res_stat_ylim = max(_chi2res_stat_ylim, 1.0)
-                _chi2res_comp_xlim = max(
-                    _chi2res_stat_ylim,
-                    float(np.nanpercentile(_chi2res_log_tim_th_chi[np.isfinite(_chi2res_log_tim_th_chi)], 99.5))
-                    if np.isfinite(_chi2res_log_tim_th_chi).sum() > 0 else 1.0,
-                )
-
-                _chi2res_ax_charge = _chi2res_fig_stats.add_subplot(
-                    _chi2res_gs_stats[_chi2res_stat_base, 0],
-                    sharex=_chi2res_stats_x_ref,
-                )
-                _chi2res_ax_main = _chi2res_fig_stats.add_subplot(
-                    _chi2res_gs_stats[_chi2res_stat_base + 1, 0],
-                    sharex=_chi2res_stats_x_ref,
-                )
-                _chi2res_ax_hist = _chi2res_fig_stats.add_subplot(
-                    _chi2res_gs_stats[_chi2res_stat_base + 1, 1],
-                    sharey=_chi2res_ax_main,
-                )
-                _chi2res_ax_comp = _chi2res_fig_stats.add_subplot(
-                    _chi2res_gs_stats[_chi2res_stat_base:_chi2res_stat_base + 2, 2]
-                )
-                if _chi2res_stats_x_ref is None:
-                    _chi2res_stats_x_ref = _chi2res_ax_main
-
-                if int(_chi2res_stat_valid.sum()) >= 5:
-                    _chi2res_ax_main.hexbin(
-                        _chi2res_charge_event[_chi2res_stat_valid],
-                        _chi2res_stat_log[_chi2res_stat_valid],
-                        gridsize=35,
-                        cmap="magma",
-                        bins="log",
-                        mincnt=1,
-                        extent=(0, _chi2res_charge_event_xlim, 0, _chi2res_stat_ylim),
-                    )
-                    _chi2res_ax_charge.hist(
-                        _chi2res_charge_event[_chi2res_stat_valid],
-                        bins=np.linspace(0, _chi2res_charge_event_xlim, 60),
-                        color="0.35",
-                        alpha=0.70,
-                        histtype="stepfilled",
-                    )
-                    _chi2res_ax_hist.hist(
-                        _chi2res_stat_log[_chi2res_stat_valid],
-                        bins=np.linspace(0, _chi2res_stat_ylim, 60),
-                        orientation="horizontal",
-                        color=f"C{_chi2res_stat_idx}",
-                        alpha=0.70,
-                        histtype="stepfilled",
-                    )
-                    _chi2res_ax_comp.hist(
-                        _chi2res_stat_log[_chi2res_stat_valid],
-                        bins=np.linspace(0, _chi2res_comp_xlim, 60),
-                        color=f"C{_chi2res_stat_idx}",
-                        histtype="step",
-                        linewidth=1.5,
-                        label=_chi2res_stat_name,
-                    )
-                    _chi2res_ax_comp.hist(
-                        _chi2res_log_tim_th_chi[np.isfinite(_chi2res_log_tim_th_chi)],
-                        bins=np.linspace(0, _chi2res_comp_xlim, 60),
-                        color="black",
-                        histtype="step",
-                        linewidth=1.2,
-                        linestyle="--",
-                        label="tim_th_chi",
-                    )
-                else:
-                    _chi2res_ax_main.text(
-                        0.5, 0.5, "no data",
-                        ha="center", va="center",
-                        transform=_chi2res_ax_main.transAxes, fontsize=9,
-                    )
-
-                _chi2res_ax_charge.set_yscale("log")
-                _chi2res_ax_hist.set_xscale("log")
-                _chi2res_ax_comp.set_yscale("log")
-                _chi2res_ax_charge.set_xlim(0, _chi2res_charge_event_xlim)
-                _chi2res_ax_main.set_xlim(0, _chi2res_charge_event_xlim)
-                _chi2res_ax_main.set_ylim(0, _chi2res_stat_ylim)
-                _chi2res_ax_charge.set_title(
-                    f"{_chi2res_stat_name}  |  n={int(_chi2res_stat_valid.sum()):,}",
-                    fontsize=9,
-                )
-                _chi2res_ax_charge.set_ylabel("count", fontsize=8)
-                _chi2res_ax_main.set_ylabel(
-                    rf"$\log(1+{_chi2res_stat_name})$",
-                    fontsize=8,
-                )
-                _chi2res_ax_main.grid(True, alpha=0.25)
-                _chi2res_ax_hist.set_xlabel("count", fontsize=8)
-                _chi2res_ax_comp.set_xlabel(r"$\log(1+\mathrm{value})$", fontsize=8)
-                _chi2res_ax_comp.set_ylabel("count", fontsize=8)
-                _chi2res_ax_comp.set_title(_chi2res_stat_desc, fontsize=8)
-                _chi2res_ax_comp.legend(fontsize=7, loc="upper right")
-                _chi2res_ax_main.tick_params(labelsize=7)
-                _chi2res_ax_charge.tick_params(labelsize=7)
-                _chi2res_ax_hist.tick_params(labelsize=7)
-                _chi2res_ax_comp.tick_params(labelsize=7)
-                plt.setp(_chi2res_ax_charge.get_xticklabels(), visible=False)
-                plt.setp(_chi2res_ax_hist.get_yticklabels(), visible=False)
-                if _chi2res_stat_idx == len(_chi2res_abs_stat_defs) - 1:
-                    _chi2res_ax_main.set_xlabel("Event charge (a.u.)", fontsize=8)
-                else:
-                    plt.setp(_chi2res_ax_main.get_xticklabels(), visible=False)
-
-            plt.tight_layout(rect=[0, 0, 1, 0.97])
-            if save_plots:
-                _chi2res_filename = f"{fig_idx}_chi2_residuals_populations_derived_stats.png"
-                fig_idx += 1
-                _chi2res_save_path = os.path.join(base_directories["figure_directory"], _chi2res_filename)
-                plot_list.append(_chi2res_save_path)
-                save_plot_figure(_chi2res_save_path, format="png", alias="chi2_residuals_populations")
-            if show_plots:
-                plt.show()
-            plt.close()
-
-            _chi2res_ratio_valid = (
-                np.isfinite(_chi2res_charge_event)
-                & np.isfinite(_chi2res_loo_max_over_sum)
-                & (_chi2res_charge_event >= 0)
-            )
-            _chi2res_fig_ratio = plt.figure(figsize=(18, 6))
-            _chi2res_gs_ratio = GridSpec(
-                2, 3, figure=_chi2res_fig_ratio,
-                width_ratios=[5.4, 1.5, 2.4],
-                height_ratios=[1.0, 4.0],
-                hspace=0.16, wspace=0.14,
-            )
-            _chi2res_fig_ratio.suptitle(
-                "chi2_residuals_populations — concentration statistic for 4-fold LOO structure\n"
-                r"$\mathrm{loo\_chi2\_max\_over\_sum}$ near 0.25 indicates a uniform 4-plane contribution; "
-                "values near 1 indicate a single-plane-dominated inconsistency",
-                fontsize=10,
-            )
-            _chi2res_ax_charge = _chi2res_fig_ratio.add_subplot(_chi2res_gs_ratio[0, 0])
-            _chi2res_ax_main = _chi2res_fig_ratio.add_subplot(_chi2res_gs_ratio[1, 0], sharex=_chi2res_ax_charge)
-            _chi2res_ax_hist = _chi2res_fig_ratio.add_subplot(_chi2res_gs_ratio[1, 1], sharey=_chi2res_ax_main)
-            _chi2res_ax_ratio = _chi2res_fig_ratio.add_subplot(_chi2res_gs_ratio[:, 2])
-
-            if int(_chi2res_ratio_valid.sum()) >= 5:
-                _chi2res_ax_main.hexbin(
-                    _chi2res_charge_event[_chi2res_ratio_valid],
-                    _chi2res_loo_max_over_sum[_chi2res_ratio_valid],
-                    gridsize=35,
-                    cmap="cividis",
-                    bins="log",
-                    mincnt=1,
-                    extent=(0, _chi2res_charge_event_xlim, 0, 1.0),
-                )
-                _chi2res_ax_charge.hist(
-                    _chi2res_charge_event[_chi2res_ratio_valid],
-                    bins=np.linspace(0, _chi2res_charge_event_xlim, 60),
-                    color="0.35",
-                    alpha=0.70,
-                    histtype="stepfilled",
-                )
-                _chi2res_ax_hist.hist(
-                    _chi2res_loo_max_over_sum[_chi2res_ratio_valid],
-                    bins=np.linspace(0, 1.0, 60),
-                    orientation="horizontal",
-                    color="C3",
-                    alpha=0.70,
-                    histtype="stepfilled",
-                )
-                _chi2res_ax_ratio.hist(
-                    _chi2res_loo_max_over_sum[_chi2res_ratio_valid],
-                    bins=np.linspace(0, 1.0, 60),
-                    color="C3",
-                    alpha=0.70,
-                    histtype="stepfilled",
-                )
-            else:
-                _chi2res_ax_main.text(
-                    0.5, 0.5, "no data",
-                    ha="center", va="center",
-                    transform=_chi2res_ax_main.transAxes, fontsize=9,
-                )
-
-            _chi2res_ax_charge.set_yscale("log")
-            _chi2res_ax_hist.set_xscale("log")
-            _chi2res_ax_ratio.set_yscale("log")
-            _chi2res_ax_charge.set_xlim(0, _chi2res_charge_event_xlim)
-            _chi2res_ax_main.set_xlim(0, _chi2res_charge_event_xlim)
-            _chi2res_ax_main.set_ylim(0, 1.0)
-            _chi2res_ax_main.axhline(0.25, color="red", lw=1.0, ls="--", alpha=0.7)
-            _chi2res_ax_hist.axhline(0.25, color="red", lw=1.0, ls="--", alpha=0.7)
-            _chi2res_ax_ratio.axvline(0.25, color="red", lw=1.0, ls="--", alpha=0.7)
-            _chi2res_ax_charge.set_ylabel("count", fontsize=8)
-            _chi2res_ax_main.set_xlabel("Event charge (a.u.)", fontsize=8)
-            _chi2res_ax_main.set_ylabel(r"$\mathrm{loo\_chi2\_max\_over\_sum}$", fontsize=8)
-            _chi2res_ax_main.grid(True, alpha=0.25)
-            _chi2res_ax_hist.set_xlabel("count", fontsize=8)
-            _chi2res_ax_ratio.set_xlabel(r"$\mathrm{loo\_chi2\_max\_over\_sum}$", fontsize=8)
-            _chi2res_ax_ratio.set_ylabel("count", fontsize=8)
-            _chi2res_ax_ratio.set_title("Reference line at 0.25", fontsize=8)
-            _chi2res_ax_charge.tick_params(labelsize=7)
-            _chi2res_ax_main.tick_params(labelsize=7)
-            _chi2res_ax_hist.tick_params(labelsize=7)
-            _chi2res_ax_ratio.tick_params(labelsize=7)
-            plt.setp(_chi2res_ax_charge.get_xticklabels(), visible=False)
-            plt.setp(_chi2res_ax_hist.get_yticklabels(), visible=False)
-
-            plt.tight_layout(rect=[0, 0, 1, 0.95])
-            if save_plots:
-                _chi2res_filename = f"{fig_idx}_chi2_residuals_populations_max_over_sum.png"
-                fig_idx += 1
-                _chi2res_save_path = os.path.join(base_directories["figure_directory"], _chi2res_filename)
-                plot_list.append(_chi2res_save_path)
-                save_plot_figure(_chi2res_save_path, format="png", alias="chi2_residuals_populations")
-            if show_plots:
-                plt.show()
-            plt.close()
-
-        if _chi2res_tim_th_chi_4fold.size < 5:
-            print("[chi2_residuals_populations] not enough 4-fold chi2 events for histogram, skipping.")
-        else:
-            _chi2res_hist_xlim = max(
-                float(np.nanpercentile(_chi2res_tim_th_chi_4fold, 99.5)),
-                _chi2res_pop_limit_chi * 1.5,
-                10.0,
-            )
-            _chi2res_hist_xlim = max(_chi2res_hist_xlim, _chi2res_pop_limit_chi * 1.05)
-            _chi2res_tail_count = int(np.sum(_chi2res_tim_th_chi_4fold > _chi2res_pop_limit_chi))
-            _chi2res_tail_frac = 100.0 * _chi2res_tail_count / max(len(_chi2res_tim_th_chi_4fold), 1)
-
-            _chi2res_fig_hist, _chi2res_ax_hist = plt.subplots(figsize=(12, 6))
-            _chi2res_ax_hist.hist(
-                _chi2res_tim_th_chi_4fold,
-                bins=np.linspace(0, _chi2res_hist_xlim, 90),
-                color="0.45",
-                alpha=0.80,
-                histtype="stepfilled",
-            )
-            _chi2res_ax_hist.axvline(
-                _chi2res_pop_limit_chi,
-                color="red",
-                lw=1.4,
-                ls="--",
-                alpha=0.8,
-                label=rf"population limit: $\log(1+\chi^2)={_chi2res_pop_limit_log:.1f}$",
-            )
-            _chi2res_ax_hist.axvspan(
-                _chi2res_pop_limit_chi,
-                _chi2res_hist_xlim,
-                color="red",
-                alpha=0.08,
-            )
-            _chi2res_ax_hist.set_xlim(0, _chi2res_hist_xlim)
-            _chi2res_ax_hist.set_xlabel(r"$\chi^2$ (tim\_th\_chi) for 4-fold events", fontsize=9)
-            _chi2res_ax_hist.set_ylabel("count", fontsize=9)
-            _chi2res_ax_hist.set_title(
-                "4-fold chi2 histogram with population-limit threshold\n"
-                rf"limit in raw $\chi^2$: {_chi2res_pop_limit_chi:.2f}",
-                fontsize=10,
-            )
-            _chi2res_ax_hist.grid(True, alpha=0.25)
-            _chi2res_ax_hist.legend(fontsize=8, loc="upper right")
-            _chi2res_ax_hist.text(
-                0.98, 0.95,
-                f"Right of limit: {_chi2res_tail_count:,} / {len(_chi2res_tim_th_chi_4fold):,}\n"
-                f"= {_chi2res_tail_frac:.2f}%",
-                transform=_chi2res_ax_hist.transAxes,
-                ha="right", va="top", fontsize=10,
-                bbox=dict(boxstyle="round", facecolor="white", alpha=0.9, edgecolor="0.6"),
-            )
-            _chi2res_ax_hist_top = _chi2res_ax_hist.secondary_xaxis(
-                "top",
-                functions=(
-                    lambda _chi2res_x: np.log1p(np.clip(_chi2res_x, 0.0, None)),
-                    lambda _chi2res_y: np.expm1(_chi2res_y),
-                ),
-            )
-            _chi2res_ax_hist_top.set_xlabel(
-                rf"$\log(1+\chi^2)$   [population limit = {_chi2res_pop_limit_log:.1f}]",
-                fontsize=9,
-            )
-            _chi2res_ax_hist.tick_params(labelsize=8)
-            _chi2res_ax_hist_top.tick_params(labelsize=8)
-            plt.tight_layout()
-            if save_plots:
-                _chi2res_filename = f"{fig_idx}_chi2_residuals_populations_timchi_histogram_4fold.png"
-                fig_idx += 1
-                _chi2res_save_path = os.path.join(base_directories["figure_directory"], _chi2res_filename)
-                plot_list.append(_chi2res_save_path)
-                save_plot_figure(_chi2res_save_path, format="png", alias="chi2_residuals_populations")
-            if show_plots:
-                plt.show()
-            plt.close()
-
-            _chi2res_hist_zoom_xlim = min(
-                max(float(np.nanpercentile(_chi2res_tim_th_chi_4fold, 98.0)), 0.5),
-                _chi2res_pop_limit_chi,
-            )
-            _chi2res_fig_hist_zoom, _chi2res_ax_hist_zoom = plt.subplots(figsize=(12, 5))
-            _chi2res_ax_hist_zoom.hist(
-                _chi2res_tim_th_chi_4fold,
-                bins=np.linspace(0, _chi2res_hist_zoom_xlim, 100),
-                color="0.30",
-                alpha=0.82,
-                histtype="stepfilled",
-            )
-            _chi2res_ax_hist_zoom.set_xlim(0, _chi2res_hist_zoom_xlim)
-            _chi2res_ax_hist_zoom.set_xlabel(r"$\chi^2$ (tim\_th\_chi)", fontsize=9)
-            _chi2res_ax_hist_zoom.set_ylabel("count", fontsize=9)
-            _chi2res_ax_hist_zoom.set_title(
-                "4-fold tim_th_chi histogram zoomed near zero\n"
-                "Window chosen from the dense core of the distribution",
-                fontsize=10,
-            )
-            _chi2res_ax_hist_zoom.grid(True, alpha=0.25)
-            _chi2res_ax_hist_zoom.tick_params(labelsize=8)
-            plt.tight_layout()
-            if save_plots:
-                _chi2res_filename = f"{fig_idx}_chi2_residuals_populations_timchi_histogram_4fold_zoom_near_zero.png"
-                fig_idx += 1
-                _chi2res_save_path = os.path.join(base_directories["figure_directory"], _chi2res_filename)
-                plot_list.append(_chi2res_save_path)
-                save_plot_figure(_chi2res_save_path, format="png", alias="chi2_residuals_populations")
-            if show_plots:
-                plt.show()
-            plt.close()
-
-        if not _chi2res_have_angles:
-            print("[chi2_residuals_populations] theta/phi columns not found, skipping chi2-angle plots.")
-        elif len(_chi2res_theta_4fold_deg) < 5:
-            print("[chi2_residuals_populations] not enough 4-fold chi2-angle events, skipping.")
-        else:
-            _chi2res_theta_min = float(np.nanmin(_chi2res_theta_4fold_deg))
-            _chi2res_theta_max = float(np.nanmax(_chi2res_theta_4fold_deg))
-            _chi2res_phi_min = float(np.nanmin(_chi2res_phi_4fold_deg))
-            _chi2res_phi_max = float(np.nanmax(_chi2res_phi_4fold_deg))
-            _chi2res_log_tim_ylim = max(
-                float(np.nanpercentile(_chi2res_log_tim_th_chi_angle, 99.5)),
-                _chi2res_pop_limit_log * 1.05,
-                1.0,
-            )
-            if _chi2res_theta_max <= _chi2res_theta_min:
-                _chi2res_theta_min -= 1.0
-                _chi2res_theta_max += 1.0
-            if _chi2res_phi_max <= _chi2res_phi_min:
-                _chi2res_phi_min -= 1.0
-                _chi2res_phi_max += 1.0
-            _chi2res_angle_idx_3d = np.arange(len(_chi2res_theta_4fold_deg))
-            if len(_chi2res_angle_idx_3d) > 30000:
-                _chi2res_angle_idx_3d = np.unique(
-                    np.linspace(
-                        0,
-                        len(_chi2res_theta_4fold_deg) - 1,
-                        30000,
-                    ).astype(int)
-                )
-
-            _chi2res_fig_angles = plt.figure(figsize=(18, 6))
-            _chi2res_ax_theta = _chi2res_fig_angles.add_subplot(1, 3, 1)
-            _chi2res_ax_phi = _chi2res_fig_angles.add_subplot(1, 3, 2, sharey=_chi2res_ax_theta)
-            _chi2res_ax_3d = _chi2res_fig_angles.add_subplot(1, 3, 3, projection="3d")
-            _chi2res_fig_angles.suptitle(
-                "4-fold chi2 angular structure\n"
-                r"chi2 shown as $\log(1+\mathrm{tim\_th\_chi})$ for readability",
-                fontsize=10,
-            )
-
-            _chi2res_ax_theta.scatter(
-                _chi2res_theta_4fold_deg,
-                _chi2res_log_tim_th_chi_angle,
-                s=4,
-                alpha=0.16,
-                color="C0",
-                edgecolors="none",
-                rasterized=True,
-            )
-            _chi2res_ax_phi.scatter(
-                _chi2res_phi_4fold_deg,
-                _chi2res_log_tim_th_chi_angle,
-                s=4,
-                alpha=0.16,
-                color="C1",
-                edgecolors="none",
-                rasterized=True,
-            )
-            _chi2res_ax_theta.axhline(_chi2res_pop_limit_log, color="red", lw=1.0, ls="--", alpha=0.7)
-            _chi2res_ax_phi.axhline(_chi2res_pop_limit_log, color="red", lw=1.0, ls="--", alpha=0.7)
-            _chi2res_ax_theta.set_xlim(_chi2res_theta_min, _chi2res_theta_max)
-            _chi2res_ax_phi.set_xlim(_chi2res_phi_min, _chi2res_phi_max)
-            _chi2res_ax_theta.set_ylim(0, _chi2res_log_tim_ylim)
-            _chi2res_ax_phi.set_ylim(0, _chi2res_log_tim_ylim)
-            _chi2res_ax_theta.set_xlabel(r"$\theta$ (deg)", fontsize=9)
-            _chi2res_ax_phi.set_xlabel(r"$\phi$ (deg)", fontsize=9)
-            _chi2res_ax_theta.set_ylabel(r"$\log(1+\chi^2)$", fontsize=9)
-            _chi2res_ax_phi.set_ylabel(r"$\log(1+\chi^2)$", fontsize=9)
-            _chi2res_ax_theta.set_title(r"$\chi^2$ vs $\theta$", fontsize=9)
-            _chi2res_ax_phi.set_title(r"$\chi^2$ vs $\phi$", fontsize=9)
-            _chi2res_ax_theta.grid(True, alpha=0.25)
-            _chi2res_ax_phi.grid(True, alpha=0.25)
-            _chi2res_ax_theta.tick_params(labelsize=8)
-            _chi2res_ax_phi.tick_params(labelsize=8)
-
-            _chi2res_sc3d = _chi2res_ax_3d.scatter(
-                _chi2res_theta_4fold_deg[_chi2res_angle_idx_3d],
-                _chi2res_phi_4fold_deg[_chi2res_angle_idx_3d],
-                _chi2res_log_tim_th_chi_angle[_chi2res_angle_idx_3d],
-                c=_chi2res_log_tim_th_chi_angle[_chi2res_angle_idx_3d],
-                cmap="viridis",
-                s=4,
-                alpha=0.20,
-                linewidths=0,
-            )
-            _chi2res_ax_3d.set_xlim(_chi2res_theta_min, _chi2res_theta_max)
-            _chi2res_ax_3d.set_ylim(_chi2res_phi_min, _chi2res_phi_max)
-            _chi2res_ax_3d.set_zlim(0, _chi2res_log_tim_ylim)
-            _chi2res_ax_3d.set_xlabel(r"$\theta$ (deg)", fontsize=8)
-            _chi2res_ax_3d.set_ylabel(r"$\phi$ (deg)", fontsize=8)
-            _chi2res_ax_3d.set_zlabel(r"$\log(1+\chi^2)$", fontsize=8)
-            _chi2res_ax_3d.set_title(r"$\theta$ vs $\phi$ vs $\chi^2$ (4-fold)", fontsize=9)
-            _chi2res_ax_3d.view_init(elev=22, azim=-58)
-            _chi2res_cbar = _chi2res_fig_angles.colorbar(
-                _chi2res_sc3d, ax=_chi2res_ax_3d, fraction=0.046, pad=0.04
-            )
-            _chi2res_cbar.set_label(r"$\log(1+\chi^2)$", fontsize=8)
-            _chi2res_cbar.ax.tick_params(labelsize=8)
-
-            plt.tight_layout(rect=[0, 0, 1, 0.95])
-            if save_plots:
-                _chi2res_filename = f"{fig_idx}_chi2_residuals_populations_timchi_angles_4fold.png"
-                fig_idx += 1
-                _chi2res_save_path = os.path.join(base_directories["figure_directory"], _chi2res_filename)
-                plot_list.append(_chi2res_save_path)
-                save_plot_figure(_chi2res_save_path, format="png", alias="chi2_residuals_populations")
-            if show_plots:
-                plt.show()
-            plt.close()
-
-        if not _chi2res_have_main_residuals:
-            print("[chi2_residuals_populations] main residual columns not found, skipping non-canceling chi2 plots.")
-        elif len(_chi2res_main_chi_sum) < 5:
-            print("[chi2_residuals_populations] not enough 4-fold events for non-canceling chi2 plots, skipping.")
-        else:
-            _chi2res_main_charge_xlim = max(
-                float(np.nanpercentile(_chi2res_main_charge[np.isfinite(_chi2res_main_charge)], 99.5)),
-                1.0,
-            )
-            _chi2res_main_log_sum_ylim = max(
-                float(np.nanpercentile(_chi2res_main_log_sum[np.isfinite(_chi2res_main_log_sum)], 99.5)),
-                1.0,
-            )
-            _chi2res_main_log_std_ylim = max(
-                float(np.nanpercentile(_chi2res_main_log_std[np.isfinite(_chi2res_main_log_std)], 99.5)),
-                1.0,
-            )
-            _chi2res_main_log_tim_xlim = max(
-                float(np.nanpercentile(_chi2res_main_log_tim[np.isfinite(_chi2res_main_log_tim)], 99.5)),
-                _chi2res_pop_limit_log * 1.05,
-                1.0,
-            )
-            if _chi2res_have_angles:
-                _chi2res_main_theta_min = float(np.nanmin(_chi2res_main_theta_deg))
-                _chi2res_main_theta_max = float(np.nanmax(_chi2res_main_theta_deg))
-                if _chi2res_main_theta_max <= _chi2res_main_theta_min:
-                    _chi2res_main_theta_min -= 1.0
-                    _chi2res_main_theta_max += 1.0
-
-            _chi2res_fig_main, _chi2res_axes_main = plt.subplots(2, 3, figsize=(18, 10), squeeze=False)
-            _chi2res_fig_main.suptitle(
-                "4-fold non-canceling fit residual statistics\n"
-                "Uses per-plane squared residual contributions so opposite-sign deviations do not cancel",
-                fontsize=10,
-            )
-
-            _chi2res_valid = (
-                np.isfinite(_chi2res_main_charge)
-                & np.isfinite(_chi2res_main_log_sum)
-                & (_chi2res_main_charge >= 0)
-            )
-            if int(_chi2res_valid.sum()) >= 5:
-                _chi2res_axes_main[0][0].hexbin(
-                    _chi2res_main_charge[_chi2res_valid],
-                    _chi2res_main_log_sum[_chi2res_valid],
-                    gridsize=35, cmap="magma", bins="log", mincnt=1,
-                    extent=(0, _chi2res_main_charge_xlim, 0, _chi2res_main_log_sum_ylim),
-                )
-            _chi2res_axes_main[0][0].set_xlim(0, _chi2res_main_charge_xlim)
-            _chi2res_axes_main[0][0].set_ylim(0, _chi2res_main_log_sum_ylim)
-            _chi2res_axes_main[0][0].set_xlabel("Event charge (a.u.)", fontsize=8)
-            _chi2res_axes_main[0][0].set_ylabel(r"$\log(1+\sum_p \chi^2_p)$", fontsize=8)
-            _chi2res_axes_main[0][0].set_title("Non-canceling total vs charge", fontsize=9)
-            _chi2res_axes_main[0][0].grid(True, alpha=0.25)
-
-            if _chi2res_have_angles:
-                _chi2res_valid = np.isfinite(_chi2res_main_theta_deg) & np.isfinite(_chi2res_main_log_sum)
-                if int(_chi2res_valid.sum()) >= 5:
-                    _chi2res_axes_main[0][1].hexbin(
-                        _chi2res_main_theta_deg[_chi2res_valid],
-                        _chi2res_main_log_sum[_chi2res_valid],
-                        gridsize=35, cmap="viridis", bins="log", mincnt=1,
-                        extent=(
-                            _chi2res_main_theta_min,
-                            _chi2res_main_theta_max,
-                            0,
-                            _chi2res_main_log_sum_ylim,
-                        ),
-                    )
-                _chi2res_axes_main[0][1].set_xlim(_chi2res_main_theta_min, _chi2res_main_theta_max)
-                _chi2res_axes_main[0][1].set_ylim(0, _chi2res_main_log_sum_ylim)
-                _chi2res_axes_main[0][1].set_xlabel(r"$\theta$ (deg)", fontsize=8)
-                _chi2res_axes_main[0][1].set_ylabel(r"$\log(1+\sum_p \chi^2_p)$", fontsize=8)
-                _chi2res_axes_main[0][1].set_title("Non-canceling total vs theta", fontsize=9)
-                _chi2res_axes_main[0][1].grid(True, alpha=0.25)
-            else:
-                _chi2res_axes_main[0][1].set_axis_off()
-
-            _chi2res_valid = np.isfinite(_chi2res_main_log_tim) & np.isfinite(_chi2res_main_log_sum)
-            if int(_chi2res_valid.sum()) >= 5:
-                _chi2res_axes_main[0][2].hexbin(
-                    _chi2res_main_log_tim[_chi2res_valid],
-                    _chi2res_main_log_sum[_chi2res_valid],
-                    gridsize=35, cmap="cividis", bins="log", mincnt=1,
-                    extent=(0, _chi2res_main_log_tim_xlim, 0, _chi2res_main_log_sum_ylim),
-                )
-            _chi2res_axes_main[0][2].axvline(_chi2res_pop_limit_log, color="red", lw=1.0, ls="--", alpha=0.7)
-            _chi2res_axes_main[0][2].set_xlim(0, _chi2res_main_log_tim_xlim)
-            _chi2res_axes_main[0][2].set_ylim(0, _chi2res_main_log_sum_ylim)
-            _chi2res_axes_main[0][2].set_xlabel(r"$\log(1+\mathrm{tim\_th\_chi})$", fontsize=8)
-            _chi2res_axes_main[0][2].set_ylabel(r"$\log(1+\sum_p \chi^2_p)$", fontsize=8)
-            _chi2res_axes_main[0][2].set_title("Canceling vs non-canceling statistic", fontsize=9)
-            _chi2res_axes_main[0][2].grid(True, alpha=0.25)
-
-            _chi2res_valid = (
-                np.isfinite(_chi2res_main_charge)
-                & np.isfinite(_chi2res_main_log_std)
-                & (_chi2res_main_charge >= 0)
-            )
-            if int(_chi2res_valid.sum()) >= 5:
-                _chi2res_axes_main[1][0].hexbin(
-                    _chi2res_main_charge[_chi2res_valid],
-                    _chi2res_main_log_std[_chi2res_valid],
-                    gridsize=35, cmap="plasma", bins="log", mincnt=1,
-                    extent=(0, _chi2res_main_charge_xlim, 0, _chi2res_main_log_std_ylim),
-                )
-            _chi2res_axes_main[1][0].set_xlim(0, _chi2res_main_charge_xlim)
-            _chi2res_axes_main[1][0].set_ylim(0, _chi2res_main_log_std_ylim)
-            _chi2res_axes_main[1][0].set_xlabel("Event charge (a.u.)", fontsize=8)
-            _chi2res_axes_main[1][0].set_ylabel(r"$\log(1+\mathrm{std}_p(\chi^2_p))$", fontsize=8)
-            _chi2res_axes_main[1][0].set_title("Inter-plane spread vs charge", fontsize=9)
-            _chi2res_axes_main[1][0].grid(True, alpha=0.25)
-
-            if _chi2res_have_angles:
-                _chi2res_valid = np.isfinite(_chi2res_main_theta_deg) & np.isfinite(_chi2res_main_chi_max_over_sum)
-                if int(_chi2res_valid.sum()) >= 5:
-                    _chi2res_axes_main[1][1].hexbin(
-                        _chi2res_main_theta_deg[_chi2res_valid],
-                        _chi2res_main_chi_max_over_sum[_chi2res_valid],
-                        gridsize=35, cmap="inferno", bins="log", mincnt=1,
-                        extent=(
-                            _chi2res_main_theta_min,
-                            _chi2res_main_theta_max,
-                            0,
-                            1.0,
-                        ),
-                    )
-                _chi2res_axes_main[1][1].axhline(0.25, color="red", lw=1.0, ls="--", alpha=0.7)
-                _chi2res_axes_main[1][1].set_xlim(_chi2res_main_theta_min, _chi2res_main_theta_max)
-                _chi2res_axes_main[1][1].set_ylim(0, 1.0)
-                _chi2res_axes_main[1][1].set_xlabel(r"$\theta$ (deg)", fontsize=8)
-                _chi2res_axes_main[1][1].set_ylabel(r"$\chi^2_{\max}/\sum_p \chi^2_p$", fontsize=8)
-                _chi2res_axes_main[1][1].set_title("Dominant-plane fraction vs theta", fontsize=9)
-                _chi2res_axes_main[1][1].grid(True, alpha=0.25)
-            else:
-                _chi2res_axes_main[1][1].set_axis_off()
-
-            _chi2res_bins_main = np.linspace(
-                0,
-                max(_chi2res_main_log_tim_xlim, _chi2res_main_log_sum_ylim),
-                80,
-            )
-            _chi2res_axes_main[1][2].hist(
-                _chi2res_main_log_tim[np.isfinite(_chi2res_main_log_tim)],
-                bins=_chi2res_bins_main,
-                histtype="step",
-                linewidth=1.4,
-                color="black",
-                label="log(1+tim_th_chi)",
-            )
-            _chi2res_axes_main[1][2].hist(
-                _chi2res_main_log_sum[np.isfinite(_chi2res_main_log_sum)],
-                bins=_chi2res_bins_main,
-                histtype="step",
-                linewidth=1.4,
-                color="C3",
-                label=r"log(1+$\sum_p \chi^2_p$)",
-            )
-            _chi2res_axes_main[1][2].axvline(_chi2res_pop_limit_log, color="red", lw=1.0, ls="--", alpha=0.7)
-            _chi2res_axes_main[1][2].set_yscale("log")
-            _chi2res_axes_main[1][2].set_xlabel(r"$\log(1+\mathrm{stat})$", fontsize=8)
-            _chi2res_axes_main[1][2].set_ylabel("count", fontsize=8)
-            _chi2res_axes_main[1][2].set_title("Histogram comparison", fontsize=9)
-            _chi2res_axes_main[1][2].legend(fontsize=7, loc="upper right")
-            _chi2res_axes_main[1][2].grid(True, alpha=0.25)
-
-            for _chi2res_ax in _chi2res_axes_main.ravel():
-                _chi2res_ax.tick_params(labelsize=7)
-
-            plt.tight_layout(rect=[0, 0, 1, 0.95])
-            if save_plots:
-                _chi2res_filename = f"{fig_idx}_chi2_residuals_populations_main_noncanceling_4fold.png"
-                fig_idx += 1
-                _chi2res_save_path = os.path.join(base_directories["figure_directory"], _chi2res_filename)
-                plot_list.append(_chi2res_save_path)
-                save_plot_figure(_chi2res_save_path, format="png", alias="chi2_residuals_populations")
-            if show_plots:
-                plt.show()
-            plt.close()
-
-        if not _chi2res_have_path_metrics:
-            print("[chi2_residuals_populations] hit-point or slope columns not found, skipping path/zig-zag plots.")
-        elif len(_chi2res_meas_path) < 5:
-            print("[chi2_residuals_populations] not enough 4-fold events for path/zig-zag plots, skipping.")
-        else:
-            _chi2res_path_theta_min = float(np.nanmin(_chi2res_path_theta_deg))
-            _chi2res_path_theta_max = float(np.nanmax(_chi2res_path_theta_deg))
-            if _chi2res_path_theta_max <= _chi2res_path_theta_min:
-                _chi2res_path_theta_min -= 1.0
-                _chi2res_path_theta_max += 1.0
-            _chi2res_path_charge_xlim = max(
-                float(np.nanpercentile(_chi2res_path_charge[np.isfinite(_chi2res_path_charge)], 99.5)),
-                1.0,
-            )
-            _chi2res_meas_path_ylim = max(
-                float(np.nanpercentile(_chi2res_meas_path[np.isfinite(_chi2res_meas_path)], 99.5)),
-                1.0,
-            )
-            _chi2res_fit_path_ylim = max(
-                float(np.nanpercentile(_chi2res_fit_length[np.isfinite(_chi2res_fit_length)], 99.5)),
-                1.0,
-            )
-            _chi2res_ratio_ylim = max(
-                float(np.nanpercentile(_chi2res_zigzag_ratio[np.isfinite(_chi2res_zigzag_ratio)], 99.5)),
-                1.0,
-            )
-            _chi2res_proj_excess_ylim = max(
-                float(np.nanpercentile(_chi2res_projected_excess[np.isfinite(_chi2res_projected_excess)], 99.5)),
-                1.0,
-            )
-            _chi2res_ratio_x_ylim = max(
-                float(np.nanpercentile(_chi2res_zigzag_ratio_x[np.isfinite(_chi2res_zigzag_ratio_x)], 99.5)),
-                1.0,
-            )
-            _chi2res_ratio_y_ylim = max(
-                float(np.nanpercentile(_chi2res_zigzag_ratio_y[np.isfinite(_chi2res_zigzag_ratio_y)], 99.5)),
-                1.0,
-            )
-
-            _chi2res_fig_path, _chi2res_axes_path = plt.subplots(2, 6, figsize=(30, 10), squeeze=False)
-            _chi2res_fig_path.suptitle(
-                "4-fold hit-path and zig-zag diagnostics\n"
-                "Measured path = summed distance between consecutive hit points  |  "
-                "Fitted length = straight segment through the fitted track across the full z-span  |  "
-                "Added XZ-plane and YZ-plane zig-zag ratios to isolate mixed-dimension effects",
-                fontsize=10,
-            )
-
-            _chi2res_row_defs = [
-                (
-                    _chi2res_path_theta_deg,
-                    r"$\theta$ (deg)",
-                    (_chi2res_path_theta_min, _chi2res_path_theta_max),
-                ),
-                (
-                    _chi2res_path_charge,
-                    "Event charge (a.u.)",
-                    (0, _chi2res_path_charge_xlim),
-                ),
-            ]
-            _chi2res_col_defs = [
-                (_chi2res_meas_path, "Measured path (mm)", _chi2res_meas_path_ylim, "viridis"),
-                (_chi2res_fit_length, "Fitted straight length (mm)", _chi2res_fit_path_ylim, "plasma"),
-                (_chi2res_zigzag_ratio, "straight / zig-zag", _chi2res_ratio_ylim, "cividis"),
-                (_chi2res_projected_excess, "Projected zig-zag excess (mm)", _chi2res_proj_excess_ylim, "magma"),
-                (_chi2res_zigzag_ratio_x, r"straight$_{xz}$ / zig-zag$_{xz}$", _chi2res_ratio_x_ylim, "Blues"),
-                (_chi2res_zigzag_ratio_y, r"straight$_{yz}$ / zig-zag$_{yz}$", _chi2res_ratio_y_ylim, "Reds"),
-            ]
-
-            for _chi2res_ri, (_chi2res_xvals, _chi2res_xlabel, _chi2res_xlim) in enumerate(_chi2res_row_defs):
-                for _chi2res_ci, (_chi2res_yvals, _chi2res_ylabel, _chi2res_ylim, _chi2res_cmap) in enumerate(_chi2res_col_defs):
-                    _chi2res_ax = _chi2res_axes_path[_chi2res_ri][_chi2res_ci]
-                    _chi2res_valid = np.isfinite(_chi2res_xvals) & np.isfinite(_chi2res_yvals)
-                    if int(_chi2res_valid.sum()) >= 5:
-                        _chi2res_ax.hexbin(
-                            _chi2res_xvals[_chi2res_valid],
-                            _chi2res_yvals[_chi2res_valid],
-                            gridsize=35,
-                            cmap=_chi2res_cmap,
-                            bins="log",
-                            mincnt=1,
-                            extent=(
-                                _chi2res_xlim[0],
-                                _chi2res_xlim[1],
-                                0,
-                                _chi2res_ylim,
-                            ),
-                        )
-                    _chi2res_ax.set_xlim(_chi2res_xlim[0], _chi2res_xlim[1])
-                    _chi2res_ax.set_ylim(0, _chi2res_ylim)
-                    _chi2res_ax.set_xlabel(_chi2res_xlabel, fontsize=8)
-                    _chi2res_ax.set_ylabel(_chi2res_ylabel, fontsize=8)
-                    _chi2res_ax.grid(True, alpha=0.25)
-                    if _chi2res_ci in (2, 4, 5):
-                        _chi2res_ax.axhline(1.0, color="red", lw=1.0, ls="--", alpha=0.7)
-                    if _chi2res_ci == 3:
-                        _chi2res_ax.axhline(0.0, color="red", lw=1.0, ls="--", alpha=0.7)
-                    _chi2res_ax.tick_params(labelsize=7)
-
-            _chi2res_axes_path[0][0].set_title("Measured path vs theta", fontsize=9)
-            _chi2res_axes_path[0][1].set_title("Fitted length vs theta", fontsize=9)
-            _chi2res_axes_path[0][2].set_title("Zig-zag ratio vs theta", fontsize=9)
-            _chi2res_axes_path[0][3].set_title("Projected excess vs theta", fontsize=9)
-            _chi2res_axes_path[0][4].set_title("X-only zig-zag ratio vs theta", fontsize=9)
-            _chi2res_axes_path[0][5].set_title("Y-only zig-zag ratio vs theta", fontsize=9)
-
-            plt.tight_layout(rect=[0, 0, 1, 0.95])
-            if save_plots:
-                _chi2res_filename = f"{fig_idx}_chi2_residuals_populations_path_geometry_4fold.png"
-                fig_idx += 1
-                _chi2res_save_path = os.path.join(base_directories["figure_directory"], _chi2res_filename)
-                plot_list.append(_chi2res_save_path)
-                save_plot_figure(_chi2res_save_path, format="png", alias="chi2_residuals_populations")
-            if show_plots:
-                plt.show()
-            plt.close()
-
-            if _chi2res_have_main_residuals:
-                _chi2res_mask_joint = _chi2res_mask_path & _chi2res_mask_main
-                if int(_chi2res_mask_joint.sum()) >= 5:
-                    _chi2res_joint_log_main = np.log1p(
-                        np.sum(
-                            (
-                                (_chi2res_main_y_all[_chi2res_mask_joint] / anc_sy) ** 2
-                                + (_chi2res_main_ts_all[_chi2res_mask_joint] / anc_sts) ** 2
-                                + (_chi2res_main_td_all[_chi2res_mask_joint] / anc_std) ** 2
-                            ),
-                            axis=1,
-                        )
-                    )
-                    _chi2res_joint_log_tim = np.log1p(_chi2res_tim_th_chi_all[_chi2res_mask_joint])
-                    _chi2res_joint_ratio = _chi2res_fit_length_all[_chi2res_mask_joint] / (
-                        _chi2res_meas_path_all[_chi2res_mask_joint] + 1e-9
-                    )
-                    _chi2res_joint_proj_excess = (
-                        np.clip(
-                            _chi2res_meas_path_all[_chi2res_mask_joint]
-                            - _chi2res_fit_length_all[_chi2res_mask_joint],
-                            0.0,
-                            None,
-                        )
-                        * np.clip(np.cos(_chi2res_theta_fit_all[_chi2res_mask_joint]), 1e-6, None)
-                    )
-                    _chi2res_joint_log_main_xlim = max(
-                        float(np.nanpercentile(_chi2res_joint_log_main[np.isfinite(_chi2res_joint_log_main)], 99.5)),
-                        1.0,
-                    )
-                    _chi2res_joint_ratio_ylim = max(
-                        float(np.nanpercentile(_chi2res_joint_ratio[np.isfinite(_chi2res_joint_ratio)], 99.5)),
-                        1.0,
-                    )
-                    _chi2res_joint_proj_ylim = max(
-                        float(np.nanpercentile(_chi2res_joint_proj_excess[np.isfinite(_chi2res_joint_proj_excess)], 99.5)),
-                        1.0,
-                    )
-                    _chi2res_joint_ratio_x = np.where(
-                        _chi2res_zigx_all[_chi2res_mask_joint] > 1e-9,
-                        _chi2res_fit_dx_all[_chi2res_mask_joint] / (_chi2res_zigx_all[_chi2res_mask_joint] + 1e-9),
-                        1.0,
-                    )
-                    _chi2res_joint_ratio_y = np.where(
-                        _chi2res_zigy_all[_chi2res_mask_joint] > 1e-9,
-                        _chi2res_fit_dy_all[_chi2res_mask_joint] / (_chi2res_zigy_all[_chi2res_mask_joint] + 1e-9),
-                        1.0,
-                    )
-                    _chi2res_joint_ratio_x_ylim = max(
-                        float(np.nanpercentile(_chi2res_joint_ratio_x[np.isfinite(_chi2res_joint_ratio_x)], 99.5)),
-                        1.0,
-                    )
-                    _chi2res_joint_ratio_y_ylim = max(
-                        float(np.nanpercentile(_chi2res_joint_ratio_y[np.isfinite(_chi2res_joint_ratio_y)], 99.5)),
-                        1.0,
-                    )
-
-                    _chi2res_fig_joint, _chi2res_axes_joint = plt.subplots(1, 5, figsize=(30, 5), squeeze=False)
-                    _chi2res_fig_joint.suptitle(
-                        "4-fold relation between spread-like geometry and residual inconsistency",
-                        fontsize=10,
-                    )
-
-                    _chi2res_valid = np.isfinite(_chi2res_joint_log_main) & np.isfinite(_chi2res_joint_ratio)
-                    if int(_chi2res_valid.sum()) >= 5:
-                        _chi2res_axes_joint[0][0].hexbin(
-                            _chi2res_joint_log_main[_chi2res_valid],
-                            _chi2res_joint_ratio[_chi2res_valid],
-                            gridsize=35, cmap="viridis", bins="log", mincnt=1,
-                            extent=(0, _chi2res_joint_log_main_xlim, 0, _chi2res_joint_ratio_ylim),
-                        )
-                    _chi2res_axes_joint[0][0].axhline(1.0, color="red", lw=1.0, ls="--", alpha=0.7)
-                    _chi2res_axes_joint[0][0].set_xlim(0, _chi2res_joint_log_main_xlim)
-                    _chi2res_axes_joint[0][0].set_ylim(0, _chi2res_joint_ratio_ylim)
-                    _chi2res_axes_joint[0][0].set_xlabel(r"$\log(1+\sum_p \chi^2_p)$", fontsize=8)
-                    _chi2res_axes_joint[0][0].set_ylabel("straight / zig-zag", fontsize=8)
-                    _chi2res_axes_joint[0][0].set_title("Non-canceling chi2 vs zig-zag ratio", fontsize=9)
-
-                    _chi2res_valid = np.isfinite(_chi2res_joint_log_main) & np.isfinite(_chi2res_joint_proj_excess)
-                    if int(_chi2res_valid.sum()) >= 5:
-                        _chi2res_axes_joint[0][1].hexbin(
-                            _chi2res_joint_log_main[_chi2res_valid],
-                            _chi2res_joint_proj_excess[_chi2res_valid],
-                            gridsize=35, cmap="magma", bins="log", mincnt=1,
-                            extent=(0, _chi2res_joint_log_main_xlim, 0, _chi2res_joint_proj_ylim),
-                        )
-                    _chi2res_axes_joint[0][1].set_xlim(0, _chi2res_joint_log_main_xlim)
-                    _chi2res_axes_joint[0][1].set_ylim(0, _chi2res_joint_proj_ylim)
-                    _chi2res_axes_joint[0][1].set_xlabel(r"$\log(1+\sum_p \chi^2_p)$", fontsize=8)
-                    _chi2res_axes_joint[0][1].set_ylabel("Projected zig-zag excess (mm)", fontsize=8)
-                    _chi2res_axes_joint[0][1].set_title("Non-canceling chi2 vs projected excess", fontsize=9)
-
-                    _chi2res_joint_pop_defs = [
-                        ((0.0, 0.1), "C2", r"$0 \leq \log(1+\chi^2) < 0.1$"),
-                        ((0.1, _chi2res_pop_limit_log), "C0", rf"$0.1 \leq \log(1+\chi^2) < {_chi2res_pop_limit_log:.1f}$"),
-                        ((_chi2res_pop_limit_log, np.inf), "C3", rf"$\log(1+\chi^2) \geq {_chi2res_pop_limit_log:.1f}$"),
-                    ]
-                    _chi2res_joint_hist_defs = [
-                        (_chi2res_joint_ratio, _chi2res_joint_ratio_ylim, "straight / zig-zag", "Total zig-zag ratio by tim_th_chi population"),
-                        (_chi2res_joint_ratio_x, _chi2res_joint_ratio_x_ylim, r"straight$_{xz}$ / zig-zag$_{xz}$", "XZ-plane zig-zag ratio by tim_th_chi population"),
-                        (_chi2res_joint_ratio_y, _chi2res_joint_ratio_y_ylim, r"straight$_{yz}$ / zig-zag$_{yz}$", "YZ-plane zig-zag ratio by tim_th_chi population"),
-                    ]
-                    for _chi2res_hist_idx, (
-                        _chi2res_hist_vals,
-                        _chi2res_hist_xlim,
-                        _chi2res_hist_xlabel,
-                        _chi2res_hist_title,
-                    ) in enumerate(_chi2res_joint_hist_defs):
-                        _chi2res_ax_histpop = _chi2res_axes_joint[0][_chi2res_hist_idx + 2]
-                        _chi2res_hist_bins = np.linspace(0, _chi2res_hist_xlim, 70)
-                        for (
-                            (_chi2res_log_lo, _chi2res_log_hi),
-                            _chi2res_hist_color,
-                            _chi2res_hist_label,
-                        ) in _chi2res_joint_pop_defs:
-                            _chi2res_pop_mask = (
-                                np.isfinite(_chi2res_hist_vals)
-                                & np.isfinite(_chi2res_joint_log_tim)
-                                & (_chi2res_joint_log_tim >= _chi2res_log_lo)
-                                & (_chi2res_joint_log_tim < _chi2res_log_hi)
-                            )
-                            if int(_chi2res_pop_mask.sum()) < 3:
-                                continue
-                            _chi2res_hist_counts, _chi2res_hist_edges = np.histogram(
-                                _chi2res_hist_vals[_chi2res_pop_mask],
-                                bins=_chi2res_hist_bins,
-                            )
-                            _chi2res_hist_max = float(np.max(_chi2res_hist_counts))
-                            if _chi2res_hist_max <= 0:
-                                continue
-                            _chi2res_hist_norm = _chi2res_hist_counts / _chi2res_hist_max
-                            _chi2res_ax_histpop.plot(
-                                0.5 * (_chi2res_hist_edges[1:] + _chi2res_hist_edges[:-1]),
-                                _chi2res_hist_norm,
-                                drawstyle="steps-mid",
-                                linewidth=1.5,
-                                color=_chi2res_hist_color,
-                                label=_chi2res_hist_label,
-                            )
-                        _chi2res_ax_histpop.axvline(1.0, color="red", lw=1.0, ls="--", alpha=0.7)
-                        _chi2res_ax_histpop.set_xlim(0, _chi2res_hist_xlim)
-                        _chi2res_ax_histpop.set_ylim(0, 1.05)
-                        _chi2res_ax_histpop.set_xlabel(_chi2res_hist_xlabel, fontsize=8)
-                        _chi2res_ax_histpop.set_ylabel("count / max(count)", fontsize=8)
-                        _chi2res_ax_histpop.set_title(_chi2res_hist_title, fontsize=9)
-                        if _chi2res_hist_idx == 0:
-                            _chi2res_ax_histpop.legend(fontsize=7, loc="upper left")
-
-                    for _chi2res_ax in _chi2res_axes_joint.ravel():
-                        _chi2res_ax.grid(True, alpha=0.25)
-                        _chi2res_ax.tick_params(labelsize=7)
-
-                    plt.tight_layout(rect=[0, 0, 1, 0.93])
-                    if save_plots:
-                        _chi2res_filename = f"{fig_idx}_chi2_residuals_populations_path_vs_residuals_4fold.png"
-                        fig_idx += 1
-                        _chi2res_save_path = os.path.join(base_directories["figure_directory"], _chi2res_filename)
-                        plot_list.append(_chi2res_save_path)
-                        save_plot_figure(_chi2res_save_path, format="png", alias="chi2_residuals_populations")
-                    if show_plots:
-                        plt.show()
-                    plt.close()
-
-                    _chi2res_loghist_min = 1.0
-                    for (
-                        _chi2res_hist_vals,
-                        _chi2res_hist_xlim,
-                        _chi2res_hist_xlabel,
-                        _chi2res_hist_title,
-                    ) in _chi2res_joint_hist_defs:
-                        _chi2res_hist_bins = np.linspace(0, _chi2res_hist_xlim, 70)
-                        for (
-                            (_chi2res_log_lo, _chi2res_log_hi),
-                            _chi2res_hist_color,
-                            _chi2res_hist_label,
-                        ) in _chi2res_joint_pop_defs:
-                            _chi2res_pop_mask = (
-                                np.isfinite(_chi2res_hist_vals)
-                                & np.isfinite(_chi2res_joint_log_tim)
-                                & (_chi2res_joint_log_tim >= _chi2res_log_lo)
-                                & (_chi2res_joint_log_tim < _chi2res_log_hi)
-                            )
-                            if int(_chi2res_pop_mask.sum()) < 3:
-                                continue
-                            _chi2res_hist_counts, _chi2res_hist_edges = np.histogram(
-                                _chi2res_hist_vals[_chi2res_pop_mask],
-                                bins=_chi2res_hist_bins,
-                            )
-                            _chi2res_hist_max = float(np.max(_chi2res_hist_counts))
-                            if _chi2res_hist_max <= 0:
-                                continue
-                            _chi2res_hist_norm = _chi2res_hist_counts / _chi2res_hist_max
-                            _chi2res_hist_positive = _chi2res_hist_norm[_chi2res_hist_norm > 0]
-                            if _chi2res_hist_positive.size > 0:
-                                _chi2res_loghist_min = min(
-                                    _chi2res_loghist_min,
-                                    float(np.min(_chi2res_hist_positive)),
-                                )
-                    _chi2res_loghist_min = max(min(_chi2res_loghist_min * 0.8, 0.1), 1e-4)
-
-                    _chi2res_fig_joint_log, _chi2res_axes_joint_log = plt.subplots(1, 3, figsize=(18, 5), squeeze=False)
-                    _chi2res_fig_joint_log.suptitle(
-                        "4-fold zig-zag ratio histograms by tim_th_chi population (log y)",
-                        fontsize=10,
-                    )
-                    for _chi2res_hist_idx, (
-                        _chi2res_hist_vals,
-                        _chi2res_hist_xlim,
-                        _chi2res_hist_xlabel,
-                        _chi2res_hist_title,
-                    ) in enumerate(_chi2res_joint_hist_defs):
-                        _chi2res_ax_histlog = _chi2res_axes_joint_log[0][_chi2res_hist_idx]
-                        _chi2res_hist_bins = np.linspace(0, _chi2res_hist_xlim, 70)
-                        for (
-                            (_chi2res_log_lo, _chi2res_log_hi),
-                            _chi2res_hist_color,
-                            _chi2res_hist_label,
-                        ) in _chi2res_joint_pop_defs:
-                            _chi2res_pop_mask = (
-                                np.isfinite(_chi2res_hist_vals)
-                                & np.isfinite(_chi2res_joint_log_tim)
-                                & (_chi2res_joint_log_tim >= _chi2res_log_lo)
-                                & (_chi2res_joint_log_tim < _chi2res_log_hi)
-                            )
-                            if int(_chi2res_pop_mask.sum()) < 3:
-                                continue
-                            _chi2res_hist_counts, _chi2res_hist_edges = np.histogram(
-                                _chi2res_hist_vals[_chi2res_pop_mask],
-                                bins=_chi2res_hist_bins,
-                            )
-                            _chi2res_hist_max = float(np.max(_chi2res_hist_counts))
-                            if _chi2res_hist_max <= 0:
-                                continue
-                            _chi2res_hist_norm = _chi2res_hist_counts / _chi2res_hist_max
-                            _chi2res_hist_norm = np.where(_chi2res_hist_norm > 0, _chi2res_hist_norm, np.nan)
-                            _chi2res_ax_histlog.plot(
-                                0.5 * (_chi2res_hist_edges[1:] + _chi2res_hist_edges[:-1]),
-                                _chi2res_hist_norm,
-                                drawstyle="steps-mid",
-                                linewidth=1.5,
-                                color=_chi2res_hist_color,
-                                label=_chi2res_hist_label,
-                            )
-                        _chi2res_ax_histlog.axvline(1.0, color="red", lw=1.0, ls="--", alpha=0.7)
-                        _chi2res_ax_histlog.set_xlim(0, _chi2res_hist_xlim)
-                        _chi2res_ax_histlog.set_yscale("log")
-                        _chi2res_ax_histlog.set_ylim(_chi2res_loghist_min, 1.05)
-                        _chi2res_ax_histlog.set_xlabel(_chi2res_hist_xlabel, fontsize=8)
-                        _chi2res_ax_histlog.set_ylabel("count / max(count) [log]", fontsize=8)
-                        _chi2res_ax_histlog.set_title(_chi2res_hist_title, fontsize=9)
-                        _chi2res_ax_histlog.grid(True, which="both", alpha=0.25)
-                        _chi2res_ax_histlog.tick_params(labelsize=7)
-                        if _chi2res_hist_idx == 0:
-                            _chi2res_ax_histlog.legend(fontsize=7, loc="upper left")
-
-                    plt.tight_layout(rect=[0, 0, 1, 0.93])
-                    if save_plots:
-                        _chi2res_filename = f"{fig_idx}_chi2_residuals_populations_path_vs_residuals_histlog_4fold.png"
-                        fig_idx += 1
-                        _chi2res_save_path = os.path.join(base_directories["figure_directory"], _chi2res_filename)
-                        plot_list.append(_chi2res_save_path)
-                        save_plot_figure(_chi2res_save_path, format="png", alias="chi2_residuals_populations")
-                    if show_plots:
-                        plt.show()
-                    plt.close()
-
-                    _chi2res_joint_max_abs_res_ystr = np.max(
-                        np.abs(_chi2res_main_y_all[_chi2res_mask_joint]), axis=1
-                    )
-                    _chi2res_joint_max_abs_res_tsum = np.max(
-                        np.abs(_chi2res_main_ts_all[_chi2res_mask_joint]), axis=1
-                    )
-                    _chi2res_joint_max_abs_res_tdif = np.max(
-                        np.abs(_chi2res_main_td_all[_chi2res_mask_joint]), axis=1
-                    )
-                    if _chi2res_have_slowness:
-                        _chi2res_joint_s = _chi2res_s_all[_chi2res_mask_joint]
-
-                    _chi2res_fig_resmax, _chi2res_axes_resmax = plt.subplots(2, 2, figsize=(14, 10), squeeze=False)
-                    _chi2res_fig_resmax.suptitle(
-                        "4-fold zig-zag ratio vs fitted slowness and per-track max residuals",
-                        fontsize=10,
-                    )
-                    _chi2res_resmax_defs = [
-                        (
-                            _chi2res_joint_s if _chi2res_have_slowness else np.array([]),
-                            "Fitted slowness s",
-                            "Zig-zag ratio vs fitted slowness",
-                            "viridis",
-                        ),
-                        (
-                            _chi2res_joint_max_abs_res_tdif,
-                            r"max $|res\_tdif_p|$ (ns)",
-                            "Zig-zag ratio vs max |res_tdif|",
-                            "cividis",
-                        ),
-                        (
-                            _chi2res_joint_max_abs_res_ystr,
-                            r"max $|res\_ystr_p|$ (mm)",
-                            "Zig-zag ratio vs max |res_ystr|",
-                            "Blues",
-                        ),
-                        (
-                            _chi2res_joint_max_abs_res_tsum,
-                            r"max $|res\_tsum_p|$ (ns)",
-                            "Zig-zag ratio vs max |res_tsum|",
-                            "Reds",
-                        ),
-                    ]
-                    for _chi2res_panel_idx, (
-                        _chi2res_panel_x,
-                        _chi2res_panel_xlabel,
-                        _chi2res_panel_title,
-                        _chi2res_panel_cmap,
-                    ) in enumerate(_chi2res_resmax_defs):
-                        _chi2res_ax = _chi2res_axes_resmax[_chi2res_panel_idx // 2][_chi2res_panel_idx % 2]
-                        if _chi2res_panel_x.size == 0:
-                            _chi2res_ax.set_axis_off()
-                            continue
-                        _chi2res_valid = np.isfinite(_chi2res_panel_x) & np.isfinite(_chi2res_joint_ratio)
-                        if _chi2res_panel_xlabel == "Fitted slowness s":
-                            _chi2res_x_lo = float(np.nanpercentile(_chi2res_panel_x[_chi2res_valid], 0.5))
-                            _chi2res_x_hi = float(np.nanpercentile(_chi2res_panel_x[_chi2res_valid], 99.5))
-                        else:
-                            _chi2res_x_lo = 0.0
-                            _chi2res_x_hi = max(
-                                float(np.nanpercentile(_chi2res_panel_x[_chi2res_valid], 99.5)),
-                                1e-6,
-                            )
-                        if int(_chi2res_valid.sum()) >= 5:
-                            _chi2res_ax.hexbin(
-                                _chi2res_panel_x[_chi2res_valid],
-                                _chi2res_joint_ratio[_chi2res_valid],
-                                gridsize=35,
-                                cmap=_chi2res_panel_cmap,
-                                bins="log",
-                                mincnt=1,
-                                extent=(
-                                    _chi2res_x_lo,
-                                    _chi2res_x_hi,
-                                    0,
-                                    _chi2res_joint_ratio_ylim,
-                                ),
-                            )
-                        _chi2res_ax.axhline(1.0, color="red", lw=1.0, ls="--", alpha=0.7)
-                        _chi2res_ax.set_xlim(_chi2res_x_lo, _chi2res_x_hi)
-                        _chi2res_ax.set_ylim(0, _chi2res_joint_ratio_ylim)
-                        _chi2res_ax.set_xlabel(_chi2res_panel_xlabel, fontsize=8)
-                        _chi2res_ax.set_ylabel("straight / zig-zag", fontsize=8)
-                        _chi2res_ax.set_title(_chi2res_panel_title, fontsize=9)
-                        _chi2res_ax.grid(True, alpha=0.25)
-                        _chi2res_ax.tick_params(labelsize=7)
-
-                    plt.tight_layout(rect=[0, 0, 1, 0.94])
-                    if save_plots:
-                        _chi2res_filename = f"{fig_idx}_chi2_residuals_populations_zigzag_vs_slowness_maxres_4fold.png"
-                        fig_idx += 1
-                        _chi2res_save_path = os.path.join(base_directories["figure_directory"], _chi2res_filename)
-                        plot_list.append(_chi2res_save_path)
-                        save_plot_figure(_chi2res_save_path, format="png", alias="chi2_residuals_populations")
-                    if show_plots:
-                        plt.show()
-                    plt.close()
-
-# ---------------------------------------------------------------------------
-# 3-fold event displays: one figure per combination (123, 234, 124, 134)
-# Same layout as the 4-fold event_display_sample; missing plane marked with
-# a salmon dotted horizontal line so the absent measurement is visible.
-# ---------------------------------------------------------------------------
-if (create_essential_plots or create_plots) and task4_plot_enabled("event_display_sample_3fold"):
-    _evd3_y_cols  = [f"P{p}_Y_final"    for p in range(1, 5)]
-    _evd3_td_cols = [f"P{p}_T_dif_final" for p in range(1, 5)]
-    _evd3_q_cols  = [f"P{p}_Q_sum_final" for p in range(1, 5)]
-    _evd3_have       = all(c in df_plot_ancillary.columns for c in _evd3_y_cols + _evd3_td_cols + _evd3_q_cols)
-    _evd3_have_track = all(c in df_plot_ancillary.columns for c in ("x", "y", "xp", "yp", task4_plot_tt_column))
-    if _evd3_have and _evd3_have_track:
-        _evd3_combos = {
-            123: [1, 2, 3],
-            234: [2, 3, 4],
-            124: [1, 2, 4],
-            134: [1, 3, 4],
-        }
-        _evd3_z_arr   = np.asarray(z_positions, dtype=float)
-        _evd3_z_lo    = _evd3_z_arr.min() - 25.0
-        _evd3_z_hi    = _evd3_z_arr.max() + 25.0
-        _evd3_z_span  = _evd3_z_hi - _evd3_z_lo
-        _evd3_x_span  = 2.0 * strip_half
-        _evd3_y_span  = 2.0 * width_half
-        _evd3_px      = 0.008
-        _evd3_col_h   = _evd3_z_span * _evd3_px
-        _evd3_col_xw  = _evd3_x_span * _evd3_px
-        _evd3_col_yw  = _evd3_y_span * _evd3_px
-        _evd3_epr     = 4   # events per row
-        _evd3_nrows   = 4
-        _evd3_z_line  = np.linspace(_evd3_z_lo, _evd3_z_hi, 80)
-
-        for _evd3_tt, _evd3_active in _evd3_combos.items():
-            _evd3_missing  = [p for p in range(1, 5) if p not in _evd3_active][0]
-            _evd3_pool     = df_plot_ancillary[df_plot_ancillary[task4_plot_tt_column] == _evd3_tt]
-            _n_evd3        = min(16, len(_evd3_pool))
-            if _n_evd3 == 0:
-                print(f"[event_display_sample_3fold] no events for fit_tt={_evd3_tt}, skipping.")
-                continue
-            _rng3   = np.random.default_rng(42)
-            _idx3   = _rng3.choice(len(_evd3_pool), size=_n_evd3, replace=False)
-            _samp3  = _evd3_pool.iloc[sorted(_idx3)]
-
-            _fw3 = (_evd3_col_xw + _evd3_col_yw) * _evd3_epr + 1.5
-            _fh3 = _evd3_col_h * _evd3_nrows + 1.5
-            fig3 = plt.figure(figsize=(_fw3, _fh3))
-            _gs3 = GridSpec(
-                _evd3_nrows, _evd3_epr * 2,
-                figure=fig3,
-                width_ratios=[_evd3_x_span, _evd3_y_span] * _evd3_epr,
-                hspace=0.55, wspace=0.20,
-            )
-
-            for _ei3, (_, _row3) in enumerate(_samp3.iterrows()):
-                _ri3  = _ei3 // _evd3_epr
-                _ci3  = _ei3 % _evd3_epr
-                _axXZ = fig3.add_subplot(_gs3[_ri3, _ci3 * 2])
-                _axYZ = fig3.add_subplot(_gs3[_ri3, _ci3 * 2 + 1])
-
-                _y3   = np.array([_row3.get(c, np.nan) for c in _evd3_y_cols],  dtype=float)
-                _td3  = np.array([_row3.get(c, np.nan) for c in _evd3_td_cols], dtype=float)
-                _x3   = _td3 * tdiff_to_x
-                _q3   = np.array([_row3.get(c, 0.0)   for c in _evd3_q_cols],  dtype=float)
-
-                _x0   = float(_row3.get("x",  0.0))
-                _y0   = float(_row3.get("y",  0.0))
-                _xp   = float(_row3.get("xp", 0.0))
-                _yp   = float(_row3.get("yp", 0.0))
-                _xl   = _x0 + _xp * _evd3_z_line
-                _yl   = _y0 + _yp * _evd3_z_line
-
-                for _zp in _evd3_z_arr:
-                    _axXZ.axhline(_zp, color="lightgray", lw=0.4, zorder=0)
-                    _axYZ.axhline(_zp, color="lightgray", lw=0.4, zorder=0)
-                for _sy in y_pos_P1_and_P3:
-                    _axYZ.axvline(_sy, color="lightgray", lw=0.4, ls="--", zorder=0)
-
-                for _pp in range(4):
-                    if (_pp + 1) in _evd3_active and np.isfinite(_y3[_pp]):
-                        _sz3 = float(np.clip(_q3[_pp] * 4, 20, 200)) if _q3[_pp] > 0 else 20
-                        _axXZ.errorbar(_x3[_pp], _evd3_z_arr[_pp], xerr=anc_sx,
-                                       fmt="none", ecolor=f"C{_pp}",
-                                       elinewidth=0.7, capsize=1.5, capthick=0.6,
-                                       alpha=0.30, zorder=2)
-                        _axYZ.errorbar(_y3[_pp], _evd3_z_arr[_pp], xerr=anc_sy,
-                                       fmt="none", ecolor=f"C{_pp}",
-                                       elinewidth=1.1, capsize=2.5, capthick=0.9,
-                                       alpha=0.45, zorder=2)
-                        _axXZ.scatter(_x3[_pp], _evd3_z_arr[_pp], s=_sz3,
-                                      c=f"C{_pp}", zorder=3, alpha=0.9)
-                        _axYZ.scatter(_y3[_pp], _evd3_z_arr[_pp], s=_sz3,
-                                      c=f"C{_pp}", zorder=3, alpha=0.9)
-                    elif (_pp + 1) == _evd3_missing:
-                        # Missing plane: salmon dotted guideline
-                        _axXZ.axhline(_evd3_z_arr[_pp], color="salmon", lw=1.0, ls=":", zorder=1)
-                        _axYZ.axhline(_evd3_z_arr[_pp], color="salmon", lw=1.0, ls=":", zorder=1)
-                        # Mark predicted hit from track
-                        _x_pred = _x0 + _xp * _evd3_z_arr[_pp]
-                        _y_pred = _y0 + _yp * _evd3_z_arr[_pp]
-                        _axXZ.scatter(_x_pred, _evd3_z_arr[_pp], s=40,
-                                      marker="x", c="salmon", zorder=4, alpha=0.7)
-                        _axYZ.scatter(_y_pred, _evd3_z_arr[_pp], s=40,
-                                      marker="x", c="salmon", zorder=4, alpha=0.7)
-
-                _axXZ.plot(_xl, _evd3_z_line, "r-", lw=0.9, alpha=0.8, zorder=2)
-                _axYZ.plot(_yl, _evd3_z_line, "r-", lw=0.9, alpha=0.8, zorder=2)
-
-                for _ax3, _xlim3, _lbl3 in [
-                    (_axXZ, strip_half, "X (mm)"),
-                    (_axYZ, width_half, "Y (mm)"),
-                ]:
-                    _ax3.set_xlim(-_xlim3, _xlim3)
-                    _ax3.set_ylim(_evd3_z_lo, _evd3_z_hi)
-                    _ax3.set_aspect("equal")
-                    _ax3.set_xlabel(_lbl3, fontsize=5)
-                    _ax3.set_ylabel("Z (mm)", fontsize=5)
-                    _ax3.tick_params(labelsize=4)
-                _axXZ.set_title(f"ev{_ei3 + 1} XZ", fontsize=6)
-                _axYZ.set_title(f"ev{_ei3 + 1} YZ", fontsize=6)
-
-            fig3.suptitle(
-                f"Sample {_evd3_tt}-type event displays (3-fold, missing plane {_evd3_missing}) — equal mm scale\n"
-                f"C0–C3 = planes 1–4  |  salmon dotted = missing plane  |  ✕ = track prediction at missing plane\n"
-                f"marker size ~ charge  |  red = fitted track  |  "
-                f"errorbars: XZ ±{anc_sx:.0f} mm  ·  YZ ±{anc_sy:.0f} mm",
-                fontsize=8,
-            )
-            plt.tight_layout(rect=[0, 0, 1, 0.96])
-            if save_plots:
-                _fn3 = f"{fig_idx}_event_display_sample_3fold_{_evd3_tt}.png"
-                fig_idx += 1
-                _fp3 = os.path.join(base_directories["figure_directory"], _fn3)
-                plot_list.append(_fp3)
-                save_plot_figure(_fp3, format="png", alias="event_display_sample_3fold")
-            if show_plots:
-                plt.show()
-            plt.close()
-
-# ---------------------------------------------------------------------------
-# Chi2 vs charge for 3-fold combinations — same structure as
-# chi2_charge_populations but applied to each three-plane combo.
-# One figure: 4 columns (one per combo), 3 metric rows + marginals.
-# The "missed" population (2-fold: telescope missing one of the 3 active planes)
-# is NOT shown here (degenerate), so we only show the 3-fold events themselves
-# and compare chi2 vs charge across combos.
-# ---------------------------------------------------------------------------
-if (create_essential_plots or create_plots) and task4_plot_enabled("chi2_charge_populations_3fold"):
-    _c3pop_need = ("tim_th_chi", "charge_event",
-                   "charge_1", "charge_2", "charge_3", "charge_4",
-                   task4_plot_tt_column)
-    _c3pop_have = all(c in df_plot_ancillary.columns for c in _c3pop_need)
-    if not _c3pop_have:
-        print("[chi2_charge_populations_3fold] required columns not found, skipping.")
-    else:
-        _c3_combos = [123, 234, 124, 134]
-        _c3_active = {123: [1, 2, 3], 234: [2, 3, 4], 124: [1, 2, 4], 134: [1, 3, 4]}
-        _c3_missing = {tt: [p for p in range(1, 5) if p not in _c3_active[tt]][0]
-                       for tt in _c3_combos}
-
-        _c3_def_tt_arr   = df_plot_ancillary[task4_plot_tt_column].values.astype(float)
-        _c3_chi2_log_all = np.log1p(np.clip(
-            df_plot_ancillary["tim_th_chi"].values.astype(float), 0.0, None
-        ))
-        _c3_qev_all      = df_plot_ancillary["charge_event"].values.astype(float)
-        _c3_qp_all       = np.column_stack([
-            df_plot_ancillary[f"charge_{p}"].values.astype(float) for p in range(1, 5)
-        ])
-
-        _c3_metrics = [
-            ("charge_event",  "Total charge (a.u.)"),
-            ("min_q_active",  "Min active-plane charge (a.u.)"),
-            ("q_asym_active", r"Charge asymmetry $(q_\mathrm{max}-q_\mathrm{min})/(q_\mathrm{max}+q_\mathrm{min})$  [active planes]"),
-        ]
-
-        # Pre-compute per-combo charge metrics
-        _c3_metric_data = {}
-        for _c3tt in _c3_combos:
-            _c3idx = [p - 1 for p in _c3_active[_c3tt]]
-            _c3tq  = _c3_qp_all[:, _c3idx]
-            _c3mn  = np.nanmin(_c3tq, axis=1)
-            _c3mx  = np.nanmax(_c3tq, axis=1)
-            _c3dn  = _c3mn + _c3mx
-            _c3_metric_data[_c3tt] = {
-                "charge_event":  _c3_qev_all,
-                "min_q_active":  _c3mn,
-                "q_asym_active": np.where(_c3dn > 0, (_c3mx - _c3mn) / _c3dn, np.nan),
-            }
-
-        # Global chi2 Y limit (shared across all subplots)
-        _c3_finite_chi2 = _c3_chi2_log_all[np.isfinite(_c3_chi2_log_all) & (_c3_chi2_log_all > 0)]
-        _c3_chi2_ylim = float(np.nanpercentile(_c3_finite_chi2, 99.5)) if _c3_finite_chi2.size > 0 else 5.0
-
-        # Also include 4-fold chi2 for reference comparison (overlay histogram)
-        _c3_mask_4fold = _c3_def_tt_arr == 1234.0
-
-        _c3_cmaps  = ["Blues", "Greens", "Oranges", "Purples"]
-        _c3_colors = ["steelblue", "seagreen", "darkorange", "mediumpurple"]
-
-        for _c3mi, (_c3mkey, _c3mlbl) in enumerate(_c3_metrics):
-            fig_c3 = plt.figure(figsize=(20, 12))
-            gs_c3  = GridSpec(
-                3, 5, figure=fig_c3,
-                width_ratios=[3, 3, 3, 3, 1.1],
-                height_ratios=[4, 1.1, 1.1],
-                hspace=0.10, wspace=0.10,
-            )
-            fig_c3.suptitle(
-                rf"3-fold combinations — $\chi^2$ vs {_c3mlbl}" + "\n"
-                "One column per three-plane combination  |  "
-                "Right: χ² marginal (all combos + 4-fold reference)  |  "
-                "Middle: charge marginal  |  Bottom: chi2 marginal per combo",
-                fontsize=9,
-            )
-
-            _c3_ref_y_ax  = None
-            _c3_col_x_ref = {}
-            _c3_chi2_pools_for_marginal = []   # [(chi2_arr, color, label), ...]
-
-            for _c3pi, _c3tt in enumerate(_c3_combos):
-                _c3mask  = _c3_def_tt_arr == float(_c3tt)
-                _c3idx3  = np.where(_c3mask)[0]
-                if _c3idx3.size == 0:
-                    continue
-
-                _c3_xd  = _c3_metric_data[_c3tt][_c3mkey][_c3idx3]
-                _c3_chi = _c3_chi2_log_all[_c3idx3]
-                _c3_vld = np.isfinite(_c3_xd) & np.isfinite(_c3_chi)
-                _c3_xlim = (float(np.nanpercentile(_c3_xd[_c3_vld], 99.5))
-                            if _c3_vld.sum() > 0 else 1.0)
-
-                _sharey3 = _c3_ref_y_ax
-                _sharex3 = _c3_col_x_ref.get(_c3pi)
-                ax_sc3 = fig_c3.add_subplot(gs_c3[0, _c3pi], sharey=_sharey3, sharex=_sharex3)
-                if _c3_ref_y_ax is None:
-                    _c3_ref_y_ax = ax_sc3
-                if _c3pi not in _c3_col_x_ref:
-                    _c3_col_x_ref[_c3pi] = ax_sc3
-
-                if _c3_vld.sum() >= 5:
-                    ax_sc3.hexbin(
-                        _c3_xd[_c3_vld], _c3_chi[_c3_vld],
-                        gridsize=30, cmap=_c3_cmaps[_c3pi], bins="log", mincnt=1,
-                        extent=(0, _c3_xlim, 0, _c3_chi2_ylim),
-                    )
-
-                ax_sc3.set_title(
-                    f"tt={_c3tt}  (missing P{_c3_missing[_c3tt]})\nn={_c3idx3.size:,}",
-                    fontsize=8,
-                )
-                if _c3pi == 0:
-                    ax_sc3.set_ylabel(r"$\log(1+\chi^2)$", fontsize=8)
-                plt.setp(ax_sc3.get_xticklabels(), visible=False)
-                ax_sc3.tick_params(labelsize=6)
-                _c3_col_x_ref[_c3pi].set_xlim(0, _c3_xlim)
-
-                # Charge marginal
-                ax_qh3 = fig_c3.add_subplot(gs_c3[1, _c3pi], sharex=_c3_col_x_ref[_c3pi])
-                _bins_q3 = np.linspace(0, _c3_xlim, 60)
-                _vld_q3  = np.isfinite(_c3_xd)
-                if _vld_q3.sum() > 0:
-                    ax_qh3.hist(_c3_xd[_vld_q3], bins=_bins_q3,
-                                color=_c3_colors[_c3pi], alpha=0.7, histtype="stepfilled")
-                ax_qh3.set_yscale("log")
-                ax_qh3.set_xlabel(_c3mlbl, fontsize=7)
-                if _c3pi == 0:
-                    ax_qh3.set_ylabel("count", fontsize=7)
-                ax_qh3.tick_params(labelsize=6, axis="x", rotation=25)
-                ax_qh3.tick_params(labelsize=6, axis="y")
-
-                # Chi2 marginal per combo (bottom row)
-                ax_chi3 = fig_c3.add_subplot(gs_c3[2, _c3pi])
-                _bins_chi3 = np.linspace(0, _c3_chi2_ylim, 60)
-                _vld_chi3  = np.isfinite(_c3_chi)
-                if _vld_chi3.sum() > 0:
-                    ax_chi3.hist(_c3_chi[_vld_chi3], bins=_bins_chi3,
-                                 color=_c3_colors[_c3pi], alpha=0.7, histtype="stepfilled",
-                                 label=f"tt={_c3tt}")
-                # Overlay 4-fold chi2 for reference
-                _c3_chi_4fold = _c3_chi2_log_all[_c3_mask_4fold & np.isfinite(_c3_chi2_log_all)]
-                if _c3_chi_4fold.size > 0:
-                    _scale3 = max(_c3idx3.size, 1) / max(_c3_mask_4fold.sum(), 1)
-                    _counts4, _edges4 = np.histogram(_c3_chi_4fold, bins=_bins_chi3)
-                    ax_chi3.stairs(_counts4 * _scale3, _edges4,
-                                   color="gray", alpha=0.55, lw=1.2, label="1234 (scaled)")
-                ax_chi3.set_yscale("log")
-                ax_chi3.set_xlabel(r"$\log(1+\chi^2)$", fontsize=7)
-                if _c3pi == 0:
-                    ax_chi3.set_ylabel("count", fontsize=7)
-                ax_chi3.tick_params(labelsize=6)
-                ax_chi3.legend(fontsize=5, loc="upper right")
-
-                # Collect chi2 for the right marginal
-                if _c3_vld.sum() > 0:
-                    _c3_chi2_pools_for_marginal.append((_c3_chi[_c3_vld], _c3_colors[_c3pi], f"tt={_c3tt}"))
-
-            # Lock shared chi2 Y axis
-            if _c3_ref_y_ax is not None:
-                _c3_ref_y_ax.set_ylim(0, _c3_chi2_ylim)
-
-            # Right marginal: all combos + 4-fold reference, overlaid
-            ax_right3 = fig_c3.add_subplot(gs_c3[0, 4], sharey=_c3_ref_y_ax)
-            _bins_r3   = np.linspace(0, _c3_chi2_ylim, 60)
-            for _c3arr, _c3col, _c3lbl in _c3_chi2_pools_for_marginal:
-                _c3arr_fin = _c3arr[np.isfinite(_c3arr)]
-                if _c3arr_fin.size > 0:
-                    ax_right3.hist(_c3arr_fin, bins=_bins_r3, orientation="horizontal",
-                                   color=_c3col, alpha=0.5, histtype="step", lw=1.5,
-                                   label=_c3lbl)
-            _c3_chi_4fold_all = _c3_chi2_log_all[_c3_mask_4fold & np.isfinite(_c3_chi2_log_all)]
-            if _c3_chi_4fold_all.size > 0:
-                ax_right3.hist(_c3_chi_4fold_all, bins=_bins_r3, orientation="horizontal",
-                               color="black", alpha=0.45, histtype="step", lw=1.2,
-                               ls="--", label="1234")
-            ax_right3.set_xscale("log")
-            ax_right3.set_title(r"$\chi^2$ marginal", fontsize=7)
-            ax_right3.legend(fontsize=5, loc="upper right")
-            ax_right3.tick_params(labelsize=6)
-            plt.setp(ax_right3.get_yticklabels(), visible=False)
-
-            if save_plots:
-                _fn_c3 = f"{fig_idx}_chi2_charge_populations_3fold_m{_c3mi + 1}.png"
-                fig_idx += 1
-                _fp_c3 = os.path.join(base_directories["figure_directory"], _fn_c3)
-                plot_list.append(_fp_c3)
-                save_plot_figure(_fp_c3, format="png", alias="chi2_charge_populations_3fold")
-            if show_plots:
-                plt.show()
-            plt.close()
-
-# ---------------------------------------------------------------------------
-# Chi2 residuals + zig-zag geometry for 3-fold combinations
-# Produces one set of figures per 3-fold combo (123, 234, 124, 134) mirroring
-# the 4-fold chi2_residuals_populations analysis:
-#   • per-plane in-fit residuals (LOO is degenerate for 3-fold; we use the
-#     in-fit residuals res_ystr_p / res_tdif_p from the 3-plane fit instead)
-#   • zig-zag path geometry over the 3 active planes (2 inter-plane segments)
-#   • zig-zag ratio = straight fit length / measured zig-zag path
-#   • chi2 vs charge / theta scatter and histograms
-# ---------------------------------------------------------------------------
-if (create_essential_plots or create_plots) and task4_plot_enabled("chi2_residuals_populations_3fold"):
-    _r3_required_base = (
-        task4_plot_tt_column, "charge_event", "tim_th_chi",
-        "tim_res_ystr_1", "tim_res_ystr_2", "tim_res_ystr_3", "tim_res_ystr_4",
-        "tim_res_tdif_1", "tim_res_tdif_2", "tim_res_tdif_3", "tim_res_tdif_4",
-        "charge_1", "charge_2", "charge_3", "charge_4",
-    )
-    _r3_have_base = all(c in df_plot_ancillary.columns for c in _r3_required_base)
-    _r3_have_path = all(
-        c in df_plot_ancillary.columns
-        for c in (
-            "P1_T_dif_final", "P2_T_dif_final", "P3_T_dif_final", "P4_T_dif_final",
-            "P1_Y_final", "P2_Y_final", "P3_Y_final", "P4_Y_final",
-            "x", "y", "theta", "phi",
-        )
-    )
-    if not _r3_have_base:
-        print("[chi2_residuals_populations_3fold] required columns not found, skipping.")
-    else:
-        _r3_combos = [123, 234, 124, 134]
-        _r3_active = {123: [1, 2, 3], 234: [2, 3, 4], 124: [1, 2, 4], 134: [1, 3, 4]}
-        _r3_missing = {tt: [p for p in range(1, 5) if p not in _r3_active[tt]][0]
-                       for tt in _r3_combos}
-        _r3_colors  = ["steelblue", "seagreen", "darkorange", "mediumpurple"]
-        _r3_cmaps   = ["Blues", "Greens", "Oranges", "Purples"]
-
-        _r3_def_tt    = df_plot_ancillary[task4_plot_tt_column].values.astype(float)
-        _r3_qev       = df_plot_ancillary["charge_event"].values.astype(float)
-        _r3_chi_all   = np.clip(df_plot_ancillary["tim_th_chi"].values.astype(float), 0.0, None)
-        _r3_log_chi   = np.log1p(_r3_chi_all)
-        _r3_res_y_all = np.column_stack([
-            df_plot_ancillary[f"tim_res_ystr_{p}"].values.astype(float) for p in range(1, 5)
-        ])
-        _r3_res_td_all = np.column_stack([
-            df_plot_ancillary[f"tim_res_tdif_{p}"].values.astype(float) for p in range(1, 5)
-        ]) * float(tdiff_to_x)
-        _r3_charge_p = np.column_stack([
-            df_plot_ancillary[f"charge_{p}"].values.astype(float) for p in range(1, 5)
-        ])
-
-        _r3_z_arr    = np.asarray(z_positions, dtype=float)
-        _r3_z_order  = np.argsort(_r3_z_arr)
-        _r3_z_sorted = _r3_z_arr[_r3_z_order]
-
-        if _r3_have_path:
-            _r3_path_x_all = np.column_stack([
-                df_plot_ancillary[f"P{p}_T_dif_final"].values.astype(float) for p in range(1, 5)
-            ]) * float(tdiff_to_x)
-            _r3_path_y_all = np.column_stack([
-                df_plot_ancillary[f"P{p}_Y_final"].values.astype(float) for p in range(1, 5)
-            ])
-            _r3_x0_all    = pd.to_numeric(df_plot_ancillary["x"],     errors="coerce").values.astype(float)
-            _r3_y0_all    = pd.to_numeric(df_plot_ancillary["y"],     errors="coerce").values.astype(float)
-            _r3_theta_all = pd.to_numeric(df_plot_ancillary["theta"], errors="coerce").values.astype(float)
-            _r3_phi_all   = pd.to_numeric(df_plot_ancillary["phi"],   errors="coerce").values.astype(float)
-            _r3_tth_all   = np.tan(_r3_theta_all)
-            _r3_xp_all    = _r3_tth_all * np.cos(_r3_phi_all)
-            _r3_yp_all    = _r3_tth_all * np.sin(_r3_phi_all)
-
-        for _r3tt in _r3_combos:
-            _r3act    = _r3_active[_r3tt]
-            _r3mis    = _r3_missing[_r3tt]
-            _r3act_i  = [p - 1 for p in _r3act]   # 0-based plane indices
-            _r3col    = _r3_colors[_r3_combos.index(_r3tt)]
-            _r3cmap   = _r3_cmaps[_r3_combos.index(_r3tt)]
-
-            _r3mask_tt = _r3_def_tt == float(_r3tt)
-
-            # ---- in-fit residuals for active planes ----
-            _r3_ry_active   = _r3_res_y_all[:, _r3act_i]
-            _r3_rtd_active  = _r3_res_td_all[:, _r3act_i]
-            _r3_qp_active   = _r3_charge_p[:, _r3act_i]
-            _r3_loo_plane   = (_r3_ry_active / anc_sy) ** 2 + (_r3_rtd_active / anc_sx) ** 2
-            _r3_loo_plane   = np.clip(_r3_loo_plane, 0.0, None)
-
-            _r3_mask_fin = (
-                _r3mask_tt
-                & np.isfinite(_r3_qev)
-                & np.isfinite(_r3_chi_all)
-                & np.isfinite(_r3_ry_active).all(axis=1)
-                & np.isfinite(_r3_rtd_active).all(axis=1)
-            )
-            _r3_mask_keep = _r3_mask_fin
-
-            if _r3_mask_keep.sum() < 5:
-                print(f"[chi2_residuals_populations_3fold] not enough events for tt={_r3tt}, skipping.")
-                continue
-
-            _r3_n           = int(_r3_mask_keep.sum())
-            _r3_loo_k       = _r3_loo_plane[_r3_mask_keep]
-            _r3_log_loo_k   = np.log1p(_r3_loo_k)
-            _r3_loo_sum     = np.sum(_r3_loo_k, axis=1)
-            _r3_loo_max     = np.max(_r3_loo_k, axis=1)
-            _r3_loo_max_ov  = _r3_loo_max / (_r3_loo_sum + 1e-9)
-            _r3_log_chi_k   = _r3_log_chi[_r3_mask_keep]
-            _r3_qev_k       = _r3_qev[_r3_mask_keep]
-            _r3_qp_k        = _r3_qp_active[_r3_mask_keep]
-
-            _r3_loo_ylim = max(float(np.nanpercentile(
-                _r3_log_loo_k[np.isfinite(_r3_log_loo_k)], 99.5
-            )) if np.isfinite(_r3_log_loo_k).any() else 1.0, 1.0)
-            _r3_qp_xlim = max(float(np.nanpercentile(
-                _r3_qp_k[np.isfinite(_r3_qp_k)], 99.5
-            )) if np.isfinite(_r3_qp_k).any() else 1.0, 1.0)
-            _r3_qev_xlim = max(float(np.nanpercentile(
-                _r3_qev_k[np.isfinite(_r3_qev_k)], 99.5
-            )) if np.isfinite(_r3_qev_k).any() else 1.0, 1.0)
-
-            # ---- Figure 1: per-active-plane residual decomposition ----
-            _nact = len(_r3act)
-            _r3_fig1 = plt.figure(figsize=(14, 5 * _nact))
-            _r3_gs1  = GridSpec(
-                _nact * 2, 2, figure=_r3_fig1,
-                width_ratios=[5.6, 1.5],
-                height_ratios=[1.0, 4.0] * _nact,
-                hspace=0.18, wspace=0.12,
-            )
-            _r3_fig1.suptitle(
-                f"chi2_residuals_populations_3fold — tt={_r3tt} (missing plane {_r3mis})  n={_r3_n:,}\n"
-                r"In-fit residuals per active plane: charge$_p$ vs $\log(1+\mathrm{residual}\ \chi^2_p)$",
-                fontsize=10,
-            )
-            _r3_plane_x_ref = None
-            _r3_plane_y_ref = None
-
-            for _ai, _p in enumerate(_r3act):
-                _r3base = 2 * _ai
-                _r3_pc  = _r3_qp_k[:, _ai]
-                _r3_py  = _r3_log_loo_k[:, _ai]
-                _r3_vld = np.isfinite(_r3_pc) & np.isfinite(_r3_py)
-
-                # charge marginal
-                ax_cq = _r3_fig1.add_subplot(
-                    _r3_gs1[_r3base, 0],
-                    sharex=_r3_plane_x_ref,
-                )
-                if _r3_plane_x_ref is None:
-                    _r3_plane_x_ref = ax_cq
-                if _r3_vld.sum() > 0:
-                    _bq = np.linspace(0, _r3_qp_xlim, 60)
-                    ax_cq.hist(_r3_pc[_r3_vld & (_r3_pc >= 0)], bins=_bq,
-                               color=_r3col, alpha=0.7, histtype="stepfilled")
-                ax_cq.set_yscale("log")
-                plt.setp(ax_cq.get_xticklabels(), visible=False)
-                ax_cq.tick_params(labelsize=6)
-                ax_cq.set_ylabel(f"P{_p} charge", fontsize=7)
-
-                # main scatter
-                ax_sc = _r3_fig1.add_subplot(
-                    _r3_gs1[_r3base + 1, 0],
-                    sharey=_r3_plane_y_ref,
-                    sharex=_r3_plane_x_ref,
-                )
-                if _r3_plane_y_ref is None:
-                    _r3_plane_y_ref = ax_sc
-                if _r3_vld.sum() >= 5:
-                    ax_sc.hexbin(
-                        _r3_pc[_r3_vld], _r3_py[_r3_vld],
-                        gridsize=30, cmap=_r3cmap, bins="log", mincnt=1,
-                        extent=(0, _r3_qp_xlim, 0, _r3_loo_ylim),
-                    )
-                ax_sc.set_ylabel(
-                    rf"$\log(1+\chi^2_{{P{_p}}})$", fontsize=8
-                )
-                ax_sc.set_xlabel(f"Charge P{_p} (a.u.)", fontsize=8)
-                ax_sc.tick_params(labelsize=6)
-                ax_sc.set_xlim(0, _r3_qp_xlim)
-                ax_sc.set_ylim(0, _r3_loo_ylim)
-                ax_sc.grid(True, alpha=0.2)
-
-                # LOO marginal
-                ax_rm = _r3_fig1.add_subplot(
-                    _r3_gs1[_r3base + 1, 1],
-                    sharey=_r3_plane_y_ref,
-                )
-                _by = np.linspace(0, _r3_loo_ylim, 60)
-                if _r3_vld.sum() > 0:
-                    ax_rm.hist(_r3_py[_r3_vld], bins=_by, orientation="horizontal",
-                               color=_r3col, alpha=0.65, histtype="stepfilled")
-                ax_rm.set_xscale("log")
-                ax_rm.tick_params(labelsize=6)
-                plt.setp(ax_rm.get_yticklabels(), visible=False)
-                ax_rm.set_xlabel("count", fontsize=7)
-
-            plt.tight_layout(rect=[0, 0, 1, 0.94])
-            if save_plots:
-                _fn_r3a = f"{fig_idx}_chi2_residuals_populations_3fold_planes_{_r3tt}.png"
-                fig_idx += 1
-                _fp_r3a = os.path.join(base_directories["figure_directory"], _fn_r3a)
-                plot_list.append(_fp_r3a)
-                save_plot_figure(_fp_r3a, format="png", alias="chi2_residuals_populations_3fold")
-            if show_plots:
-                plt.show()
-            plt.close()
-
-            # ---- Figure 2: chi2 histogram + max/sum concentration ----
-            _r3_fig2, _r3_axs2 = plt.subplots(1, 3, figsize=(15, 5))
-            _r3_fig2.suptitle(
-                f"chi2_residuals_populations_3fold — tt={_r3tt} (missing P{_r3mis})  n={_r3_n:,}\n"
-                "Chi2 statistics: timing chi2 histogram | max-over-sum concentration | "
-                "chi2 vs total charge",
-                fontsize=9,
-            )
-
-            _bins_r3_chi = np.linspace(0, float(np.nanpercentile(
-                _r3_log_chi_k[np.isfinite(_r3_log_chi_k)], 99.5
-            )) if np.isfinite(_r3_log_chi_k).any() else 5.0, 80)
-            _vld_chi2_k = np.isfinite(_r3_log_chi_k)
-            if _vld_chi2_k.sum() > 0:
-                _r3_axs2[0].hist(_r3_log_chi_k[_vld_chi2_k], bins=_bins_r3_chi,
-                                 color=_r3col, alpha=0.75, histtype="stepfilled",
-                                 label=f"tt={_r3tt}")
-                # Overlay 4-fold reference
-                _chi4_ref = _r3_log_chi[(_r3_def_tt == 1234.0) & np.isfinite(_r3_log_chi)]
-                if _chi4_ref.size > 0:
-                    _sc4 = _r3_n / max(_chi4_ref.size, 1)
-                    _c4h, _c4e = np.histogram(_chi4_ref, bins=_bins_r3_chi)
-                    _r3_axs2[0].stairs(_c4h * _sc4, _c4e,
-                                       color="gray", alpha=0.6, lw=1.2, label="1234 (scaled)")
-            _r3_axs2[0].set_yscale("log")
-            _r3_axs2[0].set_xlabel(r"$\log(1+\chi^2_\mathrm{timing})$", fontsize=9)
-            _r3_axs2[0].set_ylabel("count", fontsize=9)
-            _r3_axs2[0].legend(fontsize=8)
-            _r3_axs2[0].set_title("Timing chi2 histogram", fontsize=9)
-            _r3_axs2[0].grid(True, alpha=0.25)
-
-            _vld_mos = np.isfinite(_r3_loo_max_ov)
-            if _vld_mos.sum() > 0:
-                _r3_axs2[1].hist(_r3_loo_max_ov[_vld_mos], bins=60, range=(0, 1),
-                                 color=_r3col, alpha=0.75, histtype="stepfilled")
-            _r3_axs2[1].set_xlabel("max(χ²_p) / sum(χ²_p)  [active planes]", fontsize=9)
-            _r3_axs2[1].set_ylabel("count", fontsize=9)
-            _r3_axs2[1].set_title("Residual concentration (max/sum)", fontsize=9)
-            _r3_axs2[1].grid(True, alpha=0.25)
-
-            _vld_qev = np.isfinite(_r3_qev_k) & np.isfinite(_r3_log_chi_k)
-            if _vld_qev.sum() >= 5:
-                _r3_axs2[2].hexbin(
-                    _r3_qev_k[_vld_qev], _r3_log_chi_k[_vld_qev],
-                    gridsize=30, cmap=_r3cmap, bins="log", mincnt=1,
-                    extent=(0, _r3_qev_xlim, 0, float(_bins_r3_chi[-1])),
-                )
-            _r3_axs2[2].set_xlabel("Total charge (a.u.)", fontsize=9)
-            _r3_axs2[2].set_ylabel(r"$\log(1+\chi^2_\mathrm{timing})$", fontsize=9)
-            _r3_axs2[2].set_title(r"$\chi^2$ vs charge", fontsize=9)
-            _r3_axs2[2].grid(True, alpha=0.25)
-
-            plt.tight_layout(rect=[0, 0, 1, 0.92])
-            if save_plots:
-                _fn_r3b = f"{fig_idx}_chi2_residuals_populations_3fold_stats_{_r3tt}.png"
-                fig_idx += 1
-                _fp_r3b = os.path.join(base_directories["figure_directory"], _fn_r3b)
-                plot_list.append(_fp_r3b)
-                save_plot_figure(_fp_r3b, format="png", alias="chi2_residuals_populations_3fold")
-            if show_plots:
-                plt.show()
-            plt.close()
-
-            # ---- Figure 3: zig-zag path geometry (3 active planes, 2 segments) ----
-            if not _r3_have_path:
-                print(f"[chi2_residuals_populations_3fold] path columns not found for tt={_r3tt}, skipping zig-zag.")
-                continue
-
-            # Sort active planes by z position
-            _r3_act_z = _r3_z_arr[np.array(_r3act_i)]
-            _r3_act_z_order = np.argsort(_r3_act_z)
-            _r3_act_sorted_i = np.array(_r3act_i)[_r3_act_z_order]  # 0-based, sorted by z
-            _r3_act_z_sorted = _r3_act_z[_r3_act_z_order]
-
-            # Extract path x/y for active planes only
-            _r3_px_act = _r3_path_x_all[:, _r3_act_sorted_i]   # shape (N, 3)
-            _r3_py_act = _r3_path_y_all[:, _r3_act_sorted_i]
-
-            # 2 inter-plane segments: diffs between consecutive active planes
-            _r3_pdx = np.diff(_r3_px_act, axis=1)   # shape (N, 2)
-            _r3_pdy = np.diff(_r3_py_act, axis=1)
-            _r3_pdz = np.diff(_r3_act_z_sorted)      # shape (2,) — same for all events
-
-            # Zig-zag XZ and YZ
-            _r3_zigx_all = np.sum(np.sqrt(_r3_pdx ** 2 + _r3_pdz[None, :] ** 2), axis=1)
-            _r3_zigy_all = np.sum(np.sqrt(_r3_pdy ** 2 + _r3_pdz[None, :] ** 2), axis=1)
-            _r3_meas_path_all = np.sum(
-                np.sqrt(_r3_pdx ** 2 + _r3_pdy ** 2 + _r3_pdz[None, :] ** 2), axis=1
-            )
-
-            # Straight-line fit length between first and last active z positions
-            _r3_z_first = float(_r3_act_z_sorted[0])
-            _r3_z_last  = float(_r3_act_z_sorted[-1])
-            _r3_fit_x_first = _r3_x0_all + _r3_xp_all * _r3_z_first
-            _r3_fit_y_first = _r3_y0_all + _r3_yp_all * _r3_z_first
-            _r3_fit_x_last  = _r3_x0_all + _r3_xp_all * _r3_z_last
-            _r3_fit_y_last  = _r3_y0_all + _r3_yp_all * _r3_z_last
-            _r3_fit_dx  = np.sqrt((_r3_fit_x_last - _r3_fit_x_first) ** 2 + (_r3_z_last - _r3_z_first) ** 2)
-            _r3_fit_dy  = np.sqrt((_r3_fit_y_last - _r3_fit_y_first) ** 2 + (_r3_z_last - _r3_z_first) ** 2)
-            _r3_fit_len = np.sqrt(
-                (_r3_fit_x_last - _r3_fit_x_first) ** 2
-                + (_r3_fit_y_last - _r3_fit_y_first) ** 2
-                + (_r3_z_last - _r3_z_first) ** 2
-            )
-
-            _r3_mask_path = (
-                _r3mask_tt
-                & np.isfinite(_r3_px_act).all(axis=1)
-                & np.isfinite(_r3_py_act).all(axis=1)
-                & np.isfinite(_r3_x0_all) & np.isfinite(_r3_y0_all)
-                & np.isfinite(_r3_theta_all) & np.isfinite(_r3_phi_all)
-                & np.isfinite(_r3_xp_all) & np.isfinite(_r3_yp_all)
-                & np.isfinite(_r3_qev) & np.isfinite(_r3_chi_all)
-                & np.isfinite(_r3_meas_path_all) & np.isfinite(_r3_fit_len)
-                & (_r3_meas_path_all > 0)
-            )
-
-            if _r3_mask_path.sum() < 5:
-                print(f"[chi2_residuals_populations_3fold] not enough path events for tt={_r3tt}, skipping zig-zag plot.")
-                continue
-
-            _r3_theta_deg = np.degrees(_r3_theta_all[_r3_mask_path])
-            _r3_path_charge = _r3_qev[_r3_mask_path]
-            _r3_log_tim_p = _r3_log_chi[_r3_mask_path]
-            _r3_meas_path = _r3_meas_path_all[_r3_mask_path]
-            _r3_fit_length = _r3_fit_len[_r3_mask_path]
-            _r3_zigzag_ratio = _r3_fit_length / (_r3_meas_path + 1e-9)
-            _r3_zigzag_excess = np.clip(_r3_meas_path - _r3_fit_length, 0.0, None)
-            _r3_costh = np.clip(np.cos(_r3_theta_all[_r3_mask_path]), 1e-6, None)
-            _r3_proj_excess = _r3_zigzag_excess * _r3_costh
-            _r3_zigx = _r3_zigx_all[_r3_mask_path]
-            _r3_zigy = _r3_zigy_all[_r3_mask_path]
-            _r3_fit_dx_p = _r3_fit_dx[_r3_mask_path]
-            _r3_fit_dy_p = _r3_fit_dy[_r3_mask_path]
-            _r3_ratio_x = np.where(_r3_zigx > 1e-9, _r3_fit_dx_p / (_r3_zigx + 1e-9), 1.0)
-            _r3_ratio_y = np.where(_r3_zigy > 1e-9, _r3_fit_dy_p / (_r3_zigy + 1e-9), 1.0)
-
-            # Additional projected path quantities (mirroring the 4-fold analysis)
-            _r3_proj_meas_path   = _r3_meas_path  * _r3_costh
-            _r3_proj_fit_length  = _r3_fit_length * _r3_costh
-
-            # Y limits
-            _r3_meas_path_ylim = max(
-                float(np.nanpercentile(_r3_meas_path[np.isfinite(_r3_meas_path)], 99.5)), 1.0
-            )
-            _r3_fit_len_ylim = max(
-                float(np.nanpercentile(_r3_fit_length[np.isfinite(_r3_fit_length)], 99.5)), 1.0
-            )
-            _r3_ratio_ylim = max(
-                float(np.nanpercentile(_r3_zigzag_ratio[np.isfinite(_r3_zigzag_ratio)], 99.5)), 1.0
-            )
-            _r3_proj_excess_ylim = max(
-                float(np.nanpercentile(_r3_proj_excess[np.isfinite(_r3_proj_excess)], 99.5)), 1.0
-            )
-            _r3_ratio_x_ylim = max(
-                float(np.nanpercentile(_r3_ratio_x[np.isfinite(_r3_ratio_x)], 99.5)), 1.0
-            )
-            _r3_ratio_y_ylim = max(
-                float(np.nanpercentile(_r3_ratio_y[np.isfinite(_r3_ratio_y)], 99.5)), 1.0
-            )
-            _r3_excess_ylim = max(
-                float(np.nanpercentile(_r3_zigzag_excess[np.isfinite(_r3_zigzag_excess)], 99.5)), 1.0
-            )
-            _r3_ratio_xlim_th  = float(np.nanpercentile(_r3_theta_deg[np.isfinite(_r3_theta_deg)], 99.5))
-            _r3_ratio_xlim_ch  = float(np.nanpercentile(_r3_path_charge[np.isfinite(_r3_path_charge)], 99.5))
-            _r3_ratio_xlim_chi = float(np.nanpercentile(_r3_log_tim_p[np.isfinite(_r3_log_tim_p)], 99.5))
-
-            # ---- Figure 3a: 2×6 path geometry (mirrors 4-fold layout exactly) ----
-            # Row 0: vs θ  |  Row 1: vs charge
-            # Columns: meas_path, fit_length, ratio, proj_excess, ratio_x, ratio_y
-            _r3_fig3a, _r3_axes3a = plt.subplots(2, 6, figsize=(30, 10), squeeze=False)
-            _r3_fig3a.suptitle(
-                f"3-fold hit-path and zig-zag diagnostics — tt={_r3tt} (missing P{_r3mis})  "
-                f"n={int(_r3_mask_path.sum()):,}\n"
-                "Measured path = summed distance between 3 consecutive hit points (2 segments)  |  "
-                "Fitted length = straight segment across z-span of active planes  |  "
-                "Projected = multiplied by cos(θ)  |  ratio > 1 is unphysical (noise indicator)",
-                fontsize=10,
-            )
-            _r3_row_defs3a = [
-                (_r3_theta_deg,   r"$\theta$ (deg)",      (0, _r3_ratio_xlim_th)),
-                (_r3_path_charge, "Event charge (a.u.)",  (0, _r3_ratio_xlim_ch)),
-            ]
-            _r3_col_defs3a = [
-                (_r3_meas_path,        "Measured path (mm)",           _r3_meas_path_ylim,  "viridis", False),
-                (_r3_fit_length,       "Fitted straight length (mm)",   _r3_fit_len_ylim,   "plasma",  False),
-                (_r3_zigzag_ratio,     "straight / zig-zag",           _r3_ratio_ylim,     "cividis", True),
-                (_r3_proj_excess,      "Projected zig-zag excess (mm)", _r3_proj_excess_ylim, "magma", False),
-                (_r3_ratio_x,          r"straight$_{xz}$ / zig-zag$_{xz}$", _r3_ratio_x_ylim, "Blues", True),
-                (_r3_ratio_y,          r"straight$_{yz}$ / zig-zag$_{yz}$", _r3_ratio_y_ylim, "Reds",  True),
-            ]
-            for _r3ri3a, (_r3xv, _r3xl, _r3xlim3a) in enumerate(_r3_row_defs3a):
-                for _r3ci3a, (_r3yv, _r3yl, _r3ylim3a, _r3cm3a, _r3hline) in enumerate(_r3_col_defs3a):
-                    _ax3a = _r3_axes3a[_r3ri3a][_r3ci3a]
-                    _vld3a = np.isfinite(_r3xv) & np.isfinite(_r3yv)
-                    if _vld3a.sum() >= 5:
-                        _ax3a.hexbin(
-                            _r3xv[_vld3a], _r3yv[_vld3a],
-                            gridsize=35, cmap=_r3cm3a, bins="log", mincnt=1,
-                            extent=(_r3xlim3a[0], _r3xlim3a[1], 0, _r3ylim3a),
-                        )
-                    _ax3a.set_xlim(_r3xlim3a[0], _r3xlim3a[1])
-                    _ax3a.set_ylim(0, _r3ylim3a)
-                    _ax3a.set_xlabel(_r3xl, fontsize=8)
-                    _ax3a.set_ylabel(_r3yl, fontsize=8)
-                    _ax3a.grid(True, alpha=0.25)
-                    if _r3hline:
-                        _ax3a.axhline(1.0, color="red", lw=1.0, ls="--", alpha=0.7)
-                    _ax3a.tick_params(labelsize=7)
-
-            _r3_axes3a[0][0].set_title("Measured path vs θ",           fontsize=9)
-            _r3_axes3a[0][1].set_title("Fitted length vs θ",           fontsize=9)
-            _r3_axes3a[0][2].set_title("Zig-zag ratio vs θ",           fontsize=9)
-            _r3_axes3a[0][3].set_title("Projected excess vs θ",        fontsize=9)
-            _r3_axes3a[0][4].set_title("XZ zig-zag ratio vs θ",        fontsize=9)
-            _r3_axes3a[0][5].set_title("YZ zig-zag ratio vs θ",        fontsize=9)
-
-            plt.tight_layout(rect=[0, 0, 1, 0.93])
-            if save_plots:
-                _fn_r3c = f"{fig_idx}_chi2_residuals_populations_3fold_zigzag_{_r3tt}.png"
-                fig_idx += 1
-                _fp_r3c = os.path.join(base_directories["figure_directory"], _fn_r3c)
-                plot_list.append(_fp_r3c)
-                save_plot_figure(_fp_r3c, format="png", alias="chi2_residuals_populations_3fold")
-            if show_plots:
-                plt.show()
-            plt.close()
-
-            # ---- Figure 3b: histograms of all path metrics ----
-            _r3_hist_pairs = [
-                (_r3_meas_path,       "Measured path (mm)",                  (0, _r3_meas_path_ylim)),
-                (_r3_fit_length,      "Fitted straight length (mm)",          (0, _r3_fit_len_ylim)),
-                (_r3_zigzag_ratio,    "straight / zig-zag",                  (0, _r3_ratio_ylim)),
-                (_r3_zigzag_excess,   "zig-zag excess (mm)",                  (0, _r3_excess_ylim)),
-                (_r3_proj_excess,     "projected zig-zag excess (mm)",        (0, _r3_proj_excess_ylim)),
-                (_r3_proj_meas_path,  "projected measured path (mm)",         (0, _r3_meas_path_ylim)),
-                (_r3_proj_fit_length, "projected fitted length (mm)",         (0, _r3_fit_len_ylim)),
-                (_r3_ratio_x,         r"straight$_{xz}$ / zig-zag$_{xz}$",   (0, _r3_ratio_x_ylim)),
-                (_r3_ratio_y,         r"straight$_{yz}$ / zig-zag$_{yz}$",   (0, _r3_ratio_y_ylim)),
-            ]
-            _r3_fig3b, _r3_axs3b = plt.subplots(3, 3, figsize=(15, 12))
-            _r3_fig3b.suptitle(
-                f"3-fold path metric distributions — tt={_r3tt} (missing P{_r3mis})  "
-                f"n={int(_r3_mask_path.sum()):,}\n"
-                "Projected quantities use cos(θ) to remove geometric path-length dependence on angle",
-                fontsize=9,
-            )
-            for _r3hi3b, (_r3hd, _r3hlbl, _r3hrange) in enumerate(_r3_hist_pairs):
-                _r3_ax3b = _r3_axs3b[_r3hi3b // 3, _r3hi3b % 3]
-                _r3_vld_h = np.isfinite(_r3hd)
-                if _r3_vld_h.sum() > 0:
-                    _r3_ax3b.hist(
-                        np.clip(_r3hd[_r3_vld_h], _r3hrange[0], _r3hrange[1]),
-                        bins=80, range=_r3hrange,
-                        color=_r3col, alpha=0.75, histtype="stepfilled",
-                    )
-                _r3_ax3b.set_xlabel(_r3hlbl, fontsize=8)
-                _r3_ax3b.set_ylabel("count", fontsize=8)
-                _r3_ax3b.set_title(_r3hlbl, fontsize=8)
-                _r3_ax3b.set_yscale("log")
-                _r3_ax3b.grid(True, alpha=0.25)
-                _r3_ax3b.tick_params(labelsize=7)
-
-            plt.tight_layout(rect=[0, 0, 1, 0.93])
-            if save_plots:
-                _fn_r3d = f"{fig_idx}_chi2_residuals_populations_3fold_path_hists_{_r3tt}.png"
-                fig_idx += 1
-                _fp_r3d = os.path.join(base_directories["figure_directory"], _fn_r3d)
-                plot_list.append(_fp_r3d)
-                save_plot_figure(_fp_r3d, format="png", alias="chi2_residuals_populations_3fold")
-            if show_plots:
-                plt.show()
-            plt.close()
-
-# ---------------------------------------------------------------------------
-# Adj / Dis comparison
-# Separates events into "adj" (adjacent strip topology) and "dis" (dispersed)
-# based on the adj_dis column written by Task 3.
-# If the column is absent the plot is skipped gracefully (retrocompatible).
-# Shows: chi2 histogram, total charge, min active-plane charge, charge vs chi2
-# all split by adj / dis population so noise candidates can be identified.
-# ---------------------------------------------------------------------------
-if (create_essential_plots or create_plots) and task4_plot_enabled("adj_dis_comparison"):
-    _ad_col = "adj_dis"
-    _ad_have = (
-        _ad_col in df_plot_ancillary.columns
-        and "tim_th_chi" in df_plot_ancillary.columns
-        and "charge_event" in df_plot_ancillary.columns
-        and task4_plot_tt_column in df_plot_ancillary.columns
-    )
-    if not _ad_have:
-        print("[adj_dis_comparison] adj_dis or required columns not found, skipping.")
-    else:
-        _ad_vals   = df_plot_ancillary[_ad_col].astype(str)
-        _ad_mask_adj = (_ad_vals == "adj").to_numpy()
-        _ad_mask_dis = (_ad_vals == "dis").to_numpy()
-        _ad_n_adj  = int(_ad_mask_adj.sum())
-        _ad_n_dis  = int(_ad_mask_dis.sum())
-
-        _ad_chi2_all   = np.log1p(np.clip(
-            df_plot_ancillary["tim_th_chi"].values.astype(float), 0.0, None
-        ))
-        _ad_qev_all    = df_plot_ancillary["charge_event"].values.astype(float)
-        _ad_def_tt_all = df_plot_ancillary[task4_plot_tt_column].values.astype(float)
-
-        # Min charge across all planes with data (per event)
-        _ad_qp_cols = [f"charge_{p}" for p in range(1, 5) if f"charge_{p}" in df_plot_ancillary.columns]
-        if _ad_qp_cols:
-            _ad_qp_mat  = df_plot_ancillary[_ad_qp_cols].values.astype(float)
-            _ad_qp_mat[_ad_qp_mat <= 0] = np.nan
-            _ad_qmin_all = np.nanmin(_ad_qp_mat, axis=1)
-        else:
-            _ad_qmin_all = np.full(len(df_plot_ancillary), np.nan)
-
-        # Global axis limits
-        _ad_chi2_fin  = _ad_chi2_all[np.isfinite(_ad_chi2_all) & (_ad_chi2_all > 0)]
-        _ad_chi2_xlim = float(np.nanpercentile(_ad_chi2_fin, 99.5)) if _ad_chi2_fin.size > 0 else 5.0
-        _ad_qev_fin   = _ad_qev_all[np.isfinite(_ad_qev_all) & (_ad_qev_all > 0)]
-        _ad_qev_xlim  = float(np.nanpercentile(_ad_qev_fin, 99.5)) if _ad_qev_fin.size > 0 else 1.0
-        _ad_qmin_fin  = _ad_qmin_all[np.isfinite(_ad_qmin_all)]
-        _ad_qmin_xlim = float(np.nanpercentile(_ad_qmin_fin, 99.5)) if _ad_qmin_fin.size > 0 else 1.0
-
-        _ad_pop_defs = [
-            (_ad_mask_adj, "adj",  "steelblue",  _ad_n_adj),
-            (_ad_mask_dis, "dis",  "tomato",      _ad_n_dis),
-        ]
-
-        # ---- Figure 1: 1D histograms — chi2, charge_event, min_charge ----
-        _ad_fig1, _ad_axs1 = plt.subplots(1, 3, figsize=(15, 5))
-        _ad_fig1.suptitle(
-            f"Adj / Dis topology comparison  (adj={_ad_n_adj:,}  dis={_ad_n_dis:,})\n"
-            "adj = no gap between active strips in any plane  |  "
-            "dis = at least one plane has dispersed strip pattern",
-            fontsize=10,
-        )
-        _ad_hist_defs = [
-            (_ad_chi2_all,  r"$\log(1+\chi^2_\mathrm{timing})$", (0, _ad_chi2_xlim), _ad_axs1[0]),
-            (_ad_qev_all,   "Total charge (a.u.)",                (0, _ad_qev_xlim),  _ad_axs1[1]),
-            (_ad_qmin_all,  "Min plane charge (a.u.)",            (0, _ad_qmin_xlim), _ad_axs1[2]),
-        ]
-        for _ad_data, _ad_xlabel, _ad_xrange, _ad_ax in _ad_hist_defs:
-            _bins_ad = np.linspace(_ad_xrange[0], _ad_xrange[1], 80)
-            for _ad_mask, _ad_lbl, _ad_col_c, _ad_n in _ad_pop_defs:
-                _ad_d = _ad_data[_ad_mask & np.isfinite(_ad_data)]
-                if _ad_d.size > 0:
-                    _ad_ax.hist(
-                        np.clip(_ad_d, _ad_xrange[0], _ad_xrange[1]),
-                        bins=_bins_ad, range=_ad_xrange,
-                        color=_ad_col_c, alpha=0.55, histtype="stepfilled",
-                        label=f"{_ad_lbl} (n={_ad_n:,})",
-                        density=True,
-                    )
-            _ad_ax.set_xlabel(_ad_xlabel, fontsize=9)
-            _ad_ax.set_ylabel("density", fontsize=9)
-            _ad_ax.set_yscale("log")
-            _ad_ax.legend(fontsize=8)
-            _ad_ax.grid(True, alpha=0.25)
-            _ad_ax.tick_params(labelsize=7)
-
-        plt.tight_layout(rect=[0, 0, 1, 0.92])
-        if save_plots:
-            _fn_ad1 = f"{fig_idx}_adj_dis_comparison_histograms.png"
-            fig_idx += 1
-            _fp_ad1 = os.path.join(base_directories["figure_directory"], _fn_ad1)
-            plot_list.append(_fp_ad1)
-            save_plot_figure(_fp_ad1, format="png", alias="adj_dis_comparison")
-        if show_plots:
-            plt.show()
-        plt.close()
-
-        # ---- Figure 2: chi2 vs charge hexbin, one column per population ----
-        _ad_fig2, _ad_axs2 = plt.subplots(1, 3, figsize=(15, 5))
-        _ad_fig2.suptitle(
-            r"Adj / Dis: $\chi^2$ vs total charge (density hexbin, log colour scale)",
-            fontsize=10,
-        )
-        for _ad_ci2, (_ad_mask, _ad_lbl, _ad_col_c, _ad_n) in enumerate(_ad_pop_defs):
-            _ax2 = _ad_axs2[_ad_ci2]
-            _vld2 = _ad_mask & np.isfinite(_ad_chi2_all) & np.isfinite(_ad_qev_all)
-            if _vld2.sum() >= 5:
-                _ax2.hexbin(
-                    _ad_qev_all[_vld2], _ad_chi2_all[_vld2],
-                    gridsize=30, cmap="Blues" if _ad_lbl == "adj" else "Reds",
-                    bins="log", mincnt=1,
-                    extent=(0, _ad_qev_xlim, 0, _ad_chi2_xlim),
-                )
-            _ax2.set_xlabel("Total charge (a.u.)", fontsize=9)
-            _ax2.set_ylabel(r"$\log(1+\chi^2_\mathrm{timing})$", fontsize=9)
-            _ax2.set_title(f"{_ad_lbl}  (n={_ad_n:,})", fontsize=9)
-            _ax2.set_xlim(0, _ad_qev_xlim)
-            _ax2.set_ylim(0, _ad_chi2_xlim)
-            _ax2.grid(True, alpha=0.2)
-            _ax2.tick_params(labelsize=7)
-
-        # Third panel: both populations as contour/step comparison
-        _ax2_both = _ad_axs2[2]
-        for _ad_mask, _ad_lbl, _ad_col_c, _ad_n in _ad_pop_defs:
-            _vld_b = _ad_mask & np.isfinite(_ad_chi2_all) & np.isfinite(_ad_qev_all)
-            if _vld_b.sum() > 0:
-                _ax2_both.hist2d(
-                    _ad_qev_all[_vld_b], _ad_chi2_all[_vld_b],
-                    bins=[30, 30],
-                    range=[[0, _ad_qev_xlim], [0, _ad_chi2_xlim]],
-                    cmap="Blues" if _ad_lbl == "adj" else "Reds",
-                    alpha=0.45,
-                )
-        _ax2_both.set_xlabel("Total charge (a.u.)", fontsize=9)
-        _ax2_both.set_ylabel(r"$\log(1+\chi^2)$", fontsize=9)
-        _ax2_both.set_title("Overlay (blue=adj, red=dis)", fontsize=9)
-        _ax2_both.grid(True, alpha=0.2)
-        _ax2_both.tick_params(labelsize=7)
-
-        plt.tight_layout(rect=[0, 0, 1, 0.92])
-        if save_plots:
-            _fn_ad2 = f"{fig_idx}_adj_dis_comparison_chi2_vs_charge.png"
-            fig_idx += 1
-            _fp_ad2 = os.path.join(base_directories["figure_directory"], _fn_ad2)
-            plot_list.append(_fp_ad2)
-            save_plot_figure(_fp_ad2, format="png", alias="adj_dis_comparison")
-        if show_plots:
-            plt.show()
-        plt.close()
-
-        # ---- Figure 3: breakdown by definitive_tt (one row per combination) ----
-        _ad_tt_vals = [123, 124, 134, 234, 1234]
-        _ad_tt_have = [tt for tt in _ad_tt_vals if (_ad_def_tt_all == float(tt)).any()]
-        if _ad_tt_have:
-            _ad_fig3, _ad_axs3 = plt.subplots(
-                len(_ad_tt_have), 3,
-                figsize=(15, 4 * len(_ad_tt_have)),
-                squeeze=False,
-            )
-            _ad_fig3.suptitle(
-                "Adj / Dis comparison broken down by fit_tt\n"
-                r"Columns: $\chi^2$ histogram  |  charge histogram  |  min-charge histogram",
-                fontsize=10,
-            )
-            for _ad_ti, _ad_tt in enumerate(_ad_tt_have):
-                _ad_tt_mask = _ad_def_tt_all == float(_ad_tt)
-                _ad_bins_chi = np.linspace(0, _ad_chi2_xlim, 60)
-                _ad_bins_q   = np.linspace(0, _ad_qev_xlim,  60)
-                _ad_bins_qm  = np.linspace(0, _ad_qmin_xlim, 60)
-                for _ad_mask, _ad_lbl, _ad_col_c, _ in _ad_pop_defs:
-                    _ad_sel = _ad_tt_mask & _ad_mask
-                    _n_sel  = int(_ad_sel.sum())
-                    for _ax_col, _ad_data, _bins_use in [
-                        (_ad_axs3[_ad_ti][0], _ad_chi2_all, _ad_bins_chi),
-                        (_ad_axs3[_ad_ti][1], _ad_qev_all,  _ad_bins_q),
-                        (_ad_axs3[_ad_ti][2], _ad_qmin_all, _ad_bins_qm),
-                    ]:
-                        _ad_d = _ad_data[_ad_sel & np.isfinite(_ad_data)]
-                        if _ad_d.size > 0:
-                            _ax_col.hist(
-                                _ad_d, bins=_bins_use,
-                                color=_ad_col_c, alpha=0.55, histtype="stepfilled",
-                                label=f"{_ad_lbl} n={_n_sel:,}", density=True,
-                            )
-                _ad_axs3[_ad_ti][0].set_xlabel(r"$\log(1+\chi^2)$", fontsize=8)
-                _ad_axs3[_ad_ti][1].set_xlabel("Total charge (a.u.)", fontsize=8)
-                _ad_axs3[_ad_ti][2].set_xlabel("Min plane charge (a.u.)", fontsize=8)
-                for _ax_col in _ad_axs3[_ad_ti]:
-                    _ax_col.set_ylabel("density", fontsize=8)
-                    _ax_col.set_yscale("log")
-                    _ax_col.legend(fontsize=7, title=f"tt={_ad_tt}", title_fontsize=7)
-                    _ax_col.grid(True, alpha=0.25)
-                    _ax_col.tick_params(labelsize=7)
-
-            plt.tight_layout(rect=[0, 0, 1, 0.96])
-            if save_plots:
-                _fn_ad3 = f"{fig_idx}_adj_dis_comparison_by_tt.png"
-                fig_idx += 1
-                _fp_ad3 = os.path.join(base_directories["figure_directory"], _fn_ad3)
-                plot_list.append(_fp_ad3)
-                save_plot_figure(_fp_ad3, format="png", alias="adj_dis_comparison")
-            if show_plots:
-                plt.show()
-            plt.close()
-
-if create_plots and task4_plot_enabled("polar_theta_phi_tracking_tt_2d"):
+if create_plots and task4_plot_enabled("polar_theta_phi_tt_task4_fit_2d"):
     df_filtered = df_plot_ancillary
     # tt_values = sorted(df_filtered['definitive_tt'].dropna().unique(), key=lambda x: int(x))
 
@@ -12845,7 +9415,7 @@ if create_plots and task4_plot_enabled("polar_theta_phi_tracking_tt_2d"):
         row_idx, col_idx = divmod(idx, ncols)
         ax = axes[row_idx][col_idx]
 
-        df_tt = df_filtered[df_filtered['tracking_tt'] == tt_val]
+        df_tt = df_filtered[df_filtered['tt_task4_fit'] == tt_val]
         theta_vals = df_tt['theta'].dropna()
         phi_vals = df_tt['phi'].dropna()
 
@@ -12876,10 +9446,10 @@ if create_plots and task4_plot_enabled("polar_theta_phi_tracking_tt_2d"):
         cb = fig.colorbar(c, ax=ax, pad=0.1)
         cb.ax.hlines(local_max, *cb.ax.get_xlim(), colors='white', linewidth=2, linestyles='dashed')
 
-    plt.suptitle(r'2D Histogram of $\theta$ vs. $\phi$ for each tracking_tt Type', fontsize=16)
+    plt.suptitle(r'2D Histogram of $\theta$ vs. $\phi$ for each tt_task4_fit Type', fontsize=16)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     if save_plots:
-        final_filename = f'{fig_idx}_polar_theta_phi_tracking_tt_2D.png'
+        final_filename = f'{fig_idx}_polar_theta_phi_tt_task4_fit_2D.png'
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
@@ -12935,16 +9505,16 @@ if (
             's': [slowness_filter_left, slowness_filter_right],
             'det_s': [det_slowness_filter_left, det_slowness_filter_right],
             'tim_s': [slowness_filter_left, slowness_filter_right],
-            'delta_s': [delta_s_left, delta_s_right],
+            'event_s_err': [event_s_err_left, event_s_err_right],
             # 'th_chi': [0, 0.03],
             # 'det_th_chi': [0, 12],
             
             # Dinamic
-            'charge_event': [charge_plot_limit_left, charge_plot_event_limit_right],
-            'charge_1': [charge_plot_limit_left, charge_plot_limit_right],
-            'charge_2': [charge_plot_limit_left, charge_plot_limit_right],
-            'charge_3': [charge_plot_limit_left, charge_plot_limit_right],
-            'charge_4': [charge_plot_limit_left, charge_plot_limit_right],
+            'event_charge': [charge_plot_limit_left, charge_plot_event_limit_right],
+            'p1_qsum': [charge_plot_limit_left, charge_plot_limit_right],
+            'p2_qsum': [charge_plot_limit_left, charge_plot_limit_right],
+            'p3_qsum': [charge_plot_limit_left, charge_plot_limit_right],
+            'p4_qsum': [charge_plot_limit_left, charge_plot_limit_right],
             'res_ystr_1': [-res_ystr_filter, res_ystr_filter], 'res_ystr_2': [-res_ystr_filter, res_ystr_filter], 'res_ystr_3': [-res_ystr_filter, res_ystr_filter], 'res_ystr_4': [-res_ystr_filter, res_ystr_filter],
             'res_tsum_1': [-res_tsum_filter, res_tsum_filter], 'res_tsum_2': [-res_tsum_filter, res_tsum_filter], 'res_tsum_3': [-res_tsum_filter, res_tsum_filter], 'res_tsum_4': [-res_tsum_filter, res_tsum_filter],
             'res_tdif_1': [-res_tdif_filter, res_tdif_filter], 'res_tdif_2': [-res_tdif_filter, res_tdif_filter], 'res_tdif_3': [-res_tdif_filter, res_tdif_filter], 'res_tdif_4': [-res_tdif_filter, res_tdif_filter],
@@ -13074,26 +9644,26 @@ if (
         return fig_idx
 
     # df_cases_2 = [
-    #     ([("processed_tt", 12, 12)], "1-2 cases"),
-    #     ([("processed_tt", 23, 23)], "2-3 cases"),
-    #     ([("processed_tt", 34, 34)], "3-4 cases"),
-    #     ([("processed_tt", 13, 13)], "1-3 cases"),
-    #     ([("processed_tt", 14, 14)], "1-4 cases"),
-    #     ([("processed_tt", 123, 123)], "1-2-3 cases"),
-    #     ([("processed_tt", 234, 234)], "2-3-4 cases"),
-    #     ([("processed_tt", 124, 124)], "1-2-4 cases"),
-    #     ([("processed_tt", 134, 134)], "1-3-4 cases"),
-    #     ([("processed_tt", 1234, 1234)], "1-2-3-4 cases"),
+    #     ([("tt_task3_list", 12, 12)], "1-2 cases"),
+    #     ([("tt_task3_list", 23, 23)], "2-3 cases"),
+    #     ([("tt_task3_list", 34, 34)], "3-4 cases"),
+    #     ([("tt_task3_list", 13, 13)], "1-3 cases"),
+    #     ([("tt_task3_list", 14, 14)], "1-4 cases"),
+    #     ([("tt_task3_list", 123, 123)], "1-2-3 cases"),
+    #     ([("tt_task3_list", 234, 234)], "2-3-4 cases"),
+    #     ([("tt_task3_list", 124, 124)], "1-2-4 cases"),
+    #     ([("tt_task3_list", 134, 134)], "1-3-4 cases"),
+    #     ([("tt_task3_list", 1234, 1234)], "1-2-3-4 cases"),
     # ]
     
     
     # df_cases_2 = [
-    #     ([("tracking_tt", 12, 12)], "1-2 cases"),
-    #     ([("tracking_tt", 23, 23)], "2-3 cases"),
-    #     ([("tracking_tt", 34, 34)], "3-4 cases"),
-    #     ([("tracking_tt", 123, 123)], "1-2-3 cases"),
-    #     ([("tracking_tt", 234, 234)], "2-3-4 cases"),
-    #     ([("tracking_tt", 1234, 1234)], "1-2-3-4 cases"),
+    #     ([("tt_task4_fit", 12, 12)], "1-2 cases"),
+    #     ([("tt_task4_fit", 23, 23)], "2-3 cases"),
+    #     ([("tt_task4_fit", 34, 34)], "3-4 cases"),
+    #     ([("tt_task4_fit", 123, 123)], "1-2-3 cases"),
+    #     ([("tt_task4_fit", 234, 234)], "2-3-4 cases"),
+    #     ([("tt_task4_fit", 1234, 1234)], "1-2-3-4 cases"),
     # ]
     
     df_cases_1 = [
@@ -13111,13 +9681,13 @@ if (
     
 
     df_cases_1234 = [
-        ([("fit_tt", 1234, 1234)], "1-2-3-4 fit_tt cases"),
+        ([("tt_task4_fit", 1234, 1234)], "1-2-3-4 tt_task4_fit cases"),
     ]
 
     df_cases_1234_chi_study = [
-        ([("fit_tt", 1234, 1234), ("tim_th_chi_sigmafit_1234", 0, 20)], "1-2-3-4 fit_tt cases, chi2 < 20"),
-        ([("fit_tt", 1234, 1234), ("tim_th_chi_sigmafit_1234", 20, 40)], "1-2-3-4 fit_tt cases, 20 < chi2 < 40"),
-        ([("fit_tt", 1234, 1234), ("tim_th_chi_sigmafit_1234", 40, 1000)], "1-2-3-4 fit_tt cases, 40 < chi2"),
+        ([("tt_task4_fit", 1234, 1234), ("tim_th_chi_sigmafit_1234", 0, 20)], "1-2-3-4 tt_task4_fit cases, chi2 < 20"),
+        ([("tt_task4_fit", 1234, 1234), ("tim_th_chi_sigmafit_1234", 20, 40)], "1-2-3-4 tt_task4_fit cases, 20 < chi2 < 40"),
+        ([("tt_task4_fit", 1234, 1234), ("tim_th_chi_sigmafit_1234", 40, 1000)], "1-2-3-4 tt_task4_fit cases, 40 < chi2"),
     ]
 
     df_cases_2 = [
@@ -13129,41 +9699,41 @@ if (
     ]
     
     df_cases_3 = [
-        ([(task4_plot_tt_column, 12, 12), ("iterations", 2, 2)], "1-2 cases, iterations = 2"),
-        ([(task4_plot_tt_column, 12, 12), ("iterations", 3, 3)], "1-2 cases, iterations = 3"),
-        ([(task4_plot_tt_column, 12, 12), ("iterations", 4, 4)], "1-2 cases, iterations = 4"),
-        ([(task4_plot_tt_column, 12, 12), ("iterations", 5, 5)], "1-2 cases, iterations = 5"),
-        ([(task4_plot_tt_column, 12, 12), ("iterations", 6, iter_max)], f"1-2 cases, iterations = 6 to {iter_max}"),
+        ([(task4_plot_tt_column, 12, 12), ("timtrack_iterations", 2, 2)], "1-2 cases, timtrack_iterations = 2"),
+        ([(task4_plot_tt_column, 12, 12), ("timtrack_iterations", 3, 3)], "1-2 cases, timtrack_iterations = 3"),
+        ([(task4_plot_tt_column, 12, 12), ("timtrack_iterations", 4, 4)], "1-2 cases, timtrack_iterations = 4"),
+        ([(task4_plot_tt_column, 12, 12), ("timtrack_iterations", 5, 5)], "1-2 cases, timtrack_iterations = 5"),
+        ([(task4_plot_tt_column, 12, 12), ("timtrack_iterations", 6, iter_max)], f"1-2 cases, timtrack_iterations = 6 to {iter_max}"),
         
-        ([(task4_plot_tt_column, 23, 23), ("iterations", 2, 2)], "2-3 cases, iterations = 2"),
-        ([(task4_plot_tt_column, 23, 23), ("iterations", 3, 3)], "2-3 cases, iterations = 3"),
-        ([(task4_plot_tt_column, 23, 23), ("iterations", 4, 4)], "2-3 cases, iterations = 4"),
-        ([(task4_plot_tt_column, 23, 23), ("iterations", 5, 5)], "2-3 cases, iterations = 5"),
-        ([(task4_plot_tt_column, 23, 23), ("iterations", 6, iter_max)], f"2-3 cases, iterations = 6 to {iter_max}"),
+        ([(task4_plot_tt_column, 23, 23), ("timtrack_iterations", 2, 2)], "2-3 cases, timtrack_iterations = 2"),
+        ([(task4_plot_tt_column, 23, 23), ("timtrack_iterations", 3, 3)], "2-3 cases, timtrack_iterations = 3"),
+        ([(task4_plot_tt_column, 23, 23), ("timtrack_iterations", 4, 4)], "2-3 cases, timtrack_iterations = 4"),
+        ([(task4_plot_tt_column, 23, 23), ("timtrack_iterations", 5, 5)], "2-3 cases, timtrack_iterations = 5"),
+        ([(task4_plot_tt_column, 23, 23), ("timtrack_iterations", 6, iter_max)], f"2-3 cases, timtrack_iterations = 6 to {iter_max}"),
         
-        ([(task4_plot_tt_column, 34, 34), ("iterations", 2, 2)], "3-4 cases, iterations = 2"),
-        ([(task4_plot_tt_column, 34, 34), ("iterations", 3, 3)], "3-4 cases, iterations = 3"),
-        ([(task4_plot_tt_column, 34, 34), ("iterations", 4, 4)], "3-4 cases, iterations = 4"),
-        ([(task4_plot_tt_column, 34, 34), ("iterations", 5, 5)], "3-4 cases, iterations = 5"),
-        ([(task4_plot_tt_column, 34, 34), ("iterations", 6, iter_max)], f"3-4 cases, iterations = 6 to {iter_max}"),
+        ([(task4_plot_tt_column, 34, 34), ("timtrack_iterations", 2, 2)], "3-4 cases, timtrack_iterations = 2"),
+        ([(task4_plot_tt_column, 34, 34), ("timtrack_iterations", 3, 3)], "3-4 cases, timtrack_iterations = 3"),
+        ([(task4_plot_tt_column, 34, 34), ("timtrack_iterations", 4, 4)], "3-4 cases, timtrack_iterations = 4"),
+        ([(task4_plot_tt_column, 34, 34), ("timtrack_iterations", 5, 5)], "3-4 cases, timtrack_iterations = 5"),
+        ([(task4_plot_tt_column, 34, 34), ("timtrack_iterations", 6, iter_max)], f"3-4 cases, timtrack_iterations = 6 to {iter_max}"),
         
-        ([(task4_plot_tt_column, 123, 123), ("iterations", 2, 2)], "1-2-3 cases, iterations = 2"),
-        ([(task4_plot_tt_column, 123, 123), ("iterations", 3, 3)], "1-2-3 cases, iterations = 3"),
-        ([(task4_plot_tt_column, 123, 123), ("iterations", 4, 4)], "1-2-3 cases, iterations = 4"),
-        ([(task4_plot_tt_column, 123, 123), ("iterations", 5, 5)], "1-2-3 cases, iterations = 5"),
-        ([(task4_plot_tt_column, 123, 123), ("iterations", 6, iter_max)], f"1-2-3 cases, iterations = 6 to {iter_max}"),
+        ([(task4_plot_tt_column, 123, 123), ("timtrack_iterations", 2, 2)], "1-2-3 cases, timtrack_iterations = 2"),
+        ([(task4_plot_tt_column, 123, 123), ("timtrack_iterations", 3, 3)], "1-2-3 cases, timtrack_iterations = 3"),
+        ([(task4_plot_tt_column, 123, 123), ("timtrack_iterations", 4, 4)], "1-2-3 cases, timtrack_iterations = 4"),
+        ([(task4_plot_tt_column, 123, 123), ("timtrack_iterations", 5, 5)], "1-2-3 cases, timtrack_iterations = 5"),
+        ([(task4_plot_tt_column, 123, 123), ("timtrack_iterations", 6, iter_max)], f"1-2-3 cases, timtrack_iterations = 6 to {iter_max}"),
         
-        ([(task4_plot_tt_column, 234, 234), ("iterations", 2, 2)], "2-3-4 cases, iterations = 2"),
-        ([(task4_plot_tt_column, 234, 234), ("iterations", 3, 3)], "2-3-4 cases, iterations = 3"),
-        ([(task4_plot_tt_column, 234, 234), ("iterations", 4, 4)], "2-3-4 cases, iterations = 4"),
-        ([(task4_plot_tt_column, 234, 234), ("iterations", 5, 5)], "2-3-4 cases, iterations = 5"),
-        ([(task4_plot_tt_column, 234, 234), ("iterations", 6, iter_max)], f"2-3-4 cases, iterations = 6 to {iter_max}"),
+        ([(task4_plot_tt_column, 234, 234), ("timtrack_iterations", 2, 2)], "2-3-4 cases, timtrack_iterations = 2"),
+        ([(task4_plot_tt_column, 234, 234), ("timtrack_iterations", 3, 3)], "2-3-4 cases, timtrack_iterations = 3"),
+        ([(task4_plot_tt_column, 234, 234), ("timtrack_iterations", 4, 4)], "2-3-4 cases, timtrack_iterations = 4"),
+        ([(task4_plot_tt_column, 234, 234), ("timtrack_iterations", 5, 5)], "2-3-4 cases, timtrack_iterations = 5"),
+        ([(task4_plot_tt_column, 234, 234), ("timtrack_iterations", 6, iter_max)], f"2-3-4 cases, timtrack_iterations = 6 to {iter_max}"),
         
-        ([(task4_plot_tt_column, 1234, 1234), ("iterations", 2, 2)], "1-2-3-4 cases, iterations = 2"),
-        ([(task4_plot_tt_column, 1234, 1234), ("iterations", 3, 3)], "1-2-3-4 cases, iterations = 3"),
-        ([(task4_plot_tt_column, 1234, 1234), ("iterations", 4, 4)], "1-2-3-4 cases, iterations = 4"),
-        ([(task4_plot_tt_column, 1234, 1234), ("iterations", 5, 5)], "1-2-3-4 cases, iterations = 5"),
-        ([(task4_plot_tt_column, 1234, 1234), ("iterations", 6, iter_max)], f"1-2-3-4 cases, iterations = 6 to {iter_max}"),
+        ([(task4_plot_tt_column, 1234, 1234), ("timtrack_iterations", 2, 2)], "1-2-3-4 cases, timtrack_iterations = 2"),
+        ([(task4_plot_tt_column, 1234, 1234), ("timtrack_iterations", 3, 3)], "1-2-3-4 cases, timtrack_iterations = 3"),
+        ([(task4_plot_tt_column, 1234, 1234), ("timtrack_iterations", 4, 4)], "1-2-3-4 cases, timtrack_iterations = 4"),
+        ([(task4_plot_tt_column, 1234, 1234), ("timtrack_iterations", 5, 5)], "1-2-3-4 cases, timtrack_iterations = 5"),
+        ([(task4_plot_tt_column, 1234, 1234), ("timtrack_iterations", 6, iter_max)], f"1-2-3-4 cases, timtrack_iterations = 6 to {iter_max}"),
     ]
     
     # df_cases_1 = [
@@ -13319,7 +9889,7 @@ if (
     
     
     # Comparison with alternative fitting -------------------------------------------------------------------
-    # plot_col = ['x', 'y', 'theta', 'phi', 's', 'delta_s', 'det_s', 'det_phi', 'det_theta', 'det_y', 'det_x']
+    # plot_col = ['x', 'y', 'theta', 'phi', 's', 'event_s_err', 'det_s', 'det_phi', 'det_theta', 'det_y', 'det_x']
     # for filters, title in df_cases_1:
     #     fig_idx = plot_hexbin_matrix(
     #         df_plot_ancillary,
@@ -13334,7 +9904,7 @@ if (
     #     )
     
     # plot_col = ['x', 'y', 'theta', 'phi', 's']
-    # plot_col = ['x', 'xp', 'delta_s', 'yp', 'y']
+    # plot_col = ['x', 'xp', 'event_s_err', 'yp', 'y']
     # for filters, title in df_cases_1:
     #     fig_idx = plot_hexbin_matrix(
     #         df_plot_ancillary,
@@ -13349,7 +9919,7 @@ if (
     #     )
     
     # Comparison with alternative fitting -------------------------------------------------------------------
-    # plot_col = ['x', 'y', 'theta', 'phi', 's', 'delta_s', 'det_s', 'det_phi', 'det_theta', 'det_y', 'det_x']
+    # plot_col = ['x', 'y', 'theta', 'phi', 's', 'event_s_err', 'det_s', 'det_phi', 'det_theta', 'det_y', 'det_x']
     # for filters, title in df_cases_3:
     #     fig_idx = plot_hexbin_matrix(
     #         df_plot_ancillary,
@@ -13365,7 +9935,7 @@ if (
     
     
     # # Comparison with alternative fitting -------------------------------------------------------------------
-    # plot_col = ['t0', 's', 'delta_s', 'det_s', 'det_s_ordinate']
+    # plot_col = ['t0', 's', 'event_s_err', 'det_s', 'det_s_ordinate']
     # for filters, title in df_cases_3:
     #     fig_idx = plot_hexbin_matrix(
     #         df_plot_ancillary,
@@ -13395,9 +9965,9 @@ if (
     #         plot_list
     #     )
     
-    _fit1234_all = pd.to_numeric(df_plot_ancillary.get("fit_tt"), errors="coerce")
+    _fit1234_all = pd.to_numeric(df_plot_ancillary.get("tt_task4_fit"), errors="coerce")
     _fit1234_mask = _fit1234_all.eq(1234.0)
-    global_variables["fit_tt_1234_scatter_source_n"] = int(_fit1234_mask.sum())
+    global_variables["tt_task4_fit_1234_scatter_source_n"] = int(_fit1234_mask.sum())
     for _prefix, _xcol, _ycol in (
         ("tim", "tim_x", "tim_y"),
         ("det", "det_x", "det_y"),
@@ -13411,7 +9981,7 @@ if (
                 (np.abs(_xvals) > float(strip_half)) | (np.abs(_yvals) > float(width_half))
             )
             _outside_count = int(np.count_nonzero(_outside))
-            global_variables[f"fit_tt_1234_{_prefix}_outside_plane1_n"] = _outside_count
+            global_variables[f"tt_task4_fit_1234_{_prefix}_outside_plane1_n"] = _outside_count
             print(
                 "[FIT_TT_1234_PLANE1_ACCEPTANCE] "
                 f"source={_prefix} total={int(_fit1234_mask.sum())} outside={_outside_count} "
@@ -13514,9 +10084,9 @@ if (
                 alias="timtrack_results_scatter_combination_projections",
             )
     
-    # df_plot_ancillary_conv = df_plot_ancillary[df_plot_ancillary['converged'] == 1].copy()
+    # df_plot_ancillary_conv = df_plot_ancillary[df_plot_ancillary['timtrack_converged'] == 1].copy()
     # # Comparison with alternative fitting -------------------------------------------------------------------
-    # plot_col = ['x', 'y', 'theta', 'phi', 'delta_s']
+    # plot_col = ['x', 'y', 'theta', 'phi', 'event_s_err']
     # for filters, title in df_cases_1:
     #     fig_idx = plot_hexbin_matrix(
     #         df_plot_ancillary,
@@ -13530,9 +10100,9 @@ if (
     #         plot_list
     #     )
     
-    # df_plot_ancillary_conv = df_plot_ancillary[df_plot_ancillary['converged'] == 0].copy()
+    # df_plot_ancillary_conv = df_plot_ancillary[df_plot_ancillary['timtrack_converged'] == 0].copy()
     # # Comparison with alternative fitting -------------------------------------------------------------------
-    # plot_col = ['x', 'y', 'theta', 'phi', 'delta_s']
+    # plot_col = ['x', 'y', 'theta', 'phi', 'event_s_err']
     # for filters, title in df_cases_1:
     #     fig_idx = plot_hexbin_matrix(
     #         df_plot_ancillary,
@@ -13590,12 +10160,12 @@ if create_plots:
     fig, axes = plt.subplots(2, 1, figsize=(7, 8), sharex=True)
     colors = plt.cm.tab10.colors
     bins = np.linspace(theta_left_filter, theta_right_filter, 150)
-    tt_values = sorted(df_filtered['tracking_tt'].dropna().unique(), key=lambda x: int(x))
+    tt_values = sorted(df_filtered['tt_task4_fit'].dropna().unique(), key=lambda x: int(x))
 
     for row_idx, (theta_col, row_label) in enumerate([('tim_theta', r'$\theta$'), ('det_theta', r'$\theta_{\mathrm{alt}}$')]):
         ax = axes[row_idx]
         for i, tt_val in enumerate(tt_values):
-            df_tt = df_filtered[df_filtered['tracking_tt'] == tt_val]
+            df_tt = df_filtered[df_filtered['tt_task4_fit'] == tt_val]
             theta_vals = df_tt[theta_col].dropna()
             if len(theta_vals) < 10:
                 continue
@@ -13608,12 +10178,12 @@ if create_plots:
         ax.set_title(f'{row_label} — Zoom-in')
         ax.grid(True)
         if row_idx == 0:
-            ax.legend(title='tracking_tt', fontsize='small')
+            ax.legend(title='tt_task4_fit', fontsize='small')
 
     plt.suptitle(r'$\theta$ and $\theta_{\mathrm{alt}}$ (Zoom-in) by Tracking TT Type', fontsize=15)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     if save_plots:
-        final_filename = f'{fig_idx}_theta_det_theta_zoom_tracking_tt.png'
+        final_filename = f'{fig_idx}_theta_det_theta_zoom_tt_task4_fit.png'
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
@@ -13629,7 +10199,7 @@ if create_plots and task4_plot_enabled("events_per_second_by_plane_cardinality_d
 
     fig, axes = plt.subplots(2, 3, figsize=(24, 12), sharey=True)
     colors = plt.colormaps['tab10']
-    tt_types = ['raw_tt', task4_plot_tt_column]
+    tt_types = ['tt_task0_raw', task4_plot_tt_column]
     row_titles = ['Raw TT', task4_plot_tt_column]
 
     for row_idx, column_chosen in enumerate(tt_types):
@@ -13739,7 +10309,7 @@ print("----------------------------------------------------------------------")
 missing_charge_cols = []
 for plane in ['1', '2', '3', '4']:
     for strip in range(1, 5):
-        source_col = f'Q{plane}_Q_sum_{strip}'
+        source_col = f'p{plane}_s{strip}_qsum'
         if source_col not in working_df.columns:
             working_df[source_col] = np.nan
             missing_charge_cols.append(source_col)
@@ -13754,18 +10324,18 @@ if missing_charge_cols:
 for i, plane in enumerate(['1', '2', '3', '4']):
     for j in range(4):
         strip = j + 1
-        source_col = f'Q{plane}_Q_sum_{strip}'
-        working_df[f'Q_P{plane}s{strip}'] = working_df[source_col]
+        source_col = f'p{plane}_s{strip}_qsum'
+        working_df[f'p{plane}_s{strip}_qsum'] = working_df[source_col]
 
 if self_trigger:
     for i, plane in enumerate(['1', '2', '3', '4']):
         for j in range(4):
             strip = j + 1
-            source_col = f'Q{plane}_Q_sum_{strip}'
+            source_col = f'p{plane}_s{strip}_qsum'
             if source_col not in working_st_df.columns:
                 working_st_df[source_col] = np.nan
                 print(f"Warning: missing self-trigger charge column; created NaN: {source_col}")
-            working_st_df[f'Q_P{plane}s{strip}'] = working_st_df[source_col]
+            working_st_df[f'p{plane}_s{strip}_qsum'] = working_st_df[source_col]
 
 # Charge checking --------------------------------------------------------------------------------------------------------
 if self_trigger:
@@ -13775,7 +10345,7 @@ if self_trigger:
         for i in range(1, 5):
             for j in range(1, 5):
                 # Get the column name
-                col_name = f"Q_P{i}s{j}"
+                col_name = f"p{i}_s{j}_qsum"
                 
                 # Plot the histogram
                 v = working_df[col_name]
@@ -13822,7 +10392,7 @@ if self_trigger:
         for i in range(1, 5):
             for j in range(1, 5):
                 # Get the column name
-                col_name = f"Q_P{i}s{j}"
+                col_name = f"p{i}_s{j}_qsum"
 
                 # Plot the histogram
                 v = plot_def_df[col_name]
@@ -13865,11 +10435,14 @@ if self_trigger:
 # Create and save the PDF -----------------------------------------------------
 # -----------------------------------------------------------------------------
 
+# Ensure Task 4 plots and output use the same final charge-based trigger type.
+working_df = refresh_task4_trigger_columns(working_df)
+
 _task4_charge_series = None
 _task4_charge_source = None
 _task4_charge_series, _task4_charge_source = _resolve_task4_total_event_charge_series(working_df)
 if _task4_charge_source is not None:
-    print(f"TASK_4 charge_event source: {_task4_charge_source}")
+    print(f"TASK_4 event_charge source: {_task4_charge_source}")
 
 if (
     _task4_charge_series is not None
@@ -13887,7 +10460,7 @@ if (
     ]
     _task4_charge_plot_values = _task4_charge_plot_values[_task4_charge_plot_values >= 0.0]
 
-    _task4_fit_tt_series = pd.to_numeric(
+    _task4_tt_task4_fit_series = pd.to_numeric(
         working_df.get(task4_plot_tt_column, pd.Series(np.nan, index=working_df.index)),
         errors="coerce",
     )
@@ -13925,7 +10498,7 @@ if (
         if _task4_tt_value is None:
             _task4_subset = _task4_charge_plot_values
         else:
-            _task4_tt_mask = _task4_fit_tt_series == _task4_tt_value
+            _task4_tt_mask = _task4_tt_task4_fit_series == _task4_tt_value
             _task4_subset = _task4_charge_series.loc[_task4_tt_mask]
             _task4_subset = pd.to_numeric(_task4_subset, errors="coerce")
             _task4_subset = _task4_subset[
@@ -13974,14 +10547,14 @@ if (
         plt.show()
     plt.close(_task4_fig)
 elif _task4_charge_series is None:
-    print("[WARN] TASK_4 total_event_charge_histogram skipped: no usable charge_event source.")
+    print("[WARN] TASK_4 total_event_charge_histogram skipped: no usable event_charge source.")
 
 # Final task-rate plot included in the Task 4 PDF.
 if save_plots and task4_plot_enabled("acquisition_rate_vs_time_by_task_tt_with_histograms"):
     rate_fig = create_rate_vs_time_by_task_tt_with_histograms(
         working_df,
-        tt_column="fit_tt",
-        title=f"Task 4 acquisition rate by fit_tt, {basename_no_ext}",
+        tt_column="tt_task4_fit",
+        title=f"Task 4 acquisition rate by tt_task4_fit, {basename_no_ext}",
         accumulation_window_seconds=config.get("acquisition_rate_accumulation_window_seconds", 60),
         rate_histogram_bins=config.get("acquisition_rate_task_tt_histogram_bins", 80),
         y_limit_left=config.get("acquisition_rate_task_tt_ylim_left", 0),
@@ -14000,7 +10573,7 @@ if save_plots and task4_plot_enabled("acquisition_rate_vs_time_by_task_tt_with_h
         )
         plt.close(rate_fig)
     else:
-        print("Task 4 acquisition-rate-by-task-tt plot skipped: no valid fit_tt/datetime rows.")
+        print("Task 4 acquisition-rate-by-task-tt plot skipped: no valid tt_task4_fit/datetime rows.")
 
 # Force PDF creation when Task 4 plotting is enabled.
 if create_plots or create_essential_plots:
@@ -14078,11 +10651,11 @@ component_cols = []
 for i_plane in range(1, 5):
     component_cols.extend(
         [
-            f"P{i_plane}_T_sum_final",
-            f"P{i_plane}_T_dif_final",
-            f"P{i_plane}_Q_sum_final",
-            f"P{i_plane}_Q_dif_final",
-            f"P{i_plane}_Y_final",
+            f"p{i_plane}_tsum",
+            f"p{i_plane}_tdif",
+            f"p{i_plane}_qsum",
+            f"p{i_plane}_qdif",
+            f"p{i_plane}_ypos",
         ]
     )
 component_cols = [col for col in component_cols if col in working_df.columns]
@@ -14113,36 +10686,36 @@ timtrack_outcome_keys = (
     "timtrack_itermax_reached_ratio",
     "timtrack_itermax_runout_n",
     "timtrack_itermax_runout_ratio",
-    "timtrack_converged_on_cocut_n",
-    "timtrack_converged_on_cocut_ratio",
+    "timtrack_timtrack_converged_on_cocut_n",
+    "timtrack_timtrack_converged_on_cocut_ratio",
 )
 
-if run_timtrack_fit and {"tim_iterations", "tim_conv_distance"}.issubset(working_df.columns):
-    tim_iterations_arr = pd.to_numeric(
-        working_df["tim_iterations"],
+if run_timtrack_fit and {"tim_timtrack_iterations", "tim_timtrack_conv_distance"}.issubset(working_df.columns):
+    tim_timtrack_iterations_arr = pd.to_numeric(
+        working_df["tim_timtrack_iterations"],
         errors="coerce",
     ).to_numpy(dtype=float)
-    tim_conv_distance_arr = pd.to_numeric(
-        working_df["tim_conv_distance"],
+    tim_timtrack_conv_distance_arr = pd.to_numeric(
+        working_df["tim_timtrack_conv_distance"],
         errors="coerce",
     ).to_numpy(dtype=float)
 
-    attempted_mask = np.isfinite(tim_iterations_arr) & (tim_iterations_arr > 0)
+    attempted_mask = np.isfinite(tim_timtrack_iterations_arr) & (tim_timtrack_iterations_arr > 0)
     attempted_count = int(np.count_nonzero(attempted_mask))
     global_variables["timtrack_attempted_fit_n"] = attempted_count
 
     if attempted_count > 0:
-        itermax_reached_mask = attempted_mask & (tim_iterations_arr >= float(iter_max))
-        converged_on_cocut_mask = (
+        itermax_reached_mask = attempted_mask & (tim_timtrack_iterations_arr >= float(iter_max))
+        timtrack_converged_on_cocut_mask = (
             attempted_mask
-            & np.isfinite(tim_conv_distance_arr)
-            & (tim_conv_distance_arr <= float(cocut))
+            & np.isfinite(tim_timtrack_conv_distance_arr)
+            & (tim_timtrack_conv_distance_arr <= float(cocut))
         )
-        itermax_runout_mask = itermax_reached_mask & (~converged_on_cocut_mask)
+        itermax_runout_mask = itermax_reached_mask & (~timtrack_converged_on_cocut_mask)
 
         itermax_reached_count = int(np.count_nonzero(itermax_reached_mask))
         itermax_runout_count = int(np.count_nonzero(itermax_runout_mask))
-        converged_on_cocut_count = int(np.count_nonzero(converged_on_cocut_mask))
+        timtrack_converged_on_cocut_count = int(np.count_nonzero(timtrack_converged_on_cocut_mask))
 
         global_variables["timtrack_itermax_reached_n"] = itermax_reached_count
         global_variables["timtrack_itermax_reached_ratio"] = (
@@ -14152,17 +10725,17 @@ if run_timtrack_fit and {"tim_iterations", "tim_conv_distance"}.issubset(working
         global_variables["timtrack_itermax_runout_ratio"] = (
             itermax_runout_count / attempted_count
         )
-        global_variables["timtrack_converged_on_cocut_n"] = converged_on_cocut_count
-        global_variables["timtrack_converged_on_cocut_ratio"] = (
-            converged_on_cocut_count / attempted_count
+        global_variables["timtrack_timtrack_converged_on_cocut_n"] = timtrack_converged_on_cocut_count
+        global_variables["timtrack_timtrack_converged_on_cocut_ratio"] = (
+            timtrack_converged_on_cocut_count / attempted_count
         )
     else:
         global_variables["timtrack_itermax_reached_n"] = 0
         global_variables["timtrack_itermax_reached_ratio"] = np.nan
         global_variables["timtrack_itermax_runout_n"] = 0
         global_variables["timtrack_itermax_runout_ratio"] = np.nan
-        global_variables["timtrack_converged_on_cocut_n"] = 0
-        global_variables["timtrack_converged_on_cocut_ratio"] = np.nan
+        global_variables["timtrack_timtrack_converged_on_cocut_n"] = 0
+        global_variables["timtrack_timtrack_converged_on_cocut_ratio"] = np.nan
 else:
     for metadata_key in timtrack_outcome_keys:
         global_variables[metadata_key] = np.nan
@@ -14214,20 +10787,20 @@ else:
     global_variables["fit_compare_median_relerr_timtrack_s_to_1_over_c"] = np.nan
 
 tt_columns_desired = [
-    'event_id', 'datetime', 'raw_tt', 'clean_tt', 'cal_tt',
-    'list_tt', 'tracking_tt', 'extension_tt', 'fit_tt'
+    'event_id', 'datetime', 'tt_task0_raw', 'tt_task1_clean', 'tt_task2_cal',
+    'tt_task3_list', 'tt_task4_fit', 'tt_task3_list', 'tt_task4_fit'
 ]
 tt_columns_present = [col for col in tt_columns_desired if col in working_df.columns]
 param_hash_cols = ["param_hash"] if "param_hash" in working_df.columns else []
 upstream_offender_count_cols = [
     col_name
     for col_name in (
-        "task1_problematic_channel_count",
-        "task1_problematic_channel_resolution_exact",
-        "task2_problematic_strip_count",
-        "task2_problematic_strip_resolution_exact",
-        "task3_problematic_plane_count",
-        "task3_problematic_plane_resolution_exact",
+        "filter_task1_problematic_channel_count",
+        "filter_task1_problematic_channel_exact",
+        "filter_task2_problematic_strip_count",
+        "filter_task2_problematic_strip_exact",
+        "filter_task3_problematic_plane_count",
+        "filter_task3_problematic_plane_exact",
     )
     if col_name in working_df.columns
 ]
@@ -14247,7 +10820,7 @@ columns_to_keep = (
         # 'chi_timtrack', 'chi_alternative',
 
         # Strip-level time and charge info (ordered by plane and strip)
-        *[f'Q_P{p}s{s}' for p in range(1, 5) for s in range(1, 5)],
+        *[f'p{p}_s{s}_qsum' for p in range(1, 5) for s in range(1, 5)],
         
     ]
 )
@@ -14291,19 +10864,19 @@ print(f"Original number of events in the dataframe: {original_number_of_events}"
 if not globals().get("task4_final_filter_applied", False):
     raise RuntimeError("Task 4 final filtering was not applied before the plotting/output stage.")
 
-list_tt_int = pd.to_numeric(working_df["list_tt"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
-fit_tt_int = pd.to_numeric(working_df["fit_tt"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
+tt_task3_list_int = pd.to_numeric(working_df["tt_task3_list"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
+tt_task4_fit_int = pd.to_numeric(working_df["tt_task4_fit"], errors="coerce").fillna(0).to_numpy(dtype=np.int32)
 
-fit_vals, fit_counts = np.unique(fit_tt_int, return_counts=True)
+fit_vals, fit_counts = np.unique(tt_task4_fit_int, return_counts=True)
 for tt_value, count in zip(fit_vals, fit_counts):
     tt_label = normalize_tt_label(tt_value)
-    global_variables[f"fit_tt_{tt_label}_count"] = int(count)
+    global_variables[f"tt_task4_fit_{tt_label}_count"] = int(count)
 
-combo_pairs = np.column_stack((list_tt_int, fit_tt_int))
+combo_pairs = np.column_stack((tt_task3_list_int, tt_task4_fit_int))
 combo_vals, combo_counts = np.unique(combo_pairs, axis=0, return_counts=True)
-for (list_tt_value, fit_tt_value), count in zip(combo_vals, combo_counts):
-    combo_label = normalize_tt_label(f"{int(list_tt_value)}_{int(fit_tt_value)}")
-    global_variables[f"list_to_fit_tt_{combo_label}_count"] = int(count)
+for (tt_task3_list_value, tt_task4_fit_value), count in zip(combo_vals, combo_counts):
+    combo_label = normalize_tt_label(f"{int(tt_task3_list_value)}_{int(tt_task4_fit_value)}")
+    global_variables[f"list_to_tt_task4_fit_{combo_label}_count"] = int(count)
 
 # Final number of events
 final_number_of_events = len(working_df)
@@ -14432,7 +11005,7 @@ print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
 # -------------------------------------------------------------------------------
 
 global_variables.update(build_events_per_second_metadata(working_df))
-ensure_global_count_keys(("list_tt", "fit_tt", "list_to_fit_tt"))
+ensure_global_count_keys(("tt_task3_list", "tt_task4_fit", "list_to_tt_task4_fit"))
 chi2_four_plane_bins = np.linspace(0.0, 100.0, 100)
 chi2_four_plane_values = np.array([], dtype=float)
 if "tim_th_chi_sigmafit_1234" in working_df.columns:
@@ -14446,9 +11019,9 @@ if "tim_th_chi_sigmafit_1234" in working_df.columns:
             working_df.loc[base_cond, task4_plot_tt_column],
             errors="coerce",
         ).to_numpy(dtype=float, copy=False)
-    elif "fit_tt" in working_df.columns:
+    elif "tt_task4_fit" in working_df.columns:
         chi2_tt_series = pd.to_numeric(
-            working_df.loc[base_cond, "fit_tt"],
+            working_df.loc[base_cond, "tt_task4_fit"],
             errors="coerce",
         ).to_numpy(dtype=float, copy=False)
     if chi2_tt_series is not None:
@@ -14481,7 +11054,7 @@ add_normalized_count_metadata(
 )
 set_global_rate_from_tt_rates(
     global_variables,
-    preferred_prefixes=("fit_tt", "list_tt"),
+    preferred_prefixes=("tt_task4_fit", "tt_task3_list"),
     log_fn=print,
 )
 global_variables["filename_base"] = filename_base
@@ -14528,7 +11101,7 @@ metadata_chi2_four_plane_csv_path = save_metadata(
 print(f"Metadata (chi2_four_plane) CSV updated at: {metadata_chi2_four_plane_csv_path}")
 
 prune_redundant_count_metadata(global_variables, log_fn=print)
-trigger_type_prefixes = ("list_tt", "fit_tt", "list_to_fit_tt")
+trigger_type_prefixes = ("tt_task3_list", "tt_task4_fit", "list_to_tt_task4_fit")
 trigger_type_variables = extract_trigger_type_metadata(
     global_variables,
     trigger_type_prefixes,
@@ -14542,7 +11115,7 @@ trigger_type_variables["count_rate_denominator_seconds"] = rate_histogram_variab
 add_trigger_type_total_offender_threshold_metadata(
     trigger_type_variables,
     working_df,
-    stage_tt_columns=("list_tt", "fit_tt"),
+    stage_tt_columns=("tt_task3_list", "tt_task4_fit"),
     denominator_seconds=trigger_type_variables["count_rate_denominator_seconds"],
 )
 metadata_trigger_type_csv_path = save_metadata(
@@ -14689,12 +11262,12 @@ _t_sec = time.perf_counter()
 if _task4_charge_series is None:
     _task4_charge_series, _task4_charge_source = _resolve_task4_total_event_charge_series(working_df)
     if _task4_charge_source is not None:
-        print(f"TASK_4 charge_event source: {_task4_charge_source}")
+        print(f"TASK_4 event_charge source: {_task4_charge_source}")
 
 if _task4_charge_series is not None:
-    working_df["charge_event"] = _task4_charge_series.astype(float)
+    working_df["event_charge"] = _task4_charge_series.astype(float)
 else:
-    print("[WARN] TASK_4 could not persist a usable charge_event column.")
+    print("[WARN] TASK_4 could not persist a usable event_charge column.")
 
 # Ensure no figure handles remain open before persistence/final move.
 plt.close("all")
@@ -14709,6 +11282,7 @@ if joined_analysis_active and joined_source_file_column in working_df.columns:
             columns=[joined_source_file_column, joined_source_basename_column],
             errors="ignore",
         )
+        joined_output_df = canonicalize_step1_columns(joined_output_df)
         joined_output_df.to_parquet(
             joined_out_path,
             engine="pyarrow",
@@ -14721,6 +11295,7 @@ else:
         columns=[joined_source_file_column, joined_source_basename_column],
         errors="ignore",
     )
+    output_df = canonicalize_step1_columns(output_df)
     output_df.to_parquet(
         OUT_PATH,
         engine="pyarrow",

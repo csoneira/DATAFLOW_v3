@@ -124,10 +124,13 @@ from MASTER.common.step1_activation import (
 )
 from MASTER.common.step1_shared import (
     add_normalized_count_metadata,
+    add_topology_task2_strip,
+    add_topology_task3_plane,
     add_trigger_type_total_offender_threshold_metadata,
     build_events_per_second_metadata,
     build_step1_cli_parser,
     build_step1_filtered_print,
+    canonicalize_step1_columns,
     collect_columns,
     coerce_nonnegative_float_config,
     coerce_positive_int_config,
@@ -317,11 +320,11 @@ def plot_task3_filtered_rpc_tsum_vs_qsum(
 
     for i_plane in range(1, 5):
         ax = axes.flat[i_plane - 1]
-        t_sum_col = f"P{i_plane}_T_sum_final"
-        t_dif_col = f"P{i_plane}_T_dif_final"
-        q_sum_col = f"P{i_plane}_Q_sum_final"
-        q_dif_col = f"P{i_plane}_Q_dif_final"
-        y_col = f"P{i_plane}_Y_final"
+        t_sum_col = f"p{i_plane}_tsum"
+        t_dif_col = f"p{i_plane}_tdif"
+        q_sum_col = f"p{i_plane}_qsum"
+        q_dif_col = f"p{i_plane}_qdif"
+        y_col = f"p{i_plane}_ypos"
         required_cols = [t_sum_col, t_dif_col, q_sum_col, q_dif_col, y_col]
 
         if not all(col in df_input.columns for col in required_cols):
@@ -371,11 +374,11 @@ def plot_task3_filtered_rpc_tsum_vs_qsum_per_combination(
     plot_list: list[str],
     basename: str,
 ) -> int:
-    tt_column = "list_tt" if "list_tt" in df_input.columns else "cal_tt"
+    tt_column = "tt_task3_list" if "tt_task3_list" in df_input.columns else "tt_task2_cal"
     if tt_column not in df_input.columns:
         print(
             "Warning: cannot create filtered_rpc_tsum_vs_qsum_scatter_per_combination "
-            "because neither 'list_tt' nor 'cal_tt' exists."
+            "because neither 'tt_task3_list' nor 'tt_task2_cal' exists."
         )
         return fig_idx_value
 
@@ -394,11 +397,11 @@ def plot_task3_filtered_rpc_tsum_vs_qsum_per_combination(
         tt_mask = tt_labels == tt_label
         for col_idx, i_plane in enumerate(range(1, 5)):
             ax = axes[row_idx, col_idx]
-            t_sum_col = f"P{i_plane}_T_sum_final"
-            t_dif_col = f"P{i_plane}_T_dif_final"
-            q_sum_col = f"P{i_plane}_Q_sum_final"
-            q_dif_col = f"P{i_plane}_Q_dif_final"
-            y_col = f"P{i_plane}_Y_final"
+            t_sum_col = f"p{i_plane}_tsum"
+            t_dif_col = f"p{i_plane}_tdif"
+            q_sum_col = f"p{i_plane}_qsum"
+            q_dif_col = f"p{i_plane}_qdif"
+            y_col = f"p{i_plane}_ypos"
             required_cols = [t_sum_col, t_dif_col, q_sum_col, q_dif_col, y_col]
 
             if not all(col in df_input.columns for col in required_cols):
@@ -680,7 +683,7 @@ def _task3_plane_charge_arrays(df: pd.DataFrame) -> tuple[list[str], list[np.nda
     labels: list[str] = []
     arrays: list[np.ndarray] = []
     for plane in range(1, 5):
-        column_name = f"P{plane}_Q_sum_final"
+        column_name = f"p{plane}_qsum"
         if column_name in df.columns:
             arr = pd.to_numeric(df[column_name], errors="coerce").to_numpy(dtype=float)
         else:
@@ -748,7 +751,7 @@ def store_task3_plane_activation_snapshot(
         event_counts_by_tt,
     )
 
-    q_sum_cols = [f"P{plane}_Q_sum_final" for plane in range(1, 5)]
+    q_sum_cols = [f"p{plane}_qsum" for plane in range(1, 5)]
     streamer_threshold, _ = select_task3_streamer_threshold(
         df,
         q_sum_cols,
@@ -950,7 +953,7 @@ def compute_qsum_threshold_tt(df: pd.DataFrame, threshold: float) -> pd.Series:
     """Return TT labels using only planes with P*_Q_sum_final > threshold."""
     tt_str = pd.Series("", index=df.index, dtype="object")
     for plane in range(1, 5):
-        col_name = f"P{plane}_Q_sum_final"
+        col_name = f"p{plane}_qsum"
         if col_name not in df.columns:
             continue
         charge_vals = pd.to_numeric(df[col_name], errors="coerce")
@@ -963,7 +966,7 @@ def compute_qsum_threshold_full_strip_patterns(df: pd.DataFrame, threshold: floa
     plane_arrays: list[np.ndarray] = []
     for plane in range(1, 5):
         strip_col = f"active_strips_P{plane}"
-        qsum_col = f"P{plane}_Q_sum_final"
+        qsum_col = f"p{plane}_qsum"
 
         if strip_col in df.columns:
             strip_vals = df[strip_col].fillna("0000").astype(str)
@@ -990,8 +993,8 @@ def compute_qsum_threshold_full_strip_patterns(df: pd.DataFrame, threshold: floa
 
 def compute_qsum_threshold_tsum_window(df: pd.DataFrame, threshold: float) -> tuple[pd.Series, pd.Series]:
     """Compute T_sum coincidence window=max-min across planes with Q_sum > threshold."""
-    t_cols = [f"P{plane}_T_sum_final" for plane in range(1, 5)]
-    q_cols = [f"P{plane}_Q_sum_final" for plane in range(1, 5)]
+    t_cols = [f"p{plane}_tsum" for plane in range(1, 5)]
+    q_cols = [f"p{plane}_qsum" for plane in range(1, 5)]
 
     t_vals = np.full((len(df), 4), np.nan, dtype=float)
     q_vals = np.full((len(df), 4), np.nan, dtype=float)
@@ -1056,7 +1059,7 @@ def compute_source_tt_min_charge(df: pd.DataFrame, source_tt: object) -> pd.Seri
     if not planes:
         return pd.Series(np.nan, index=df.index, dtype=float)
 
-    cols = [f"P{plane}_Q_sum_final" for plane in planes if f"P{plane}_Q_sum_final" in df.columns]
+    cols = [f"p{plane}_qsum" for plane in planes if f"p{plane}_qsum" in df.columns]
     if not cols:
         return pd.Series(np.nan, index=df.index, dtype=float)
 
@@ -1143,7 +1146,7 @@ def compute_task3_charge_topology_codes(
     topology_code_arrays: list[np.ndarray] = []
 
     for plane in range(1, 5):
-        q_sum_col = f"P{plane}_Q_sum_final"
+        q_sum_col = f"p{plane}_qsum"
         if q_sum_col in df.columns:
             q_sum_values = pd.to_numeric(df[q_sum_col], errors="coerce").to_numpy(dtype=float)
         else:
@@ -1430,11 +1433,11 @@ def collect_task3_plane_final_map(df: pd.DataFrame) -> dict[int, dict[str, str]]
     plane_map: dict[int, dict[str, str]] = {}
     for plane in range(1, 5):
         cols = {
-            "T_sum": f"P{plane}_T_sum_final",
-            "T_dif": f"P{plane}_T_dif_final",
-            "Q_sum": f"P{plane}_Q_sum_final",
-            "Q_dif": f"P{plane}_Q_dif_final",
-            "Y": f"P{plane}_Y_final",
+            "T_sum": f"p{plane}_tsum",
+            "T_dif": f"p{plane}_tdif",
+            "Q_sum": f"p{plane}_qsum",
+            "Q_dif": f"p{plane}_qdif",
+            "Y": f"p{plane}_ypos",
         }
         if all(col in df.columns for col in cols.values()):
             plane_map[plane] = cols
@@ -2106,7 +2109,7 @@ def apply_task3_plane_combination_filter(
 
 
 def _task3_filter_tt_series(df: pd.DataFrame) -> pd.Series:
-    for candidate in ("list_tt", "cal_tt", "clean_tt", "raw_tt"):
+    for candidate in ("tt_task3_list", "tt_task2_cal", "tt_task1_clean", "tt_task0_raw"):
         if candidate in df.columns:
             return df[candidate].apply(normalize_tt_label).astype(str)
     return pd.Series(["0"] * len(df), index=df.index, dtype=str)
@@ -2778,11 +2781,11 @@ def _zpos_from_conf(row):
 def record_filter6_counts(df: pd.DataFrame, tag: str) -> None:
     for i_plane in range(1, 5):
         columns = {
-            "T_sum": f"P{i_plane}_T_sum_final",
-            "T_diff": f"P{i_plane}_T_dif_final",
-            "Q_sum": f"P{i_plane}_Q_sum_final",
-            "Q_diff": f"P{i_plane}_Q_dif_final",
-            "Y": f"P{i_plane}_Y_final",
+            "T_sum": f"p{i_plane}_tsum",
+            "T_diff": f"p{i_plane}_tdif",
+            "Q_sum": f"p{i_plane}_qsum",
+            "Q_diff": f"p{i_plane}_qdif",
+            "Y": f"p{i_plane}_ypos",
         }
         for label, col in columns.items():
             if col in df:
@@ -2821,7 +2824,7 @@ TASK3_PLOT_ALIASES: tuple[str, ...] = (
     "tdiff_pattern_sigma_vs_charge",
     "tdiff_pattern_sigma1_charge_surface",
     "tdiff_pattern_sigma2_charge_surface",
-    "y_position_by_cal_tt",
+    "y_position_by_tt_task2_cal",
     "strip_variable_pairgrid",
     "self_trigger_strip_variable_pairgrid",
     "rpc_variables_hexbin",
@@ -2836,14 +2839,14 @@ TASK3_PLOT_ALIASES: tuple[str, ...] = (
     "filtered_rpc_tsum_vs_qsum_hexbin",
     "filtered_rpc_variables_hexbin",
     "prefilter_qsum_nonzero_debug",
-    "prefilter_list_tt_debug",
-    "list_tt_qsum_pairgrid",
+    "prefilter_tt_task3_list_debug",
+    "tt_task3_list_qsum_pairgrid",
     "all_events_charge_threshold_population",
-    "source_list_tt_charge_threshold_population",
-    "list_tt_transition_matrices",
-    "list_tt_retention_curves",
-    "list_tt_minimum_charge_distributions",
-    "list_tt_empirical_efficiency_vs_threshold",
+    "source_tt_task3_list_charge_threshold_population",
+    "tt_task3_list_transition_matrices",
+    "tt_task3_list_retention_curves",
+    "tt_task3_list_minimum_charge_distributions",
+    "tt_task3_list_empirical_efficiency_vs_threshold",
     "full_topology_threshold_retention",
     "full_topology_exact_retention",
     "full_topology_class_fraction",
@@ -3504,7 +3507,7 @@ FILTER_METRIC_NAMES: tuple[str, ...] = (
     "q_sum_all_zero_rows_removed_pct",
     "data_purity_percentage",
     "all_components_zero_rows_removed_pct",
-    "list_tt_lt_10_rows_removed_pct",
+    "tt_task3_list_lt_10_rows_removed_pct",
 )
 NOISE_CONTROL_RATE_DENOMINATOR_COLUMN = "count_rate_denominator_seconds"
 TASK3_NOISE_CONTROL_METRIC_NAMES: tuple[str, ...] = tuple(
@@ -4291,58 +4294,58 @@ Q_clip_max_ST = config.get("Q_clip_max_ST", 500)
 
 charge_per_strip_plot_threshold = config["charge_per_strip_plot_threshold"]
 charge_per_plane_plot_threshold = config["charge_per_plane_plot_threshold"]
-list_tt_qsum_pair_plot_mode = str(config.get("list_tt_qsum_pair_plot_mode", "hexbin")).strip().lower()
-if list_tt_qsum_pair_plot_mode not in {"hexbin", "scatter"}:
+tt_task3_list_qsum_pair_plot_mode = str(config.get("tt_task3_list_qsum_pair_plot_mode", "hexbin")).strip().lower()
+if tt_task3_list_qsum_pair_plot_mode not in {"hexbin", "scatter"}:
     print(
-        "Warning: invalid list_tt_qsum_pair_plot_mode="
-        f"{list_tt_qsum_pair_plot_mode!r}; using 'hexbin'."
+        "Warning: invalid tt_task3_list_qsum_pair_plot_mode="
+        f"{tt_task3_list_qsum_pair_plot_mode!r}; using 'hexbin'."
     )
-    list_tt_qsum_pair_plot_mode = "hexbin"
-_plot_charge_cap_raw = config.get("list_tt_qsum_pair_plot_charge_cap", None)
+    tt_task3_list_qsum_pair_plot_mode = "hexbin"
+_plot_charge_cap_raw = config.get("tt_task3_list_qsum_pair_plot_charge_cap", None)
 try:
     if _plot_charge_cap_raw in (None, ""):
-        list_tt_qsum_pair_plot_charge_cap = None
+        tt_task3_list_qsum_pair_plot_charge_cap = None
     else:
-        list_tt_qsum_pair_plot_charge_cap = float(_plot_charge_cap_raw)
+        tt_task3_list_qsum_pair_plot_charge_cap = float(_plot_charge_cap_raw)
 except (TypeError, ValueError):
     print(
-        "Warning: invalid list_tt_qsum_pair_plot_charge_cap="
+        "Warning: invalid tt_task3_list_qsum_pair_plot_charge_cap="
         f"{_plot_charge_cap_raw!r}; using automatic range."
     )
-    list_tt_qsum_pair_plot_charge_cap = None
+    tt_task3_list_qsum_pair_plot_charge_cap = None
 if (
-    list_tt_qsum_pair_plot_charge_cap is not None
-    and (not np.isfinite(list_tt_qsum_pair_plot_charge_cap) or list_tt_qsum_pair_plot_charge_cap <= 0)
+    tt_task3_list_qsum_pair_plot_charge_cap is not None
+    and (not np.isfinite(tt_task3_list_qsum_pair_plot_charge_cap) or tt_task3_list_qsum_pair_plot_charge_cap <= 0)
 ):
     print(
-        "Warning: non-positive list_tt_qsum_pair_plot_charge_cap="
-        f"{list_tt_qsum_pair_plot_charge_cap!r}; using automatic range."
+        "Warning: non-positive tt_task3_list_qsum_pair_plot_charge_cap="
+        f"{tt_task3_list_qsum_pair_plot_charge_cap!r}; using automatic range."
     )
-    list_tt_qsum_pair_plot_charge_cap = None
+    tt_task3_list_qsum_pair_plot_charge_cap = None
 
-_global_charge_limit_raw = config.get("list_tt_charge_limit", None)
+_global_charge_limit_raw = config.get("tt_task3_list_charge_limit", None)
 try:
     if _global_charge_limit_raw in (None, ""):
-        list_tt_charge_limit = None
+        tt_task3_list_charge_limit = None
     else:
-        list_tt_charge_limit = float(_global_charge_limit_raw)
+        tt_task3_list_charge_limit = float(_global_charge_limit_raw)
 except (TypeError, ValueError):
     print(
-        "Warning: invalid list_tt_charge_limit="
+        "Warning: invalid tt_task3_list_charge_limit="
         f"{_global_charge_limit_raw!r}; ignoring global charge limit."
     )
-    list_tt_charge_limit = None
-if list_tt_charge_limit is not None and (
-    not np.isfinite(list_tt_charge_limit) or list_tt_charge_limit <= 0
+    tt_task3_list_charge_limit = None
+if tt_task3_list_charge_limit is not None and (
+    not np.isfinite(tt_task3_list_charge_limit) or tt_task3_list_charge_limit <= 0
 ):
     print(
-        "Warning: non-positive list_tt_charge_limit="
-        f"{list_tt_charge_limit!r}; ignoring global charge limit."
+        "Warning: non-positive tt_task3_list_charge_limit="
+        f"{tt_task3_list_charge_limit!r}; ignoring global charge limit."
     )
-    list_tt_charge_limit = None
+    tt_task3_list_charge_limit = None
 
-_station_charge_limits_raw = config.get("list_tt_charge_limit_by_station", {})
-list_tt_charge_limit_station = None
+_station_charge_limits_raw = config.get("tt_task3_list_charge_limit_by_station", {})
+tt_task3_list_charge_limit_station = None
 if isinstance(_station_charge_limits_raw, dict):
     station_norm = str(station).strip()
     station_candidates = {
@@ -4366,7 +4369,7 @@ if isinstance(_station_charge_limits_raw, dict):
             )
             continue
         if np.isfinite(parsed_limit) and parsed_limit > 0:
-            list_tt_charge_limit_station = parsed_limit
+            tt_task3_list_charge_limit_station = parsed_limit
             break
         print(
             "Warning: non-positive station charge limit for "
@@ -4374,71 +4377,71 @@ if isinstance(_station_charge_limits_raw, dict):
         )
 elif _station_charge_limits_raw not in (None, ""):
     print(
-        "Warning: list_tt_charge_limit_by_station must be a mapping; "
+        "Warning: tt_task3_list_charge_limit_by_station must be a mapping; "
         f"got {_station_charge_limits_raw!r}."
     )
 
-list_tt_charge_limit_effective = list_tt_charge_limit_station
-if list_tt_charge_limit_effective is None:
-    list_tt_charge_limit_effective = list_tt_charge_limit
+tt_task3_list_charge_limit_effective = tt_task3_list_charge_limit_station
+if tt_task3_list_charge_limit_effective is None:
+    tt_task3_list_charge_limit_effective = tt_task3_list_charge_limit
 
-if list_tt_qsum_pair_plot_charge_cap is not None and list_tt_charge_limit_effective is not None:
-    list_tt_qsum_pair_plot_charge_cap = min(
-        float(list_tt_qsum_pair_plot_charge_cap),
-        float(list_tt_charge_limit_effective),
+if tt_task3_list_qsum_pair_plot_charge_cap is not None and tt_task3_list_charge_limit_effective is not None:
+    tt_task3_list_qsum_pair_plot_charge_cap = min(
+        float(tt_task3_list_qsum_pair_plot_charge_cap),
+        float(tt_task3_list_charge_limit_effective),
     )
-elif list_tt_qsum_pair_plot_charge_cap is None and list_tt_charge_limit_effective is not None:
-    list_tt_qsum_pair_plot_charge_cap = float(list_tt_charge_limit_effective)
+elif tt_task3_list_qsum_pair_plot_charge_cap is None and tt_task3_list_charge_limit_effective is not None:
+    tt_task3_list_qsum_pair_plot_charge_cap = float(tt_task3_list_charge_limit_effective)
 
-if list_tt_charge_limit_effective is not None:
+if tt_task3_list_charge_limit_effective is not None:
     print(
         "Task 3: effective charge limit cap for station "
-        f"{station} set to {float(list_tt_charge_limit_effective):g}."
+        f"{station} set to {float(tt_task3_list_charge_limit_effective):g}."
     )
 
-_list_tt_charge_thresholds_raw = config.get("list_tt_charge_thresholds", [0, 5, 10, 20, 50])
-if isinstance(_list_tt_charge_thresholds_raw, (int, float, str)):
-    _list_tt_charge_thresholds_raw = [_list_tt_charge_thresholds_raw]
-list_tt_charge_thresholds: list[float] = []
-for raw_threshold in _list_tt_charge_thresholds_raw:
+_tt_task3_list_charge_thresholds_raw = config.get("tt_task3_list_charge_thresholds", [0, 5, 10, 20, 50])
+if isinstance(_tt_task3_list_charge_thresholds_raw, (int, float, str)):
+    _tt_task3_list_charge_thresholds_raw = [_tt_task3_list_charge_thresholds_raw]
+tt_task3_list_charge_thresholds: list[float] = []
+for raw_threshold in _tt_task3_list_charge_thresholds_raw:
     try:
         threshold_value = float(raw_threshold)
     except (TypeError, ValueError):
-        print(f"Warning: invalid list_tt_charge_thresholds entry {raw_threshold!r}; skipping.")
+        print(f"Warning: invalid tt_task3_list_charge_thresholds entry {raw_threshold!r}; skipping.")
         continue
     if not np.isfinite(threshold_value) or threshold_value < 0:
-        print(f"Warning: non-finite or negative list_tt_charge_thresholds entry {raw_threshold!r}; skipping.")
+        print(f"Warning: non-finite or negative tt_task3_list_charge_thresholds entry {raw_threshold!r}; skipping.")
         continue
-    if threshold_value not in list_tt_charge_thresholds:
-        list_tt_charge_thresholds.append(threshold_value)
-if not list_tt_charge_thresholds:
-    list_tt_charge_thresholds = [0.0, 5.0, 10.0, 20.0, 50.0]
-manual_list_tt_charge_thresholds = list(list_tt_charge_thresholds)
-list_tt_charge_threshold_mode = str(config.get("list_tt_charge_threshold_mode", "manual")).strip().lower()
-if list_tt_charge_threshold_mode not in {"manual", "auto", "quantile"}:
+    if threshold_value not in tt_task3_list_charge_thresholds:
+        tt_task3_list_charge_thresholds.append(threshold_value)
+if not tt_task3_list_charge_thresholds:
+    tt_task3_list_charge_thresholds = [0.0, 5.0, 10.0, 20.0, 50.0]
+manual_tt_task3_list_charge_thresholds = list(tt_task3_list_charge_thresholds)
+tt_task3_list_charge_threshold_mode = str(config.get("tt_task3_list_charge_threshold_mode", "manual")).strip().lower()
+if tt_task3_list_charge_threshold_mode not in {"manual", "auto", "quantile"}:
     print(
-        "Warning: invalid list_tt_charge_threshold_mode="
-        f"{list_tt_charge_threshold_mode!r}; using 'manual'."
+        "Warning: invalid tt_task3_list_charge_threshold_mode="
+        f"{tt_task3_list_charge_threshold_mode!r}; using 'manual'."
     )
-    list_tt_charge_threshold_mode = "manual"
+    tt_task3_list_charge_threshold_mode = "manual"
 
-_auto_thr_quantile_raw = config.get("list_tt_charge_threshold_auto_quantile", 95.0)
+_auto_thr_quantile_raw = config.get("tt_task3_list_charge_threshold_auto_quantile", 95.0)
 try:
-    list_tt_charge_threshold_auto_quantile = float(_auto_thr_quantile_raw)
+    tt_task3_list_charge_threshold_auto_quantile = float(_auto_thr_quantile_raw)
 except (TypeError, ValueError):
-    list_tt_charge_threshold_auto_quantile = 95.0
-if not np.isfinite(list_tt_charge_threshold_auto_quantile):
-    list_tt_charge_threshold_auto_quantile = 95.0
-list_tt_charge_threshold_auto_quantile = float(
-    np.clip(list_tt_charge_threshold_auto_quantile, 50.0, 99.999)
+    tt_task3_list_charge_threshold_auto_quantile = 95.0
+if not np.isfinite(tt_task3_list_charge_threshold_auto_quantile):
+    tt_task3_list_charge_threshold_auto_quantile = 95.0
+tt_task3_list_charge_threshold_auto_quantile = float(
+    np.clip(tt_task3_list_charge_threshold_auto_quantile, 50.0, 99.999)
 )
 
-_auto_thr_steps_raw = config.get("list_tt_charge_threshold_auto_steps", 10)
+_auto_thr_steps_raw = config.get("tt_task3_list_charge_threshold_auto_steps", 10)
 try:
-    list_tt_charge_threshold_auto_steps = int(_auto_thr_steps_raw)
+    tt_task3_list_charge_threshold_auto_steps = int(_auto_thr_steps_raw)
 except (TypeError, ValueError):
-    list_tt_charge_threshold_auto_steps = 10
-list_tt_charge_threshold_auto_steps = max(2, list_tt_charge_threshold_auto_steps)
+    tt_task3_list_charge_threshold_auto_steps = 10
+tt_task3_list_charge_threshold_auto_steps = max(2, tt_task3_list_charge_threshold_auto_steps)
 
 full_topology_min_baseline_count = int(config.get("full_topology_min_baseline_count", 30))
 full_topology_min_baseline_count = max(1, full_topology_min_baseline_count)
@@ -5141,6 +5144,8 @@ for joined_record in joined_input_records:
     joined_path = joined_record["processing_file_path"]
     joined_frame = pd.read_parquet(joined_path, engine="pyarrow")
     joined_frame = joined_frame.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
+    joined_frame = canonicalize_step1_columns(joined_frame)
+    joined_frame = add_topology_task2_strip(joined_frame)
     if "event_id" not in joined_frame.columns:
         print(
             "Warning: 'event_id' missing in Task 3 input; reconstructing from "
@@ -5214,7 +5219,7 @@ if task3_plot_enabled("incoming_parquet_main_columns_debug"):
         for col in working_df.columns
         if any(pattern.match(col) for pattern in incoming_patterns)
     ]
-    main_cols.extend([col for col in ("raw_tt", "clean_tt", "cal_tt") if col in working_df.columns])
+    main_cols.extend([col for col in ("tt_task0_raw", "tt_task1_clean", "tt_task2_cal") if col in working_df.columns])
     seen = set()
     main_cols = [col for col in main_cols if not (col in seen or seen.add(col))]
     if main_cols:
@@ -5228,24 +5233,24 @@ if task3_plot_enabled("incoming_parquet_main_columns_debug"):
             max_cols_per_fig=20,
         )
 
-cal_tt_columns: dict[int, list[str]] = {}
+tt_task2_cal_columns: dict[int, list[str]] = {}
 for plane in range(1, 5):
-    cal_tt_columns[plane] = [
-        f"T{plane}_T_sum_{strip}" for strip in range(1, 5) if f"T{plane}_T_sum_{strip}" in working_df.columns
+    tt_task2_cal_columns[plane] = [
+        f"p{plane}_s{strip}_tsum" for strip in range(1, 5) if f"p{plane}_s{strip}_tsum" in working_df.columns
     ] + [
-        f"T{plane}_T_dif_{strip}" for strip in range(1, 5) if f"T{plane}_T_dif_{strip}" in working_df.columns
+        f"p{plane}_s{strip}_tdif" for strip in range(1, 5) if f"p{plane}_s{strip}_tdif" in working_df.columns
     ] + [
-        f"Q{plane}_Q_sum_{strip}" for strip in range(1, 5) if f"Q{plane}_Q_sum_{strip}" in working_df.columns
+        f"p{plane}_s{strip}_qsum" for strip in range(1, 5) if f"p{plane}_s{strip}_qsum" in working_df.columns
     ] + [
-        f"Q{plane}_Q_dif_{strip}" for strip in range(1, 5) if f"Q{plane}_Q_dif_{strip}" in working_df.columns
+        f"p{plane}_s{strip}_qdif" for strip in range(1, 5) if f"p{plane}_s{strip}_qdif" in working_df.columns
     ]
 
-# Keep cal_tt from Task 2 when present; compute only if missing.
-if "cal_tt" not in working_df.columns:
-    working_df = compute_tt(working_df, "cal_tt", cal_tt_columns)
+# Keep tt_task2_cal from Task 2 when present; compute only if missing.
+if "tt_task2_cal" not in working_df.columns:
+    working_df = compute_tt(working_df, "tt_task2_cal", tt_task2_cal_columns)
 else:
-    working_df.loc[:, "cal_tt"] = (
-        pd.to_numeric(working_df["cal_tt"], errors="coerce")
+    working_df.loc[:, "tt_task2_cal"] = (
+        pd.to_numeric(working_df["tt_task2_cal"], errors="coerce")
         .fillna(0)
         .astype(int)
     )
@@ -5429,7 +5434,7 @@ print("----------------------------------------------------------------------")
 active_strip_cols = {}
 
 for plane_id in range(1, 5):
-    cols = [f'Q{plane_id}_Q_sum_{i}' for i in range(1, 5)]
+    cols = [f'p{plane_id}_s{i}_qsum' for i in range(1, 5)]
     Q_plane = working_df[cols].values  # shape (N, 4)
     active_strips_binary = (Q_plane > 0).astype(int)
     binary_strings = [''.join(map(str, row)) for row in active_strips_binary]
@@ -5487,16 +5492,20 @@ for _p in range(1, 5):
     if _col in working_df.columns:
         _adj_dis_flags |= working_df[_col].isin(_DISPERSED_STRIP_PATTERNS).to_numpy()
 
-working_df["adj_dis"] = np.where(_adj_dis_flags, "dis", "adj")
+_adj_dis_label_series = pd.Series(
+    np.where(_adj_dis_flags, "dis", "adj"),
+    index=working_df.index,
+    dtype="object",
+)
 
-_adj_dis_counts = working_df["adj_dis"].value_counts()
+_adj_dis_counts = _adj_dis_label_series.value_counts()
 _n_adj = int(_adj_dis_counts.get("adj", 0))
 _n_dis = int(_adj_dis_counts.get("dis", 0))
 _n_total_adj_dis = _n_adj + _n_dis
 global_variables["adj_count"] = _n_adj
 global_variables["dis_count"] = _n_dis
 global_variables["dis_fraction"] = round(_n_dis / _n_total_adj_dis, 6) if _n_total_adj_dis > 0 else 0.0
-print(f"adj_dis column added: adj={_n_adj:,}  dis={_n_dis:,}  dis_fraction={global_variables['dis_fraction']:.4f}")
+print(f"Task 3 adjacent/dispersed strip summary: adj={_n_adj:,}  dis={_n_dis:,}  dis_fraction={global_variables['dis_fraction']:.4f}")
 
 cal_strip_patterns = build_task3_full_strip_pattern_series(working_df)
 store_pattern_rates(pattern_metadata, cal_strip_patterns, "cal_strip_pattern", working_df)
@@ -5560,7 +5569,7 @@ if task3_plot_enabled("multi_strip_pair_diagnostics"):
     qsum_normdiff_y_all = []
     for i_plane in range(1, 5):
         active_col = f'active_strips_P{i_plane}'
-        q_sum_cols_for_limits = [f'Q{i_plane}_Q_sum_{j+1}' for j in range(4)]
+        q_sum_cols_for_limits = [f'p{i_plane}_s{j+1}_qsum' for j in range(4)]
         patterns_for_limits = working_df[active_col].unique()
         multi_patterns_for_limits = [
             p for p in patterns_for_limits if p != '0000' and p.count('1') > 1
@@ -5627,10 +5636,10 @@ if task3_plot_enabled("multi_strip_pair_diagnostics"):
         print(f"\n--- Plane {i_plane} ---")
 
         # Column names
-        T_sum_cols = [f'T{i_plane}_T_sum_{j+1}' for j in range(4)]
-        T_dif_cols = [f'T{i_plane}_T_dif_{j+1}' for j in range(4)]
-        Q_sum_cols = [f'Q{i_plane}_Q_sum_{j+1}' for j in range(4)]
-        Q_dif_cols = [f'Q{i_plane}_Q_dif_{j+1}' for j in range(4)]
+        T_sum_cols = [f'p{i_plane}_s{j+1}_tsum' for j in range(4)]
+        T_dif_cols = [f'p{i_plane}_s{j+1}_tdif' for j in range(4)]
+        Q_sum_cols = [f'p{i_plane}_s{j+1}_qsum' for j in range(4)]
+        Q_dif_cols = [f'p{i_plane}_s{j+1}_qdif' for j in range(4)]
 
         variable_sets = [
             ('T_sum', T_sum_cols),
@@ -5740,7 +5749,7 @@ if task3_plot_enabled("tdiff_pattern_spatial_scatter"):
 
     for i_plane in range(1, 5):
         active_col = f'active_strips_P{i_plane}'
-        T_dif_cols = [f'T{i_plane}_T_dif_{j+1}' for j in range(4)]
+        T_dif_cols = [f'p{i_plane}_s{j+1}_tdif' for j in range(4)]
 
         for j_pattern, pattern in enumerate(patterns_of_interest):
             ax = axs[i_plane - 1, j_pattern]
@@ -5791,8 +5800,8 @@ if task3_plot_enabled("tdiff_pattern_charge_scatter"):
 
     for i_plane in range(1, 5):
         active_col = f'active_strips_P{i_plane}'
-        T_dif_cols = [f'T{i_plane}_T_dif_{j+1}' for j in range(4)]
-        Q_sum_cols = [f'Q{i_plane}_Q_sum_{j+1}' for j in range(4)]
+        T_dif_cols = [f'p{i_plane}_s{j+1}_tdif' for j in range(4)]
+        Q_sum_cols = [f'p{i_plane}_s{j+1}_qsum' for j in range(4)]
 
         for j_pattern, pattern in enumerate(patterns_of_interest):
             ax = axs[i_plane - 1, j_pattern]
@@ -5849,8 +5858,8 @@ if task3_plot_enabled("tdiff_pattern_charge_scan_scatter"):
 
         for i_plane in range(1, 5):
             active_col = f'active_strips_P{i_plane}'
-            T_dif_cols = [f'T{i_plane}_T_dif_{j+1}' for j in range(4)]
-            Q_sum_cols = [f'Q{i_plane}_Q_sum_{j+1}' for j in range(4)]
+            T_dif_cols = [f'p{i_plane}_s{j+1}_tdif' for j in range(4)]
+            Q_sum_cols = [f'p{i_plane}_s{j+1}_qsum' for j in range(4)]
 
             for j_pattern, pattern in enumerate(patterns_of_interest):
                 ax = axs[i_plane - 1, j_pattern]
@@ -5908,7 +5917,7 @@ if task3_plot_enabled("tdiff_pattern_histograms"):
 
     for i_plane in range(1, 5):
         active_col = f'active_strips_P{i_plane}'
-        T_dif_cols = [f'T{i_plane}_T_dif_{j+1}' for j in range(4)]
+        T_dif_cols = [f'p{i_plane}_s{j+1}_tdif' for j in range(4)]
 
         for j_pattern, pattern in enumerate(patterns_of_interest):
             ax = axs[i_plane - 1, j_pattern]
@@ -5965,7 +5974,7 @@ if task3_plot_enabled("tdiff_pattern_histograms"):
     
     for i_plane in range(1, 5):
         active_col = f'active_strips_P{i_plane}'
-        T_dif_cols = [f'T{i_plane}_T_dif_{j+1}' for j in range(4)]
+        T_dif_cols = [f'p{i_plane}_s{j+1}_tdif' for j in range(4)]
 
         for j_pattern, pattern in enumerate(patterns_of_interest):
             ax = axs[i_plane - 1, j_pattern]
@@ -6076,8 +6085,8 @@ if calculate_sigmas_adjacent:
         
         for i_plane in range(1, 5):
             active_col = f'active_strips_P{i_plane}'
-            T_dif_cols = [f'T{i_plane}_T_dif_{j+1}' for j in range(4)]
-            Q_sum_cols = [f'Q{i_plane}_Q_sum_{j+1}' for j in range(4)]
+            T_dif_cols = [f'p{i_plane}_s{j+1}_tdif' for j in range(4)]
+            Q_sum_cols = [f'p{i_plane}_s{j+1}_qsum' for j in range(4)]
 
             for j_pattern, pattern in enumerate(patterns_of_interest):
 
@@ -6156,8 +6165,8 @@ if calculate_sigmas_adjacent:
             
             for i_plane in range(1, 5):
                 active_col = f'active_strips_P{i_plane}'
-                T_dif_cols = [f'T{i_plane}_T_dif_{j+1}' for j in range(4)]
-                Q_sum_cols = [f'Q{i_plane}_Q_sum_{j+1}' for j in range(4)]
+                T_dif_cols = [f'p{i_plane}_s{j+1}_tdif' for j in range(4)]
+                Q_sum_cols = [f'p{i_plane}_s{j+1}_qsum' for j in range(4)]
 
                 for j_pattern, pattern in enumerate(patterns_of_interest):
                     ax = axs[i_plane - 1, j_pattern]
@@ -6313,8 +6322,8 @@ if calculate_sigmas_adjacent:
                 
                 for i_plane in range(1, 5):
                     active_col = f'active_strips_P{i_plane}'
-                    T_dif_cols = [f'T{i_plane}_T_dif_{j+1}' for j in range(4)]
-                    Q_sum_cols = [f'Q{i_plane}_Q_sum_{j+1}' for j in range(4)]
+                    T_dif_cols = [f'p{i_plane}_s{j+1}_tdif' for j in range(4)]
+                    Q_sum_cols = [f'p{i_plane}_s{j+1}_qsum' for j in range(4)]
 
                     for j_pattern, pattern in enumerate(patterns_of_interest):
 
@@ -6560,7 +6569,7 @@ if y_new_method:
             list(map(int, s)) for s in working_df[f'active_strips_P{plane_id}']
         ])
         
-        q_plane = working_df[[f'Q{plane_id}_Q_sum_{i}' for i in range(1, 5)]].values  # shape (N, 4)
+        q_plane = working_df[[f'p{plane_id}_s{i}_qsum' for i in range(1, 5)]].values  # shape (N, 4)
         
         # Take only active strips' charges
         q_active = topo_binary * q_plane
@@ -6597,7 +6606,7 @@ if y_new_method:
             y_position[rows] = np.random.uniform(centers - widths/2, centers + widths/2)
 
         # Store result
-        y_columns[f'P{plane_id}_Y_final'] = y_position
+        y_columns[f'p{plane_id}_ypos'] = y_position
 
     # Insert all new Y_ columns at once
     working_df = pd.concat([working_df, pd.DataFrame(y_columns, index=working_df.index)], axis=1)
@@ -6606,7 +6615,7 @@ else:
     y_columns = {}
 
     for plane_id in range(1, 5):
-        q_plane = working_df[[f'Q{plane_id}_Q_sum_{i}' for i in range(1, 5)]].to_numpy(dtype=float)
+        q_plane = working_df[[f'p{plane_id}_s{i}_qsum' for i in range(1, 5)]].to_numpy(dtype=float)
         y_vec = y_pos_P1_and_P3 if plane_id in [1, 3] else y_pos_P2_and_P4
         widths_vec = y_width_P1_and_P3 if plane_id in [1, 3] else y_width_P2_and_P4
 
@@ -6622,21 +6631,21 @@ else:
             widths = widths_vec[cols]
             y_position[rows] = np.random.uniform(centers - widths / 2, centers + widths / 2)
 
-        y_columns[f'P{plane_id}_Y_final'] = y_position
+        y_columns[f'p{plane_id}_ypos'] = y_position
 
     working_df = pd.concat([working_df, pd.DataFrame(y_columns, index=working_df.index)], axis=1)
     _prof["s_y_position_core_s"] = round(time.perf_counter() - _t_y_position_core, 2)
 
-if task3_plot_enabled("y_position_by_cal_tt"):
+if task3_plot_enabled("y_position_by_tt_task2_cal"):
 
-    for cal_tt in [ 12, 23, 34, 1234, 123, 234, 124, 13, 14, 24, 134]:
-        mask = working_df['cal_tt'] == cal_tt
+    for tt_task2_cal in [ 12, 23, 34, 1234, 123, 234, 124, 13, 14, 24, 134]:
+        mask = working_df['tt_task2_cal'] == tt_task2_cal
         filtered_df = working_df[mask].copy()  # Work on a copy for fitting
     
         plt.figure(figsize=(12, 8))
         for i, plane_id in enumerate(range(1, 5), 1):
             plt.subplot(2, 2, i)
-            column_name = f'P{plane_id}_Y_final'
+            column_name = f'p{plane_id}_ypos'
             data = filtered_df[column_name]
             
             plt.hist(data[data != 0], bins=100, histtype='stepfilled', alpha=0.6)
@@ -6656,10 +6665,10 @@ if task3_plot_enabled("y_position_by_cal_tt"):
             plt.ylabel('Counts')
             plt.grid(True)
         
-        plt.suptitle(f'Y Position Distribution for cal_tt = {cal_tt}', fontsize=16)
+        plt.suptitle(f'Y Position Distribution for tt_task2_cal = {tt_task2_cal}', fontsize=16)
         plt.tight_layout()
         if save_plots:
-            name_of_file = f'Y_{cal_tt}'
+            name_of_file = f'Y_{tt_task2_cal}'
             final_filename = f'{fig_idx}_{name_of_file}.png'
             fig_idx += 1
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
@@ -6686,10 +6695,10 @@ if task3_plot_enabled("strip_variable_pairgrid"):
         
         for strip in range(1, 5):
             # Column names
-            t_sum_col = f'T{i_plane}_T_sum_{strip}'
-            t_dif_col = f'T{i_plane}_T_dif_{strip}'
-            q_sum_col = f'Q{i_plane}_Q_sum_{strip}'
-            q_dif_col = f'Q{i_plane}_Q_dif_{strip}'
+            t_sum_col = f'p{i_plane}_s{strip}_tsum'
+            t_dif_col = f'p{i_plane}_s{strip}_tdif'
+            q_sum_col = f'p{i_plane}_s{strip}_qsum'
+            q_dif_col = f'p{i_plane}_s{strip}_qdif'
 
             # Filter valid rows (non-zero)
             valid_rows = working_df[[t_sum_col, t_dif_col, q_sum_col, q_dif_col]].replace(0, np.nan).dropna()
@@ -6744,10 +6753,10 @@ if self_trigger:
             
             for strip in range(1, 5):
                 # Column names
-                t_sum_col = f'T{i_plane}_T_sum_{strip}'
-                t_dif_col = f'T{i_plane}_T_dif_{strip}'
-                q_sum_col = f'Q{i_plane}_Q_sum_{strip}'
-                q_dif_col = f'Q{i_plane}_Q_dif_{strip}'
+                t_sum_col = f'p{i_plane}_s{strip}_tsum'
+                t_dif_col = f'p{i_plane}_s{strip}_tdif'
+                q_sum_col = f'p{i_plane}_s{strip}_qsum'
+                q_dif_col = f'p{i_plane}_s{strip}_qdif'
 
                 # Filter valid rows (non-zero)
                 valid_rows = working_st_df[[t_sum_col, t_dif_col, q_sum_col, q_dif_col]].replace(0, np.nan).dropna()
@@ -6805,10 +6814,10 @@ plane_raw_values: dict[int, dict[str, np.ndarray]] = {}
 final_columns: dict[str, np.ndarray] = {}
 
 for i_plane in range(1, 5):
-    t_sum_cols = [f'T{i_plane}_T_sum_{i+1}' for i in range(4)]
-    t_dif_cols = [f'T{i_plane}_T_dif_{i+1}' for i in range(4)]
-    q_sum_cols = [f'Q{i_plane}_Q_sum_{i+1}' for i in range(4)]
-    q_dif_cols = [f'Q{i_plane}_Q_dif_{i+1}' for i in range(4)]
+    t_sum_cols = [f'p{i_plane}_s{i+1}_tsum' for i in range(4)]
+    t_dif_cols = [f'p{i_plane}_s{i+1}_tdif' for i in range(4)]
+    q_sum_cols = [f'p{i_plane}_s{i+1}_qsum' for i in range(4)]
+    q_dif_cols = [f'p{i_plane}_s{i+1}_qdif' for i in range(4)]
 
     t_sums = working_df[t_sum_cols].astype(float).fillna(0).to_numpy(copy=False)
     t_difs = working_df[t_dif_cols].astype(float).fillna(0).to_numpy(copy=False)
@@ -6838,10 +6847,10 @@ for i_plane in range(1, 5):
         "Q_sum": q_sum_final.copy(),
         "Q_dif": q_dif_final.copy(),
     }
-    final_columns[f'P{i_plane}_T_sum_final'] = t_sum_final
-    final_columns[f'P{i_plane}_T_dif_final'] = t_dif_final
-    final_columns[f'P{i_plane}_Q_sum_final'] = q_sum_final
-    final_columns[f'P{i_plane}_Q_dif_final'] = q_dif_final
+    final_columns[f'p{i_plane}_tsum'] = t_sum_final
+    final_columns[f'p{i_plane}_tdif'] = t_dif_final
+    final_columns[f'p{i_plane}_qsum'] = q_sum_final
+    final_columns[f'p{i_plane}_qdif'] = q_dif_final
 
 working_df = pd.concat([working_df, pd.DataFrame(final_columns, index=working_df.index)], axis=1)
 _prof["s_rpc_vars_core_s"] = round(time.perf_counter() - _t_rpc_vars_core, 2)
@@ -6852,11 +6861,11 @@ if task3_plot_enabled("rpc_variables_hexbin"):
 
     for i_plane in range(1, 5):
         # Column names
-        t_sum_col = f'P{i_plane}_T_sum_final'
-        t_dif_col = f'P{i_plane}_T_dif_final'
-        q_sum_col = f'P{i_plane}_Q_sum_final'
-        q_dif_col = f'P{i_plane}_Q_dif_final'
-        y_col = f'P{i_plane}_Y_final'
+        t_sum_col = f'p{i_plane}_tsum'
+        t_dif_col = f'p{i_plane}_tdif'
+        q_sum_col = f'p{i_plane}_qsum'
+        q_dif_col = f'p{i_plane}_qdif'
+        y_col = f'p{i_plane}_ypos'
 
         # Filter valid rows (non-zero)
         valid_rows = working_df[[t_sum_col, t_dif_col, q_sum_col, q_dif_col, y_col]].replace(0, np.nan).dropna()
@@ -6910,11 +6919,11 @@ if task3_plot_enabled("rpc_variables_hexbin_low_charge"):
 
     for i_plane in range(1, 5):
         # Column names
-        t_sum_col = f'P{i_plane}_T_sum_final'
-        t_dif_col = f'P{i_plane}_T_dif_final'
-        q_sum_col = f'P{i_plane}_Q_sum_final'
-        q_dif_col = f'P{i_plane}_Q_dif_final'
-        y_col = f'P{i_plane}_Y_final'
+        t_sum_col = f'p{i_plane}_tsum'
+        t_dif_col = f'p{i_plane}_tdif'
+        q_sum_col = f'p{i_plane}_qsum'
+        q_dif_col = f'p{i_plane}_qdif'
+        y_col = f'p{i_plane}_ypos'
 
         # Filter valid rows (non-zero)
         valid_rows = working_df[[t_sum_col, t_dif_col, q_sum_col, q_dif_col, y_col]].replace(0, np.nan).dropna()
@@ -6968,7 +6977,7 @@ print("----------------------------------------------------------------------")
 print("------ Put Tsum in reference to the first strip that is not zero -----")
 print("----------------------------------------------------------------------")
 
-cols = ["P1_T_sum_final", "P2_T_sum_final", "P3_T_sum_final", "P4_T_sum_final"]
+cols = ["p1_tsum", "p2_tsum", "p3_tsum", "p4_tsum"]
 vals = working_df[cols].to_numpy()
 nonzero_mask = vals != 0
 has_signal = nonzero_mask.any(axis=1)
@@ -6988,11 +6997,11 @@ for i_plane in range(1, 5):
 filter6_cols: list[str] = []
 for i_plane in range(1, 5):
     filter6_cols.extend([
-        f"P{i_plane}_Y_final",
-        f"P{i_plane}_T_sum_final",
-        f"P{i_plane}_T_dif_final",
-        f"P{i_plane}_Q_sum_final",
-        f"P{i_plane}_Q_dif_final",
+        f"p{i_plane}_ypos",
+        f"p{i_plane}_tsum",
+        f"p{i_plane}_tdif",
+        f"p{i_plane}_qsum",
+        f"p{i_plane}_qdif",
     ])
 filter6_cols = [col for col in filter6_cols if col in working_df.columns]
 
@@ -7420,70 +7429,70 @@ for selected_count in TASK3_SELECTED_OFFENDER_CARDINALITY_VALUES:
     global_variables[_task3_selected_offender_cardinality_metric_key(selected_count)] = selected_rows
 for plane_key, offender_count in plane_combination_summary["selected_offender_counts"].items():
     global_variables[_task3_plane_offender_metric_key(plane_key)] = int(offender_count)
-working_df.loc[:, "task3_problematic_plane_count"] = (
+working_df.loc[:, "filter_task3_problematic_plane_count"] = (
     plane_combination_summary["selected_offender_count_by_row"]
     .reindex(working_df.index)
     .fillna(0)
     .astype(int)
     .to_numpy()
 )
-working_df.loc[:, "task3_problematic_plane_resolution_exact"] = (
+working_df.loc[:, "filter_task3_problematic_plane_exact"] = (
     plane_combination_summary["resolution_exact_by_row"]
     .reindex(working_df.index, fill_value=True)
     .astype(bool)
     .to_numpy()
 )
 
-task1_problematic_channel_count = pd.to_numeric(
+filter_task1_problematic_channel_count = pd.to_numeric(
     working_df.get(
-        "task1_problematic_channel_count",
+        "filter_task1_problematic_channel_count",
         pd.Series(index=working_df.index, dtype=float),
     ),
     errors="coerce",
 ).fillna(0).astype(int)
-task2_problematic_strip_count = pd.to_numeric(
+filter_task2_problematic_strip_count = pd.to_numeric(
     working_df.get(
-        "task2_problematic_strip_count",
+        "filter_task2_problematic_strip_count",
         pd.Series(index=working_df.index, dtype=float),
     ),
     errors="coerce",
 ).fillna(0).astype(int)
-task3_problematic_plane_count_series = pd.to_numeric(
+filter_task3_problematic_plane_count_series = pd.to_numeric(
     working_df.get(
-        "task3_problematic_plane_count",
+        "filter_task3_problematic_plane_count",
         pd.Series(index=working_df.index, dtype=float),
     ),
     errors="coerce",
 ).fillna(0).astype(int)
-total_problematic_offender_count = (
-    task1_problematic_channel_count
-    + task2_problematic_strip_count
-    + task3_problematic_plane_count_series
+filter_total_problematic_offender_count = (
+    filter_task1_problematic_channel_count
+    + filter_task2_problematic_strip_count
+    + filter_task3_problematic_plane_count_series
 ).astype(int)
 
-working_df.loc[:, "task1_problematic_channel_count"] = task1_problematic_channel_count.to_numpy()
-working_df.loc[:, "task2_problematic_strip_count"] = task2_problematic_strip_count.to_numpy()
-working_df.loc[:, "task3_problematic_plane_count"] = task3_problematic_plane_count_series.to_numpy()
+working_df.loc[:, "filter_task1_problematic_channel_count"] = filter_task1_problematic_channel_count.to_numpy()
+working_df.loc[:, "filter_task2_problematic_strip_count"] = filter_task2_problematic_strip_count.to_numpy()
+working_df.loc[:, "filter_task3_problematic_plane_count"] = filter_task3_problematic_plane_count_series.to_numpy()
 for exact_column in (
-    "task1_problematic_channel_resolution_exact",
-    "task2_problematic_strip_resolution_exact",
-    "task3_problematic_plane_resolution_exact",
+    "filter_task1_problematic_channel_exact",
+    "filter_task2_problematic_strip_exact",
+    "filter_task3_problematic_plane_exact",
 ):
     if exact_column in working_df.columns:
         working_df.loc[:, exact_column] = working_df[exact_column].astype(bool).to_numpy()
-working_df.loc[:, "total_problematic_offender_count"] = (
-    total_problematic_offender_count.to_numpy()
+working_df.loc[:, "filter_total_problematic_offender_count"] = (
+    filter_total_problematic_offender_count.to_numpy()
 )
 
-total_problematic_offender_count_counts = (
-    total_problematic_offender_count.value_counts().sort_index()
+filter_total_problematic_offender_count_counts = (
+    filter_total_problematic_offender_count.value_counts().sort_index()
 )
 global_variables["plane_combination_filter_max_selected_offenders_in_row"] = int(
-    total_problematic_offender_count.max() if len(total_problematic_offender_count) else 0
+    filter_total_problematic_offender_count.max() if len(filter_total_problematic_offender_count) else 0
 )
 for selected_count in TASK3_SELECTED_OFFENDER_CARDINALITY_VALUES:
     global_variables[_task3_selected_offender_cardinality_metric_key(selected_count)] = int(
-        total_problematic_offender_count_counts.get(selected_count, 0)
+        filter_total_problematic_offender_count_counts.get(selected_count, 0)
     )
 if _plot_plane_combination_filter_by_tt:
     plane_combination_same_plane_limits = {
@@ -7641,11 +7650,11 @@ if task3_plot_enabled("filtered_rpc_variables_hexbin"):
 
     for i_plane in range(1, 5):
         # Column names
-        t_sum_col = f'P{i_plane}_T_sum_final'
-        t_dif_col = f'P{i_plane}_T_dif_final'
-        q_sum_col = f'P{i_plane}_Q_sum_final'
-        q_dif_col = f'P{i_plane}_Q_dif_final'
-        y_col = f'P{i_plane}_Y_final'
+        t_sum_col = f'p{i_plane}_tsum'
+        t_dif_col = f'p{i_plane}_tdif'
+        q_sum_col = f'p{i_plane}_qsum'
+        q_dif_col = f'p{i_plane}_qdif'
+        y_col = f'p{i_plane}_ypos'
 
         # Filter valid rows (non-zero)
         valid_rows = working_df[[t_sum_col, t_dif_col, q_sum_col, q_dif_col, y_col]].replace(0, np.nan).dropna()
@@ -7751,10 +7760,10 @@ os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
 cols_to_remove = []
 for i_plane in range(1, 5):
     for strip in range(1, 5):
-        cols_to_remove.append(f'T{i_plane}_T_sum_{strip}')
-        cols_to_remove.append(f'T{i_plane}_T_dif_{strip}')
-        cols_to_remove.append(f'Q{i_plane}_Q_sum_{strip}')
-        cols_to_remove.append(f'Q{i_plane}_Q_dif_{strip}')
+        cols_to_remove.append(f'p{i_plane}_s{strip}_tsum')
+        cols_to_remove.append(f'p{i_plane}_s{strip}_tdif')
+        cols_to_remove.append(f'p{i_plane}_s{strip}_qsum')
+        cols_to_remove.append(f'p{i_plane}_s{strip}_qdif')
 if keep_all_columns_output:
     print(
         "Task 3 keep_all_columns_output enabled: "
@@ -7793,51 +7802,52 @@ record_filter_metric(
 )
 
 print(f"Original number of events in the dataframe: {original_number_of_events}")
-list_tt_columns = {
+working_df = add_topology_task3_plane(working_df)
+tt_task3_list_columns = {
     i_plane: [
-        f"P{i_plane}_T_sum_final",
-        f"P{i_plane}_T_dif_final",
-        f"P{i_plane}_Q_sum_final",
-        f"P{i_plane}_Q_dif_final",
-        f"P{i_plane}_Y_final",
+        f"p{i_plane}_tsum",
+        f"p{i_plane}_tdif",
+        f"p{i_plane}_qsum",
+        f"p{i_plane}_qdif",
+        f"p{i_plane}_ypos",
     ]
     for i_plane in range(1, 5)
 }
-working_df = compute_tt(working_df, "list_tt", list_tt_columns)
+working_df = compute_tt(working_df, "tt_task3_list", tt_task3_list_columns)
 task3_plane_activation_initial = store_task3_plane_activation_snapshot(
     activation_meta={},
     scalar_meta={},
     df=working_df,
     snapshot_label="initial",
-    tt_series=pd.to_numeric(working_df["list_tt"], errors="coerce"),
+    tt_series=pd.to_numeric(working_df["tt_task3_list"], errors="coerce"),
     streamer_high_charge_factor_value=streamer_high_charge_factor,
     streamer_threshold_override=streamer_charge_sum_threshold,
 )
-list_tt_total = len(working_df)
-if "list_tt" in working_df.columns and task3_plot_enabled("prefilter_list_tt_debug"):
+tt_task3_list_total = len(working_df)
+if "tt_task3_list" in working_df.columns and task3_plot_enabled("prefilter_tt_task3_list_debug"):
     debug_fig_idx = plot_debug_histograms(
         working_df,
-        ["list_tt"],
-        {"list_tt": [10]},
-        title=f"Task 3 pre-filter: list_tt >= 10 [NON-TUNABLE] (station {station})",
+        ["tt_task3_list"],
+        {"tt_task3_list": [10]},
+        title=f"Task 3 pre-filter: tt_task3_list >= 10 [NON-TUNABLE] (station {station})",
         out_dir=debug_plot_directory,
         fig_idx=debug_fig_idx,
     )
-list_tt_mask = working_df["list_tt"].notna() & (working_df["list_tt"] >= 10)
-working_df = working_df.loc[list_tt_mask].copy()
+tt_task3_list_mask = working_df["tt_task3_list"].notna() & (working_df["tt_task3_list"] >= 10)
+working_df = working_df.loc[tt_task3_list_mask].copy()
 record_filter_metric(
-    "list_tt_lt_10_rows_removed_pct",
-    list_tt_total - int(list_tt_mask.sum()),
-    list_tt_total if list_tt_total else 0,
+    "tt_task3_list_lt_10_rows_removed_pct",
+    tt_task3_list_total - int(tt_task3_list_mask.sum()),
+    tt_task3_list_total if tt_task3_list_total else 0,
 )
-working_df.loc[:, "cal_to_list_tt"] = (
-    pd.to_numeric(working_df["cal_tt"], errors="coerce").fillna(0).astype(int).astype(str)
+working_df.loc[:, "transferred_task3_cal_to_list"] = (
+    pd.to_numeric(working_df["tt_task2_cal"], errors="coerce").fillna(0).astype(int).astype(str)
     + "_"
-    + pd.to_numeric(working_df["list_tt"], errors="coerce").fillna(0).astype(int).astype(str)
+    + pd.to_numeric(working_df["tt_task3_list"], errors="coerce").fillna(0).astype(int).astype(str)
 )
 refresh_global_count_metadata(
     working_df,
-    ("cal_tt", "list_tt", "cal_to_list_tt"),
+    ("tt_task2_cal", "tt_task3_list", "transferred_task3_cal_to_list"),
 )
 
 task3_final_filter_dry_run_summary = apply_task3_plane_combination_filter(
@@ -7904,13 +7914,13 @@ task3_plane_activation_filtered = store_task3_plane_activation_snapshot(
     scalar_meta=global_variables,
     df=working_df,
     snapshot_label="filtered",
-    tt_series=pd.to_numeric(working_df["list_tt"], errors="coerce"),
+    tt_series=pd.to_numeric(working_df["tt_task3_list"], errors="coerce"),
     streamer_high_charge_factor_value=streamer_high_charge_factor,
     streamer_threshold_override=streamer_charge_sum_threshold,
 )
 
 task3_q_sum_final_cols = [
-    f"P{i_plane}_Q_sum_final" for i_plane in range(1, 5) if f"P{i_plane}_Q_sum_final" in working_df.columns
+    f"p{i_plane}_qsum" for i_plane in range(1, 5) if f"p{i_plane}_qsum" in working_df.columns
 ]
 task3_streamer_threshold, task3_streamer_threshold_source = select_task3_streamer_threshold(
     working_df,
@@ -7947,18 +7957,18 @@ if task3_streamer_threshold is not None:
         exclude_streamer_events=True,
         index=working_df.index,
     )
-    working_df.loc[:, "plane_charge_topology_code"] = task3_topology_code_series
+    working_df.loc[:, "topology_task2_strip"] = task3_topology_code_series
 else:
-    working_df.loc[:, "plane_charge_topology_code"] = "0000"
+    working_df.loc[:, "topology_task2_strip"] = "0000"
 
-if "list_tt" in working_df.columns and task3_any_plot_enabled(
-    "list_tt_qsum_pairgrid",
+if "tt_task3_list" in working_df.columns and task3_any_plot_enabled(
+    "tt_task3_list_qsum_pairgrid",
     "all_events_charge_threshold_population",
-    "source_list_tt_charge_threshold_population",
-    "list_tt_transition_matrices",
-    "list_tt_retention_curves",
-    "list_tt_minimum_charge_distributions",
-    "list_tt_empirical_efficiency_vs_threshold",
+    "source_tt_task3_list_charge_threshold_population",
+    "tt_task3_list_transition_matrices",
+    "tt_task3_list_retention_curves",
+    "tt_task3_list_minimum_charge_distributions",
+    "tt_task3_list_empirical_efficiency_vs_threshold",
     "charge_asymmetry_vs_threshold",
     "interplane_timing_correlation",
     "multiplicity_charge_landscape",
@@ -7974,28 +7984,28 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
     "charge_by_strip_multiplicity_dis",
 ):
     q_sum_final_cols = [
-        f"P{i_plane}_Q_sum_final" for i_plane in range(1, 5) if f"P{i_plane}_Q_sum_final" in working_df.columns
+        f"p{i_plane}_qsum" for i_plane in range(1, 5) if f"p{i_plane}_qsum" in working_df.columns
     ]
     if q_sum_final_cols:
-        list_tt_charge_limit_effective_runtime = list_tt_charge_limit_effective
+        tt_task3_list_charge_limit_effective_runtime = tt_task3_list_charge_limit_effective
         if (
             task3_streamer_threshold is not None
             and np.isfinite(task3_streamer_threshold)
             and task3_streamer_threshold > 0
         ):
-            list_tt_charge_limit_effective_runtime = float(task3_streamer_threshold)
+            tt_task3_list_charge_limit_effective_runtime = float(task3_streamer_threshold)
             print(
                 f"Task 3: using {task3_streamer_threshold_source}-selected streamer threshold "
                 f"as charge-threshold cap: {float(task3_streamer_threshold):.3g}"
             )
 
-        if list_tt_charge_threshold_mode in {"auto", "quantile"}:
+        if tt_task3_list_charge_threshold_mode in {"auto", "quantile"}:
             positive_charge_arrays: list[np.ndarray] = []
             for col_name in q_sum_final_cols:
                 q_vals = pd.to_numeric(working_df[col_name], errors="coerce").to_numpy(dtype=float)
                 finite_positive = q_vals[np.isfinite(q_vals) & (q_vals > 0)]
-                if list_tt_charge_limit_effective_runtime is not None:
-                    finite_positive = finite_positive[finite_positive <= float(list_tt_charge_limit_effective_runtime)]
+                if tt_task3_list_charge_limit_effective_runtime is not None:
+                    finite_positive = finite_positive[finite_positive <= float(tt_task3_list_charge_limit_effective_runtime)]
                 if finite_positive.size:
                     positive_charge_arrays.append(finite_positive)
 
@@ -8003,52 +8013,52 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                 auto_qmax = float(
                     np.nanpercentile(
                         np.concatenate(positive_charge_arrays),
-                        list_tt_charge_threshold_auto_quantile,
+                        tt_task3_list_charge_threshold_auto_quantile,
                     )
                 )
                 if np.isfinite(auto_qmax) and auto_qmax > 0:
-                    if list_tt_charge_limit_effective_runtime is not None:
-                        auto_qmax = min(auto_qmax, float(list_tt_charge_limit_effective_runtime))
-                    auto_thresholds = np.linspace(0.0, auto_qmax, list_tt_charge_threshold_auto_steps)
+                    if tt_task3_list_charge_limit_effective_runtime is not None:
+                        auto_qmax = min(auto_qmax, float(tt_task3_list_charge_limit_effective_runtime))
+                    auto_thresholds = np.linspace(0.0, auto_qmax, tt_task3_list_charge_threshold_auto_steps)
                     auto_thresholds = np.unique(np.round(auto_thresholds, 6))
-                    list_tt_charge_thresholds = [float(v) for v in auto_thresholds if np.isfinite(v) and v >= 0]
-                    if len(list_tt_charge_thresholds) >= 2:
+                    tt_task3_list_charge_thresholds = [float(v) for v in auto_thresholds if np.isfinite(v) and v >= 0]
+                    if len(tt_task3_list_charge_thresholds) >= 2:
                         print(
-                            "Task 3: auto list_tt_charge_thresholds generated from 0 to "
-                            f"Q{list_tt_charge_threshold_auto_quantile:g} ({auto_qmax:.3g}) with "
-                            f"{len(list_tt_charge_thresholds)} steps."
+                            "Task 3: auto tt_task3_list_charge_thresholds generated from 0 to "
+                            f"Q{tt_task3_list_charge_threshold_auto_quantile:g} ({auto_qmax:.3g}) with "
+                            f"{len(tt_task3_list_charge_thresholds)} steps."
                         )
                     else:
                         print(
                             "Warning: auto threshold generation produced too few values; "
-                            "falling back to manual list_tt_charge_thresholds."
+                            "falling back to manual tt_task3_list_charge_thresholds."
                         )
-                        list_tt_charge_thresholds = list(manual_list_tt_charge_thresholds)
+                        tt_task3_list_charge_thresholds = list(manual_tt_task3_list_charge_thresholds)
                 else:
                     print(
                         "Warning: auto threshold quantile is invalid/non-positive; "
-                        "using manual list_tt_charge_thresholds."
+                        "using manual tt_task3_list_charge_thresholds."
                     )
-                    list_tt_charge_thresholds = list(manual_list_tt_charge_thresholds)
+                    tt_task3_list_charge_thresholds = list(manual_tt_task3_list_charge_thresholds)
             else:
                 print(
                     "Warning: no positive Q_sum_final values found for auto threshold generation; "
-                    "using manual list_tt_charge_thresholds."
+                    "using manual tt_task3_list_charge_thresholds."
                 )
-                list_tt_charge_thresholds = list(manual_list_tt_charge_thresholds)
+                tt_task3_list_charge_thresholds = list(manual_tt_task3_list_charge_thresholds)
 
-        list_tt_charge_thresholds = sorted({float(v) for v in list_tt_charge_thresholds if np.isfinite(v) and v >= 0})
-        if list_tt_charge_limit_effective_runtime is not None:
-            cap_val = float(list_tt_charge_limit_effective_runtime)
-            list_tt_charge_thresholds = [thr for thr in list_tt_charge_thresholds if thr <= cap_val]
-            if 0.0 not in list_tt_charge_thresholds:
-                list_tt_charge_thresholds.insert(0, 0.0)
-            if len(list_tt_charge_thresholds) < 2 and cap_val > 0:
-                list_tt_charge_thresholds = [0.0, cap_val]
-        if not list_tt_charge_thresholds:
-            list_tt_charge_thresholds = [0.0, 5.0, 10.0, 20.0, 50.0]
+        tt_task3_list_charge_thresholds = sorted({float(v) for v in tt_task3_list_charge_thresholds if np.isfinite(v) and v >= 0})
+        if tt_task3_list_charge_limit_effective_runtime is not None:
+            cap_val = float(tt_task3_list_charge_limit_effective_runtime)
+            tt_task3_list_charge_thresholds = [thr for thr in tt_task3_list_charge_thresholds if thr <= cap_val]
+            if 0.0 not in tt_task3_list_charge_thresholds:
+                tt_task3_list_charge_thresholds.insert(0, 0.0)
+            if len(tt_task3_list_charge_thresholds) < 2 and cap_val > 0:
+                tt_task3_list_charge_thresholds = [0.0, cap_val]
+        if not tt_task3_list_charge_thresholds:
+            tt_task3_list_charge_thresholds = [0.0, 5.0, 10.0, 20.0, 50.0]
 
-        tt_numeric = pd.to_numeric(working_df["list_tt"], errors="coerce").fillna(0).astype(int)
+        tt_numeric = pd.to_numeric(working_df["tt_task3_list"], errors="coerce").fillna(0).astype(int)
         present_tt_values = set(tt_numeric.unique().tolist())
         ordered_tt_values = [
             tt_value for tt_value in TT_COUNT_VALUES if tt_value >= 10 and tt_value in present_tt_values
@@ -8057,16 +8067,16 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
             sorted(tt_value for tt_value in present_tt_values if tt_value >= 10 and tt_value not in TT_COUNT_VALUES)
         )
 
-        if task3_plot_enabled("list_tt_qsum_pairgrid"):
-            if list_tt_qsum_pair_plot_charge_cap is not None:
-                qsum_plot_max = float(list_tt_qsum_pair_plot_charge_cap)
+        if task3_plot_enabled("tt_task3_list_qsum_pairgrid"):
+            if tt_task3_list_qsum_pair_plot_charge_cap is not None:
+                qsum_plot_max = float(tt_task3_list_qsum_pair_plot_charge_cap)
             else:
                 positive_charge_arrays = []
                 for col_name in q_sum_final_cols:
                     charge_vals = pd.to_numeric(working_df[col_name], errors="coerce").to_numpy(dtype=float)
                     finite_positive = charge_vals[np.isfinite(charge_vals) & (charge_vals > 0)]
-                    if list_tt_charge_limit_effective_runtime is not None:
-                        finite_positive = finite_positive[finite_positive <= float(list_tt_charge_limit_effective_runtime)]
+                    if tt_task3_list_charge_limit_effective_runtime is not None:
+                        finite_positive = finite_positive[finite_positive <= float(tt_task3_list_charge_limit_effective_runtime)]
                     if finite_positive.size:
                         positive_charge_arrays.append(finite_positive)
 
@@ -8077,8 +8087,8 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                 else:
                     qsum_plot_max = 10.0
                 qsum_plot_max = float(max(10.0, math.ceil(qsum_plot_max / 10.0) * 10.0))
-                if list_tt_charge_limit_effective_runtime is not None:
-                    qsum_plot_max = float(min(qsum_plot_max, float(list_tt_charge_limit_effective_runtime)))
+                if tt_task3_list_charge_limit_effective_runtime is not None:
+                    qsum_plot_max = float(min(qsum_plot_max, float(tt_task3_list_charge_limit_effective_runtime)))
 
             for tt_value in ordered_tt_values:
                 tt_subset = working_df.loc[tt_numeric == tt_value, q_sum_final_cols]
@@ -8089,9 +8099,9 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                 last_hexbin = None
 
                 for i_plane in range(1, 5):
-                    y_col = f"P{i_plane}_Q_sum_final"
+                    y_col = f"p{i_plane}_qsum"
                     for j_plane in range(1, 5):
-                        x_col = f"P{j_plane}_Q_sum_final"
+                        x_col = f"p{j_plane}_qsum"
                         ax = axes[i_plane - 1, j_plane - 1]
 
                         if j_plane > i_plane:
@@ -8107,8 +8117,8 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
 
                         if i_plane == j_plane:
                             diag_valid = np.isfinite(x_vals) & (x_vals > 0)
-                            if list_tt_qsum_pair_plot_charge_cap is not None:
-                                diag_valid &= x_vals < list_tt_qsum_pair_plot_charge_cap
+                            if tt_task3_list_qsum_pair_plot_charge_cap is not None:
+                                diag_valid &= x_vals < tt_task3_list_qsum_pair_plot_charge_cap
                             diag_vals = x_vals[diag_valid]
                             if diag_vals.size:
                                 ax.hist(
@@ -8142,11 +8152,11 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                             & (x_vals > 0)
                             & (y_vals > 0)
                         )
-                        if list_tt_qsum_pair_plot_charge_cap is not None:
-                            valid &= (x_vals < list_tt_qsum_pair_plot_charge_cap)
-                            valid &= (y_vals < list_tt_qsum_pair_plot_charge_cap)
+                        if tt_task3_list_qsum_pair_plot_charge_cap is not None:
+                            valid &= (x_vals < tt_task3_list_qsum_pair_plot_charge_cap)
+                            valid &= (y_vals < tt_task3_list_qsum_pair_plot_charge_cap)
                         if np.any(valid):
-                            if list_tt_qsum_pair_plot_mode == "hexbin":
+                            if tt_task3_list_qsum_pair_plot_mode == "hexbin":
                                 last_hexbin = ax.hexbin(
                                     x_vals[valid],
                                     y_vals[valid],
@@ -8194,16 +8204,16 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                             ax.set_ylabel(f"P{i_plane} Q_sum_final")
 
                 cap_label = (
-                    f", Q < {list_tt_qsum_pair_plot_charge_cap:g}"
-                    if list_tt_qsum_pair_plot_charge_cap is not None
+                    f", Q < {tt_task3_list_qsum_pair_plot_charge_cap:g}"
+                    if tt_task3_list_qsum_pair_plot_charge_cap is not None
                     else ""
                 )
                 fig.suptitle(
                     "Task 3 Q_sum lower-triangular plot for "
-                    f"list_tt {tt_value} ({list_tt_qsum_pair_plot_mode}, N={len(tt_subset)}{cap_label})",
+                    f"tt_task3_list {tt_value} ({tt_task3_list_qsum_pair_plot_mode}, N={len(tt_subset)}{cap_label})",
                     fontsize=16,
                 )
-                if list_tt_qsum_pair_plot_mode == "hexbin" and last_hexbin is not None:
+                if tt_task3_list_qsum_pair_plot_mode == "hexbin" and last_hexbin is not None:
                     fig.subplots_adjust(left=0.08, right=0.89, bottom=0.07, top=0.93, wspace=0.28, hspace=0.28)
                     cbar_ax = fig.add_axes([0.91, 0.12, 0.018, 0.74])
                     fig.colorbar(last_hexbin, cax=cbar_ax, label="Counts")
@@ -8211,13 +8221,13 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                     fig.subplots_adjust(left=0.08, right=0.95, bottom=0.07, top=0.93, wspace=0.28, hspace=0.28)
 
                 if save_plots:
-                    mode_slug = list_tt_qsum_pair_plot_mode
+                    mode_slug = tt_task3_list_qsum_pair_plot_mode
                     cap_slug = (
-                        f"_qcap_{list_tt_qsum_pair_plot_charge_cap:g}".replace(".", "p")
-                        if list_tt_qsum_pair_plot_charge_cap is not None
+                        f"_qcap_{tt_task3_list_qsum_pair_plot_charge_cap:g}".replace(".", "p")
+                        if tt_task3_list_qsum_pair_plot_charge_cap is not None
                         else ""
                     )
-                    name_of_file = f"list_tt_{tt_value}_qsum_lower_triangular_{mode_slug}{cap_slug}.png"
+                    name_of_file = f"tt_task3_list_{tt_value}_qsum_lower_triangular_{mode_slug}{cap_slug}.png"
                     final_filename = f"{fig_idx}_{name_of_file}"
                     fig_idx += 1
                     save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
@@ -8228,17 +8238,17 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                     plt.show()
                 plt.close(fig)
 
-        threshold_labels = [f"Q > {threshold:g}" for threshold in list_tt_charge_thresholds]
+        threshold_labels = [f"Q > {threshold:g}" for threshold in tt_task3_list_charge_thresholds]
         threshold_tt_by_label: dict[str, pd.Series] = {}
         if task3_any_plot_enabled(
             "all_events_charge_threshold_population",
-            "list_tt_transition_matrices",
-            "list_tt_empirical_efficiency_vs_threshold",
+            "tt_task3_list_transition_matrices",
+            "tt_task3_list_empirical_efficiency_vs_threshold",
             "full_topology_threshold_retention",
             "tsum_coincidence_window_histograms",
             "tsum_coincidence_window_vs_threshold",
         ):
-            for threshold, threshold_label in zip(list_tt_charge_thresholds, threshold_labels):
+            for threshold, threshold_label in zip(tt_task3_list_charge_thresholds, threshold_labels):
                 threshold_tt_by_label[threshold_label] = compute_qsum_threshold_tt(
                     working_df[q_sum_final_cols], threshold
                 )
@@ -8249,7 +8259,7 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
             "full_topology_exact_retention",
             "full_topology_class_fraction",
         ):
-            for threshold, threshold_label in zip(list_tt_charge_thresholds, threshold_labels):
+            for threshold, threshold_label in zip(tt_task3_list_charge_thresholds, threshold_labels):
                 threshold_full_patterns_by_label[threshold_label] = compute_qsum_threshold_full_strip_patterns(
                     working_df,
                     threshold,
@@ -8261,7 +8271,7 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
             "tsum_coincidence_window_histograms",
             "tsum_coincidence_window_vs_threshold",
         ):
-            for threshold, threshold_label in zip(list_tt_charge_thresholds, threshold_labels):
+            for threshold, threshold_label in zip(tt_task3_list_charge_thresholds, threshold_labels):
                 window_series, active_counts = compute_qsum_threshold_tsum_window(working_df, threshold)
                 threshold_tsum_window_by_label[threshold_label] = window_series
                 threshold_tsum_active_counts_by_label[threshold_label] = active_counts
@@ -8295,14 +8305,14 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                     plot_list=plot_list,
                 )
 
-        if task3_plot_enabled("source_list_tt_charge_threshold_population"):
+        if task3_plot_enabled("source_tt_task3_list_charge_threshold_population"):
             for source_tt in ordered_tt_values:
                 source_subset = working_df.loc[tt_numeric == source_tt, q_sum_final_cols]
                 if source_subset.empty:
                     continue
 
                 source_threshold_counts: dict[str, pd.Series] = {}
-                for threshold, threshold_label in zip(list_tt_charge_thresholds, threshold_labels):
+                for threshold, threshold_label in zip(tt_task3_list_charge_thresholds, threshold_labels):
                     threshold_tt = compute_qsum_threshold_tt(source_subset, threshold)
                     source_threshold_counts[threshold_label] = threshold_tt.value_counts()
 
@@ -8323,10 +8333,10 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                 fig_idx = plot_population_table(
                     source_counts_df,
                     title=(
-                        f"Source list_tt {source_tt}: charge-filtered plane combinations "
+                        f"Source tt_task3_list {source_tt}: charge-filtered plane combinations "
                         f"(N={len(source_subset)})"
                     ),
-                    filename_suffix=f"list_tt_{source_tt}_charge_threshold_combo_population",
+                    filename_suffix=f"tt_task3_list_{source_tt}_charge_threshold_combo_population",
                     fig_idx=fig_idx,
                     base_dir=base_directories["figure_directory"],
                     show_plots=show_plots,
@@ -8334,7 +8344,7 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                     plot_list=plot_list,
                 )
 
-        if task3_plot_enabled("list_tt_transition_matrices"):
+        if task3_plot_enabled("tt_task3_list_transition_matrices"):
             transition_row_order = ordered_tt_values
             transition_col_order = list(TT_COUNT_VALUES)
             for threshold_label in threshold_labels:
@@ -8353,11 +8363,11 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                 threshold_value = threshold_label.replace("Q > ", "")
                 fig_idx = plot_population_table(
                     transition_counts,
-                    title=f"Source list_tt to charge-filtered combination at {threshold_label}",
-                    filename_suffix=f"list_tt_transition_matrix_qgt_{threshold_value}".replace(".", "p"),
+                    title=f"Source tt_task3_list to charge-filtered combination at {threshold_label}",
+                    filename_suffix=f"tt_task3_list_transition_matrix_qgt_{threshold_value}".replace(".", "p"),
                     fig_idx=fig_idx,
                     base_dir=base_directories["figure_directory"],
-                    row_label="Source list_tt",
+                    row_label="Source tt_task3_list",
                     col_label="Charge-filtered combination",
                     show_plots=show_plots,
                     save_plots=save_plots,
@@ -8366,8 +8376,8 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
 
         min_charge_by_source_tt: dict[int, pd.Series] = {}
         if task3_any_plot_enabled(
-            "list_tt_retention_curves",
-            "list_tt_minimum_charge_distributions",
+            "tt_task3_list_retention_curves",
+            "tt_task3_list_minimum_charge_distributions",
         ):
             for source_tt in ordered_tt_values:
                 source_mask = tt_numeric == source_tt
@@ -8376,7 +8386,7 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                     continue
                 min_charge_by_source_tt[source_tt] = compute_source_tt_min_charge(source_subset, source_tt)
 
-        if task3_plot_enabled("list_tt_retention_curves") and min_charge_by_source_tt:
+        if task3_plot_enabled("tt_task3_list_retention_curves") and min_charge_by_source_tt:
             fig, ax = plt.subplots(figsize=(11, 6.5))
             cmap = plt.get_cmap("tab20")
             for idx, source_tt in enumerate(ordered_tt_values):
@@ -8390,10 +8400,10 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                     continue
                 retention = [
                     float(np.count_nonzero(np.isfinite(min_charge_vals) & (min_charge_vals > threshold))) / baseline_count
-                    for threshold in list_tt_charge_thresholds
+                    for threshold in tt_task3_list_charge_thresholds
                 ]
                 ax.plot(
-                    list_tt_charge_thresholds,
+                    tt_task3_list_charge_thresholds,
                     retention,
                     marker="o",
                     linewidth=1.7,
@@ -8404,14 +8414,14 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
 
             ax.set_xlabel("Charge threshold")
             ax.set_ylabel("Retention fraction relative to Q > 0")
-            ax.set_title("Retention curves by source list_tt")
+            ax.set_title("Retention curves by source tt_task3_list")
             ax.set_ylim(0, 1.05)
             ax.grid(True, alpha=0.25)
-            ax.legend(title="Source list_tt", bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=9)
+            ax.legend(title="Source tt_task3_list", bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=9)
             fig.tight_layout(rect=[0, 0, 0.84, 1])
 
             if save_plots:
-                final_filename = f"{fig_idx}_list_tt_retention_curves.png"
+                final_filename = f"{fig_idx}_tt_task3_list_retention_curves.png"
                 fig_idx += 1
                 save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                 plot_list.append(save_fig_path)
@@ -8420,7 +8430,7 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                 plt.show()
             plt.close(fig)
 
-        if task3_plot_enabled("list_tt_minimum_charge_distributions") and min_charge_by_source_tt:
+        if task3_plot_enabled("tt_task3_list_minimum_charge_distributions") and min_charge_by_source_tt:
             positive_min_charge_arrays = []
             for min_charge in min_charge_by_source_tt.values():
                 min_charge_vals = pd.to_numeric(min_charge, errors="coerce").to_numpy(dtype=float)
@@ -8430,14 +8440,14 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
 
             if positive_min_charge_arrays:
                 min_charge_plot_max = float(np.nanpercentile(np.concatenate(positive_min_charge_arrays), 99.5))
-                min_charge_plot_max = max(min_charge_plot_max, max(list_tt_charge_thresholds) if list_tt_charge_thresholds else 0)
+                min_charge_plot_max = max(min_charge_plot_max, max(tt_task3_list_charge_thresholds) if tt_task3_list_charge_thresholds else 0)
                 if not np.isfinite(min_charge_plot_max) or min_charge_plot_max <= 0:
                     min_charge_plot_max = 10.0
             else:
-                min_charge_plot_max = max(max(list_tt_charge_thresholds), 10.0) if list_tt_charge_thresholds else 10.0
+                min_charge_plot_max = max(max(tt_task3_list_charge_thresholds), 10.0) if tt_task3_list_charge_thresholds else 10.0
             min_charge_plot_max = float(max(10.0, math.ceil(min_charge_plot_max / 10.0) * 10.0))
-            if list_tt_charge_limit_effective_runtime is not None:
-                min_charge_plot_max = float(min(min_charge_plot_max, float(list_tt_charge_limit_effective_runtime)))
+            if tt_task3_list_charge_limit_effective_runtime is not None:
+                min_charge_plot_max = float(min(min_charge_plot_max, float(tt_task3_list_charge_limit_effective_runtime)))
 
             n_sources = len(min_charge_by_source_tt)
             ncols = 4
@@ -8460,12 +8470,12 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                         color="tab:blue",
                         alpha=0.75,
                     )
-                    for threshold in list_tt_charge_thresholds:
+                    for threshold in tt_task3_list_charge_thresholds:
                         ax.axvline(threshold, color="black", linestyle="--", linewidth=0.8, alpha=0.5)
                 else:
                     ax.text(0.5, 0.5, "No positive charge", ha="center", va="center", transform=ax.transAxes)
                 ax.set_xlim(0, min_charge_plot_max)
-                ax.set_title(f"list_tt {source_tt} (N={len(hist_vals)})", fontsize=10)
+                ax.set_title(f"tt_task3_list {source_tt} (N={len(hist_vals)})", fontsize=10)
                 ax.grid(True, alpha=0.2)
 
             for ax in axes_flat[n_sources:]:
@@ -8476,11 +8486,11 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
             for col_idx in range(ncols):
                 axes[-1, col_idx].set_xlabel("Minimum active-plane Q_sum_final")
 
-            fig.suptitle("Minimum active-plane charge by source list_tt", fontsize=16)
+            fig.suptitle("Minimum active-plane charge by source tt_task3_list", fontsize=16)
             fig.tight_layout(rect=[0, 0.03, 1, 0.95])
 
             if save_plots:
-                final_filename = f"{fig_idx}_list_tt_minimum_charge_distributions.png"
+                final_filename = f"{fig_idx}_tt_task3_list_minimum_charge_distributions.png"
                 fig_idx += 1
                 save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                 plot_list.append(save_fig_path)
@@ -8489,12 +8499,12 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                 plt.show()
             plt.close(fig)
 
-        if task3_plot_enabled("list_tt_empirical_efficiency_vs_threshold"):
+        if task3_plot_enabled("tt_task3_list_empirical_efficiency_vs_threshold"):
             plane_to_thresholds: dict[int, list[float]] = {1: [], 2: [], 3: [], 4: []}
             plane_to_efficiencies: dict[int, list[float]] = {1: [], 2: [], 3: [], 4: []}
             plane_to_errors: dict[int, list[float]] = {1: [], 2: [], 3: [], 4: []}
             plane_to_counts: dict[int, list[tuple[int, int]]] = {1: [], 2: [], 3: [], 4: []}
-            for threshold, threshold_label in zip(list_tt_charge_thresholds, threshold_labels):
+            for threshold, threshold_label in zip(tt_task3_list_charge_thresholds, threshold_labels):
                 tt_counts = threshold_tt_by_label[threshold_label].value_counts()
                 per_plane = compute_empirical_efficiency_from_tt_counts(tt_counts)
                 for plane in (1, 2, 3, 4):
@@ -8582,7 +8592,7 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                 fig.tight_layout()
 
                 if save_plots:
-                    final_filename = f"{fig_idx}_list_tt_empirical_efficiency_vs_threshold.png"
+                    final_filename = f"{fig_idx}_tt_task3_list_empirical_efficiency_vs_threshold.png"
                     fig_idx += 1
                     save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                     plot_list.append(save_fig_path)
@@ -8691,7 +8701,7 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                 plt.close(fig)
 
         if task3_plot_enabled("tsum_coincidence_window_vs_threshold") and threshold_tsum_window_by_label:
-            x_vals = np.asarray(list_tt_charge_thresholds, dtype=float)
+            x_vals = np.asarray(tt_task3_list_charge_thresholds, dtype=float)
             percentile_curves: dict[float, list[float]] = {pct: [] for pct in tsum_window_percentiles}
             acceptance_curves: dict[float, list[float]] = {cut_val: [] for cut_val in tsum_window_cut_values_ns}
             reference_acceptance: list[float] = []
@@ -8907,13 +8917,13 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                     plt.close(fig)
 
         if task3_plot_enabled("plane_charge_fraction_vs_total_charge_threshold_scan"):
-            q_cols = [f"P{plane}_Q_sum_final" for plane in range(1, 5) if f"P{plane}_Q_sum_final" in working_df.columns]
+            q_cols = [f"p{plane}_qsum" for plane in range(1, 5) if f"p{plane}_qsum" in working_df.columns]
             if len(q_cols) >= 2:
                 q_df = working_df[q_cols].apply(pd.to_numeric, errors="coerce")
                 q_df = q_df.where(q_df > 0, 0.0).fillna(0.0)
                 q_total = q_df.sum(axis=1)
 
-                scan_thresholds = sorted(list_tt_charge_thresholds)[:plane_charge_fraction_max_panels]
+                scan_thresholds = sorted(tt_task3_list_charge_thresholds)[:plane_charge_fraction_max_panels]
                 ncols = len(scan_thresholds)
                 nrows = len(q_cols)
                 fig, axes = plt.subplots(
@@ -9084,7 +9094,7 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                             retention_vals.append(float(surviving) / float(baseline_n))
 
                         ax.plot(
-                            list_tt_charge_thresholds,
+                            tt_task3_list_charge_thresholds,
                             retention_vals,
                             marker="o",
                             linewidth=1.9,
@@ -9174,7 +9184,7 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                         suffix = f"{class_short}:{path_label}" if path_label else class_short
                         label = f"{pattern[:8]}.. {suffix} (N0={int(baseline_n)})"
                         ax.plot(
-                            list_tt_charge_thresholds,
+                            tt_task3_list_charge_thresholds,
                             retention_vals,
                             marker="o",
                             linewidth=1.4,
@@ -9268,7 +9278,7 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                         if not np.any(valid):
                             continue
                         ax.plot(
-                            np.asarray(list_tt_charge_thresholds, dtype=float)[valid],
+                            np.asarray(tt_task3_list_charge_thresholds, dtype=float)[valid],
                             y_vals[valid],
                             marker="o",
                             linewidth=1.9,
@@ -9313,14 +9323,14 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
 
         # --- 1. Charge asymmetry (Q_diff / Q_sum) vs threshold ---
         if task3_plot_enabled("charge_asymmetry_vs_threshold"):
-            q_sum_cols_asym = [f"P{p}_Q_sum_final" for p in range(1, 5) if f"P{p}_Q_sum_final" in working_df.columns]
-            q_dif_cols_asym = [f"P{p}_Q_dif_final" for p in range(1, 5) if f"P{p}_Q_dif_final" in working_df.columns]
+            q_sum_cols_asym = [f"p{p}_qsum" for p in range(1, 5) if f"p{p}_qsum" in working_df.columns]
+            q_dif_cols_asym = [f"p{p}_qdif" for p in range(1, 5) if f"p{p}_qdif" in working_df.columns]
             paired_planes = [
                 (int(qs.split("_")[0].replace("P", "")), qs, qd)
                 for qs, qd in zip(q_sum_cols_asym, q_dif_cols_asym)
             ]
             if paired_planes:
-                scan_thrs = sorted(list_tt_charge_thresholds)[:plane_charge_fraction_max_panels]
+                scan_thrs = sorted(tt_task3_list_charge_thresholds)[:plane_charge_fraction_max_panels]
 
                 # Shared x-range for all asymmetry panels (auto, with optional manual override).
                 _asym_x_abs_raw = config.get("charge_asymmetry_x_abs_max", None)
@@ -9432,13 +9442,13 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
         # --- 2. Inter-plane T_sum correlation ---
         if task3_plot_enabled("interplane_timing_correlation"):
             t_sum_corr_cols = {
-                p: f"P{p}_T_sum_final"
+                p: f"p{p}_tsum"
                 for p in range(1, 5)
-                if f"P{p}_T_sum_final" in working_df.columns
+                if f"p{p}_tsum" in working_df.columns
             }
             plane_pairs = list(combinations(sorted(t_sum_corr_cols.keys()), 2))
             # Use a sparse selection of thresholds to keep the figure readable.
-            corr_thrs = sorted(list_tt_charge_thresholds)[::max(1, len(list_tt_charge_thresholds) // 4)][:4]
+            corr_thrs = sorted(tt_task3_list_charge_thresholds)[::max(1, len(tt_task3_list_charge_thresholds) // 4)][:4]
             if plane_pairs and corr_thrs:
                 nrows_t = len(plane_pairs)
                 ncols_t = len(corr_thrs)
@@ -9452,8 +9462,8 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                 for i_row, (pA, pB) in enumerate(plane_pairs):
                     tA = pd.to_numeric(working_df[t_sum_corr_cols[pA]], errors="coerce").to_numpy(dtype=float)
                     tB = pd.to_numeric(working_df[t_sum_corr_cols[pB]], errors="coerce").to_numpy(dtype=float)
-                    qA_col = f"P{pA}_Q_sum_final"
-                    qB_col = f"P{pB}_Q_sum_final"
+                    qA_col = f"p{pA}_qsum"
+                    qB_col = f"p{pB}_qsum"
                     qA = pd.to_numeric(working_df.get(qA_col, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
                     qB = pd.to_numeric(working_df.get(qB_col, pd.Series(dtype=float)), errors="coerce").to_numpy(dtype=float)
                     for j_col, thr in enumerate(corr_thrs):
@@ -9506,10 +9516,10 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
 
         # --- 3. Multiplicity–charge landscape ---
         if task3_plot_enabled("multiplicity_charge_landscape"):
-            q_land_cols = [f"P{p}_Q_sum_final" for p in range(1, 5) if f"P{p}_Q_sum_final" in working_df.columns]
+            q_land_cols = [f"p{p}_qsum" for p in range(1, 5) if f"p{p}_qsum" in working_df.columns]
             if len(q_land_cols) >= 2:
                 q_land = working_df[q_land_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0)
-                scan_thrs_m = sorted(list_tt_charge_thresholds)[:plane_charge_fraction_max_panels]
+                scan_thrs_m = sorted(tt_task3_list_charge_thresholds)[:plane_charge_fraction_max_panels]
                 ncols_m = len(scan_thrs_m)
                 fig_m, axes_m = plt.subplots(
                     1, ncols_m,
@@ -9574,7 +9584,7 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
             "charge_by_strip_multiplicity_adj",
             "charge_by_strip_multiplicity_dis",
         ):
-            _cbsm_have_adj_dis = "adj_dis" in working_df.columns
+            _cbsm_have_adj_dis = len(_adj_dis_label_series) == len(working_df)
             _cbsm_mult_colors = {1: "tab:blue", 2: "tab:orange", 3: "tab:green", 4: "tab:red"}
             _cbsm_mult_labels = {1: "single", 2: "double", 3: "triple", 4: "quad"}
 
@@ -9587,11 +9597,11 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                 if not _cbsm_have_adj_dis:
                     continue
 
-                _cbsm_df = working_df.loc[working_df["adj_dis"] == _cbsm_label]
+                _cbsm_df = working_df.loc[_adj_dis_label_series == _cbsm_label]
                 if _cbsm_df.empty:
                     continue
 
-                _cbsm_tt = pd.to_numeric(_cbsm_df["list_tt"], errors="coerce").fillna(0).astype(int)
+                _cbsm_tt = pd.to_numeric(_cbsm_df["tt_task3_list"], errors="coerce").fillna(0).astype(int)
                 _cbsm_present = set(_cbsm_tt.unique().tolist())
                 _cbsm_ordered_tt = [tt for tt in ordered_tt_values if tt in _cbsm_present]
                 _n_cbsm_cols = len(_cbsm_ordered_tt)
@@ -9601,7 +9611,7 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                 # Common x range from 99th percentile across all planes
                 _cbsm_all_charges: list[np.ndarray] = []
                 for p in range(1, 5):
-                    _cbsm_qcol = f"P{p}_Q_sum_final"
+                    _cbsm_qcol = f"p{p}_qsum"
                     if _cbsm_qcol in _cbsm_df.columns:
                         _cbsm_qv = pd.to_numeric(_cbsm_df[_cbsm_qcol], errors="coerce").to_numpy(float)
                         _cbsm_pos = _cbsm_qv[np.isfinite(_cbsm_qv) & (_cbsm_qv > 0)]
@@ -9633,7 +9643,7 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                     )
                     for i_row, p in enumerate(range(1, 5)):
                         ax = axes_cbsm[i_row, j_col]
-                        _cbsm_qcol = f"P{p}_Q_sum_final"
+                        _cbsm_qcol = f"p{p}_qsum"
                         _cbsm_scol = f"active_strips_P{p}"
                         if _cbsm_qcol not in _cbsm_sub.columns or _cbsm_scol not in _cbsm_sub.columns:
                             ax.text(0.5, 0.5, "N/A", ha="center", va="center",
@@ -9695,8 +9705,8 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
         # Streamer investigation block
         # -----------------------------------------------------------------
         streamer_q_cols = [
-            f"P{p}_Q_sum_final" for p in range(1, 5)
-            if f"P{p}_Q_sum_final" in working_df.columns
+            f"p{p}_qsum" for p in range(1, 5)
+            if f"p{p}_qsum" in working_df.columns
         ]
         streamer_thr = task3_streamer_threshold
 
@@ -9706,7 +9716,7 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
         any_streamer = np.zeros(len(working_df), dtype=bool)
         n_streamer_planes = np.zeros(len(working_df), dtype=int)
         for p in range(1, 5):
-            col = f"P{p}_Q_sum_final"
+            col = f"p{p}_qsum"
             if col not in working_df.columns:
                 continue
 
@@ -9803,13 +9813,13 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                     fig_sp, ax_sp = plt.subplots(figsize=(8, 5))
                     for p in sorted(plane_is_streamer.keys()):
                         fracs = []
-                        for thr in sorted(list_tt_charge_thresholds):
+                        for thr in sorted(tt_task3_list_charge_thresholds):
                             active_mask = plane_q_arr[p] > float(thr)
                             n_act = int(np.sum(active_mask))
                             n_str = int(np.sum(active_mask & plane_is_streamer[p]))
                             fracs.append(n_str / n_act if n_act > 0 else np.nan)
                         ax_sp.plot(
-                            sorted(list_tt_charge_thresholds), fracs,
+                            sorted(tt_task3_list_charge_thresholds), fracs,
                             "o-", color=plane_colors_s[p], label=f"Plane {p}",
                             markersize=4, linewidth=1.5,
                         )
@@ -10071,8 +10081,8 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
         # --- Weakest-plane charge distribution for 4-plane events ---
         if task3_plot_enabled("fourplane_weakest_charge"):
             q_anat_cols = [
-                f"P{p}_Q_sum_final" for p in range(1, 5)
-                if f"P{p}_Q_sum_final" in working_df.columns
+                f"p{p}_qsum" for p in range(1, 5)
+                if f"p{p}_qsum" in working_df.columns
             ]
             if len(q_anat_cols) == 4:
                 q_anat = working_df[q_anat_cols].apply(pd.to_numeric, errors="coerce")
@@ -10137,15 +10147,15 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
         # --- Which plane is weakest in 4-plane events vs threshold ---
         if task3_plot_enabled("fourplane_weakest_plane_identity"):
             q_anat_cols = [
-                f"P{p}_Q_sum_final" for p in range(1, 5)
-                if f"P{p}_Q_sum_final" in working_df.columns
+                f"p{p}_qsum" for p in range(1, 5)
+                if f"p{p}_qsum" in working_df.columns
             ]
             if len(q_anat_cols) == 4:
                 q_anat = working_df[q_anat_cols].apply(pd.to_numeric, errors="coerce")
                 q_arr_a = q_anat.to_numpy(dtype=float)
                 plane_colors_w = {1: "tab:blue", 2: "tab:orange", 3: "tab:green", 4: "tab:red"}
 
-                scan_thrs = sorted(list_tt_charge_thresholds)
+                scan_thrs = sorted(tt_task3_list_charge_thresholds)
                 fig_wp, axes_wp = plt.subplots(1, 2, figsize=(14, 5.5))
 
                 # Left: fraction of 4-plane events where each plane is the weakest
@@ -10229,8 +10239,8 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
         # --- Efficiency anatomy by charge band ---
         if task3_plot_enabled("efficiency_anatomy_by_charge_band"):
             q_anat_cols = [
-                f"P{p}_Q_sum_final" for p in range(1, 5)
-                if f"P{p}_Q_sum_final" in working_df.columns
+                f"p{p}_qsum" for p in range(1, 5)
+                if f"p{p}_qsum" in working_df.columns
             ]
             if len(q_anat_cols) == 4:
                 q_anat = working_df[q_anat_cols].apply(pd.to_numeric, errors="coerce")
@@ -10257,7 +10267,7 @@ if "list_tt" in working_df.columns and task3_any_plot_enabled(
                     fig_ea, axes_ea = plt.subplots(1, n_bands, figsize=(5.5 * n_bands, 5.5),
                                                    sharey=True, squeeze=False)
 
-                    scan_thrs = sorted(list_tt_charge_thresholds)
+                    scan_thrs = sorted(tt_task3_list_charge_thresholds)
                     for b_idx in range(n_bands):
                         ax = axes_ea[0, b_idx]
                         lo = band_edges[b_idx]
@@ -10321,8 +10331,8 @@ if task3_plot_enabled("strip_activation_matrix_before_after"):
 if save_plots and task3_plot_enabled("acquisition_rate_vs_time_by_task_tt_with_histograms"):
     rate_fig = create_rate_vs_time_by_task_tt_with_histograms(
         working_df,
-        tt_column="list_tt",
-        title=f"Task 3 acquisition rate by list_tt, {basename_no_ext}",
+        tt_column="tt_task3_list",
+        title=f"Task 3 acquisition rate by tt_task3_list, {basename_no_ext}",
         accumulation_window_seconds=config.get("acquisition_rate_accumulation_window_seconds", 60),
         rate_histogram_bins=config.get("acquisition_rate_task_tt_histogram_bins", 80),
         y_limit_left=config.get("acquisition_rate_task_tt_ylim_left", 0),
@@ -10336,7 +10346,7 @@ if save_plots and task3_plot_enabled("acquisition_rate_vs_time_by_task_tt_with_h
         save_plot_figure(save_fig_path, fig=rate_fig, dpi=140)
         plt.close(rate_fig)
     else:
-        print("Task 3 acquisition-rate-by-task-tt plot skipped: no valid list_tt/datetime rows.")
+        print("Task 3 acquisition-rate-by-task-tt plot skipped: no valid tt_task3_list/datetime rows.")
 
 finalize_saved_plots_to_pdf()
 _prof["s_pdf_finalize_s"] = round(time.perf_counter() - _t_sec, 2)
@@ -10470,13 +10480,13 @@ for selected_count in TASK3_SELECTED_OFFENDER_CARDINALITY_VALUES:
         f"plane_combination_filter_rows_with_{selected_count}_selected_offenders_pct"
     ] = round(pct_value, 4)
 
-task3_noise_control_list_tt = pd.to_numeric(
-    working_df.get("list_tt", pd.Series(index=working_df.index, dtype=float)),
+task3_noise_control_tt_task3_list = pd.to_numeric(
+    working_df.get("tt_task3_list", pd.Series(index=working_df.index, dtype=float)),
     errors="coerce",
 ).fillna(0).astype(int)
 task3_noise_control_selected_offenders = pd.to_numeric(
     working_df.get(
-        "total_problematic_offender_count",
+        "filter_total_problematic_offender_count",
         pd.Series(index=working_df.index, dtype=float),
     ),
     errors="coerce",
@@ -10484,8 +10494,8 @@ task3_noise_control_selected_offenders = pd.to_numeric(
 
 for selected_count_threshold in task3_noise_control_efficiency_selected_offender_values:
     threshold_mask = task3_noise_control_selected_offenders <= selected_count_threshold
-    threshold_list_tt = task3_noise_control_list_tt.loc[threshold_mask]
-    four_plane_count = int((threshold_list_tt == 1234).sum())
+    threshold_tt_task3_list = task3_noise_control_tt_task3_list.loc[threshold_mask]
+    four_plane_count = int((threshold_tt_task3_list == 1234).sum())
     for plane, missing_trigger in TASK3_THREE_TO_FOUR_MISSING_TRIGGER_BY_PLANE.items():
         metric_key = _task3_noise_control_efficiency_metric_key(
             plane,
@@ -10494,7 +10504,7 @@ for selected_count_threshold in task3_noise_control_efficiency_selected_offender
         if four_plane_count <= 0:
             noise_control_row[metric_key] = ""
             continue
-        missing_plane_count = int((threshold_list_tt == missing_trigger).sum())
+        missing_plane_count = int((threshold_tt_task3_list == missing_trigger).sum())
         noise_control_row[metric_key] = round(
             1.0 - (float(missing_plane_count) / float(four_plane_count)),
             6,
@@ -10573,27 +10583,27 @@ print(f"Metadata (pattern) CSV updated at: {metadata_pattern_csv_path}")
 # -------------------------------------------------------------------------------
 
 global_variables.update(build_events_per_second_metadata(working_df))
-global_variables["charge_topology_code_column"] = "plane_charge_topology_code"
+global_variables["charge_topology_code_column"] = "topology_task2_strip"
 global_variables["charge_topology_streamer_threshold_source"] = task3_streamer_threshold_source
 store_task3_charge_topology_metadata(
     global_variables,
     working_df,
-    working_df["plane_charge_topology_code"].astype(str),
+    working_df["topology_task2_strip"].astype(str),
     task3_topology_digits_by_plane,
-    pd.to_numeric(working_df["list_tt"], errors="coerce").astype("Int64"),
+    pd.to_numeric(working_df["tt_task3_list"], errors="coerce").astype("Int64"),
     task3_topology_tt_streamer_as_avalanche,
     task3_topology_tt_streamer_as_invalid,
     task3_topology_tt_streamer_as_invalid_no_transference,
     task3_streamer_threshold,
 )
-ensure_global_count_keys(("cal_tt", "list_tt", "cal_to_list_tt"))
+ensure_global_count_keys(("tt_task2_cal", "tt_task3_list", "transferred_task3_cal_to_list"))
 add_normalized_count_metadata(
     global_variables,
     global_variables.get("events_per_second_total_seconds", 0),
 )
 set_global_rate_from_tt_rates(
     global_variables,
-    preferred_prefixes=("list_tt", "cal_tt"),
+    preferred_prefixes=("tt_task3_list", "tt_task2_cal"),
     log_fn=print,
 )
 global_variables["filename_base"] = filename_base
@@ -10608,7 +10618,7 @@ metadata_rate_histogram_csv_path = save_metadata(
 print(f"Metadata (rate_histogram) CSV updated at: {metadata_rate_histogram_csv_path}")
 
 prune_redundant_count_metadata(global_variables, log_fn=print)
-trigger_type_prefixes = ("cal_tt", "list_tt", "cal_to_list_tt")
+trigger_type_prefixes = ("tt_task2_cal", "tt_task3_list", "transferred_task3_cal_to_list")
 trigger_type_variables = extract_trigger_type_metadata(
     global_variables,
     trigger_type_prefixes,
@@ -10622,7 +10632,7 @@ trigger_type_variables["count_rate_denominator_seconds"] = rate_histogram_variab
 add_trigger_type_total_offender_threshold_metadata(
     trigger_type_variables,
     working_df,
-    stage_tt_columns=("cal_tt", "list_tt"),
+    stage_tt_columns=("tt_task2_cal", "tt_task3_list"),
     denominator_seconds=trigger_type_variables["count_rate_denominator_seconds"],
 )
 metadata_trigger_type_csv_path = save_metadata(
@@ -10681,6 +10691,7 @@ if joined_analysis_active and joined_source_file_column in working_df.columns:
             columns=[joined_source_file_column, joined_source_basename_column],
             errors="ignore",
         )
+        joined_output_df = canonicalize_step1_columns(joined_output_df)
         joined_output_df.to_parquet(
             joined_out_path,
             engine="pyarrow",
@@ -10693,6 +10704,7 @@ else:
         columns=[joined_source_file_column, joined_source_basename_column],
         errors="ignore",
     )
+    output_df = canonicalize_step1_columns(output_df)
     output_df.to_parquet(
         OUT_PATH,
         engine="pyarrow",

@@ -7,7 +7,14 @@ from glob import glob
 from pathlib import Path
 import sys
 
+import pandas as pd
 import pyarrow.parquet as pq
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from MASTER.common.step1_shared import canonicalize_step1_columns
 
 
 OUTPUT_PATH = Path(
@@ -123,9 +130,11 @@ def get_columns(parquet_path: Path) -> list[str]:
     parquet_file = pq.ParquetFile(parquet_path)
     try:
         batch = next(parquet_file.iter_batches(batch_size=5))
-        return list(batch.schema.names)
+        columns = list(batch.schema.names)
     except StopIteration:
-        return list(parquet_file.schema_arrow.names)
+        columns = list(parquet_file.schema_arrow.names)
+    schema_df = pd.DataFrame(columns=columns)
+    return list(canonicalize_step1_columns(schema_df).columns)
 
 
 def build_document() -> tuple[str, list[str]]:

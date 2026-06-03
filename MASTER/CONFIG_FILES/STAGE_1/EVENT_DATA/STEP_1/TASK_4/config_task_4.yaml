@@ -76,5 +76,5 @@ projection_ellipse_diagnostic:
   y_min: null
   y_max: null
 # Upper quantile used for the x-range of the essential total-event-charge
-# histogram grid. The plot range becomes 0 .. q(quantile) of charge_event.
+# histogram grid. The plot range becomes 0 .. q(quantile) of event_charge.
 total_event_charge_histogram_upper_quantile: 0.999

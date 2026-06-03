@@ -123,6 +123,7 @@ from MASTER.common.step1_shared import (
     build_events_per_second_metadata,
     build_step1_cli_parser,
     build_step1_filtered_print,
+    canonicalize_step1_columns,
     coerce_nonnegative_float_config,
     coerce_positive_int_config,
     extract_rate_histogram_metadata,
@@ -153,10 +154,10 @@ from plotting_functions import _task5_channel_hist_range
 
 task_number = 5
 TASK4_CHARGE_SUM_COLUMNS: tuple[str, ...] = (
-    "P1_Q_sum_final",
-    "P2_Q_sum_final",
-    "P3_Q_sum_final",
-    "P4_Q_sum_final",
+    "p1_qsum",
+    "p2_qsum",
+    "p3_qsum",
+    "p4_qsum",
 )
 TASK4_LISTED_FALLBACK_SUBDIRS: tuple[str, ...] = (
     "PROCESSING_DIRECTORY",
@@ -164,9 +165,25 @@ TASK4_LISTED_FALLBACK_SUBDIRS: tuple[str, ...] = (
     "UNPROCESSED_DIRECTORY",
     "OUT_OF_DATE_DIRECTORY",
 )
-TASK5_STRIP_Q_COLUMN_RE = re.compile(r"^Q_P[1-4]s[1-4]$")
-TASK5_PLANE_Q_SUM_COLUMN_RE = re.compile(r"^P[1-4]_Q_sum_final$")
-POST_TT_COLUMN = "post_tt"
+TASK5_STRIP_Q_COLUMN_RE = re.compile(r"^p[1-4]_s[1-4]_qsum$")
+TASK5_PLANE_Q_SUM_COLUMN_RE = re.compile(r"^p[1-4]_qsum$")
+POST_TT_COLUMN = "tt_task5_post"
+TASK5_INTERNAL_EVENT_ALIASES: tuple[tuple[str, str], ...] = (
+    ("event_x", "x"),
+    ("event_y", "y"),
+    ("event_xp", "xp"),
+    ("event_yp", "yp"),
+    ("event_s", "s"),
+    ("event_t0", "t0"),
+    ("event_theta", "theta"),
+    ("event_phi", "phi"),
+    ("event_x_err", "x_err"),
+    ("event_y_err", "y_err"),
+    ("event_s_err", "s_err"),
+    ("event_t0_err", "t0_err"),
+    ("event_theta_err", "theta_err"),
+    ("event_phi_err", "phi_err"),
+)
 
 try:
     import pyarrow as pa
@@ -174,10 +191,10 @@ except Exception:  # pragma: no cover - pyarrow is already required for parquet 
     pa = None
 
 
-def _derive_charge_event_from_dataframe(
+def _derive_event_charge_from_dataframe(
     dataframe: pd.DataFrame,
 ) -> tuple[pd.Series | None, str | None]:
-    for column_name in ("charge_event", "tim_charge_event"):
+    for column_name in ("event_charge", "tim_event_charge"):
         if column_name not in dataframe.columns:
             continue
         series = pd.to_numeric(dataframe[column_name], errors="coerce")
@@ -219,7 +236,18 @@ def _derive_charge_event_from_dataframe(
     return None, None
 
 
-def _load_charge_event_from_task4_listed(
+def _ensure_task5_internal_event_aliases(dataframe: pd.DataFrame) -> pd.DataFrame:
+    """Task 5 still uses short track names internally; outputs are canonicalized before write."""
+    for canonical_name, internal_name in TASK5_INTERNAL_EVENT_ALIASES:
+        if internal_name not in dataframe.columns and canonical_name in dataframe.columns:
+            source = dataframe[canonical_name]
+            if isinstance(source, pd.DataFrame):
+                source = source.iloc[:, 0]
+            dataframe.loc[:, internal_name] = source
+    return dataframe
+
+
+def _load_event_charge_from_task4_listed(
     station_root: str | Path,
     basename_no_ext: str,
     event_ids: pd.Series,
@@ -260,39 +288,39 @@ def _load_charge_event_from_task4_listed(
             continue
 
         charge_lookup = task4_df.loc[:, ["event_id", *present_charge_columns]].copy()
-        charge_lookup["charge_event"] = (
+        charge_lookup["event_charge"] = (
             charge_lookup.loc[:, present_charge_columns]
             .apply(pd.to_numeric, errors="coerce")
             .fillna(0.0)
             .sum(axis=1)
             .astype(float)
         )
-        charge_lookup = charge_lookup.loc[:, ["event_id", "charge_event"]]
+        charge_lookup = charge_lookup.loc[:, ["event_id", "event_charge"]]
         charge_lookup = charge_lookup.drop_duplicates(subset=["event_id"], keep="last")
 
         aligned = pd.DataFrame({"event_id": event_ids}).merge(
             charge_lookup,
             on="event_id",
             how="left",
-        )["charge_event"]
+        )["event_charge"]
         if _charge_series_is_usable(aligned):
             return aligned.astype(float), str(candidate_path)
 
     return None, None
 
 
-def resolve_charge_event_series(
+def resolve_event_charge_series(
     dataframe: pd.DataFrame,
     *,
     station_root: str | Path,
     basename_no_ext: str,
 ) -> tuple[pd.Series | None, str | None]:
-    series, source = _derive_charge_event_from_dataframe(dataframe)
+    series, source = _derive_event_charge_from_dataframe(dataframe)
     if series is not None:
         return series, source
 
     if "event_id" in dataframe.columns:
-        return _load_charge_event_from_task4_listed(
+        return _load_event_charge_from_task4_listed(
             station_root,
             basename_no_ext,
             pd.to_numeric(dataframe["event_id"], errors="coerce"),
@@ -753,7 +781,7 @@ def _task5_load_task1_channel_combination_settings() -> tuple[
 
 
 def _task5_resolve_audit_tt_column(df_input: pd.DataFrame) -> str | None:
-    for candidate in ("raw_tt", "clean_tt", "cal_tt", "list_tt", "fit_tt", POST_TT_COLUMN):
+    for candidate in ("tt_task0_raw", "tt_task1_clean", "tt_task2_cal", "tt_task3_list", "tt_task4_fit", POST_TT_COLUMN):
         if candidate in df_input.columns:
             return candidate
     return None
@@ -1136,7 +1164,7 @@ TASK5_PLOT_ALIASES: tuple[str, ...] = (
     "usual_suite",
     "essential_suite",
     "acquisition_rate_vs_time_by_task_tt_with_histograms",
-    "charge_fit_tt_1234_per_plane_and_total",
+    "charge_tt_task4_fit_1234_per_plane_and_total",
     "theta_phi_definitive_tt_2d",
     "polar_theta_phi_definitive_tt_2d_detail_pre",
     "polar_theta_phi_definitive_tt_2d_detail_angle_correction",
@@ -1921,22 +1949,24 @@ for joined_record in joined_input_records:
     joined_path = joined_record["processing_file_path"]
     joined_frame = pd.read_parquet(joined_path, engine="pyarrow")
     joined_frame = joined_frame.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
+    joined_frame = canonicalize_step1_columns(joined_frame)
+    joined_frame = _ensure_task5_internal_event_aliases(joined_frame)
     if "event_id" not in joined_frame.columns:
         print(
             "Warning: 'event_id' missing in Task 5 input; reconstructing from "
             f"current row order for {joined_record['file_name']}."
         )
         joined_frame.insert(0, "event_id", np.arange(len(joined_frame), dtype=np.int64))
-    charge_event_series, charge_event_source = resolve_charge_event_series(
+    event_charge_series, event_charge_source = resolve_event_charge_series(
         joined_frame,
         station_root=station_directory,
         basename_no_ext=joined_record["basename_no_ext"],
     )
-    if charge_event_series is not None:
-        joined_frame["charge_event"] = charge_event_series
-        print(f"Recovered charge_event for TASK_5 using: {charge_event_source}")
+    if event_charge_series is not None:
+        joined_frame["event_charge"] = event_charge_series
+        print(f"Recovered event_charge for TASK_5 using: {event_charge_source}")
     else:
-        print(f"[WARN] charge_event could not be reconstructed in TASK_5 for {joined_record['file_name']}.")
+        print(f"[WARN] event_charge could not be reconstructed in TASK_5 for {joined_record['file_name']}.")
     joined_frame.loc[:, joined_source_file_column] = joined_record["file_name"]
     joined_frame.loc[:, joined_source_basename_column] = joined_record["basename_no_ext"]
     joined_frames.append(joined_frame)
@@ -1992,17 +2022,17 @@ if create_debug_plots:
     for i_plane in range(1, 5):
         main_cols.extend(
             [
-                f"P{i_plane}_T_sum_final",
-                f"P{i_plane}_T_dif_final",
-                f"P{i_plane}_Q_sum_final",
-                f"P{i_plane}_Q_dif_final",
-                f"P{i_plane}_Y_final",
+                f"p{i_plane}_tsum",
+                f"p{i_plane}_tdif",
+                f"p{i_plane}_qsum",
+                f"p{i_plane}_qdif",
+                f"p{i_plane}_ypos",
             ]
         )
     main_cols.extend(
         [
             col
-            for col in ("raw_tt", "clean_tt", "cal_tt", "list_tt", "tracking_tt", "fit_tt", POST_TT_COLUMN)
+            for col in ("tt_task0_raw", "tt_task1_clean", "tt_task2_cal", "tt_task3_list", "tt_task4_fit", POST_TT_COLUMN)
             if col in working_df.columns
         ]
     )
@@ -2017,13 +2047,13 @@ if create_debug_plots:
             fig_idx=debug_fig_idx,
             max_cols_per_fig=20,
         )
-fit_tt_columns = {
+tt_task4_fit_columns = {
     i_plane: [
-        f"P{i_plane}_T_sum_final",
-        f"P{i_plane}_T_dif_final",
-        f"P{i_plane}_Q_sum_final",
-        f"P{i_plane}_Q_dif_final",
-        f"P{i_plane}_Y_final",
+        f"p{i_plane}_tsum",
+        f"p{i_plane}_tdif",
+        f"p{i_plane}_qsum",
+        f"p{i_plane}_qdif",
+        f"p{i_plane}_ypos",
     ]
     for i_plane in range(1, 5)
 }
@@ -2058,33 +2088,33 @@ FILTER_METRIC_NAMES: tuple[str, ...] = (
     "total_rows_removed_pct",
     "data_purity_percentage",
     "all_components_zero_rows_removed_pct",
-    "post_tt_lt_10_rows_removed_pct",
+    "tt_task5_post_lt_10_rows_removed_pct",
 )
 
 filter_metrics: dict[str, float] = {}
-# Keep fit_tt from Task 4 when present; compute only if missing.
-if "fit_tt" not in working_df.columns:
-    working_df = compute_tt(working_df, "fit_tt", fit_tt_columns)
+# Keep tt_task4_fit from Task 4 when present; compute only if missing.
+if "tt_task4_fit" not in working_df.columns:
+    working_df = compute_tt(working_df, "tt_task4_fit", tt_task4_fit_columns)
 else:
-    working_df.loc[:, "fit_tt"] = (
-        pd.to_numeric(working_df["fit_tt"], errors="coerce")
+    working_df.loc[:, "tt_task4_fit"] = (
+        pd.to_numeric(working_df["tt_task4_fit"], errors="coerce")
         .fillna(0)
         .astype(int)
     )
 
-fit_tt_counts_initial = working_df["fit_tt"].value_counts()
-for tt_value, count in fit_tt_counts_initial.items():
+tt_task4_fit_counts_initial = working_df["tt_task4_fit"].value_counts()
+for tt_value, count in tt_task4_fit_counts_initial.items():
     tt_label = normalize_tt_label(tt_value)
-    global_variables[f"fit_tt_{tt_label}_count"] = int(count)
+    global_variables[f"tt_task4_fit_{tt_label}_count"] = int(count)
 
 working_df.loc[:, POST_TT_COLUMN] = (
-    pd.to_numeric(working_df["fit_tt"], errors="coerce")
+    pd.to_numeric(working_df["tt_task4_fit"], errors="coerce")
     .fillna(0)
     .astype(int)
 )
 
-post_tt_counts_initial = working_df[POST_TT_COLUMN].value_counts()
-for tt_value, count in post_tt_counts_initial.items():
+tt_task5_post_counts_initial = working_df[POST_TT_COLUMN].value_counts()
+for tt_value, count in tt_task5_post_counts_initial.items():
     tt_label = normalize_tt_label(tt_value)
     global_variables[f"{POST_TT_COLUMN}_{tt_label}_count"] = int(count)
 
@@ -2667,7 +2697,7 @@ save_pdf_path = os.path.join(base_directories["pdf_directory"], save_pdf_filenam
 fig_idx, plot_list = ensure_plot_state(globals())
 if (
     (create_essential_plots or create_plots)
-    and task5_plot_enabled("charge_fit_tt_1234_per_plane_and_total")
+    and task5_plot_enabled("charge_tt_task4_fit_1234_per_plane_and_total")
 ):
     plane_charge_df = pd.DataFrame(index=working_df.index)
     plane_charge_columns: list[str] = []
@@ -2677,7 +2707,8 @@ if (
     charge_candidates = [
         col
         for col in working_df.columns
-        if re.search(r"^(P[1-4]_Q_sum(?:_.*)?|Q_P[1-4]s[1-4])$", col)
+        if TASK5_PLANE_Q_SUM_COLUMN_RE.fullmatch(str(col))
+        or TASK5_STRIP_Q_COLUMN_RE.fullmatch(str(col))
     ]
     if charge_candidates:
         print(
@@ -2697,7 +2728,7 @@ if (
         )
 
     for i_plane in range(1, 5):
-        sum_col = f"P{i_plane}_Q_sum_final"
+        sum_col = f"p{i_plane}_qsum"
         if sum_col in working_df.columns:
             plane_charge_df.loc[:, sum_col] = pd.to_numeric(
                 working_df[sum_col], errors="coerce"
@@ -2706,38 +2737,21 @@ if (
             plane_charge_titles.append(f"Plane {i_plane} Q_sum_final")
             continue
 
-        alt_sum_cols = [
-            col
-            for col in working_df.columns
-            if re.fullmatch(fr"P{i_plane}_Q_sum(?:_.*)?", col)
-        ]
-        if alt_sum_cols:
-            alt_sum_cols = [c for c in alt_sum_cols if c != sum_col]
-            best_alt = [c for c in alt_sum_cols if c.endswith("_final")] or alt_sum_cols
-            alt_col = best_alt[0]
-            plane_charge_df.loc[:, alt_col] = pd.to_numeric(
-                working_df[alt_col], errors="coerce"
-            )
-            plane_charge_columns.append(alt_col)
-            plane_charge_titles.append(f"Plane {i_plane} {alt_col}")
-            fallback_notes.append(f"{sum_col} from {alt_col}")
-            continue
-
         strip_cols = [
-            f"Q_P{i_plane}s{i_strip}"
+            f"p{i_plane}_s{i_strip}_qsum"
             for i_strip in range(1, 5)
-            if f"Q_P{i_plane}s{i_strip}" in working_df.columns
+            if f"p{i_plane}_s{i_strip}_qsum" in working_df.columns
         ]
         if not strip_cols:
             continue
 
-        fallback_col = f"P{i_plane}_Q_sum_from_strips"
+        fallback_col = f"p{i_plane}_qsum_from_strips"
         strip_values = working_df[strip_cols].apply(pd.to_numeric, errors="coerce")
         # Keep all-NaN rows as NaN so missing charge data is not misrepresented as 0.
         plane_charge_df.loc[:, fallback_col] = strip_values.sum(axis=1, min_count=1)
         plane_charge_columns.append(fallback_col)
         plane_charge_titles.append(f"Plane {i_plane} Q sum from strips")
-        fallback_notes.append(f"P{i_plane}={' + '.join(strip_cols)}")
+        fallback_notes.append(f"p{i_plane}={' + '.join(strip_cols)}")
 
     if plane_charge_columns:
         if fallback_notes:
@@ -2751,13 +2765,13 @@ if (
             min_count=1,
         )
 
-        fit_tt_values = pd.to_numeric(working_df["fit_tt"], errors="coerce")
+        tt_task4_fit_values = pd.to_numeric(working_df["tt_task4_fit"], errors="coerce")
         df_charge_1234 = plane_charge_df.loc[
-            fit_tt_values == 1234,
+            tt_task4_fit_values == 1234,
             plane_charge_columns + ["detector_total_charge"],
         ].copy()
         print(
-            f"Task 5: preparing charge summary for fit_tt=1234 with {len(df_charge_1234)} matching rows"
+            f"Task 5: preparing charge summary for tt_task4_fit=1234 with {len(df_charge_1234)} matching rows"
         )
 
         if not df_charge_1234.empty:
@@ -2795,7 +2809,7 @@ if (
                     axis.text(
                         0.5,
                         0.5,
-                        "No fit_tt=1234 data available",
+                        "No tt_task4_fit=1234 data available",
                         ha="center",
                         va="center",
                     )
@@ -2842,14 +2856,14 @@ if (
             axes[row_idx, 1].axis("off")
 
         fig.suptitle(
-            "Task 5 charge summary for fit_tt = 1234\n"
+            "Task 5 charge summary for tt_task4_fit = 1234\n"
             "Per-plane charge and total event charge\n"
             f"Events: {len(df_charge_1234)} | Columns: {', '.join(plot_columns)}",
             fontsize=12,
         )
 
         if save_plots:
-            final_filename = f"{fig_idx}_charge_fit_tt_1234_per_plane_and_total.png"
+            final_filename = f"{fig_idx}_charge_tt_task4_fit_1234_per_plane_and_total.png"
             fig_idx += 1
             save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
             plot_list.append(save_fig_path)
@@ -2858,7 +2872,7 @@ if (
                 fig=fig,
                 format="png",
                 dpi=150,
-                alias="charge_fit_tt_1234_per_plane_and_total",
+                alias="charge_tt_task4_fit_1234_per_plane_and_total",
             )
         if show_plots:
             plt.show()
@@ -2866,7 +2880,7 @@ if (
     else:
         print(
             "Warning: Task 5 charge summary plot skipped because no per-plane charge "
-            "columns were found (neither P#_Q_sum_final nor Q_P#s# columns)."
+            "columns were found (neither p#_qsum nor p#_s#_qsum columns)."
         )
 
 reprocessing_parameters = pd.DataFrame()
@@ -2926,10 +2940,10 @@ z_positions = z_positions - z_positions[0]
 print(f"Z positions: {z_positions}")
 
 # Save the z_positions in the metadata file
-global_variables['z_P1'] =  z_positions[0]
-global_variables['z_P2'] =  z_positions[1]
-global_variables['z_P3'] =  z_positions[2]
-global_variables['z_P4'] =  z_positions[3]
+global_variables['z_p1'] =  z_positions[0]
+global_variables['z_p2'] =  z_positions[1]
+global_variables['z_p3'] =  z_positions[2]
+global_variables['z_p4'] =  z_positions[3]
 
 fast_mode = False
 debug_mode = False
@@ -3223,17 +3237,17 @@ print(
 )
 
 # Save the z_positions in the metadata file
-global_variables['z_P1'] =  z_positions[0]
-global_variables['z_P2'] =  z_positions[1]
-global_variables['z_P3'] =  z_positions[2]
-global_variables['z_P4'] =  z_positions[3]
+global_variables['z_p1'] =  z_positions[0]
+global_variables['z_p2'] =  z_positions[1]
+global_variables['z_p3'] =  z_positions[2]
+global_variables['z_p4'] =  z_positions[3]
 
 raw_data_len = len(working_df)
 if raw_data_len == 0 and not self_trigger:
     print("No coincidence nor self-trigger events.")
     sys.exit(1)
 
-print("TASK_5 angular-region segmentation disabled.")
+print("TASK_5 angular segmentation disabled.")
 
 correct_angle = bool(config.get("correct_angle", False))
 global_variables['correct_angle'] = correct_angle
@@ -3265,7 +3279,7 @@ if task5_plot_enabled("theta_phi_definitive_tt_2d"):
         row_idx, col_idx = divmod(idx, ncols)
         ax = axes[row_idx][col_idx]
             
-        df_tt = df_filtered[df_filtered["fit_tt"] == tt_val]
+        df_tt = df_filtered[df_filtered["tt_task4_fit"] == tt_val]
         theta_vals = df_tt['theta'].dropna()
         phi_vals = df_tt['phi'].dropna()
 
@@ -3274,7 +3288,7 @@ if task5_plot_enabled("theta_phi_definitive_tt_2d"):
             continue
         
         h = ax.hist2d(theta_vals, phi_vals, bins=[theta_bins, phi_bins], cmap='viridis', norm=None, cmin=0, cmax=None)
-        ax.set_title(f'fit_tt = {tt_val}')
+        ax.set_title(f'tt_task4_fit = {tt_val}')
         ax.set_xlabel(r'$\theta$ [rad]')
         ax.set_ylabel(r'$\phi$ [rad]')
         ax.grid(True)
@@ -3283,11 +3297,11 @@ if task5_plot_enabled("theta_phi_definitive_tt_2d"):
 
         fig.colorbar(h[3], ax=ax, label='Counts')
 
-    plt.suptitle(r'2D Histogram of $\theta$ vs. $\phi$ for each fit_tt Type', fontsize=16)
+    plt.suptitle(r'2D Histogram of $\theta$ vs. $\phi$ for each tt_task4_fit Type', fontsize=16)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
 
     if save_plots:
-        final_filename = f'{fig_idx}_theta_phi_fit_tt_2D.png'
+        final_filename = f'{fig_idx}_theta_phi_tt_task4_fit_2D.png'
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
@@ -3308,7 +3322,7 @@ if task5_plot_enabled("polar_theta_phi_definitive_tt_2d_detail_pre"):
     phi_right_filter = np.pi
         
     df_filtered = df
-    # tt_values = sorted(df_filtered["fit_tt"].dropna().unique(), key=lambda x: int(x))
+    # tt_values = sorted(df_filtered["tt_task4_fit"].dropna().unique(), key=lambda x: int(x))
 
     # tt_values = [13, 12, 23, 34, 123, 124, 134, 234, 1234]
     tt_values = [23, 123, 234, 1234]
@@ -3329,18 +3343,18 @@ if task5_plot_enabled("polar_theta_phi_definitive_tt_2d_detail_pre"):
     theta_min, theta_max = theta_left_filter, theta_right_filter    # adjust as needed
     phi_min, phi_max     = phi_left_filter, phi_right_filter        # adjust as needed
     
-    vmax_global = df_filtered.groupby("fit_tt").apply(lambda df: np.histogram2d(df["theta"], df["phi"], bins=[theta_bins, phi_bins])[0].max()).max()
+    vmax_global = df_filtered.groupby("tt_task4_fit").apply(lambda df: np.histogram2d(df["theta"], df["phi"], bins=[theta_bins, phi_bins])[0].max()).max()
     
     for idx, tt_val in enumerate(tt_values):
         row_idx, col_idx = divmod(idx, ncols)
         ax = axes[row_idx][col_idx]
 
-        df_tt = df_filtered[df_filtered["fit_tt"] == tt_val]
+        df_tt = df_filtered[df_filtered["tt_task4_fit"] == tt_val]
         theta_vals = df_tt['theta'].dropna()
         phi_vals = df_tt['phi'].dropna()
 
         # Apply range filtering
-        df_tt = df_filtered[df_filtered["fit_tt"] == tt_val].copy()
+        df_tt = df_filtered[df_filtered["tt_task4_fit"] == tt_val].copy()
         mask = (
             (df_tt['theta'] >= theta_min) & (df_tt['theta'] <= theta_max) &
             (df_tt['phi'] >= phi_min) & (df_tt['phi'] <= phi_max)
@@ -3360,7 +3374,7 @@ if task5_plot_enabled("polar_theta_phi_definitive_tt_2d_detail_pre"):
         axes[row_idx][col_idx] = ax  # update reference for consistency
 
         ax.set_facecolor(colors(0.0))  # darkest background in colormap
-        ax.set_title(f'fit_tt = {tt_val}', fontsize=14)
+        ax.set_title(f'tt_task4_fit = {tt_val}', fontsize=14)
             
         # Limit in radius in theta_right_filter
         ax.set_ylim(0, theta_right_filter)
@@ -3376,10 +3390,10 @@ if task5_plot_enabled("polar_theta_phi_definitive_tt_2d_detail_pre"):
         cb = fig.colorbar(c, ax=ax, pad=0.1)
         cb.ax.hlines(local_max, *cb.ax.get_xlim(), colors='white', linewidth=2, linestyles='dashed')
 
-    plt.suptitle(r'PRE-CORRECTION. 2D Histogram of $\theta$ vs. $\phi$ for each fit_tt Type', fontsize=16)
+    plt.suptitle(r'PRE-CORRECTION. 2D Histogram of $\theta$ vs. $\phi$ for each tt_task4_fit Type', fontsize=16)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     if save_plots:
-        final_filename = f'{fig_idx}_polar_theta_phi_fit_tt_2D_detail.png'
+        final_filename = f'{fig_idx}_polar_theta_phi_tt_task4_fit_2D_detail.png'
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
@@ -3486,7 +3500,7 @@ if correct_angle:
         iterator = tqdm(range(N), desc="Sampling true angles (nearest-bin)", unit="evt") if show_progress else range(N)
 
         for n in iterator:
-            t_type = str(df_fit["fit_tt"].iat[n])   # ensure string
+            t_type = str(df_fit["tt_task4_fit"].iat[n])   # ensure string
 
             if t_type not in matrix_cache:
                 raise ValueError(f"LUT not found for type: {t_type}")
@@ -3512,8 +3526,8 @@ if correct_angle:
             phi_pred[n] = wrap_to_pi(math.atan2(u_pred, v_pred))
 
         df_out = df_fit.copy()
-        df_out["Theta_pred"] = theta_pred
-        df_out["Phi_pred"] = phi_pred
+        df_out["theta"] = theta_pred
+        df_out["phi"] = phi_pred
         return df_out
 
     if VERBOSE:
@@ -3529,9 +3543,6 @@ if correct_angle:
         show_progress=True,
     )
     
-    df['theta'] = df['Theta_pred']
-    df['phi'] = df['Phi_pred']
-    
     # Plotting corrected vs measured angles
     if task5_plot_enabled("polar_theta_phi_definitive_tt_2d_detail_angle_correction"):
         VALID_MEASURED_TYPES = ['1234', '123', '124', '234', '134', '12', '13', '14', '23', '24', '34']
@@ -3544,19 +3555,19 @@ if correct_angle:
             axes[0, 0].hist(df['Theta_fit'], bins=theta_bins, histtype='step', color='black', label='All')
             axes[1, 0].hist(df['Phi_fit'], bins=phi_bins, histtype='step', color='black', label='All')
             for tt in tt_list:
-                    sel = (df["fit_tt"] == int(tt))
+                    sel = (df["tt_task4_fit"] == int(tt))
                     axes[0, 0].hist(df.loc[sel, 'Theta_fit'], bins=theta_bins, histtype='step', label=tt)
                     axes[1, 0].hist(df.loc[sel, 'Phi_fit'], bins=phi_bins, histtype='step', label=tt)
                     axes[0, 0].set_title("Measured tracks θ_fit")
                     axes[1, 0].set_title("Measured tracks ϕ_fit")
         
             # Fourth column: Measured (θ_fit, ϕ_fit)
-            axes[0, 1].hist(df['Theta_pred'], bins=theta_bins, histtype='step', color='black', label='All')
-            axes[1, 1].hist(df['Phi_pred'], bins=phi_bins, histtype='step', color='black', label='All')
+            axes[0, 1].hist(df['theta'], bins=theta_bins, histtype='step', color='black', label='All')
+            axes[1, 1].hist(df['phi'], bins=phi_bins, histtype='step', color='black', label='All')
             for tt in tt_list:
-                    sel = (df["fit_tt"] == int(tt))
-                    axes[0, 1].hist(df.loc[sel, 'Theta_pred'], bins=theta_bins, histtype='step', label=tt)
-                    axes[1, 1].hist(df.loc[sel, 'Phi_pred'], bins=phi_bins, histtype='step', label=tt)
+                    sel = (df["tt_task4_fit"] == int(tt))
+                    axes[0, 1].hist(df.loc[sel, 'theta'], bins=theta_bins, histtype='step', label=tt)
+                    axes[1, 1].hist(df.loc[sel, 'phi'], bins=phi_bins, histtype='step', label=tt)
                     axes[0, 1].set_title("Corrected tracks θ_fit")
                     axes[1, 1].set_title("Corrected tracks ϕ_fit")
 
@@ -3574,7 +3585,7 @@ if correct_angle:
             fig.tight_layout()
             plt.tight_layout(rect=[0, 0, 1, 0.95])
             if save_plots:
-                final_filename = f'{fig_idx}_polar_theta_phi_fit_tt_2D_detail_angle_correction.png'
+                final_filename = f'{fig_idx}_polar_theta_phi_tt_task4_fit_2D_detail_angle_correction.png'
                 fig_idx += 1
                 save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                 plot_list.append(save_fig_path)
@@ -3589,11 +3600,8 @@ if correct_angle:
 
 else:
     print("Angle correction is disabled.")
-    df['Theta_pred'] = df['Theta_fit']
-    df['Phi_pred'] = df['Phi_fit']
-    
-    df['theta'] = df['Theta_pred']
-    df['phi'] = df['Phi_pred']
+    df['theta'] = df['Theta_fit']
+    df['phi'] = df['Phi_fit']
     df.drop(columns=["Theta_fit", "Phi_fit"], inplace=True, errors="ignore")
 
 gc.collect()
@@ -3660,7 +3668,7 @@ if task5_plot_enabled("polar_theta_phi_definitive_tt_2d_detail_final"):
         axes[row_idx][col_idx] = ax  # update reference for consistency
 
         ax.set_facecolor(colors(0.0))  # darkest background in colormap
-        ax.set_title(f'post_tt = {tt_val}', fontsize=14)
+        ax.set_title(f'tt_task5_post = {tt_val}', fontsize=14)
             
         # Limit in radius in theta_right_filter
         ax.set_ylim(0, theta_right_filter)
@@ -3676,10 +3684,10 @@ if task5_plot_enabled("polar_theta_phi_definitive_tt_2d_detail_final"):
         cb = fig.colorbar(c, ax=ax, pad=0.1)
         cb.ax.hlines(local_max, *cb.ax.get_xlim(), colors='white', linewidth=2, linestyles='dashed')
 
-    plt.suptitle(rf'FINAL. Correction = {correct_angle}. 2D Histogram of $\theta$ vs. $\phi$ for each post_tt Type', fontsize=16)
+    plt.suptitle(rf'FINAL. Correction = {correct_angle}. 2D Histogram of $\theta$ vs. $\phi$ for each tt_task5_post Type', fontsize=16)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     if save_plots:
-        final_filename = f'{fig_idx}_polar_theta_phi_post_tt_2D_detail.png'
+        final_filename = f'{fig_idx}_polar_theta_phi_tt_task5_post_2D_detail.png'
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
@@ -3703,12 +3711,12 @@ if task5_plot_enabled("theta_efficiency_simple_3v4"):
         if "theta" not in df.columns:
             print("Warning: theta column missing, skipping simple efficiency-vs-theta plot.")
             theta_vals_all = None
-            post_tt_vals = None
+            tt_task5_post_vals = None
         else:
             theta_vals_all = pd.to_numeric(df["theta"], errors="coerce")
-            post_tt_vals = pd.to_numeric(df[POST_TT_COLUMN], errors="coerce").fillna(0).astype(int)
+            tt_task5_post_vals = pd.to_numeric(df[POST_TT_COLUMN], errors="coerce").fillna(0).astype(int)
 
-        if theta_vals_all is not None and post_tt_vals is not None:
+        if theta_vals_all is not None and tt_task5_post_vals is not None:
             right_theta_eff = float(pd.to_numeric(det_theta_right_filter, errors="coerce"))
             if not np.isfinite(right_theta_eff) or right_theta_eff <= 0:
                 right_theta_eff = np.pi / 2.5
@@ -3717,22 +3725,22 @@ if task5_plot_enabled("theta_efficiency_simple_3v4"):
             theta_centers_eff = 0.5 * (bins_theta_eff[:-1] + bins_theta_eff[1:])
 
             theta_np = theta_vals_all.to_numpy(dtype=float, copy=False)
-            post_tt_np = post_tt_vals.to_numpy(dtype=int, copy=False)
+            tt_task5_post_np = tt_task5_post_vals.to_numpy(dtype=int, copy=False)
             valid = (
                 np.isfinite(theta_np)
                 & (theta_np >= 0)
                 & (theta_np <= right_theta_eff)
-                & np.isin(post_tt_np, [1234, 134, 124])
+                & np.isin(tt_task5_post_np, [1234, 134, 124])
             )
             theta_vals_eff = theta_np[valid]
-            post_tt_eff = post_tt_np[valid]
+            tt_task5_post_eff = tt_task5_post_np[valid]
 
-            counts_1234, _ = np.histogram(theta_vals_eff[post_tt_eff == 1234], bins=bins_theta_eff)
-            counts_134, _ = np.histogram(theta_vals_eff[post_tt_eff == 134], bins=bins_theta_eff)
-            counts_124, _ = np.histogram(theta_vals_eff[post_tt_eff == 124], bins=bins_theta_eff)
+            counts_1234, _ = np.histogram(theta_vals_eff[tt_task5_post_eff == 1234], bins=bins_theta_eff)
+            counts_134, _ = np.histogram(theta_vals_eff[tt_task5_post_eff == 134], bins=bins_theta_eff)
+            counts_124, _ = np.histogram(theta_vals_eff[tt_task5_post_eff == 124], bins=bins_theta_eff)
 
             if counts_1234.sum() == 0:
-                print("Warning: No post_tt==1234 events in theta range, skipping simple efficiency-vs-theta plot.")
+                print("Warning: No tt_task5_post==1234 events in theta range, skipping simple efficiency-vs-theta plot.")
             else:
                 eff_2 = np.full_like(theta_centers_eff, np.nan, dtype=float)
                 eff_3 = np.full_like(theta_centers_eff, np.nan, dtype=float)
@@ -3923,9 +3931,6 @@ if task5_plot_enabled("theta_efficiency_simple_3v4"):
                     plt.show()
                 plt.close()
 
-df['region'] = "all"
-print(df['region'].value_counts())
-
 working_df = df
 
 # Final task-rate plot included in the Task 5 PDF.
@@ -4018,10 +4023,10 @@ if VERBOSE:
 cols_to_remove = []
 for i_plane in range(1, 5):
     for strip in range(1, 5):
-        cols_to_remove.append(f'T{i_plane}_T_sum_{strip}')
-        cols_to_remove.append(f'T{i_plane}_T_dif_{strip}')
-        cols_to_remove.append(f'Q{i_plane}_Q_sum_{strip}')
-        cols_to_remove.append(f'Q{i_plane}_Q_dif_{strip}')
+        cols_to_remove.append(f'p{i_plane}_s{strip}_tsum')
+        cols_to_remove.append(f'p{i_plane}_s{strip}_tdif')
+        cols_to_remove.append(f'p{i_plane}_s{strip}_qsum')
+        cols_to_remove.append(f'p{i_plane}_s{strip}_qdif')
 if keep_all_columns_output:
     print(
         "Task 5 keep_all_columns_output enabled: "
@@ -4041,11 +4046,11 @@ component_cols = []
 for i_plane in range(1, 5):
     component_cols.extend(
         [
-            f"P{i_plane}_T_sum_final",
-            f"P{i_plane}_T_dif_final",
-            f"P{i_plane}_Q_sum_final",
-            f"P{i_plane}_Q_dif_final",
-            f"P{i_plane}_Y_final",
+            f"p{i_plane}_tsum",
+            f"p{i_plane}_tdif",
+            f"p{i_plane}_qsum",
+            f"p{i_plane}_qdif",
+            f"p{i_plane}_ypos",
         ]
     )
 component_cols = [col for col in component_cols if col in working_df.columns]
@@ -4071,30 +4076,30 @@ if create_debug_plots and POST_TT_COLUMN in working_df.columns:
         out_dir=debug_plot_directory,
         fig_idx=debug_fig_idx,
     )
-post_tt_total = len(working_df)
-post_tt_mask = working_df[POST_TT_COLUMN].notna() & (working_df[POST_TT_COLUMN] >= 10)
-working_df = working_df.loc[post_tt_mask].copy()
+tt_task5_post_total = len(working_df)
+tt_task5_post_mask = working_df[POST_TT_COLUMN].notna() & (working_df[POST_TT_COLUMN] >= 10)
+working_df = working_df.loc[tt_task5_post_mask].copy()
 record_filter_metric(
-    "post_tt_lt_10_rows_removed_pct",
-    post_tt_total - int(post_tt_mask.sum()),
-    post_tt_total if post_tt_total else 0,
+    "tt_task5_post_lt_10_rows_removed_pct",
+    tt_task5_post_total - int(tt_task5_post_mask.sum()),
+    tt_task5_post_total if tt_task5_post_total else 0,
 )
 
-working_df.loc[:, "fit_to_post_tt"] = (
-    pd.to_numeric(working_df["fit_tt"], errors="coerce").fillna(0).astype(int).astype(str)
+working_df.loc[:, "transferred_task5_fit_to_post"] = (
+    pd.to_numeric(working_df["tt_task4_fit"], errors="coerce").fillna(0).astype(int).astype(str)
     + "_"
     + pd.to_numeric(working_df[POST_TT_COLUMN], errors="coerce").fillna(0).astype(int).astype(str)
 )
 
-post_tt_counts = working_df[POST_TT_COLUMN].value_counts()
-for tt_value, count in post_tt_counts.items():
+tt_task5_post_counts = working_df[POST_TT_COLUMN].value_counts()
+for tt_value, count in tt_task5_post_counts.items():
     tt_label = normalize_tt_label(tt_value)
     global_variables[f"{POST_TT_COLUMN}_{tt_label}_count"] = int(count)
 
-fit_to_post_counts = working_df["fit_to_post_tt"].value_counts()
+fit_to_post_counts = working_df["transferred_task5_fit_to_post"].value_counts()
 for combo_value, count in fit_to_post_counts.items():
     combo_label = normalize_tt_label(combo_value)
-    global_variables[f"fit_to_post_tt_{combo_label}_count"] = int(count)
+    global_variables[f"transferred_task5_fit_to_post_{combo_label}_count"] = int(count)
 
 # Final number of events
 final_number_of_events = len(working_df)
@@ -4230,14 +4235,14 @@ print(f"Metadata (execution) CSV updated at: {metadata_execution_csv_path}")
 # -------------------------------------------------------------------------------
 
 global_variables.update(build_events_per_second_metadata(working_df))
-ensure_global_count_keys(("fit_tt", "post_tt", "fit_to_post_tt"))
+ensure_global_count_keys(("tt_task4_fit", "tt_task5_post", "transferred_task5_fit_to_post"))
 add_normalized_count_metadata(
     global_variables,
     global_variables.get("events_per_second_total_seconds", 0),
 )
 set_global_rate_from_tt_rates(
     global_variables,
-    preferred_prefixes=("post_tt", "fit_tt"),
+    preferred_prefixes=("tt_task5_post", "tt_task4_fit"),
     log_fn=print,
 )
 global_variables["filename_base"] = filename_base
@@ -4252,7 +4257,7 @@ metadata_rate_histogram_csv_path = save_metadata(
 print(f"Metadata (rate_histogram) CSV updated at: {metadata_rate_histogram_csv_path}")
 
 prune_redundant_count_metadata(global_variables, log_fn=print)
-trigger_type_prefixes = ("fit_tt", "post_tt", "fit_to_post_tt")
+trigger_type_prefixes = ("tt_task4_fit", "tt_task5_post", "transferred_task5_fit_to_post")
 legacy_trigger_type_prefixes: tuple[str, ...] = ()
 trigger_type_variables = extract_trigger_type_metadata(
     global_variables,
@@ -4267,7 +4272,7 @@ trigger_type_variables["count_rate_denominator_seconds"] = rate_histogram_variab
 add_trigger_type_total_offender_threshold_metadata(
     trigger_type_variables,
     working_df,
-    stage_tt_columns=("fit_tt", "post_tt"),
+    stage_tt_columns=("tt_task4_fit", "tt_task5_post"),
     denominator_seconds=trigger_type_variables["count_rate_denominator_seconds"],
 )
 metadata_trigger_type_csv_path = save_metadata(
@@ -4329,6 +4334,7 @@ if joined_analysis_active and joined_source_file_column in working_df.columns:
             columns=[joined_source_file_column, joined_source_basename_column],
             errors="ignore",
         )
+        joined_output_df = canonicalize_step1_columns(joined_output_df)
         joined_output_df.to_parquet(
             joined_out_path,
             engine="pyarrow",
@@ -4341,6 +4347,7 @@ else:
         columns=[joined_source_file_column, joined_source_basename_column],
         errors="ignore",
     )
+    output_df = canonicalize_step1_columns(output_df)
     output_df.to_parquet(
         OUT_PATH,
         engine="pyarrow",

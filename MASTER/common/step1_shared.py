@@ -134,6 +134,210 @@ METADATA_VECTOR_STRING_COLUMNS: frozenset[str] = frozenset(
 )
 
 
+def raw_end_column(plane: int, strip: int, end: str, quantity: str) -> str:
+    clean_end = str(end).strip().lower()
+    if clean_end in {"f", "front"}:
+        clean_end = "ef"
+    elif clean_end in {"b", "back"}:
+        clean_end = "eb"
+    return f"p{int(plane)}_s{int(strip)}_{clean_end}_{str(quantity).strip().lower()}"
+
+
+def strip_quantity_column(plane: int, strip: int, quantity: str) -> str:
+    return f"p{int(plane)}_s{int(strip)}_{str(quantity).strip().lower()}"
+
+
+def plane_quantity_column(plane: int, quantity: str) -> str:
+    return f"p{int(plane)}_{str(quantity).strip().lower()}"
+
+
+def build_step1_legacy_column_rename_map() -> Dict[str, str]:
+    rename_map: Dict[str, str] = {
+        "acq_tt": "tt_task0_acq",
+        "raw_tt": "tt_task0_raw",
+        "clean_tt": "tt_task1_clean",
+        "cal_tt": "tt_task2_cal",
+        "list_tt": "tt_task3_list",
+        "fit_tt": "tt_task4_fit",
+        "post_tt": "tt_task5_post",
+        "raw_to_clean_tt": "transferred_task1_raw_to_clean",
+        "clean_to_cal_tt": "transferred_task2_clean_to_cal",
+        "cal_to_list_tt": "transferred_task3_cal_to_list",
+        "fit_to_post_tt": "transferred_task5_fit_to_post",
+        "transferred_acq_to_raw": "transferred_task0_acq_to_raw",
+        "transferred_raw_to_clean": "transferred_task1_raw_to_clean",
+        "transferred_clean_to_cal": "transferred_task2_clean_to_cal",
+        "transferred_cal_to_list": "transferred_task3_cal_to_list",
+        "transferred_fit_to_post": "transferred_task5_fit_to_post",
+        "event_projected_tt": "tt_task4_projected",
+        "task1_problematic_channel_count": "filter_task1_problematic_channel_count",
+        "task1_problematic_channel_resolution_exact": "filter_task1_problematic_channel_exact",
+        "task2_problematic_strip_count": "filter_task2_problematic_strip_count",
+        "task2_problematic_strip_resolution_exact": "filter_task2_problematic_strip_exact",
+        "task3_problematic_plane_count": "filter_task3_problematic_plane_count",
+        "task3_problematic_plane_resolution_exact": "filter_task3_problematic_plane_exact",
+        "total_problematic_offender_count": "filter_total_problematic_offender_count",
+        "plane_charge_topology_code": "topology_task2_strip",
+        "charge_event": "event_charge",
+        "delta_s": "event_s_err",
+        "conv_distance": "timtrack_conv_distance",
+        "converged": "timtrack_converged",
+        "iterations": "timtrack_iterations",
+        "Time": "datetime",
+    }
+    for plane in range(1, 5):
+        rename_map[f"P{plane}_Q_total_uncal"] = plane_quantity_column(plane, "qsum_uncalibrated")
+        rename_map[f"P{plane}_Q_dif_final"] = plane_quantity_column(plane, "qdif")
+        rename_map[f"P{plane}_Q_sum_final"] = plane_quantity_column(plane, "qsum")
+        rename_map[f"P{plane}_T_dif_final"] = plane_quantity_column(plane, "tdif")
+        rename_map[f"P{plane}_T_sum_final"] = plane_quantity_column(plane, "tsum")
+        rename_map[f"P{plane}_Y_final"] = plane_quantity_column(plane, "ypos")
+        rename_map[f"z_P{plane}"] = f"z_p{plane}"
+        rename_map[f"charge_{plane}"] = plane_quantity_column(plane, "qsum")
+        rename_map[f"th_chi_{plane}"] = f"th_chisq_df_{plane}"
+        rename_map[f"ext_res_tdif_{plane}"] = f"p{plane}_tdif_res_ext"
+        rename_map[f"res_tdif_{plane}"] = f"p{plane}_tdif_res"
+        rename_map[f"ext_res_tsum_{plane}"] = f"p{plane}_tsum_res_ext"
+        rename_map[f"res_tsum_{plane}"] = f"p{plane}_tsum_res"
+        rename_map[f"ext_res_ystr_{plane}"] = f"p{plane}_ystr_res_ext"
+        rename_map[f"res_ystr_{plane}"] = f"p{plane}_ystr_res"
+        rename_map[f"ext_res_tdif_{plane}_err"] = f"p{plane}_tdif_res_ext_err"
+        rename_map[f"res_tdif_{plane}_err"] = f"p{plane}_tdif_res_err"
+        rename_map[f"ext_res_tsum_{plane}_err"] = f"p{plane}_tsum_res_ext_err"
+        rename_map[f"res_tsum_{plane}_err"] = f"p{plane}_tsum_res_err"
+        rename_map[f"ext_res_ystr_{plane}_err"] = f"p{plane}_ystr_res_ext_err"
+        rename_map[f"res_ystr_{plane}_err"] = f"p{plane}_ystr_res_err"
+        for strip in range(1, 5):
+            rename_map[f"Q{plane}_F_{strip}"] = raw_end_column(plane, strip, "ef", "q")
+            rename_map[f"Q{plane}_B_{strip}"] = raw_end_column(plane, strip, "eb", "q")
+            rename_map[f"T{plane}_F_{strip}"] = raw_end_column(plane, strip, "ef", "t")
+            rename_map[f"T{plane}_B_{strip}"] = raw_end_column(plane, strip, "eb", "t")
+            rename_map[f"Q{plane}_Q_sum_{strip}"] = strip_quantity_column(plane, strip, "qsum")
+            rename_map[f"Q{plane}_Q_dif_{strip}"] = strip_quantity_column(plane, strip, "qdif")
+            rename_map[f"T{plane}_T_sum_{strip}"] = strip_quantity_column(plane, strip, "tsum")
+            rename_map[f"T{plane}_T_dif_{strip}"] = strip_quantity_column(plane, strip, "tdif")
+            rename_map[f"Q_P{plane}s{strip}"] = strip_quantity_column(plane, strip, "qsum")
+    for ndf in range(0, 16):
+        rename_map[f"th_chi_{ndf}"] = f"th_chisq_df_{ndf}"
+    for name in ("x", "y", "xp", "yp", "s", "t0", "theta", "phi"):
+        rename_map[name] = f"event_{name}"
+    for name in ("x_err", "y_err", "s_err", "t0_err", "theta_err", "phi_err"):
+        rename_map[name] = f"event_{name}"
+    return rename_map
+
+
+STEP1_LEGACY_COLUMN_RENAME_MAP: Dict[str, str] = build_step1_legacy_column_rename_map()
+STEP1_OBSOLETE_COLUMNS: frozenset[str] = frozenset(
+    {
+        "adj_dis",
+        "Phi_pred",
+        "Theta_pred",
+        "region",
+        "extension_tt",
+        "processed_tt",
+        "tracking_tt",
+        "active_strips_P1",
+        "active_strips_P2",
+        "active_strips_P3",
+        "active_strips_P4",
+    }
+)
+
+
+def canonicalize_step1_columns(df: pd.DataFrame, *, drop_obsolete: bool = True) -> pd.DataFrame:
+    """Normalize legacy STEP_1 column names once at dataframe boundaries."""
+    rename_map = {
+        old_name: new_name
+        for old_name, new_name in STEP1_LEGACY_COLUMN_RENAME_MAP.items()
+        if old_name in df.columns and new_name not in df.columns
+    }
+    for column_name in df.columns:
+        if column_name.startswith("det_"):
+            new_column_name = f"event_{column_name}"
+            if new_column_name not in df.columns:
+                rename_map.setdefault(column_name, new_column_name)
+        elif column_name.startswith("tim_"):
+            new_column_name = f"event_{column_name}"
+            if new_column_name not in df.columns:
+                rename_map.setdefault(column_name, new_column_name)
+    if rename_map:
+        df = df.rename(columns=rename_map)
+    duplicate_legacy = [
+        old_name
+        for old_name, new_name in STEP1_LEGACY_COLUMN_RENAME_MAP.items()
+        if old_name in df.columns and new_name in df.columns and old_name != new_name
+    ]
+    duplicate_legacy.extend(
+        column_name
+        for column_name in df.columns
+        if (
+            (column_name.startswith("det_") or column_name.startswith("tim_"))
+            and f"event_{column_name}" in df.columns
+        )
+    )
+    if duplicate_legacy:
+        df = df.drop(columns=duplicate_legacy, errors="ignore")
+    if df.columns.has_duplicates:
+        df = df.loc[:, ~df.columns.duplicated()].copy()
+    if drop_obsolete:
+        obsolete_columns = [
+            col
+            for col in df.columns
+            if col in STEP1_OBSOLETE_COLUMNS
+            or col.endswith("_crstlk")
+            or "_with_crstlk" in col
+            or "_no_crstlk" in col
+        ]
+        if obsolete_columns:
+            df = df.drop(columns=obsolete_columns, errors="ignore")
+    return df
+
+
+def add_topology_task1_channel(df: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        raw_end_column(plane, strip, end, "q")
+        for plane in range(1, 5)
+        for strip in range(1, 5)
+        for end in ("ef", "eb")
+    ]
+    if not all(col in df.columns for col in columns):
+        return df
+    values = df.loc[:, columns].apply(pd.to_numeric, errors="coerce").fillna(0).to_numpy(copy=False)
+    df.loc[:, "topology_task1_channel"] = [
+        "".join("1" if value != 0 else "0" for value in row)
+        for row in values
+    ]
+    return df
+
+
+def add_topology_task2_strip(df: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        strip_quantity_column(plane, strip, "qsum")
+        for plane in range(1, 5)
+        for strip in range(1, 5)
+    ]
+    if not all(col in df.columns for col in columns):
+        return df
+    values = df.loc[:, columns].apply(pd.to_numeric, errors="coerce").fillna(0).to_numpy(copy=False)
+    df.loc[:, "topology_task2_strip"] = [
+        "".join("1" if value != 0 else "0" for value in row)
+        for row in values
+    ]
+    return df
+
+
+def add_topology_task3_plane(df: pd.DataFrame) -> pd.DataFrame:
+    columns = [plane_quantity_column(plane, "qsum") for plane in range(1, 5)]
+    if not all(col in df.columns for col in columns):
+        return df
+    values = df.loc[:, columns].apply(pd.to_numeric, errors="coerce").fillna(0).to_numpy(copy=False)
+    df.loc[:, "topology_task3_plane"] = [
+        "".join("1" if value != 0 else "0" for value in row)
+        for row in values
+    ]
+    return df
+
+
 def _metadata_value_is_empty(value: object) -> bool:
     return value is None or value == "" or (isinstance(value, float) and math.isnan(value))
 

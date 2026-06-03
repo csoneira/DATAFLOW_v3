@@ -80,11 +80,11 @@ task3_problematic_plane_count --> filter_task3_problematic_plane_count
 task3_problematic_plane_resolution_exact --> filter_task3_problematic_plane_exact
 total_problematic_offender_count --> filter_total_problematic_offender_count
 
-(CREATE:)            transferred_acq_to_raw
-raw_to_clean_tt  --> transferred_raw_to_clean
-clean_to_cal_tt  --> transferred_clean_to_cal
-cal_to_list_tt   --> transferred_cal_to_list
-fit_to_post_tt   --> transferred_fit_to_post
+(CREATE:)            transferred_task0_acq_to_raw
+raw_to_clean_tt  --> transferred_task1_raw_to_clean
+clean_to_cal_tt  --> transferred_task2_clean_to_cal
+cal_to_list_tt   --> transferred_task3_cal_to_list
+fit_to_post_tt   --> transferred_task5_fit_to_post
 
 
 
