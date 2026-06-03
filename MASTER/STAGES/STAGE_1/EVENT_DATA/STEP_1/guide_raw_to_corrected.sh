@@ -78,13 +78,13 @@ Usage:
 
 Options:
   -s, --station   Station numbers (0-4). Comma-separated or space-separated. Default: all.
-  -t, --task      Task IDs to run: 1-5 or "all" (default: all tasks).
+  -t, --task      Task IDs to run: 0-5 or "all" (default: all tasks).
   --run-anyway    Skip the check that prevents overlapping guide_raw_to_corrected.sh runs.
   -v, --verbose   Pass --verbose to each inner STEP_1 Python task script.
   -h, --help      Show this help message and exit.
 
 When multiple stations and tasks are provided, tasks are executed in task-major
-order (e.g., stations 1,2 and tasks 3,4,5 run as: 1-3, 2-3, 1-4, 2-4, 1-5, 2-5),
+order (e.g., stations 1,2 and tasks 0,1 run as: 1-0, 2-0, 1-1, 2-1),
 looping continuously. If another guide_raw_to_corrected.sh is already running
 for a station, that station is skipped for this invocation.
 
@@ -144,6 +144,7 @@ STATUS_TIMESTAMP=""
 # STATUS_CSV=""
 
 TASK_SCRIPTS=(
+  "$SCRIPT_DIR/TASK_0/script_0_acq_to_raw.py"
   "$SCRIPT_DIR/TASK_1/script_1_raw_to_clean.py"
   "$SCRIPT_DIR/TASK_2/script_2_clean_to_cal.py"
   "$SCRIPT_DIR/TASK_3/script_3_cal_to_list.py"
@@ -152,6 +153,7 @@ TASK_SCRIPTS=(
 )
 
 TASK_LABELS=(
+  "acq_to_raw"
   "raw_to_clean"
   "clean_to_cal"
   "cal_to_list"
@@ -343,7 +345,7 @@ parse_list() {
 }
 
 ALL_STATIONS=(0 1 2 3 4)
-ALL_TASK_IDS=(1 2 3 4 5)
+ALL_TASK_IDS=(0 1 2 3 4 5)
 
 LOCK_BASE_DIR="$HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/guide_raw_to_corrected"
 ARG_LOCK_FILE=""
@@ -466,10 +468,10 @@ validate_tasks() {
   local arr=("$@")
   local validated=()
   for t in "${arr[@]}"; do
-    if [[ "$t" =~ ^[1-5]$ ]]; then
+    if [[ "$t" =~ ^[0-5]$ ]]; then
       validated+=("$t")
     else
-      log_warn "ignoring invalid task '$t' (must be 1-5)"
+      log_warn "ignoring invalid task '$t' (must be 0-5)"
     fi
   done
   if [[ ${#validated[@]} -eq 0 ]]; then
@@ -940,7 +942,7 @@ while true; do
       log_rate_limited "disabled_pair_${pair}" 300 "Skipping station $station task${task_id}: disabled by event_data_step1_run_matrix."
       continue
     fi
-    task_index=$((task_id - 1))
+    task_index=$((task_id))
     task_script="${TASK_SCRIPTS[$task_index]}"
     task_label="${TASK_LABELS[$task_index]}"
     rotate_pair_to_queue_end "$pair"

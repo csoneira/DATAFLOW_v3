@@ -8,7 +8,7 @@ complete_reanalysis: true
 article_format: false
 # create_plots options: null | debug | usual | essential | all
 # Task 2 plot alias statuses live in config_plots_task_2.yaml
-create_plots: essential
+create_plots: null
 keep_all_columns_output: false
 filter_parameter_config_csv: config_filter_parameters_task_2.csv
 # Optional filter-parameter overlay. Keep true to apply

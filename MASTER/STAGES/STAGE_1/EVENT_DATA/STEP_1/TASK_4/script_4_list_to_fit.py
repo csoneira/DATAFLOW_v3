@@ -13413,7 +13413,7 @@ if (
 
     # A pure theta vs phi map
     plot_col = ['tim_x', 'tim_y', 'tim_xp', 'tim_yp', 'tim_s', 'tim_th_chi_sigmafit_1234']
-    for filters, title in df_cases_1234:
+    for filters, title in df_cases_1:
         fig_idx = plot_hexbin_matrix(
             df_plot_ancillary,
             plot_col,
@@ -13427,62 +13427,62 @@ if (
         )
     
     # Charge of each plane -------------------------------------------------------------------
-    for filters, title in df_cases_1234:
-        # Extract the relevant charge numbers from the title (e.g., "1-2 cases" -> [1, 2])
-        relevant_charges = [f"charge_{n}" for n in map(int, title.split()[0].split('-'))]
+    # for filters, title in df_cases_1234:
+    #     # Extract the relevant charge numbers from the title (e.g., "1-2 cases" -> [1, 2])
+    #     relevant_charges = [f"charge_{n}" for n in map(int, title.split()[0].split('-'))]
 
-        # Define the columns - interest dynamically
-        columns_of_interest = ['tim_x', 'tim_y', 'tim_theta', 'tim_phi', 'tim_s', 'tim_th_chi_sigmafit_1234'] + relevant_charges
+    #     # Define the columns - interest dynamically
+    #     columns_of_interest = ['tim_x', 'tim_y', 'tim_theta', 'tim_phi', 'tim_s', 'tim_th_chi_sigmafit_1234'] + relevant_charges
 
-        # Keep the original filters (if needed) and apply them
-        fig_idx = plot_hexbin_matrix(
-            df_plot_ancillary,
-            columns_of_interest,  # Dynamically set the columns to include relevant charges
-            filters,  # Keep original filters
-            title,
-            save_plots,
-            show_plots,
-            base_directories,
-            fig_idx,
-            plot_list
-        )
+    #     # Keep the original filters (if needed) and apply them
+    #     fig_idx = plot_hexbin_matrix(
+    #         df_plot_ancillary,
+    #         columns_of_interest,  # Dynamically set the columns to include relevant charges
+    #         filters,  # Keep original filters
+    #         title,
+    #         save_plots,
+    #         show_plots,
+    #         base_directories,
+    #         fig_idx,
+    #         plot_list
+    #     )
 
-        columns_of_interest = ['tim_th_chi_sigmafit_1234'] + relevant_charges
-        if (create_essential_plots or create_plots) and task4_plot_enabled("timtrack_results_scatter_combination_projections"):
-            fig_idx = plot_hexbin_matrix(
-                df_plot_ancillary,
-                columns_of_interest,
-                filters,
-                f"{title} [scatter]",
-                save_plots,
-                show_plots,
-                base_directories,
-                fig_idx,
-                plot_list,
-                plot_mode="scatter",
-                filename_stem="timtrack_results_scatter_combination_projections",
-                alias="timtrack_results_scatter_combination_projections",
-            )
+    #     columns_of_interest = ['tim_th_chi_sigmafit_1234'] + relevant_charges
+    #     if (create_essential_plots or create_plots) and task4_plot_enabled("timtrack_results_scatter_combination_projections"):
+    #         fig_idx = plot_hexbin_matrix(
+    #             df_plot_ancillary,
+    #             columns_of_interest,
+    #             filters,
+    #             f"{title} [scatter]",
+    #             save_plots,
+    #             show_plots,
+    #             base_directories,
+    #             fig_idx,
+    #             plot_list,
+    #             plot_mode="scatter",
+    #             filename_stem="timtrack_results_scatter_combination_projections",
+    #             alias="timtrack_results_scatter_combination_projections",
+    #         )
         
         
-        # Define the columns - interest dynamically
-        columns_of_interest = ['tim_x', 'tim_y', 'tim_theta', 'tim_phi', 'tim_s', 'tim_th_chi_sigmafit_1234'] + relevant_charges
+    #     # Define the columns - interest dynamically
+    #     columns_of_interest = ['tim_x', 'tim_y', 'tim_theta', 'tim_phi', 'tim_s', 'tim_th_chi_sigmafit_1234'] + relevant_charges
         
-        if (create_essential_plots or create_plots) and task4_plot_enabled("timtrack_results_scatter_combination_projections"):
-            fig_idx = plot_hexbin_matrix(
-                df_plot_ancillary,
-                columns_of_interest,
-                filters,
-                f"{title} [scatter]",
-                save_plots,
-                show_plots,
-                base_directories,
-                fig_idx,
-                plot_list,
-                plot_mode="scatter",
-                filename_stem="timtrack_results_scatter_combination_projections",
-                alias="timtrack_results_scatter_combination_projections",
-            )
+    #     if (create_essential_plots or create_plots) and task4_plot_enabled("timtrack_results_scatter_combination_projections"):
+    #         fig_idx = plot_hexbin_matrix(
+    #             df_plot_ancillary,
+    #             columns_of_interest,
+    #             filters,
+    #             f"{title} [scatter]",
+    #             save_plots,
+    #             show_plots,
+    #             base_directories,
+    #             fig_idx,
+    #             plot_list,
+    #             plot_mode="scatter",
+    #             filename_stem="timtrack_results_scatter_combination_projections",
+    #             alias="timtrack_results_scatter_combination_projections",
+    #         )
     
     
     for filters, title in df_cases_1234_chi_study:

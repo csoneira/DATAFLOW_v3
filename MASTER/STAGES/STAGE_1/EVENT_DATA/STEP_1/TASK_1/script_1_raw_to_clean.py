@@ -119,6 +119,7 @@ from MASTER.common.step1_activation import (
 from MASTER.common.step1_shared import (
     add_normalized_count_metadata,
     add_trigger_type_total_offender_threshold_metadata,
+    build_step1_raw_input_dataframe,
     build_events_per_second_metadata,
     build_step1_cli_parser,
     build_step1_filtered_print,
@@ -271,6 +272,10 @@ def safe_move(source_path: str, dest_path: str) -> str:
     except OSError as exc:
         print(f"Error moving '{source_path}' to '{dest_path}': {exc}")
         raise
+
+
+def _task1_output_basename_from_input_stem(stem: str) -> str:
+    return stem[4:] if stem.startswith("raw_") else stem
 
 
 def _track_figure(fig: mpl.figure.Figure) -> mpl.figure.Figure:
@@ -2304,6 +2309,7 @@ def _build_task1_input_dataframe(
     limit_rows: int | None = None,
 ) -> tuple[pd.DataFrame, int, int]:
     """Parse the raw .dat file in one pass and build the typed input dataframe."""
+    return build_step1_raw_input_dataframe(source_path, rejected_path, expected_columns, limit_rows)
     read_lines = 0
     written_lines = 0
     stored_rows = 0
@@ -2656,10 +2662,29 @@ raw_to_list_working_directory = os.path.join(base_directory, f"STEP_1/TASK_{task
 metadata_directory = os.path.join(raw_to_list_working_directory, "METADATA")
 
 if task_number == 1:
-    raw_directory = "STAGE_0_to_1"
-    raw_working_directory = os.path.join(station_directory, raw_directory)
+    task0_output_directory = os.path.join(base_directory, "STEP_1/TASK_0/OUTPUT_FILES")
+    user_selected_raw_parquet = bool(
+        selected_input_file
+        and Path(str(selected_input_file)).suffix.lower() == ".parquet"
+        and Path(str(selected_input_file)).stem.startswith("raw_")
+    )
+    task0_raw_candidates_exist = (
+        os.path.isdir(task0_output_directory)
+        and any(
+            name.startswith("raw_") and name.lower().endswith(".parquet")
+            for name in os.listdir(task0_output_directory)
+        )
+    )
+    task1_raw_parquet_input = user_selected_raw_parquet or task0_raw_candidates_exist
+    if task1_raw_parquet_input:
+        raw_directory = "STEP_1/TASK_0/OUTPUT_FILES"
+        raw_working_directory = task0_output_directory
+    else:
+        raw_directory = "STAGE_0_to_1"
+        raw_working_directory = os.path.join(station_directory, raw_directory)
     
 else:
+    task1_raw_parquet_input = False
     raw_directory = f"STEP_1/TASK_{task_number - 1}/OUTPUT_FILES"
     raw_working_directory = os.path.join(base_directory, raw_directory)
 
@@ -2776,7 +2801,10 @@ LEVELS = [
     raw_directory,
 ]
 
-station_re = re.compile(r'^mi0(\d).*\.dat$', re.IGNORECASE)
+if task1_raw_parquet_input:
+    station_re = re.compile(r'^raw_mi0(\d).*\.parquet$', re.IGNORECASE)
+else:
+    station_re = re.compile(r'^mi0(\d).*\.dat$', re.IGNORECASE)
 
 seen = set()
 for d in LEVELS:
@@ -2841,10 +2869,17 @@ for directory in [raw_directory, unprocessed_directory, processing_directory, co
 # Files to move: in STAGE_0_to_1 but not in UNPROCESSED, PROCESSING, or COMPLETED
 raw_files = set(os.listdir(raw_directory))
 
-# Take only in raw_files those in raw_directory that are strictly ending in *.dat
-raw_files = {f for f in raw_files if f.lower().endswith('.dat')}
-
-print("dat files are:", raw_files)
+# Take only files that match the active Task 1 input mode.
+if task1_raw_parquet_input:
+    raw_files = {
+        f
+        for f in raw_files
+        if f.startswith("raw_") and f.lower().endswith(".parquet")
+    }
+    print("raw parquet files are:", raw_files)
+else:
+    raw_files = {f for f in raw_files if f.lower().endswith('.dat')}
+    print("dat files are:", raw_files)
 
 unprocessed_files = set(os.listdir(unprocessed_directory))
 processing_files = set(os.listdir(processing_directory))
@@ -3788,7 +3823,7 @@ joined_input_records = [
         "file_name": file_name,
         "processing_file_path": processing_file_path,
         "completed_file_path": completed_file_path if not user_file_selection else "",
-        "basename_no_ext": os.path.splitext(file_name)[0],
+        "basename_no_ext": _task1_output_basename_from_input_stem(os.path.splitext(file_name)[0]),
     }
 ]
 if (
@@ -3829,7 +3864,7 @@ if (
                 "file_name": joined_file_name,
                 "processing_file_path": joined_processing_path,
                 "completed_file_path": joined_completed_path,
-                "basename_no_ext": os.path.splitext(joined_file_name)[0],
+                "basename_no_ext": _task1_output_basename_from_input_stem(os.path.splitext(joined_file_name)[0]),
             }
         )
 elif joined_analysis_files > 1:
@@ -3845,6 +3880,9 @@ the_filename = os.path.basename(file_path)
 print(f"File to process: {the_filename}")
 basename_no_ext, file_extension = os.path.splitext(the_filename)
 print(f"File basename (no extension): {basename_no_ext}")
+basename_no_ext = _task1_output_basename_from_input_stem(basename_no_ext)
+if basename_no_ext != os.path.splitext(the_filename)[0]:
+    print(f"Task 1 output basename after raw_ prefix removal: {basename_no_ext}")
 resolved_status_filename_base = basename_no_ext
 if status_execution_date is None:
     status_execution_date = initialize_status_row(
@@ -3924,7 +3962,8 @@ os.utime(processing_file_path, (now, now))
 # It might be that the data header is, instead of mi01: minI, which is the same, in that
 # case consider minI as mi01
 try:
-    station_label = file_name[3]  # 4th character (index 3)
+    station_name_for_check = file_name[4:] if file_name.startswith("raw_") else file_name
+    station_label = station_name_for_check[3]  # 4th character (index 3)
     print(f'File station number is: {station_label}')
     
     if station_label == "I":
@@ -3999,12 +4038,28 @@ read_lines = 0
 written_lines = 0
 for joined_record in joined_input_records:
     joined_path = joined_record["processing_file_path"]
-    joined_read_df, joined_read_lines, joined_written_lines = _build_task1_input_dataframe(
-        joined_path,
-        rejected_file,
-        EXPECTED_COLUMNS,
-        limit_rows=limit_number if limit else None,
+    joined_stem = Path(joined_path).stem
+    joined_is_task0_raw_parquet = (
+        Path(joined_path).suffix.lower() == ".parquet"
+        and joined_stem.startswith("raw_")
     )
+    if joined_is_task0_raw_parquet:
+        joined_read_df = pd.read_parquet(joined_path)
+        if limit:
+            joined_read_df = joined_read_df.head(int(limit_number)).copy()
+        if "datetime" in joined_read_df.columns:
+            joined_read_df["datetime"] = pd.to_datetime(joined_read_df["datetime"], errors="coerce")
+        if "column_6" not in joined_read_df.columns:
+            raise ValueError(f"Task 1 raw parquet is missing column_6: {joined_path}")
+        joined_read_lines = len(joined_read_df)
+        joined_written_lines = len(joined_read_df)
+    else:
+        joined_read_df, joined_read_lines, joined_written_lines = _build_task1_input_dataframe(
+            joined_path,
+            rejected_file,
+            EXPECTED_COLUMNS,
+            limit_rows=limit_number if limit else None,
+        )
     read_lines += int(joined_read_lines)
     written_lines += int(joined_written_lines)
     if not joined_read_df.empty:
@@ -4057,6 +4112,7 @@ if task1_plot_enabled("event_total_charge_raw"):
         *(f"column_{idx}" for idx in range(31, 39)),
         *(f"column_{idx}" for idx in range(47, 55)),
         *(f"column_{idx}" for idx in range(63, 71)),
+        *(f"Q{plane}_{side}_{strip}" for plane in range(1, 5) for side in ("F", "B") for strip in range(1, 5)),
     ]
     raw_total_charge_columns = [col for col in raw_total_charge_columns if col in read_df.columns]
     if raw_total_charge_columns:
@@ -4152,10 +4208,13 @@ _t_geometry_resolve = time.perf_counter()
 
 conf_value = None
 z_source = "unset"
+task1_processing_path = Path(file_path)
+task1_processing_suffix = task1_processing_path.suffix.lower()
 simulated_z_positions, simulated_param_hash = resolve_simulated_z_positions(
     basename_no_ext,
     Path(base_directory),
-    dat_path=Path(file_path),
+    dat_path=task1_processing_path if task1_processing_suffix == ".dat" else None,
+    parquet_path=task1_processing_path if task1_processing_suffix == ".parquet" else None,
 )
 if simulated_param_hash:
     global_variables["param_hash"] = simulated_param_hash
@@ -4289,22 +4348,39 @@ column_indices = {
 
 channel_source_columns: list[str] = []
 channel_rename_map: dict[str, str] = {}
+named_channel_columns: list[str] = []
 for key, idx_range in column_indices.items():
     for i, col_idx in enumerate(idx_range, start=1):
         source_column = f"column_{col_idx}"
         target_column = f"{key}_{i}"
         channel_source_columns.append(source_column)
         channel_rename_map[source_column] = target_column
+        named_channel_columns.append(target_column)
+
+if all(column in read_df.columns for column in named_channel_columns):
+    # Task 0 raw parquet already owns the detector channel naming.
+    channel_source_columns = named_channel_columns
+    channel_rename_map = {}
+elif not all(column in read_df.columns for column in channel_source_columns):
+    missing_named = [column for column in named_channel_columns if column not in read_df.columns]
+    missing_legacy = [column for column in channel_source_columns if column not in read_df.columns]
+    raise ValueError(
+        "Task 1 input is missing detector channel columns. "
+        f"missing_named={missing_named[:8]} missing_legacy={missing_legacy[:8]}"
+    )
 
 task1_join_source_columns = [
     col
     for col in (joined_source_file_column, joined_source_basename_column)
     if col in read_df.columns
 ]
-working_df = read_df.loc[
-    selected_mask,
-    ["event_id", "datetime", *task1_join_source_columns, *channel_source_columns],
-].copy()
+if keep_all_columns_output:
+    working_df = read_df.loc[selected_mask].copy()
+else:
+    working_df = read_df.loc[
+        selected_mask,
+        ["event_id", "datetime", *task1_join_source_columns, *channel_source_columns],
+    ].copy()
 working_df = working_df.rename(columns=channel_rename_map)
 # Track rows that later drop out of Task 1 so their original indexed values stay inspectable.
 removed_rows_df = working_df.iloc[0:0].copy()
@@ -4342,7 +4418,10 @@ if found_matching_conf and conf_value is not None:
                 working_df[[col2, col4]] = working_df[[col4, col2]].values  # swap columns
 
 if self_trigger:
-    working_st_df = read_df.loc[self_trigger_mask, ["event_id", "datetime", *channel_source_columns]].copy()
+    if keep_all_columns_output:
+        working_st_df = read_df.loc[self_trigger_mask].copy()
+    else:
+        working_st_df = read_df.loc[self_trigger_mask, ["event_id", "datetime", *channel_source_columns]].copy()
     working_st_df = working_st_df.rename(columns=channel_rename_map)
     working_st_df = working_st_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
     

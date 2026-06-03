@@ -6,13 +6,53 @@ add_to_rclone.info
 /home/mingo/DATAFLOW_v3/OPERATIONS/NOTIFICATIONS/TELEGRAM_BOT/TERMINAL_PASSWORD.txt
 
 # ----------------------------------------------------------------------
-# Runtime directories (data-heavy, generated outside source control)
+# Runtime/generated directories
 # ----------------------------------------------------------------------
 STATIONS/
 NOT_ESSENTIAL/
-OPERATIONS_RUNTIME/
-EXECUTION_LOGS/
 .ATTIC/
+
+# Generated intermediate trees
+**/INTERSTEPS/
+**/INTERSTEPS_*/
+**/INTERSTEP*/
+**/INTERMEDIATE*/
+**/INTERMEDIATES/
+MINGO_DIGITAL_TWIN/INTERSTEPS/
+
+# Generated output/plot/calibration trees
+**/OUTPUT*/
+**/PLOTS*/
+**/PLOT*/
+**/CALIBRATION_OUTPUT*/
+**/CALIBRATION_OUTPUTS/
+**/CALIBRATION_PLOTS*/
+**/VALIDATION_PLOTS*/
+**/DIAGNOSTIC_PLOTS*/
+**/diagnostic_plots/
+
+# Runtime/log/throttle trees
+**/OPERATIONS_RUNTIME/
+**/EXECUTION_LOGS/
+**/LOG_THROTTLE/
+**/RUNTIME/
+**/RUN_LOGS/
+**/LOGS/
+
+# Heavy generated detector/data products
+**/RAW/
+**/RAW_DATA/
+**/PROCESSED/
+**/PROCESSED_DATA/
+**/REPROCESSED/
+**/REPROCESSING_OUTPUT*/
+**/DATA_PRODUCTS/
+**/MERGED/
+**/MERGED_DATA/
+**/FILTERED/
+**/FILTERED_DATA/
+**/CLEANED/
+**/CLEANED_DATA/
 
 # ----------------------------------------------------------------------
 # Runtime locks and throttle markers
@@ -26,15 +66,18 @@ OPERATIONS_RUNTIME/LOG_THROTTLE/*.ts
 # ----------------------------------------------------------------------
 *.pkl
 *.npz
+*.npy
 *.bin
 *.h5
+*.hdf5
 *.hld
 *.mat
 *.nc
 *.nc4
-.cdsapirc
+*.root
 *.parquet
 *.index
+.cdsapirc
 
 # ----------------------------------------------------------------------
 # Archives and compressed payloads
@@ -48,13 +91,14 @@ OPERATIONS_RUNTIME/LOG_THROTTLE/*.ts
 *.gz
 
 # ----------------------------------------------------------------------
-# Data payloads (default-ignore with explicit allow-list)
+# Data payloads
 # ----------------------------------------------------------------------
 *.dat*
 *.csv
 *.tsv
 *.json
 *.txt
+
 !OPERATIONS/NOTIFICATIONS/TELEGRAM_BOT/WELCOME_MESSAGE.txt
 !MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/config_parameters.csv
 !MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_*/config_parameters_task_*.csv
@@ -68,7 +112,7 @@ OPERATIONS_RUNTIME/LOG_THROTTLE/*.ts
 !MINGO_DICTIONARY_CREATION_AND_TEST/config_step_2.1_columns.json
 
 # ----------------------------------------------------------------------
-# Logs, temp files, and merge leftovers
+# Logs, temporary files, and merge leftovers
 # ----------------------------------------------------------------------
 *.log
 *.tmp
@@ -101,10 +145,12 @@ OPERATIONS_RUNTIME/LOG_THROTTLE/*.ts
 # Python and notebook caches
 # ----------------------------------------------------------------------
 __pycache__/
+**/__pycache__/
 *.pyc
 *.pyo
 *.pyd
 .ipynb_checkpoints/
+**/.ipynb_checkpoints/
 venv/
 .env/
 .venv/
@@ -114,9 +160,9 @@ venv/
 # ----------------------------------------------------------------------
 build/
 dist/
-DOCUMENTATION/site/
 *.egg-info/
 node_modules/
+DOCUMENTATION/site/
 
 # ----------------------------------------------------------------------
 # Documentation source exceptions
@@ -133,21 +179,6 @@ Thumbs.db
 desktop.ini
 
 # ----------------------------------------------------------------------
-# Internal
+# Internal/private material
 # ----------------------------------------------------------------------
 ARTICLES_AND_THESIS/
-
-__pycache__/
-*.pyc
-.ipynb_checkpoints/
-*.root
-*.h5
-*.hdf5
-*.parquet
-*.npy
-*.npz
-OUTPUT*/
-PLOTS*/
-CALIBRATION_OUTPUT*/
-
-MINGO_DIGITAL_TWIN/INTERSTEPS/

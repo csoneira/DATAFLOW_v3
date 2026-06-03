@@ -7570,7 +7570,45 @@ if task3_plot_enabled("filtered_rpc_tsum_vs_qsum_hexbin"):
 if task3_plot_enabled("filtered_rpc_variables_hexbin"):
 
     fig, axes = plt.subplots(4, 10, figsize=(40, 20))  # 10 combinations per plane
-    axes = axes.flatten()
+    axes_grid = np.asarray(axes)
+    plot_pairs_by_plane: dict[int, list[tuple[pd.Series, pd.Series, str, str, str]]] = {}
+    shared_axis_values: list[dict[str, list[np.ndarray]]] = [
+        {"x": [], "y": []}
+        for _ in range(10)
+    ]
+    configured_axis_limits = {
+        "t_sum": (float(T_sum_RPC_left), float(T_sum_RPC_right)),
+        "t_diff": (float(T_dif_RPC_left), float(T_dif_RPC_right)),
+        "q_sum": (float(Q_RPC_left), float(Q_RPC_right)),
+        "q_diff": (float(Q_dif_RPC_left), float(Q_dif_RPC_right)),
+        "y": (float(Y_RPC_left), float(Y_RPC_right)),
+    }
+
+    def _valid_configured_axis_limit(variable_key: str) -> tuple[float, float] | None:
+        limits = configured_axis_limits.get(variable_key)
+        if limits is None:
+            return None
+        left, right = limits
+        if not np.isfinite(left) or not np.isfinite(right) or left >= right:
+            return None
+        return left, right
+
+    def _filter_hexbin_pair_to_configured_limits(
+        x: pd.Series,
+        yv: pd.Series,
+        x_key: str,
+        y_key: str,
+    ) -> tuple[pd.Series, pd.Series]:
+        x_values = pd.to_numeric(x, errors="coerce")
+        y_values = pd.to_numeric(yv, errors="coerce")
+        mask = np.isfinite(x_values) & np.isfinite(y_values)
+        x_limit = _valid_configured_axis_limit(x_key)
+        y_limit = _valid_configured_axis_limit(y_key)
+        if x_limit is not None:
+            mask &= (x_values >= x_limit[0]) & (x_values <= x_limit[1])
+        if y_limit is not None:
+            mask &= (y_values >= y_limit[0]) & (y_values <= y_limit[1])
+        return x_values.loc[mask], y_values.loc[mask]
 
     for i_plane in range(1, 5):
         # Column names
@@ -7591,24 +7629,68 @@ if task3_plot_enabled("filtered_rpc_variables_hexbin"):
         q_diff = valid_rows.loc[cond, q_dif_col]
         y      = valid_rows.loc[cond, y_col]
 
-        base_idx = (i_plane - 1) * 10  # 10 plots per plane
-
         plot_pairs = [
-            (t_sum,  t_diff, f'{t_sum_col} vs {t_dif_col}'),
-            (t_sum,  q_sum,  f'{t_sum_col} vs {q_sum_col}'),
-            (t_sum,  y,      f'{t_sum_col} vs {y_col}'),
-            (t_diff, q_sum,  f'{t_dif_col} vs {q_sum_col}'),
-            (t_diff, y,      f'{t_dif_col} vs {y_col}'),
-            (q_sum,  y,      f'{q_sum_col} vs {y_col}'),
-            (t_sum,  q_diff, f'{t_sum_col} vs {q_dif_col}'),
-            (t_diff, q_diff, f'{t_dif_col} vs {q_dif_col}'),
-            (q_diff, y,      f'{q_dif_col} vs {y_col}'),
-            (q_sum,  q_diff, f'{q_sum_col} vs {q_dif_col}')
+            (t_sum,  t_diff, f'{t_sum_col} vs {t_dif_col}', "t_sum", "t_diff"),
+            (t_sum,  q_sum,  f'{t_sum_col} vs {q_sum_col}', "t_sum", "q_sum"),
+            (t_sum,  y,      f'{t_sum_col} vs {y_col}', "t_sum", "y"),
+            (t_diff, q_sum,  f'{t_dif_col} vs {q_sum_col}', "t_diff", "q_sum"),
+            (t_diff, y,      f'{t_dif_col} vs {y_col}', "t_diff", "y"),
+            (q_sum,  y,      f'{q_sum_col} vs {y_col}', "q_sum", "y"),
+            (t_sum,  q_diff, f'{t_sum_col} vs {q_dif_col}', "t_sum", "q_diff"),
+            (t_diff, q_diff, f'{t_dif_col} vs {q_dif_col}', "t_diff", "q_diff"),
+            (q_diff, y,      f'{q_dif_col} vs {y_col}', "q_diff", "y"),
+            (q_sum,  q_diff, f'{q_sum_col} vs {q_dif_col}', "q_sum", "q_diff")
         ]
 
-        for offset, (x, yv, title) in enumerate(plot_pairs):
-            ax = axes[base_idx + offset]
+        filtered_plot_pairs: list[tuple[pd.Series, pd.Series, str, str, str]] = []
+        for offset, (x, yv, title, x_key, y_key) in enumerate(plot_pairs):
+            x, yv = _filter_hexbin_pair_to_configured_limits(x, yv, x_key, y_key)
+            filtered_plot_pairs.append((x, yv, title, x_key, y_key))
+            x_values = pd.to_numeric(x, errors="coerce").to_numpy(dtype=float)
+            y_values = pd.to_numeric(yv, errors="coerce").to_numpy(dtype=float)
+            finite = np.isfinite(x_values) & np.isfinite(y_values)
+            if np.any(finite):
+                shared_axis_values[offset]["x"].append(x_values[finite])
+                shared_axis_values[offset]["y"].append(y_values[finite])
+        plot_pairs_by_plane[i_plane] = filtered_plot_pairs
+
+    def _shared_hexbin_axis_limit(value_chunks: list[np.ndarray]) -> tuple[float, float] | None:
+        if not value_chunks:
+            return None
+        values = np.concatenate(value_chunks)
+        values = values[np.isfinite(values)]
+        if values.size == 0:
+            return None
+        left = float(np.nanpercentile(values, 1.0))
+        right = float(np.nanpercentile(values, 99.0))
+        if not np.isfinite(left) or not np.isfinite(right) or left >= right:
+            left = float(np.nanmin(values))
+            right = float(np.nanmax(values))
+        if not np.isfinite(left) or not np.isfinite(right):
+            return None
+        if left == right:
+            padding = 0.5 if left == 0 else 0.05 * abs(left)
+            return left - padding, right + padding
+        padding = 0.03 * (right - left)
+        return left - padding, right + padding
+
+    shared_axis_limits: list[tuple[tuple[float, float] | None, tuple[float, float] | None]] = []
+    for offset, axis_values in enumerate(shared_axis_values):
+        x_limit = _shared_hexbin_axis_limit(axis_values["x"])
+        y_limit = _shared_hexbin_axis_limit(axis_values["y"])
+        shared_axis_limits.append((x_limit, y_limit))
+
+    for i_plane in range(1, 5):
+        plot_pairs = plot_pairs_by_plane.get(i_plane, [])
+        for offset, (x, yv, title, _x_key, _y_key) in enumerate(plot_pairs):
+            ax = axes_grid[i_plane - 1, offset]
+            ax.set_facecolor(plt.get_cmap("turbo")(0.0))
             _task3_plot_quantile_hexbin(ax, x, yv, title, gridsize=50, cmap="turbo")
+            xlim, ylim = shared_axis_limits[offset]
+            if xlim is not None:
+                ax.set_xlim(xlim)
+            if ylim is not None:
+                ax.set_ylim(ylim)
 
     plt.tight_layout()
     plt.subplots_adjust(top=0.92)

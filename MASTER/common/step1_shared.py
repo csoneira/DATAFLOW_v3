@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 from ast import literal_eval
 import builtins
+from array import array
 from collections.abc import Mapping as MappingABC
 import csv
 from datetime import datetime
@@ -836,6 +837,135 @@ def build_step1_cli_parser(
 def validate_step1_input_file_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     if args.input_file and args.input_file_flag:
         parser.error("Use either positional input_file or --input-file, not both.")
+
+
+ZERO_TOKEN_PATTERN = re.compile(r"0000\.0000")
+LEADING_ZERO_PATTERN = re.compile(r"\b0+([0-9]+)")
+MULTI_SPACE_PATTERN = re.compile(r" +")
+XYEAR_PATTERN = re.compile(r"X(20\d{2})")
+NEG_GAP_PATTERN = re.compile(r"(\w)-(\d)")
+MALFORMED_NUMBER_PATTERN = re.compile(r"-?\d+\.\d+\.\d+")
+VALID_YEARS = set(range(1999, 2100))
+
+
+def process_step1_raw_line(line: str) -> str:
+    line = ZERO_TOKEN_PATTERN.sub("0", line)
+    line = LEADING_ZERO_PATTERN.sub(r"\1", line)
+    line = MULTI_SPACE_PATTERN.sub(",", line.strip())
+    line = XYEAR_PATTERN.sub(r"X\n\1", line)
+    line = NEG_GAP_PATTERN.sub(r"\1 -\2", line)
+    return line
+
+
+def step1_raw_line_contains_malformed_numbers(line: str) -> bool:
+    return bool(MALFORMED_NUMBER_PATTERN.search(line))
+
+
+def step1_raw_values_have_valid_date(values: Sequence[object]) -> bool:
+    try:
+        year, month, day = int(values[0]), int(values[1]), int(values[2])
+        return year in VALID_YEARS and 1 <= month <= 12 and 1 <= day <= 31
+    except (IndexError, TypeError, ValueError):
+        return False
+
+
+def _normalize_step1_raw_line_for_numpy(line: str) -> str:
+    normalized = line.strip()
+    normalized = ZERO_TOKEN_PATTERN.sub("0", normalized)
+    normalized = LEADING_ZERO_PATTERN.sub(r"\1", normalized)
+    if "X20" in normalized:
+        normalized = XYEAR_PATTERN.sub(r"X \1", normalized)
+    if "-" in normalized:
+        normalized = NEG_GAP_PATTERN.sub(r"\1 -\2", normalized)
+    return normalized
+
+
+def _parse_step1_raw_line_fast(line: str, expected_columns: int) -> np.ndarray | None:
+    stripped = line.strip()
+    values = np.fromstring(stripped, sep=" ", dtype=np.float64)
+    if values.size == expected_columns and step1_raw_values_have_valid_date(values[:3]):
+        return values
+    normalized = _normalize_step1_raw_line_for_numpy(stripped)
+    values = np.fromstring(normalized, sep=" ", dtype=np.float64)
+    if values.size == expected_columns and step1_raw_values_have_valid_date(values[:3]):
+        return values
+    return None
+
+
+def build_step1_raw_input_dataframe(
+    source_path: str | Path,
+    rejected_path: str | Path,
+    expected_columns: int,
+    limit_rows: int | None = None,
+) -> tuple[pd.DataFrame, int, int]:
+    """Parse a Stage 1 acquisition text file into the raw Task 1 dataframe shape."""
+    read_lines = 0
+    written_lines = 0
+    stored_rows = 0
+    flat_values = array("d")
+    event_ids: list[int] = []
+
+    with Path(source_path).open("r", encoding="utf-8", errors="replace") as infile, Path(
+        rejected_path
+    ).open("w", encoding="utf-8") as rejectfile:
+        for i, line in enumerate(infile, start=1):
+            if line.lstrip().startswith("#"):
+                continue
+            read_lines += 1
+
+            parsed_values = _parse_step1_raw_line_fast(line, expected_columns)
+            if parsed_values is None:
+                cleaned_line = process_step1_raw_line(line)
+                cleaned_values = cleaned_line.split(",")
+
+                if len(cleaned_values) < 3 or not step1_raw_values_have_valid_date(cleaned_values[:3]):
+                    rejectfile.write(f"Line {i} (Invalid date): {line.strip()}\n")
+                    continue
+
+                if step1_raw_line_contains_malformed_numbers(line):
+                    rejectfile.write(f"Line {i} (Malformed number): {line.strip()}\n")
+                    continue
+
+                if len(cleaned_values) != expected_columns:
+                    rejectfile.write(f"Line {i} (Wrong column count): {line.strip()}\n")
+                    continue
+
+                parsed_values = np.fromstring(
+                    cleaned_line.replace(",", " "),
+                    sep=" ",
+                    dtype=np.float64,
+                )
+                if parsed_values.size != expected_columns:
+                    rejectfile.write(f"Line {i} (Wrong column count): {line.strip()}\n")
+                    continue
+
+            written_lines += 1
+            if limit_rows is None or stored_rows < limit_rows:
+                flat_values.extend(parsed_values)
+                event_ids.append(i)
+                stored_rows += 1
+
+    if stored_rows == 0:
+        return pd.DataFrame(), read_lines, written_lines
+
+    raw_matrix = np.frombuffer(flat_values, dtype=np.float64).reshape(stored_rows, expected_columns)
+    datetime_components = {
+        "year": np.rint(raw_matrix[:, 0]).astype(np.int16, copy=False),
+        "month": np.rint(raw_matrix[:, 1]).astype(np.int8, copy=False),
+        "day": np.rint(raw_matrix[:, 2]).astype(np.int8, copy=False),
+        "hour": np.rint(raw_matrix[:, 3]).astype(np.int8, copy=False),
+        "minute": np.rint(raw_matrix[:, 4]).astype(np.int8, copy=False),
+        "second": np.rint(raw_matrix[:, 5]).astype(np.int8, copy=False),
+    }
+    datetime_series = pd.to_datetime(datetime_components)
+
+    value_columns = [f"column_{i}" for i in range(6, expected_columns)]
+    value_data = raw_matrix[:, 6:].astype(np.float32, copy=False)
+    read_df = pd.DataFrame(value_data, columns=value_columns, copy=False)
+    read_df.insert(0, "event_id", np.asarray(event_ids, dtype=np.int64))
+    read_df.insert(0, "datetime", datetime_series)
+    read_df["column_6"] = np.rint(raw_matrix[:, 6]).astype(np.int8, copy=False)
+    return read_df, read_lines, written_lines
 
 
 def build_step1_filtered_print(

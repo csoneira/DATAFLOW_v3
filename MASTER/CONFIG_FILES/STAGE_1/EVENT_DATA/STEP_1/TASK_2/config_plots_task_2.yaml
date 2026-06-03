@@ -40,8 +40,8 @@ plots:
   slewing_delta_t_centroid_vs_qsum_cut: essential
   slewing_pair_delta_t_qsum1_qsum2_contour: usual
   slewing_delta_t_vs_qsum2_by_qsum1_bins: usual
-  slewing_delta_t_vs_qsum2_by_qsum1_bins_fit: essential
-  slewing_per_strip_from_pair_fit: essential
+  slewing_delta_t_vs_qsum2_by_qsum1_bins_fit: false
+  slewing_per_strip_from_pair_fit: false
   slewing_per_channel_polynomial_curves: essential
   slewing_relative_tsum_vs_qsum_after_correction: essential
   slewing_relative_tsum_vs_qsum_after_correction_logscale: essential

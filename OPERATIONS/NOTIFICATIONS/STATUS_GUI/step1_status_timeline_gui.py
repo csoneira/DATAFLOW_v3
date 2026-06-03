@@ -37,6 +37,15 @@ DATE_FORMATS = (
 )
 STATION_RE = re.compile(r"^MINGO0(\d)$")
 TASK_RE = re.compile(r"^TASK_(\d+)$")
+GUIDE_RELATIVE_PATH = Path("MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh")
+DEFAULT_TASK_LABELS = {
+    0: "acq_to_raw",
+    1: "raw_to_clean",
+    2: "clean_to_cal",
+    3: "cal_to_list",
+    4: "list_to_fit",
+    5: "fit_to_corr",
+}
 
 
 @dataclass(frozen=True)
@@ -86,6 +95,33 @@ def _extract_station_task(path: Path) -> tuple[Optional[int], Optional[int]]:
 
 def _iter_status_files(repo_root: Path) -> Iterable[Path]:
     yield from sorted(repo_root.glob(STATUS_FILE_GLOB))
+
+
+def _load_task_labels(repo_root: Path) -> dict[int, str]:
+    labels = dict(DEFAULT_TASK_LABELS)
+    guide_path = repo_root / GUIDE_RELATIVE_PATH
+    try:
+        text = guide_path.read_text(encoding="utf-8")
+    except OSError:
+        return labels
+
+    match = re.search(r"TASK_LABELS=\(\s*(.*?)\s*\)", text, flags=re.DOTALL)
+    if match is None:
+        return labels
+
+    parsed = re.findall(r'"([^"]+)"', match.group(1))
+    if not parsed:
+        return labels
+    for task_id, label in enumerate(parsed):
+        labels[task_id] = label
+    return labels
+
+
+def _format_task_label(task_id: int, task_labels: dict[int, str]) -> str:
+    label = task_labels.get(task_id)
+    if not label:
+        return f"TASK_{task_id}"
+    return f"TASK_{task_id} {label}"
 
 
 def load_status_events(
@@ -194,6 +230,7 @@ class StatusTimelineApp:
         self.repo_root = args.repo_root.resolve()
         self.max_rows = args.max_rows
         self.events: list[StatusEvent] = []
+        self.task_labels = _load_task_labels(self.repo_root)
         self.after_id: Optional[str] = None
 
         self.lookback_var = self.tk.StringVar(value=str(args.lookback_hours))
@@ -299,7 +336,7 @@ class StatusTimelineApp:
             return None, station_error
 
         tasks, task_error = _parse_id_filter(
-            self.task_var.get(), min_value=1, max_value=5, label="task"
+            self.task_var.get(), min_value=0, max_value=5, label="task"
         )
         if task_error:
             return None, task_error
@@ -386,7 +423,7 @@ class StatusTimelineApp:
         lane_count = len(lanes)
         lane_index = {lane: idx for idx, lane in enumerate(lanes)}
 
-        left = 95
+        left = 155
         right = width - 20
         top = 24
         bottom = height - 36
@@ -417,7 +454,7 @@ class StatusTimelineApp:
             self.canvas.create_text(
                 left - 8,
                 y,
-                text=f"M{station} T{task}",
+                text=f"M{station} {_format_task_label(task, self.task_labels)}",
                 anchor="e",
                 font=("TkDefaultFont", 9, "bold"),
             )
@@ -462,7 +499,7 @@ class StatusTimelineApp:
                 values=(
                     event.execution_time.strftime("%Y-%m-%d %H:%M:%S"),
                     f"MINGO0{event.station}",
-                    f"TASK_{event.task}",
+                    _format_task_label(event.task, self.task_labels),
                     event.filename_base,
                     f"{event.completion:.2f}",
                     event.csv_mtime.strftime("%Y-%m-%d %H:%M:%S"),
@@ -498,7 +535,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--tasks",
         default="all",
-        help='Comma-separated task filter (e.g. "1,2,3,4") or "all".',
+        help='Comma-separated task filter (e.g. "0,1,2,3") or "all".',
     )
     parser.add_argument(
         "--max-rows",
@@ -521,7 +558,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             args.stations, min_value=0, max_value=4, label="station"
         )
         tasks, task_error = _parse_id_filter(
-            args.tasks, min_value=1, max_value=5, label="task"
+            args.tasks, min_value=0, max_value=5, label="task"
         )
         if station_error or task_error:
             print(station_error or task_error, file=sys.stderr)
@@ -533,11 +570,12 @@ def main(argv: Optional[list[str]] = None) -> int:
             station_filter=stations,
             task_filter=tasks,
         )
+        task_labels = _load_task_labels(args.repo_root.resolve())
         print(f"status_rows={len(events)}")
         for event in events[-20:]:
             print(
                 f"{event.execution_time:%Y-%m-%d %H:%M:%S} "
-                f"M{event.station} T{event.task} {event.filename_base} "
+                f"M{event.station} {_format_task_label(event.task, task_labels)} {event.filename_base} "
                 f"{event.completion:.2f}"
             )
         return 0

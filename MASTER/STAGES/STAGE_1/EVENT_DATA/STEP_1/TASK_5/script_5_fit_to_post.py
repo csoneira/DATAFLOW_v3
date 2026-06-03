@@ -165,6 +165,7 @@ TASK4_LISTED_FALLBACK_SUBDIRS: tuple[str, ...] = (
 )
 TASK5_STRIP_Q_COLUMN_RE = re.compile(r"^Q_P[1-4]s[1-4]$")
 TASK5_PLANE_Q_SUM_COLUMN_RE = re.compile(r"^P[1-4]_Q_sum_final$")
+POST_TT_COLUMN = "post_tt"
 
 try:
     import pyarrow as pa
@@ -751,7 +752,7 @@ def _task5_load_task1_channel_combination_settings() -> tuple[
 
 
 def _task5_resolve_audit_tt_column(df_input: pd.DataFrame) -> str | None:
-    for candidate in ("raw_tt", "clean_tt", "cal_tt", "list_tt", "fit_tt", CORR_TT_COLUMN, POST_TT_COLUMN):
+    for candidate in ("raw_tt", "clean_tt", "cal_tt", "list_tt", "fit_tt", POST_TT_COLUMN):
         if candidate in df_input.columns:
             return candidate
     return None
@@ -1999,7 +2000,7 @@ if create_debug_plots:
     main_cols.extend(
         [
             col
-            for col in ("raw_tt", "clean_tt", "cal_tt", "list_tt", "tracking_tt", "fit_tt", CORR_TT_COLUMN, POST_TT_COLUMN)
+            for col in ("raw_tt", "clean_tt", "cal_tt", "list_tt", "tracking_tt", "fit_tt", POST_TT_COLUMN)
             if col in working_df.columns
         ]
     )
@@ -2025,9 +2026,6 @@ fit_tt_columns = {
     for i_plane in range(1, 5)
 }
 
-# Prefer the corr_tt already provided by upstream steps.
-CORR_TT_COLUMN = "corr_tt"
-POST_TT_COLUMN = "post_tt"
 global_variables = {
     "joined_analysis_files_requested": int(joined_analysis_files),
     "joined_analysis_files_used": int(len(joined_input_records)),
@@ -2058,7 +2056,7 @@ FILTER_METRIC_NAMES: tuple[str, ...] = (
     "total_rows_removed_pct",
     "data_purity_percentage",
     "all_components_zero_rows_removed_pct",
-    "corr_tt_lt_10_rows_removed_pct",
+    "post_tt_lt_10_rows_removed_pct",
 )
 
 filter_metrics: dict[str, float] = {}
@@ -2072,27 +2070,13 @@ else:
         .astype(int)
     )
 
-# Prefer corr_tt from upstream; otherwise initialize it from fit_tt.
-if CORR_TT_COLUMN in working_df.columns:
-    working_df.loc[:, CORR_TT_COLUMN] = (
-        pd.to_numeric(working_df[CORR_TT_COLUMN], errors="coerce")
-        .fillna(0)
-        .astype(int)
-    )
-else:
-    working_df.loc[:, CORR_TT_COLUMN] = (
-        pd.to_numeric(working_df["fit_tt"], errors="coerce")
-        .fillna(0)
-        .astype(int)
-    )
-
 fit_tt_counts_initial = working_df["fit_tt"].value_counts()
 for tt_value, count in fit_tt_counts_initial.items():
     tt_label = normalize_tt_label(tt_value)
     global_variables[f"fit_tt_{tt_label}_count"] = int(count)
 
 working_df.loc[:, POST_TT_COLUMN] = (
-    pd.to_numeric(working_df[CORR_TT_COLUMN], errors="coerce")
+    pd.to_numeric(working_df["fit_tt"], errors="coerce")
     .fillna(0)
     .astype(int)
 )

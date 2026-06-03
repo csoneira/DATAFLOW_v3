@@ -4103,7 +4103,7 @@ def calculate_task2_tsum_calibration_from_pair_residuals(
 ) -> list[list[float]]:
     print(
         "Using direct T_sum calibration from geometry-corrected pair residuals "
-        "with high-Q centroid pair offsets."
+        "with pair centroid offsets."
     )
     strip_pair_patterns = [
         (1, 1), (2, 2), (3, 3), (4, 4),
@@ -4192,10 +4192,6 @@ def calculate_task2_tsum_calibration_from_pair_residuals(
                     pair_offset_q_cut = float(q_cut)
             if not np.isfinite(pair_offset):
                 pair_offset = summary(values)
-                print(
-                    "Warning: high-Q pair offset unavailable for "
-                    f"{label1}-{label2}; using all-event centroid."
-                )
             else:
                 print(
                     f"T_sum pair offset {label1}-{label2}: "
@@ -6416,7 +6412,11 @@ def apply_per_channel_polynomial_slewing_to_dataframe(
             snapshot_column_if_changed(target_df, t_column, change_mask)
             current_values = pd.to_numeric(target_df.loc[valid_indices, t_column], errors="coerce").to_numpy(dtype=float)
             corrections = np.asarray(correction_values, dtype=float)
-            target_df.loc[valid_indices, t_column] = current_values - corrections
+            new_values = current_values - corrections
+            target_dtype = target_df[t_column].dtype
+            if pd.api.types.is_float_dtype(target_dtype):
+                new_values = np.asarray(new_values, dtype=target_dtype)
+            target_df.loc[valid_indices, t_column] = new_values
             corrected_by_label[label] = len(valid_indices)
             diagnostics["working_df_hits_corrected"] = int(diagnostics["working_df_hits_corrected"]) + len(valid_indices)
 
@@ -6523,7 +6523,19 @@ def plot_per_channel_polynomial_slewing_curves(
 
     outside_domain_mode = _task2_slewing_outside_domain_mode()
     charge_coordinate = str(model.get("charge_coordinate", "Q_sum"))
-    fig, axes = plt.subplots(4, 4, figsize=(18, 14), sharex=False, sharey=True, constrained_layout=True)
+    try:
+        degree = int(model.get("degree", 1))
+    except (TypeError, ValueError):
+        degree = 1
+    if degree <= 1:
+        fit_shape = "s_i(x)=a_i1*(x-mu_i1)"
+    else:
+        terms = " + ".join(
+            f"a_i{power}*(x^{power}-mu_i{power})"
+            for power in range(1, degree + 1)
+        )
+        fit_shape = f"s_i(x)={terms}"
+    fig, axes = plt.subplots(4, 4, figsize=(18, 14), sharex=True, sharey=True, constrained_layout=True)
     curve_count = 0
     for plane in range(1, 5):
         for strip in range(1, 5):
@@ -6621,7 +6633,7 @@ def plot_per_channel_polynomial_slewing_curves(
 
     fig.suptitle(
         "Per-channel polynomial slewing curves "
-        f"({context_label}; fit coordinate={charge_coordinate})",
+        f"({context_label}; x={charge_coordinate}; {fit_shape})",
         fontsize=14,
     )
     if save_plots:
@@ -11427,6 +11439,23 @@ _plot_slewing_histograms = _slewing_plot_requests["slewing"]
 _plot_slewing_3d = _slewing_plot_requests["slewing_3d"]
 _plot_slewing_3d_fitproj = _slewing_plot_requests["slewing_3d_fitproj"]
 _plot_slewing_fit_validation = _slewing_plot_requests["model_validation_simple"]
+_need_pair_event_slewing_fit = (
+    apply_slewing_correction_from_pair_fit
+    and slewing_application_mode == "pair_event_solution"
+)
+if not _need_pair_event_slewing_fit and (
+    _plot_slewing_delta_t_vs_qsum2_by_qsum1_bins_fit
+    or _plot_slewing_per_strip_from_pair_fit
+):
+    print(
+        "Skipping legacy pair-fit slewing diagnostics because "
+        f"slewing_application_mode={slewing_application_mode!r}; "
+        "using per-channel polynomial slewing diagnostics instead."
+    )
+    _plot_slewing_delta_t_vs_qsum2_by_qsum1_bins_fit = False
+    _plot_slewing_per_strip_from_pair_fit = False
+    _slewing_plot_requests["slewing_delta_t_vs_qsum2_by_qsum1_bins_fit"] = False
+    _slewing_plot_requests["slewing_per_strip_from_pair_fit"] = False
 if _plot_slewing_3d_fitproj or _plot_slewing_fit_validation:
     print(
         "Active slewing regression plots are disabled: no slewing fit is "
@@ -12953,7 +12982,11 @@ if defer_charge_calibration_until_post_time:
             qdif_col = f"Q{key}_Q_dif_{i+1}"
             corrected_diff = Q_dif_adj - polynomial(T_dif_adj, *coeffs)
             snapshot_column_if_changed(calibration_work_df, qdif_col, cond)
-            calibration_work_df.loc[cond, qdif_col] = np.asarray(corrected_diff, dtype=float)
+            new_values = np.asarray(corrected_diff, dtype=float)
+            target_dtype = calibration_work_df[qdif_col].dtype
+            if pd.api.types.is_float_dtype(target_dtype):
+                new_values = np.asarray(new_values, dtype=target_dtype)
+            calibration_work_df.loc[cond, qdif_col] = new_values
 
             if task2_plot_requested("charge_dif_vs_time_dif_cal", essential=True):
                 title = (
@@ -13421,16 +13454,22 @@ if (
         "slewing_delta_t_vs_qsum2_by_qsum1_bins_fit",
         essential=True,
     )
-    slewing_fit_df = calculate_slewing_delta_t_vs_qsum2_by_qsum1_bins_fit(
-        time_pair_residuals_df,
-        save_coefficients=not _plot_slewing_fit_requested_now,
+    _need_legacy_pair_fit_slewing = (
+        _need_pair_event_slewing_fit
+        or _plot_slewing_delta_t_vs_qsum2_by_qsum1_bins_fit
+        or _plot_slewing_per_strip_from_pair_fit
     )
-    if _plot_slewing_fit_requested_now:
-        plot_slewing_delta_t_vs_qsum2_by_qsum1_bins_fit(
+    if _need_legacy_pair_fit_slewing:
+        slewing_fit_df = calculate_slewing_delta_t_vs_qsum2_by_qsum1_bins_fit(
             time_pair_residuals_df,
-            save_coefficients=True,
+            save_coefficients=not _plot_slewing_fit_requested_now,
         )
-    plot_slewing_per_strip_from_pair_fit(time_pair_residuals_df, slewing_fit_df)
+        if _plot_slewing_fit_requested_now:
+            plot_slewing_delta_t_vs_qsum2_by_qsum1_bins_fit(
+                time_pair_residuals_df,
+                save_coefficients=True,
+            )
+        plot_slewing_per_strip_from_pair_fit(time_pair_residuals_df, slewing_fit_df)
     if apply_slewing_correction_from_pair_fit and slewing_application_mode == "per_channel_polynomial":
         per_channel_slewing_model, per_channel_slewing_diagnostics = fit_per_channel_polynomial_slewing_model(
             time_pair_residuals_df,
@@ -13601,6 +13640,9 @@ if apply_Q_TDIF_calibration:
             corrected_values = qdif_values.copy()
             corrected_values[mask] = qdif_values[mask] - polynomial(tdif_values[mask], *coeffs)
             snapshot_column_if_changed(working_df, qdif_col, mask)
+            target_dtype = working_df[qdif_col].dtype
+            if pd.api.types.is_float_dtype(target_dtype):
+                corrected_values = np.asarray(corrected_values, dtype=target_dtype)
             working_df.loc[:, qdif_col] = corrected_values
 
 if crosstalk_removal_and_recalibration:

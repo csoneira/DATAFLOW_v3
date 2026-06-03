@@ -6,11 +6,11 @@ event_data_step1_run_matrix:
   already_running_log_seconds: 300
   config_refresh_seconds: 60
   stations:
-    "0": [1, 2, 3, 4]
-    # "1": [1, 2, 3, 4, 5]
-    "2": [1, 2, 3, 4]
-    # "3": [1, 2, 3, 4, 5]
-    # "4": [1, 2, 3, 4, 5]
+    "0": [0, 1, 2, 3, 4, 5]
+    "1": [0, 1, 2, 3, 4, 5]
+    "2": [0, 1, 2, 3, 4, 5]
+    "3": [0, 1, 2, 3, 4, 5]
+    "4": [0, 1, 2, 3, 4, 5]
 
 event_data_resource_limits:
   mem_used_pct_max: 95
@@ -23,13 +23,13 @@ step_1_overrides:
   # Non-empty values override lower-level STEP_1 task configs.
   # Leave a value blank to defer to each TASK_*/config_task_*.yaml.
   # Use create_plots: null to force plots off for all tasks.
-  complete_reanalysis: true
+  complete_reanalysis:
   create_plots:
-  keep_all_columns_output: false
+  keep_all_columns_output: true
   save_removed_channel_values: false
   save_time_slewing_pair_residuals: false
   joined_analysis_files: 1
-  joined_analysis_time_tolerance_hours: 8
+  joined_analysis_time_tolerance_hours: 1
   process_only_qa_retry_files: false
   prioritize_other_than_qa_files: true
 

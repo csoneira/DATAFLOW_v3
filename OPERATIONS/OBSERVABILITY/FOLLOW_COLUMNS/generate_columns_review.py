@@ -20,9 +20,33 @@ class Section:
     title: str
     display_pattern: str
     glob_pattern: str
+    exclude_prefixes: tuple[str, ...] = ()
 
 
 SECTIONS = [
+    Section(
+        title="TASK_0 -> TASK_1",
+        display_pattern=(
+            "~/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            "TASK_1/INPUT_FILES/COMPLETED_DIRECTORY/raw_*.parquet"
+        ),
+        glob_pattern=(
+            "/home/mingo/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            "TASK_1/INPUT_FILES/COMPLETED_DIRECTORY/raw_*.parquet"
+        ),
+        exclude_prefixes=("selftrigger_",),
+    ),
+    Section(
+        title="TASK_0 -> SELFTRIGGER",
+        display_pattern=(
+            "~/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            "TASK_0/OUTPUT_FILES/selftrigger_raw_*.parquet"
+        ),
+        glob_pattern=(
+            "/home/mingo/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            "TASK_0/OUTPUT_FILES/selftrigger_raw_*.parquet"
+        ),
+    ),
     Section(
         title="TASK_1 -> TASK_2",
         display_pattern=(
@@ -81,11 +105,18 @@ SECTIONS = [
 ]
 
 
-def get_first_file(pattern: str) -> Path | None:
-    matches = sorted(glob(pattern))
+def get_first_file(section: Section) -> Path | None:
+    pattern = section.glob_pattern
+    matches = [Path(match) for match in glob(pattern)]
+    if section.exclude_prefixes:
+        matches = [
+            match
+            for match in matches
+            if not match.name.startswith(section.exclude_prefixes)
+        ]
     if not matches:
         return None
-    return Path(matches[0])
+    return max(matches, key=lambda path: (path.stat().st_mtime, path.name))
 
 
 def get_columns(parquet_path: Path) -> list[str]:
@@ -106,7 +137,7 @@ def build_document() -> tuple[str, list[str]]:
         lines.append(f"### from the {section.display_pattern}")
         lines.append("")
 
-        sample_file = get_first_file(section.glob_pattern)
+        sample_file = get_first_file(section)
         if sample_file is None:
             lines.append("No parquet files found")
         else:
