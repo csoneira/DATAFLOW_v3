@@ -184,6 +184,15 @@ TASK5_INTERNAL_EVENT_ALIASES: tuple[tuple[str, str], ...] = (
     ("event_theta_err", "theta_err"),
     ("event_phi_err", "phi_err"),
 )
+TASK5_GATE_CONFIG_DEFAULT_NAME = "config_gates_task_5.yaml"
+
+
+class Task5GateConfigError(ValueError):
+    """Raised when the Task 5 gate configuration is malformed."""
+
+
+class Task5GateEvaluationError(ValueError):
+    """Raised when a Task 5 gate expression cannot be evaluated."""
 
 try:
     import pyarrow as pa
@@ -244,6 +253,84 @@ def _ensure_task5_internal_event_aliases(dataframe: pd.DataFrame) -> pd.DataFram
             if isinstance(source, pd.DataFrame):
                 source = source.iloc[:, 0]
             dataframe.loc[:, internal_name] = source
+    return dataframe
+
+
+def _load_task5_gate_config(config_path: str | Path) -> list[dict[str, object]]:
+    raw_config = yaml.safe_load(Path(config_path).read_text(encoding="utf-8")) or {}
+    gates_section = raw_config.get("gates")
+    if not isinstance(gates_section, dict) or not gates_section:
+        raise Task5GateConfigError("Task 5 gate config must define a non-empty top-level 'gates' mapping.")
+
+    seen_bits: set[int] = set()
+    gate_definitions: list[dict[str, object]] = []
+    for gate_name, gate_config in gates_section.items():
+        if not isinstance(gate_config, dict):
+            raise Task5GateConfigError(f"Gate '{gate_name}' must be defined as a mapping.")
+        if "bit" not in gate_config:
+            raise Task5GateConfigError(f"Gate '{gate_name}' is missing its bit index.")
+        if "expression" not in gate_config or not str(gate_config["expression"]).strip():
+            raise Task5GateConfigError(f"Gate '{gate_name}' is missing its expression.")
+
+        bit = int(gate_config["bit"])
+        if bit < 0 or bit > 63:
+            raise Task5GateConfigError(f"Gate '{gate_name}' uses bit {bit}; valid bits are 0 through 63.")
+        if bit in seen_bits:
+            raise Task5GateConfigError(f"Gate '{gate_name}' reuses bit {bit}. Gate bits must be unique.")
+        seen_bits.add(bit)
+
+        gate_definitions.append(
+            {
+                "name": str(gate_name),
+                "bit": bit,
+                "bit_value": np.uint64(1 << bit),
+                "description": str(gate_config.get("description", "") or ""),
+                "expression": str(gate_config["expression"]).strip(),
+            }
+        )
+    return gate_definitions
+
+
+def _evaluate_task5_gate_expression(dataframe: pd.DataFrame, gate_definition: dict[str, object]) -> np.ndarray:
+    gate_name = str(gate_definition["name"])
+    expression = str(gate_definition["expression"])
+    try:
+        result = dataframe.eval(expression, engine="python")
+    except Exception as exc:
+        raise Task5GateEvaluationError(
+            f"Failed to evaluate Task 5 gate '{gate_name}' with expression '{expression}': {exc}"
+        ) from exc
+
+    if not isinstance(result, pd.Series):
+        raise Task5GateEvaluationError(
+            f"Task 5 gate '{gate_name}' did not return a pandas Series. "
+            "Use a vectorized boolean expression."
+        )
+    if len(result) != len(dataframe):
+        raise Task5GateEvaluationError(
+            f"Task 5 gate '{gate_name}' returned {len(result)} rows, expected {len(dataframe)}."
+        )
+    return result.fillna(False).to_numpy(dtype=bool)
+
+
+def apply_task5_gates(dataframe: pd.DataFrame, gate_definitions: list[dict[str, object]]) -> pd.DataFrame:
+    gate_mask = np.zeros(len(dataframe), dtype=np.uint64)
+    gate_labels = np.full(len(dataframe), "none", dtype=object)
+
+    for gate_definition in gate_definitions:
+        event_mask = _evaluate_task5_gate_expression(dataframe, gate_definition)
+        gate_mask[event_mask] |= np.uint64(gate_definition["bit_value"])
+        gate_name = str(gate_definition["name"])
+        current_labels = gate_labels[event_mask]
+        gate_labels[event_mask] = np.where(
+            current_labels == "none",
+            gate_name,
+            np.char.add(np.char.add(current_labels.astype(str), "|"), gate_name),
+        )
+        print(f"Task 5 gate '{gate_name}': {int(event_mask.sum())} matching rows.")
+
+    dataframe.loc[:, "gate_mask"] = gate_mask
+    dataframe.loc[:, "gate"] = gate_labels
     return dataframe
 
 
@@ -1246,6 +1333,9 @@ config = resolve_step1_effective_task_config(
     plot_parameter_config_file_path=plot_parameter_config_file_path,
     log_fn=print,
 )
+task5_gate_config_path = Path(config_file_path).with_name(
+    str(config.get("gate_config_yaml", TASK5_GATE_CONFIG_DEFAULT_NAME))
+)
 process_only_qa_retry_files = bool(config.get("process_only_qa_retry_files", False))
 joined_analysis_files = coerce_positive_int_config(config.get("joined_analysis_files"), default=1)
 joined_analysis_time_tolerance_hours = coerce_nonnegative_float_config(
@@ -1967,6 +2057,10 @@ if not simulated_param_hash and "param_hash" in working_df.columns:
         )
         if simulated_param_hash:
             print(f"Recovered simulated param_hash from parquet column: {simulated_param_hash}")
+
+task5_gate_definitions = _load_task5_gate_config(task5_gate_config_path)
+print(f"Loaded {len(task5_gate_definitions)} Task 5 gate definition(s) from {task5_gate_config_path}")
+working_df = apply_task5_gates(working_df, task5_gate_definitions)
 # print("Columns loaded from parquet:")
 # for col in working_df.columns:
 #     print(f" - {col}")

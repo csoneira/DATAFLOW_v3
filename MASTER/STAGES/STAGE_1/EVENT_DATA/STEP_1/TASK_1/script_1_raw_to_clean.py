@@ -6404,13 +6404,7 @@ if task1_plot_enabled("channel_contagion_by_tt"):
         save_plots, show_plots, plot_list,
     )
 
-# -----------------------------------------------------------------------------
-# Create and save the PDF (deferred until all plots are generated) ------------
-# -----------------------------------------------------------------------------
 _finalize_stage_t0 = _t_sec
-finalize_saved_plots_to_pdf()
-_prof["s_pdf_finalize_s"] = round(time.perf_counter() - _t_sec, 2)
-_t_sec = time.perf_counter()
 
 # Final number of events
 final_number_of_events = len(working_df)
@@ -6844,6 +6838,13 @@ if save_plots and task1_plot_enabled("acquisition_rate_vs_time_by_task_tt_with_h
         plt.close(rate_fig)
     else:
         print("Task 1 acquisition-rate-by-task-tt plot skipped: no valid tt_task0_raw/datetime rows.")
+
+# -----------------------------------------------------------------------------
+# Create and save the PDF (deferred until all plots are generated) ------------
+# -----------------------------------------------------------------------------
+finalize_saved_plots_to_pdf()
+_prof["s_pdf_finalize_s"] = round(time.perf_counter() - _t_sec, 2)
+_t_sec = time.perf_counter()
 
 # Ensure no figure handles remain open before persistence/final move.
 plt.close("all")

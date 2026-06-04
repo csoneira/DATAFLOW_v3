@@ -205,6 +205,7 @@ TASK2_PLOT_ALIASES: tuple[str, ...] = (
     "grand_figure_t_dif_cal",
     "grand_figure_t_dif_cal_st",
     "uncalibrated",
+    "uncalibrated_per_plane_combination",
     "total_charge_per_plane_uncalibrated",
     "calibration_charge_gates",
     "tsum_spread_histograms_og",
@@ -416,6 +417,59 @@ def close_direct_pdf_writer() -> None:
     _direct_pdf_page_count = 0
     _direct_pdf_target_path = None
     _direct_pdf_temp_path = None
+
+
+def finalize_task2_plots_to_pdf() -> None:
+    figure_directory = globals().get("base_directories", {}).get("figure_directory")
+    if not figure_directory:
+        close_direct_pdf_writer()
+        return
+
+    if not globals().get("create_pdf", False):
+        close_direct_pdf_writer()
+        if os.path.exists(figure_directory):
+            shutil.rmtree(figure_directory)
+        return
+
+    save_pdf_path_local = globals().get("save_pdf_path")
+    if not save_pdf_path_local:
+        close_direct_pdf_writer()
+        return
+
+    if _direct_pdf_pages is not None:
+        print(f"Finalizing PDF with all plots in {save_pdf_path_local}")
+        close_direct_pdf_writer()
+    else:
+        existing_pngs = collect_saved_plot_paths(globals().get("plot_list", []), figure_directory)
+        if existing_pngs:
+            print(f"Creating PDF with all plots in {save_pdf_path_local}")
+            temp_pdf_path = _build_temp_pdf_path(save_pdf_path_local)
+            try:
+                with PdfPages(temp_pdf_path) as pdf:
+                    for png in existing_pngs:
+                        img = Image.open(png)
+                        fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
+                        ax.imshow(img)
+                        ax.axis('off')
+                        pdf_save_rasterized_page(pdf, fig, bbox_inches='tight')
+                        plt.close(fig)
+                os.replace(temp_pdf_path, save_pdf_path_local)
+            finally:
+                if os.path.exists(temp_pdf_path):
+                    os.remove(temp_pdf_path)
+            for png in existing_pngs:
+                try:
+                    os.remove(png)
+                except OSError as e:
+                    print(f"Error: {e.filename} - {e.strerror}.")
+        else:
+            print(
+                "Warning: Plotting is enabled for Task 2 but no plot pages were generated "
+                f"for {basename_no_ext}; skipping PDF creation: {save_pdf_path_local}"
+            )
+
+    if os.path.exists(figure_directory):
+        shutil.rmtree(figure_directory)
 
 
 def is_calibration_metadata_column(column_name: str) -> bool:
@@ -7634,7 +7688,7 @@ _direct_pdf_pages: PdfPages | None = None
 _direct_pdf_page_count = 0
 _direct_pdf_target_path: str | None = None
 _direct_pdf_temp_path: str | None = None
-atexit.register(close_direct_pdf_writer)
+atexit.register(finalize_task2_plots_to_pdf)
 
 CALIBRATION_METADATA_PATTERN = re.compile(
     r"^P[1-4]_s[1-4]_((?:Q_FB|Q_TDIF)_coeffs(?:__[0-9]+)?|Q_sum|Q_F|Q_B|T_sum|T_dif|T_slew_[A-Za-z0-9_]+)$"
@@ -7709,6 +7763,10 @@ joined_analysis_files = _coerce_positive_int_config(
 joined_analysis_time_tolerance_hours = _coerce_positive_float_config(
     config.get("joined_analysis_time_tolerance_hours"),
     default=8.0,
+)
+task2_qt_histograms_use_4x16_layout = _coerce_config_bool(
+    config.get("task2_qt_histograms_use_4x16_layout"),
+    default=False,
 )
 apply_slewing_correction_from_pair_fit = _coerce_config_bool(
     config.get("apply_slewing_correction_from_pair_fit"),
@@ -10777,56 +10835,193 @@ else:
     task2_charge_component_backup_st_df = None
     task2_charge_component_backup_st_df_qfb = None
 
-if task2_plot_requested("uncalibrated", essential=True):
+def _select_task2_qt_sum_dif_columns(df: pd.DataFrame) -> list[str]:
+    return [
+        col
+        for col in df.columns
+        if col != "datetime"
+        if not str(col).lower().endswith("_qsum_uncalibrated")
+        if any(
+            token in col
+            for token in ("Q_sum", "Q_dif", "T_sum", "T_dif", "_qsum", "_qdif", "_tsum", "_tdif")
+        )
+    ]
 
-    # Select only the strip-derived columns for the quick uncalibrated overview.
-    plot_df = working_df.loc[:, [
-        col for col in working_df.columns
-        if any(x in col for x in ['Q_sum', 'Q_dif', 'T_sum', 'T_dif'])
-    ]]
-    
-    num_columns = len(plot_df.columns) - 1  # Exclude 'datetime'
-    num_rows = (num_columns + 7) // 8  # Adjust as necessary for better layout
-    fig, axes = plt.subplots(num_rows, 8, figsize=(20, num_rows * 2))
-    axes = axes.flatten()
 
-    for i, col in enumerate([col for col in plot_df.columns if col != 'datetime']):
-        y = plot_df[col]
-        
-        if 'Q_sum' in col:
-            color = Q_sum_color
-        elif 'Q_dif' in col:
-            color = Q_dif_color
-        elif 'T_sum' in col:
-            color = T_sum_color
-        elif 'T_dif' in col:
-            color = T_dif_color
-        else:
-            print(col)
-            continue
-        axes[i].hist(y[y != 0], bins=100, alpha=0.5, label=col, color=color)
-        axes[i].set_title(col)
-        axes[i].legend()
-        if 'Q_sum' in col:
-            axes[i].set_yscale('log')
-    
-    # Remove any unused axes
-    for j in range(i + 1, len(axes)):
-        fig.delaxes(axes[j])
-    
-    fig.tight_layout(rect=[0, 0, 1, 0.95])  # leave space at the top (5%)
-    fig.suptitle("Uncalibrated data", fontsize=20)  # increase font size
+def _task2_qt_histogram_column_kind(column_name: str) -> str | None:
+    lower_name = str(column_name).lower()
+    if "t_sum" in lower_name or lower_name.endswith("_tsum"):
+        return "tsum"
+    if "t_dif" in lower_name or lower_name.endswith("_tdif"):
+        return "tdif"
+    if "q_sum" in lower_name or lower_name.endswith("_qsum"):
+        return "qsum"
+    if "q_dif" in lower_name or lower_name.endswith("_qdif"):
+        return "qdif"
+    return None
+
+
+def _task2_qt_histogram_color(column_name: str) -> str:
+    kind = _task2_qt_histogram_column_kind(column_name)
+    if kind == "qsum":
+        return Q_sum_color
+    if kind == "qdif":
+        return Q_dif_color
+    if kind == "tsum":
+        return T_sum_color
+    if kind == "tdif":
+        return T_dif_color
+    return "tab:blue"
+
+
+def _task2_qt_histogram_column_key(column_name: str) -> tuple[int, int, str] | None:
+    lower_name = str(column_name).lower()
+    if lower_name.endswith("_qsum_uncalibrated"):
+        return None
+
+    canonical_match = re.fullmatch(r"p([1-4])_s([1-4])_(tsum|tdif|qsum|qdif)", lower_name)
+    if canonical_match:
+        plane, strip, kind = canonical_match.groups()
+        return int(plane), int(strip), kind
+
+    legacy_match = re.fullmatch(r"([qt])([1-4])_\1_(sum|dif)_([1-4])", lower_name)
+    if legacy_match:
+        family, plane, operation, strip = legacy_match.groups()
+        kind = f"{family}{operation}"
+        return int(plane), int(strip), kind
+
+    return None
+
+
+def _task2_qt_histogram_4x16_cells(df: pd.DataFrame) -> list[tuple[int, int, str, str | None]]:
+    column_by_key: dict[tuple[int, int, str], str] = {}
+    for column_name in df.columns:
+        key = _task2_qt_histogram_column_key(str(column_name))
+        if key is not None and key not in column_by_key:
+            column_by_key[key] = str(column_name)
+
+    cells: list[tuple[int, int, str, str | None]] = []
+    for plane in range(1, 5):
+        for kind_idx, kind in enumerate(("tsum", "tdif", "qsum", "qdif")):
+            for strip in range(1, 5):
+                column_name = column_by_key.get((plane, strip, kind))
+                panel_idx = kind_idx * 4 + (strip - 1)
+                panel_title = f"P{plane}s{strip} {kind}"
+                cells.append((plane - 1, panel_idx, panel_title, column_name))
+    return cells
+
+
+def _plot_task2_qt_sum_dif_histograms(
+    plot_source_df: pd.DataFrame,
+    *,
+    title: str,
+    filename_stem: str,
+    alias: str,
+) -> None:
+    global fig_idx
+    plot_columns = _select_task2_qt_sum_dif_columns(plot_source_df)
+    if not plot_columns:
+        print(f"{alias}: skipped because no Q/T sum/dif columns were found.")
+        return
+
+    plot_df = plot_source_df.loc[:, plot_columns]
+    if task2_qt_histograms_use_4x16_layout:
+        print(f"{alias}: using 4x16 Q/T histogram layout.")
+        fig, axes = plt.subplots(4, 16, figsize=(32, 10), sharex=False)
+        axes = np.asarray(axes)
+        for row_idx, col_idx, panel_title, column_name in _task2_qt_histogram_4x16_cells(plot_df):
+            ax = axes[row_idx, col_idx]
+            ax.set_title(panel_title, fontsize=8)
+            if column_name is None:
+                ax.text(0.5, 0.5, "missing", ha="center", va="center", transform=ax.transAxes)
+                ax.set_xticks([])
+                ax.set_yticks([])
+                continue
+            y = pd.to_numeric(plot_df[column_name], errors="coerce")
+            y_nonzero = y[(y != 0) & np.isfinite(y)]
+            ax.hist(y_nonzero, bins=100, alpha=0.5, label=column_name, color=_task2_qt_histogram_color(column_name))
+            ax.legend(fontsize=6)
+            if _task2_qt_histogram_column_kind(column_name) == "qsum":
+                ax.set_yscale("log")
+    else:
+        print(f"{alias}: using default Q/T histogram layout.")
+        cols_per_row = 8
+        num_columns = len(plot_columns)
+        num_rows = max(1, (num_columns + cols_per_row - 1) // cols_per_row)
+        fig, axes = plt.subplots(num_rows, cols_per_row, figsize=(20, num_rows * 2))
+        axes = np.atleast_1d(axes).flatten()
+
+        for i, col in enumerate(plot_columns):
+            y = pd.to_numeric(plot_df[col], errors="coerce")
+            color = _task2_qt_histogram_color(col)
+            axes[i].hist(y[(y != 0) & np.isfinite(y)], bins=100, alpha=0.5, label=col, color=color)
+            axes[i].set_title(col)
+            axes[i].legend()
+            if _task2_qt_histogram_column_kind(col) == "qsum":
+                axes[i].set_yscale("log")
+
+        for j in range(i + 1, len(axes)):
+            fig.delaxes(axes[j])
+
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    fig.suptitle(title, fontsize=20)
     if save_plots:
-        name_of_file = 'uncalibrated'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
+        final_filename = f"{fig_idx}_{filename_stem}.png"
         fig_idx += 1
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        save_plot_figure(save_fig_path, format='png')
-    if show_plots: 
+        save_plot_figure(save_fig_path, fig=fig, alias=alias, format="png")
+    if show_plots:
         plt.show()
-    plt.close()
+    plt.close(fig)
     del plot_df
+
+
+def _task2_uncalibrated_group_tt_column(df: pd.DataFrame) -> str | None:
+    for candidate in ("tt_task1_raw", "tt_task0_raw", "tt_task1_clean"):
+        if candidate in df.columns:
+            return candidate
+    return None
+
+
+task2_execution_file_count = int(len(joined_input_records))
+
+if task2_plot_requested("uncalibrated", essential=True):
+    _plot_task2_qt_sum_dif_histograms(
+        working_df,
+        title=f"Uncalibrated data (files processed={task2_execution_file_count})",
+        filename_stem="uncalibrated",
+        alias="uncalibrated",
+    )
+
+if task2_plot_requested("uncalibrated_per_plane_combination", essential=True):
+    task2_uncalibrated_group_tt_column = _task2_uncalibrated_group_tt_column(working_df)
+    if task2_uncalibrated_group_tt_column is None:
+        print("Skipping uncalibrated_per_plane_combination: no upstream TT column was found.")
+    else:
+        tt_values = pd.to_numeric(working_df[task2_uncalibrated_group_tt_column], errors="coerce")
+        generated_uncalibrated_per_tt_figures = 0
+        for tt_value in sorted(tt_values[np.isfinite(tt_values)].unique()):
+            tt_mask = tt_values.eq(tt_value)
+            if not bool(tt_mask.any()):
+                continue
+            tt_label = normalize_tt_label(tt_value)
+            _plot_task2_qt_sum_dif_histograms(
+                working_df.loc[tt_mask],
+                title=(
+                    f"Uncalibrated data, {task2_uncalibrated_group_tt_column}={tt_label} "
+                    f"(grouped using {task2_uncalibrated_group_tt_column}; "
+                    f"files processed={task2_execution_file_count})"
+                ),
+                filename_stem=f"uncalibrated_per_plane_combination_{task2_uncalibrated_group_tt_column}_{tt_label}",
+                alias="uncalibrated_per_plane_combination",
+            )
+            generated_uncalibrated_per_tt_figures += 1
+        print(
+            "uncalibrated_per_plane_combination: "
+            f"generated {generated_uncalibrated_per_tt_figures} figures using "
+            f"{task2_uncalibrated_group_tt_column}."
+        )
 
 if task2_plot_requested("total_charge_per_plane_uncalibrated", essential=True) and task2_total_charge_plane_columns:
     fig, axes = plt.subplots(2, 2, figsize=(12, 8))
@@ -14083,42 +14278,7 @@ for i, plane in enumerate(['P1', 'P2', 'P3', 'P4']):
 # metadata_df.to_csv(csv_path, index=False, float_format='%.5g')
 # print(f'{csv_path} updated with the calibration summary.')
 
-figure_directory = base_directories["figure_directory"]
-if create_pdf:
-    print(f"Creating PDF with all plots in {save_pdf_path}")
-    existing_pngs = collect_saved_plot_paths(plot_list, figure_directory)
-
-    if _direct_pdf_pages is not None:
-        # Direct PDF mode: pages were written incrementally via save_plot_figure.
-        # close_direct_pdf_writer() is registered with atexit and will finalize
-        # the PDF after all remaining plots (e.g. activation/streamer matrices) are added.
-        pass
-    elif existing_pngs:
-        temp_pdf_path = _build_temp_pdf_path(save_pdf_path)
-        try:
-            with PdfPages(temp_pdf_path) as pdf:
-                for png in existing_pngs:
-                    img = Image.open(png)
-                    fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
-                    ax.imshow(img)
-                    ax.axis('off')
-                    pdf_save_rasterized_page(pdf, fig, bbox_inches='tight')
-                    plt.close(fig)
-            os.replace(temp_pdf_path, save_pdf_path)
-        finally:
-            if os.path.exists(temp_pdf_path):
-                os.remove(temp_pdf_path)
-
-    # Remove PNG files after creating the PDF (or after direct PDF append path).
-    for png in existing_pngs:
-        try:
-            os.remove(png)
-        except OSError as e:
-            print(f"Error: {e.filename} - {e.strerror}.")
-    
-if os.path.exists(figure_directory):
-    shutil.rmtree(figure_directory)
-_prof["s_pdf_finalize_s"] = round(time.perf_counter() - _t_sec, 2)
+_prof["s_pdf_finalize_s"] = 0.0
 _t_sec = time.perf_counter()
 _finalize_stage_t0 = _t_sec
 
@@ -14720,67 +14880,12 @@ def _plot_task2_calibrated_filtered_removed_zeroes(
     filename_stem: str,
     alias: str,
 ) -> None:
-    global fig_idx
-    filtered_plot_columns = [
-        col
-        for col in plot_source_df.columns
-        if any(token in col for token in ("Q_sum", "Q_dif", "T_sum", "T_dif"))
-    ]
-    if not filtered_plot_columns:
-        return
-
-    plot_df = plot_source_df.loc[:, filtered_plot_columns]
-    cols_per_row = 8
-    num_columns = len(filtered_plot_columns)
-    num_rows = max(1, (num_columns + cols_per_row - 1) // cols_per_row)
-    fig, axes = plt.subplots(
-        num_rows,
-        cols_per_row,
-        figsize=(20, num_rows * 2),
-        sharex="col",
+    _plot_task2_qt_sum_dif_histograms(
+        plot_source_df,
+        title=title,
+        filename_stem=filename_stem,
+        alias=alias,
     )
-    axes = np.atleast_1d(axes).flatten()
-
-    for i, col in enumerate(filtered_plot_columns):
-        y = plot_df[col]
-        if "Q_sum" in col:
-            color = Q_sum_color
-        elif "Q_dif" in col:
-            color = Q_dif_color
-        elif "T_sum" in col:
-            color = T_sum_color
-        elif "T_dif" in col:
-            color = T_dif_color
-        else:
-            color = "tab:blue"
-
-        y_nonzero = y[(y != 0) & np.isfinite(y)]
-        axes[i].hist(y_nonzero, bins=100, alpha=0.5, color=color)
-        axes[i].set_title(col)
-        if "Q_sum" in col:
-            axes[i].set_yscale("log")
-
-    for j in range(i + 1, len(axes)):
-        fig.delaxes(axes[j])
-
-    fig.tight_layout(rect=[0, 0, 1, 0.95])
-    fig.suptitle(title, fontsize=20)
-
-    if save_plots:
-        final_filename = f"{fig_idx}_{filename_stem}.png"
-        fig_idx += 1
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        save_plot_figure(
-            save_fig_path,
-            fig=fig,
-            alias=alias,
-            format="png",
-        )
-    if show_plots:
-        plt.show()
-    plt.close(fig)
-    del plot_df
 
 
 if task2_plot_requested("calibrated_filtered_removed_zeroes", essential=True):
@@ -14796,6 +14901,7 @@ if task2_plot_requested("calibrated_filtered_removed_zeroes_per_plane_combinatio
         print("Skipping calibrated_filtered_removed_zeroes_per_plane_combination: tt_task2_cal column is missing.")
     else:
         tt_values = pd.to_numeric(final_filtered_working_df["tt_task2_cal"], errors="coerce")
+        generated_per_tt_figures = 0
         for tt_value in sorted(tt_values[np.isfinite(tt_values)].unique()):
             tt_mask = tt_values.eq(tt_value)
             if not bool(tt_mask.any()):
@@ -14807,6 +14913,11 @@ if task2_plot_requested("calibrated_filtered_removed_zeroes_per_plane_combinatio
                 filename_stem=f"calibrated_filtered_removed_zeroes_per_plane_combination_tt_{tt_label}",
                 alias="calibrated_filtered_removed_zeroes_per_plane_combination",
             )
+            generated_per_tt_figures += 1
+        print(
+            "calibrated_filtered_removed_zeroes_per_plane_combination: "
+            f"generated {generated_per_tt_figures} figures."
+        )
 
 if task2_plot_requested("time_calibrated_filtered_removed_zeroes", essential=True):
     time_plot_columns = [

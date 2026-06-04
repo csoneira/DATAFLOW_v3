@@ -8,7 +8,7 @@ self_trigger: false
 complete_reanalysis: false
 # create_plots options: null | debug | usual | essential | all
 # Task 5 plot alias statuses live in config_plots_task_5.yaml
-create_plots: debug
+create_plots: essential
 keep_all_columns_output: false
 joined_analysis_files: 3
 joined_analysis_time_tolerance_hours: 5

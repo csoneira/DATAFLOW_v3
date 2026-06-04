@@ -23,6 +23,7 @@ plots:
   grand_figure_t_dif_cal: usual
   grand_figure_t_dif_cal_st: usual
   uncalibrated: usual
+  uncalibrated_per_plane_combination: essential
   total_charge_per_plane_uncalibrated: usual
   calibration_charge_gates: usual
   tsum_spread_histograms_og: usual

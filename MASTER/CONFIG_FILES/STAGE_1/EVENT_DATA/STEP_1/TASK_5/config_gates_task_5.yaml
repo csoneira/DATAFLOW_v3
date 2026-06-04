@@ -1,0 +1,7 @@
+version: 1
+
+gates:
+  all_events:
+    bit: 0
+    description: "All events loaded by Task 5."
+    expression: "(event_id == event_id)"

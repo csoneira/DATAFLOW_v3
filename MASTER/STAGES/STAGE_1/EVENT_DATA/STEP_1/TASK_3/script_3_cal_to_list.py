@@ -510,8 +510,21 @@ def _build_temp_pdf_path(target_path: str) -> str:
     return candidate
 
 def save_plot_figure(save_path: str, fig: mpl.figure.Figure | None = None, **savefig_kwargs) -> None:
-    """Save a figure to disk; the task PDF is assembled later from saved plots."""
+    """Save a figure to PNG or directly append it to the task PDF."""
+    global _direct_pdf_pages, _direct_pdf_page_count, _direct_pdf_target_path, _direct_pdf_temp_path
     target_fig = fig if fig is not None else plt.gcf()
+    direct_pdf_path = globals().get("save_pdf_path")
+    if globals().get("create_pdf", False) and direct_pdf_path:
+        if _direct_pdf_pages is None:
+            _direct_pdf_target_path = str(direct_pdf_path)
+            _direct_pdf_temp_path = _build_temp_pdf_path(_direct_pdf_target_path)
+            _direct_pdf_pages = PdfPages(_direct_pdf_temp_path)
+        pdf_kwargs = dict(savefig_kwargs)
+        dpi = int(pdf_kwargs.pop("dpi", 150))
+        pdf_kwargs.pop("format", None)
+        pdf_save_rasterized_page(_direct_pdf_pages, target_fig, dpi=dpi, **pdf_kwargs)
+        _direct_pdf_page_count += 1
+        return
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     target_fig.savefig(save_path, **savefig_kwargs)
 
@@ -535,11 +548,18 @@ def close_direct_pdf_writer() -> None:
 def finalize_saved_plots_to_pdf() -> None:
     figure_directory = base_directories["figure_directory"]
     if not create_pdf:
+        close_direct_pdf_writer()
         if os.path.exists(figure_directory):
             shutil.rmtree(figure_directory)
         return
 
-    close_direct_pdf_writer()
+    if _direct_pdf_pages is not None:
+        print(f"Finalizing PDF with all plots in {save_pdf_path}")
+        close_direct_pdf_writer()
+        if os.path.exists(figure_directory):
+            shutil.rmtree(figure_directory)
+        return
+
     existing_pngs = collect_saved_plot_paths(plot_list, figure_directory)
     if not existing_pngs:
         print(
@@ -6931,22 +6951,6 @@ if task3_plot_enabled("rpc_variables_hexbin"):
         filename_stem='rpc_variables_hexbin_combinations',
     )
 
-if task3_plot_enabled("rpc_variables_hexbin_per_plane_combination"):
-    if "tt_task3_list" not in working_df.columns:
-        print("Skipping rpc_variables_hexbin_per_plane_combination: tt_task3_list column is missing.")
-    else:
-        tt_values = pd.to_numeric(working_df["tt_task3_list"], errors="coerce")
-        for tt_value in sorted(tt_values[np.isfinite(tt_values)].unique()):
-            tt_mask = tt_values.eq(tt_value)
-            if not bool(tt_mask.any()):
-                continue
-            tt_label = normalize_tt_label(tt_value)
-            _plot_task3_rpc_variables_hexbin(
-                working_df.loc[tt_mask],
-                title=f'Hexbin Plots for All Variable Combinations by Plane, tt_task3_list={tt_label}',
-                filename_stem=f'rpc_variables_hexbin_per_plane_combination_tt_{tt_label}',
-            )
-
 if task3_plot_enabled("rpc_variables_hexbin_low_charge"):
     fig, axes = plt.subplots(4, 10, figsize=(40, 20))  # 10 combinations per plane
     axes = axes.flatten()
@@ -7848,6 +7852,29 @@ tt_task3_list_columns = {
     for i_plane in range(1, 5)
 }
 working_df = compute_tt(working_df, "tt_task3_list", tt_task3_list_columns)
+
+if task3_plot_enabled("rpc_variables_hexbin_per_plane_combination"):
+    tt_values = pd.to_numeric(working_df["tt_task3_list"], errors="coerce")
+    generated_per_tt_figures = 0
+    for tt_value in sorted(tt_values[np.isfinite(tt_values)].unique()):
+        tt_mask = tt_values.eq(tt_value)
+        if not bool(tt_mask.any()):
+            continue
+        tt_label = normalize_tt_label(tt_value)
+        title = f"tt_task3_list={tt_label}"
+        if joined_input_records:
+            title = f"{title} (files={len(joined_input_records)})"
+        _plot_task3_rpc_variables_hexbin(
+            working_df.loc[tt_mask],
+            title=title,
+            filename_stem=f'rpc_variables_hexbin_per_plane_combination_tt_{tt_label}',
+        )
+        generated_per_tt_figures += 1
+    print(
+        "rpc_variables_hexbin_per_plane_combination: "
+        f"generated {generated_per_tt_figures} figures."
+    )
+
 task3_plane_activation_initial = store_task3_plane_activation_snapshot(
     activation_meta={},
     scalar_meta={},
