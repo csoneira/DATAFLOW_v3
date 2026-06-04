@@ -3,6 +3,7 @@ from __future__ import annotations
 import matplotlib
 
 matplotlib.use("Agg")
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -117,6 +118,11 @@ def create_rate_vs_time_by_task_tt_with_histograms(
     )
     if rates_by_tt.empty:
         return None
+    first_valid_datetime = datetimes.loc[valid_mask].min()
+    window_datetimes = first_valid_datetime + pd.to_timedelta(
+        rates_by_tt.index.to_numpy(dtype=int) * accumulation_window_seconds,
+        unit="s",
+    )
 
     fig, (ax_time, ax_hist) = plt.subplots(
         1,
@@ -152,7 +158,7 @@ def create_rate_vs_time_by_task_tt_with_histograms(
         color = _task_tt_color(task_tt_int)
         label = f"{tt_column}={task_tt_int}"
         ax_time.plot(
-            rates_by_tt.index.to_numpy() * accumulation_window_seconds,
+            window_datetimes,
             rates,
             linewidth=1.1,
             label=label,
@@ -169,8 +175,10 @@ def create_rate_vs_time_by_task_tt_with_histograms(
         )
 
     ax_time.set_title("Rate versus time")
-    ax_time.set_xlabel("Seconds from first valid task timestamp")
+    ax_time.set_xlabel("Time")
     ax_time.set_ylabel(f"Rate [Hz], {accumulation_window_seconds}s accumulation")
+    ax_time.xaxis.set_major_formatter(mdates.DateFormatter("%y-%m-%d %H:%M:%S"))
+    fig.autofmt_xdate(rotation=30, ha="right")
     if y_min is not None or y_max is not None:
         ax_time.set_ylim(y_min, y_max)
     ax_time.grid(True, alpha=0.25)

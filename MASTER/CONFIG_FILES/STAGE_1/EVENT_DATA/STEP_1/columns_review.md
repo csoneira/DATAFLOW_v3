@@ -956,6 +956,8 @@ filter_task2_problematic_strip_exact
 filter_task3_problematic_plane_count
 filter_task3_problematic_plane_exact
 filter_total_problematic_offender_count
+gate
+gate_mask
 p1_qdif
 p1_qsum
 p1_qsum_uncalibrated

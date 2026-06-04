@@ -6823,7 +6823,10 @@ if save_plots and task1_plot_enabled("acquisition_rate_vs_time_by_task_tt_with_h
     rate_fig = create_rate_vs_time_by_task_tt_with_histograms(
         working_df,
         tt_column="tt_task0_raw",
-        title=f"Task 1 acquisition rate by tt_task0_raw, {basename_no_ext}",
+        title=(
+            f"Task 1 acquisition rate by tt_task0_raw, {basename_no_ext} "
+            f"(files processed={len(joined_input_records)})"
+        ),
         accumulation_window_seconds=config.get("acquisition_rate_accumulation_window_seconds", 60),
         rate_histogram_bins=config.get("acquisition_rate_task_tt_histogram_bins", 80),
         y_limit_left=config.get("acquisition_rate_task_tt_ylim_left", 0),

@@ -3077,6 +3077,10 @@ limit = limit_number is not None
 
 # RPC variables
 y_new_method = config["y_new_method"]
+weighted_by_charge_for_plane_tsum_and_tdif = _coerce_config_bool(
+    config.get("weighted_by_charge_for_plane_tsum_and_tdif", False),
+    default=False,
+)
 streamer_high_charge_factor = float(config.get("streamer_high_charge_factor", 0.2))
 streamer_charge_sum_threshold = _task3_optional_float(
     config.get("streamer_charge_sum_threshold", None)
@@ -6828,6 +6832,14 @@ _t_rpc_vars_core = _t_sec
 print("----------------------------------------------------------------------")
 print("----------------- Setting the variables of each RPC ------------------")
 print("----------------------------------------------------------------------")
+print(
+    "Task 3 plane T_sum/T_dif aggregation: "
+    + (
+        "charge-weighted by active strip Q_sum"
+        if weighted_by_charge_for_plane_tsum_and_tdif
+        else "arithmetic mean over active strips"
+    )
+)
 
 # Build the raw per-plane observables first. The filtering/zeroing path is
 # applied immediately afterwards, one variable family at a time.
@@ -6852,8 +6864,20 @@ for i_plane in range(1, 5):
     n_active = active_mask.sum(axis=1)
     n_active_safe = np.where(n_active == 0, 1, n_active)
 
-    t_sum_final = (t_sums * active_mask).sum(axis=1) / n_active_safe
-    t_dif_final = (t_difs * active_mask).sum(axis=1) / n_active_safe
+    t_sum_mean = (t_sums * active_mask).sum(axis=1) / n_active_safe
+    t_dif_mean = (t_difs * active_mask).sum(axis=1) / n_active_safe
+    if weighted_by_charge_for_plane_tsum_and_tdif:
+        charge_weights = q_sums * active_mask
+        charge_weight_sum = charge_weights.sum(axis=1)
+        charge_weight_sum_safe = np.where(charge_weight_sum == 0, 1, charge_weight_sum)
+        t_sum_weighted = (t_sums * charge_weights).sum(axis=1) / charge_weight_sum_safe
+        t_dif_weighted = (t_difs * charge_weights).sum(axis=1) / charge_weight_sum_safe
+        has_charge_weight = charge_weight_sum > 0
+        t_sum_final = np.where(has_charge_weight, t_sum_weighted, t_sum_mean)
+        t_dif_final = np.where(has_charge_weight, t_dif_weighted, t_dif_mean)
+    else:
+        t_sum_final = t_sum_mean
+        t_dif_final = t_dif_mean
     q_sum_final = (q_sums * active_mask).sum(axis=1)
     q_dif_final = (q_difs * active_mask).sum(axis=1)
 
@@ -10393,7 +10417,10 @@ if save_plots and task3_plot_enabled("acquisition_rate_vs_time_by_task_tt_with_h
     rate_fig = create_rate_vs_time_by_task_tt_with_histograms(
         working_df,
         tt_column="tt_task3_list",
-        title=f"Task 3 acquisition rate by tt_task3_list, {basename_no_ext}",
+        title=(
+            f"Task 3 acquisition rate by tt_task3_list, {basename_no_ext} "
+            f"(files processed={len(joined_input_records)})"
+        ),
         accumulation_window_seconds=config.get("acquisition_rate_accumulation_window_seconds", 60),
         rate_histogram_bins=config.get("acquisition_rate_task_tt_histogram_bins", 80),
         y_limit_left=config.get("acquisition_rate_task_tt_ylim_left", 0),

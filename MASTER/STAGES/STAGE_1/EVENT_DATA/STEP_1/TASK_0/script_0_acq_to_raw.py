@@ -534,7 +534,7 @@ if save_plots and task0_plot_enabled("acquisition_rate_vs_time_by_task_tt_with_h
     plotted = plot_acquisition_rate_vs_time_by_task_tt_with_histograms(
         read_df,
         plot_path,
-        title=f"Task 0 acquisition rate by tt_task0_acq, {basename_no_ext}",
+        title=f"Task 0 acquisition rate by tt_task0_acq, {basename_no_ext} (files processed=1)",
         tt_column="tt_task0_acq",
         accumulation_window_seconds=acquisition_rate_accumulation_window_seconds,
         rate_histogram_bins=acquisition_rate_task_tt_histogram_bins,
