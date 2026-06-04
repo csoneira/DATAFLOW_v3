@@ -171,6 +171,7 @@ def normalise_basename(name: str) -> str:
         "cleaned_",
         "calibrated_",
         "fitted_",
+        "postprocessed_",
         "corrected_",
         "accumulated_",
         "listed_",

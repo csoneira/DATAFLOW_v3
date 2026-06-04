@@ -2828,6 +2828,7 @@ TASK3_PLOT_ALIASES: tuple[str, ...] = (
     "strip_variable_pairgrid",
     "self_trigger_strip_variable_pairgrid",
     "rpc_variables_hexbin",
+    "rpc_variables_hexbin_per_plane_combination",
     "rpc_variables_hexbin_low_charge",
     "filter6_tsum_debug",
     "filter6_tdif_debug",
@@ -6855,7 +6856,13 @@ for i_plane in range(1, 5):
 working_df = pd.concat([working_df, pd.DataFrame(final_columns, index=working_df.index)], axis=1)
 _prof["s_rpc_vars_core_s"] = round(time.perf_counter() - _t_rpc_vars_core, 2)
 
-if task3_plot_enabled("rpc_variables_hexbin"):
+def _plot_task3_rpc_variables_hexbin(
+    plot_source_df: pd.DataFrame,
+    *,
+    title: str,
+    filename_stem: str,
+) -> None:
+    global fig_idx
     fig, axes = plt.subplots(4, 10, figsize=(40, 20))  # 10 combinations per plane
     axes = axes.flatten()
 
@@ -6867,8 +6874,12 @@ if task3_plot_enabled("rpc_variables_hexbin"):
         q_dif_col = f'p{i_plane}_qdif'
         y_col = f'p{i_plane}_ypos'
 
+        required_columns = [t_sum_col, t_dif_col, q_sum_col, q_dif_col, y_col]
+        if not all(col in plot_source_df.columns for col in required_columns):
+            continue
+
         # Filter valid rows (non-zero)
-        valid_rows = working_df[[t_sum_col, t_dif_col, q_sum_col, q_dif_col, y_col]].replace(0, np.nan).dropna()
+        valid_rows = plot_source_df[required_columns].replace(0, np.nan).dropna()
         
         # Extract variables and filter low charge
         cond = valid_rows[q_sum_col] < charge_per_plane_plot_threshold
@@ -6899,19 +6910,42 @@ if task3_plot_enabled("rpc_variables_hexbin"):
 
     plt.tight_layout()
     plt.subplots_adjust(top=0.92)
-    plt.suptitle('Hexbin Plots for All Variable Combinations by Plane', fontsize=18)
+    plt.suptitle(title, fontsize=18)
 
     if save_plots:
-        name_of_file = 'rpc_variables_hexbin_combinations'
-        final_filename = f'{fig_idx}_{name_of_file}.png'
+        final_filename = f'{fig_idx}_{filename_stem}.png'
         fig_idx += 1
 
         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
         plot_list.append(save_fig_path)
-        save_plot_figure(save_fig_path, format='png')
+        save_plot_figure(save_fig_path, fig=fig, format='png')
 
     if show_plots: plt.show()
-    plt.close()
+    plt.close(fig)
+
+
+if task3_plot_enabled("rpc_variables_hexbin"):
+    _plot_task3_rpc_variables_hexbin(
+        working_df,
+        title='Hexbin Plots for All Variable Combinations by Plane',
+        filename_stem='rpc_variables_hexbin_combinations',
+    )
+
+if task3_plot_enabled("rpc_variables_hexbin_per_plane_combination"):
+    if "tt_task3_list" not in working_df.columns:
+        print("Skipping rpc_variables_hexbin_per_plane_combination: tt_task3_list column is missing.")
+    else:
+        tt_values = pd.to_numeric(working_df["tt_task3_list"], errors="coerce")
+        for tt_value in sorted(tt_values[np.isfinite(tt_values)].unique()):
+            tt_mask = tt_values.eq(tt_value)
+            if not bool(tt_mask.any()):
+                continue
+            tt_label = normalize_tt_label(tt_value)
+            _plot_task3_rpc_variables_hexbin(
+                working_df.loc[tt_mask],
+                title=f'Hexbin Plots for All Variable Combinations by Plane, tt_task3_list={tt_label}',
+                filename_stem=f'rpc_variables_hexbin_per_plane_combination_tt_{tt_label}',
+            )
 
 if task3_plot_enabled("rpc_variables_hexbin_low_charge"):
     fig, axes = plt.subplots(4, 10, figsize=(40, 20))  # 10 combinations per plane

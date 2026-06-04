@@ -26,7 +26,7 @@ OUTPUT_PATH = Path(
 class Section:
     title: str
     display_pattern: str
-    glob_pattern: str
+    glob_pattern: str | tuple[str, ...]
     exclude_prefixes: tuple[str, ...] = ()
 
 
@@ -101,20 +101,30 @@ SECTIONS = [
     Section(
         title="TASK_5 -> OUT",
         display_pattern=(
-            "~/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_2/"
-            "INPUT_FILES/COMPLETED/*_*.parquet"
+            "~/DATAFLOW_v3/STATIONS/MINGO04/STAGE_1/EVENT_DATA/"
+            "{STEP_2/INPUT_FILES,STEP_1_TO_2_OUTPUT}/**/postprocessed_*.parquet"
         ),
         glob_pattern=(
-            "/home/mingo/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_2/"
-            "INPUT_FILES/COMPLETED/*_*.parquet"
+            "/home/mingo/DATAFLOW_v3/STATIONS/MINGO04/STAGE_1/EVENT_DATA/STEP_2/"
+            "INPUT_FILES/**/postprocessed_*.parquet",
+            "/home/mingo/DATAFLOW_v3/STATIONS/MINGO04/STAGE_1/EVENT_DATA/"
+            "STEP_1_TO_2_OUTPUT/**/postprocessed_*.parquet",
         ),
     ),
 ]
 
 
 def get_first_file(section: Section) -> Path | None:
-    pattern = section.glob_pattern
-    matches = [Path(match) for match in glob(pattern)]
+    patterns = (
+        section.glob_pattern
+        if isinstance(section.glob_pattern, tuple)
+        else (section.glob_pattern,)
+    )
+    matches = [
+        Path(match)
+        for pattern in patterns
+        for match in glob(pattern, recursive=True)
+    ]
     if section.exclude_prefixes:
         matches = [
             match

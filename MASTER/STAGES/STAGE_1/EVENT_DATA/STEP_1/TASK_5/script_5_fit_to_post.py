@@ -557,14 +557,14 @@ def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[s
             charge_columns = [
                 col
                 for col in [
-                    f"Q{plane}_F_1",
-                    f"Q{plane}_F_2",
-                    f"Q{plane}_F_3",
-                    f"Q{plane}_F_4",
-                    f"Q{plane}_B_1",
-                    f"Q{plane}_B_2",
-                    f"Q{plane}_B_3",
-                    f"Q{plane}_B_4",
+                    f"p{plane}_s1_ef_q",
+                    f"p{plane}_s2_ef_q",
+                    f"p{plane}_s3_ef_q",
+                    f"p{plane}_s4_ef_q",
+                    f"p{plane}_s1_eb_q",
+                    f"p{plane}_s2_eb_q",
+                    f"p{plane}_s3_eb_q",
+                    f"p{plane}_s4_eb_q",
                 ]
                 if col in df.columns
             ]
@@ -606,8 +606,9 @@ def collect_task5_channel_qt_map(
     for plane in range(1, 5):
         for side in ("F", "B"):
             for strip in range(1, 5):
-                q_col = f"Q{plane}_{side}_{strip}"
-                t_col = f"T{plane}_{side}_{strip}"
+                side_token = "ef" if side == "F" else "eb"
+                q_col = f"p{plane}_s{strip}_{side_token}_q"
+                t_col = f"p{plane}_s{strip}_{side_token}_t"
                 if q_col in df_input.columns and t_col in df_input.columns:
                     channel_map[(plane, side, strip)] = {"Q": q_col, "T": t_col}
     return channel_map
@@ -1334,18 +1335,9 @@ raw_to_list_working_directory = os.path.join(base_directory, f"STEP_1/TASK_{task
 
 metadata_directory = os.path.join(raw_to_list_working_directory, "METADATA")
 
-if task_number == 1:
-    raw_directory = "STAGE_0_TO_1"
-    raw_working_directory = os.path.join(station_directory, raw_directory)
-    
-else:
-    raw_directory = f"STEP_1/TASK_{task_number - 1}/OUTPUT_FILES"
-    raw_working_directory = os.path.join(base_directory, raw_directory)
-
-if task_number == 5:
-    output_location = os.path.join(base_directory, "STEP_1_TO_2_OUTPUT")
-else:
-    output_location = os.path.join(raw_to_list_working_directory, "OUTPUT_FILES")
+raw_directory = f"STEP_1/TASK_{task_number - 1}/OUTPUT_FILES"
+raw_working_directory = os.path.join(base_directory, raw_directory)
+output_location = os.path.join(base_directory, "STEP_1_TO_2_OUTPUT")
 
 # Define directory paths relative to base_directory
 base_directories = {
@@ -1428,11 +1420,6 @@ empty_files_directory = base_directories["empty_files_directory"]
 rejected_files_directory = base_directories["rejected_files_directory"]
 temp_files_directory = base_directories["temp_files_directory"]
 
-raw_files = set(_expected_input_files(os.listdir(raw_directory)))
-unprocessed_files = set(_expected_input_files(os.listdir(unprocessed_directory)))
-processing_files = set(_expected_input_files(os.listdir(processing_directory)))
-completed_files = set(_expected_input_files(os.listdir(completed_directory)))
-
 _t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
@@ -1440,41 +1427,8 @@ print("----------------- Data reading and preprocessing ---------------------")
 print("----------------------------------------------------------------------")
 print("----------------------------------------------------------------------")
 
-# Get lists of files in the directories
-unprocessed_files = _expected_input_files(os.listdir(base_directories["unprocessed_directory"]))
-processing_files = _expected_input_files(os.listdir(base_directories["processing_directory"]))
-completed_files = _expected_input_files(os.listdir(base_directories["completed_directory"]))
-# Create ALL directories if they don't already exist
-
-for directory in base_directories.values():
-    # Skip figure directories at startup; create lazily after selecting a file.
-    if directory in (base_directories["base_figure_directory"], base_directories["figure_directory"]):
-        continue
-    os.makedirs(directory, exist_ok=True)
-
 # status_csv_path = os.path.join(base_directory, "raw_to_list_status.csv")
 # status_timestamp = append_status_row(status_csv_path)
-
-# Move files from STAGE_0_TO_1 to STAGE_0_TO_1_TO_LIST/STAGE_0_TO_1_TO_LIST_FILES/UNPROCESSED,
-# ensuring that only files not already in UNPROCESSED, PROCESSING,
-# or COMPLETED are moved:
-
-raw_directory = base_directories["raw_directory"]
-unprocessed_directory = base_directories["unprocessed_directory"]
-error_directory = base_directories["error_directory"]
-stratos_list_events_directory = base_directories["stratos_list_events_directory"]
-processing_directory = base_directories["processing_directory"]
-completed_directory = base_directories["completed_directory"]
-output_directory = base_directories["output_directory"]
-
-empty_files_directory = base_directories["empty_files_directory"]
-rejected_files_directory = base_directories["rejected_files_directory"]
-temp_files_directory = base_directories["temp_files_directory"]
-
-raw_files = set(_expected_input_files(os.listdir(raw_directory)))
-unprocessed_files = set(_expected_input_files(os.listdir(unprocessed_directory)))
-processing_files = set(_expected_input_files(os.listdir(processing_directory)))
-completed_files = set(_expected_input_files(os.listdir(completed_directory)))
 
 # Ordered list from highest to lowest priority
 LEVELS = [
@@ -2884,6 +2838,7 @@ if (
         )
 
 reprocessing_parameters = pd.DataFrame()
+
 # -------------------------------------------------------------------------------
 # ------------ Input file and data managing to select configuration -------------
 # -------------------------------------------------------------------------------
@@ -3249,689 +3204,7 @@ if raw_data_len == 0 and not self_trigger:
 
 print("TASK_5 angular segmentation disabled.")
 
-correct_angle = bool(config.get("correct_angle", False))
-global_variables['correct_angle'] = correct_angle
 
-df = working_df.copy()
-df['Theta_fit'] = df['theta']
-df['Phi_fit'] = df['phi']
-
-if task5_plot_enabled("theta_phi_definitive_tt_2d"):
-
-    print("-------------------------- Angular plots -----------------------------")
-
-    df_filtered = df
-    # tt_values = [13, 12, 23, 34, 123, 124, 134, 234, 1234]
-    tt_values = [23, 123, 234, 1234]
-    
-    n_tt = len(tt_values)
-    ncols = 2
-    nrows = (n_tt + 1) // ncols
-
-    fig, axes = plt.subplots(nrows, ncols, figsize=(7 * ncols, 5 * nrows), squeeze=False)
-        
-    nbins = 50
-    theta_bins = np.linspace(0, np.pi/2, nbins)
-    phi_bins = np.linspace(-np.pi, np.pi, nbins)
-    colors = plt.cm.viridis
-
-    for idx, tt_val in enumerate(tt_values):
-        row_idx, col_idx = divmod(idx, ncols)
-        ax = axes[row_idx][col_idx]
-            
-        df_tt = df_filtered[df_filtered["tt_task4_fit"] == tt_val]
-        theta_vals = df_tt['theta'].dropna()
-        phi_vals = df_tt['phi'].dropna()
-
-        if len(theta_vals) < 10 or len(phi_vals) < 10:
-            ax.set_visible(False)
-            continue
-        
-        h = ax.hist2d(theta_vals, phi_vals, bins=[theta_bins, phi_bins], cmap='viridis', norm=None, cmin=0, cmax=None)
-        ax.set_title(f'tt_task4_fit = {tt_val}')
-        ax.set_xlabel(r'$\theta$ [rad]')
-        ax.set_ylabel(r'$\phi$ [rad]')
-        ax.grid(True)
-        # Put the background color to the darkest in the colormap
-        ax.set_facecolor(colors(0.0))  # darkest background in colormap
-
-        fig.colorbar(h[3], ax=ax, label='Counts')
-
-    plt.suptitle(r'2D Histogram of $\theta$ vs. $\phi$ for each tt_task4_fit Type', fontsize=16)
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
-
-    if save_plots:
-        final_filename = f'{fig_idx}_theta_phi_tt_task4_fit_2D.png'
-        fig_idx += 1
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        save_plot_figure(save_fig_path, format='png', alias="theta_phi_definitive_tt_2d")
-
-    if show_plots:
-        plt.show()
-    plt.close()
-
-
-
-if task5_plot_enabled("polar_theta_phi_definitive_tt_2d_detail_pre"):
-
-    theta_left_filter = 0
-    theta_right_filter = np.pi / 2.5
-        
-    phi_left_filter = -np.pi
-    phi_right_filter = np.pi
-        
-    df_filtered = df
-    # tt_values = sorted(df_filtered["tt_task4_fit"].dropna().unique(), key=lambda x: int(x))
-
-    # tt_values = [13, 12, 23, 34, 123, 124, 134, 234, 1234]
-    tt_values = [23, 123, 234, 1234]
-
-    n_tt = len(tt_values)
-    ncols = 2
-    nrows = (n_tt + 1) // ncols
-
-    fig, axes = plt.subplots(nrows, ncols, figsize=(7 * ncols, 7 * nrows), squeeze=False)
-    phi_nbins = 70
-    # theta_nbins = int(round(phi_nbins / 2) + 1)
-    theta_nbins = 40
-    theta_bins = np.linspace(theta_left_filter, theta_right_filter, theta_nbins )
-    phi_bins = np.linspace(phi_left_filter, phi_right_filter, phi_nbins)
-    colors = plt.cm.turbo
-
-    # Select theta/phi range (optional filtering)
-    theta_min, theta_max = theta_left_filter, theta_right_filter    # adjust as needed
-    phi_min, phi_max     = phi_left_filter, phi_right_filter        # adjust as needed
-    
-    vmax_global = df_filtered.groupby("tt_task4_fit").apply(lambda df: np.histogram2d(df["theta"], df["phi"], bins=[theta_bins, phi_bins])[0].max()).max()
-    
-    for idx, tt_val in enumerate(tt_values):
-        row_idx, col_idx = divmod(idx, ncols)
-        ax = axes[row_idx][col_idx]
-
-        df_tt = df_filtered[df_filtered["tt_task4_fit"] == tt_val]
-        theta_vals = df_tt['theta'].dropna()
-        phi_vals = df_tt['phi'].dropna()
-
-        # Apply range filtering
-        df_tt = df_filtered[df_filtered["tt_task4_fit"] == tt_val].copy()
-        mask = (
-            (df_tt['theta'] >= theta_min) & (df_tt['theta'] <= theta_max) &
-            (df_tt['phi'] >= phi_min) & (df_tt['phi'] <= phi_max)
-        )
-        df_tt = df_tt[mask]
-
-        theta_vals = df_tt['theta']
-        phi_vals   = df_tt['phi']
-
-        if len(theta_vals) < 10 or len(phi_vals) < 10:
-            ax.set_visible(False)
-            continue
-
-        # Polar plot settings
-        fig.delaxes(axes[row_idx][col_idx])  # remove the original non-polar Axes
-        ax = fig.add_subplot(nrows, ncols, idx + 1, polar=True)  # add a polar Axes
-        axes[row_idx][col_idx] = ax  # update reference for consistency
-
-        ax.set_facecolor(colors(0.0))  # darkest background in colormap
-        ax.set_title(f'tt_task4_fit = {tt_val}', fontsize=14)
-            
-        # Limit in radius in theta_right_filter
-        ax.set_ylim(0, theta_right_filter)
-            
-        # 2D histogram: use phi as angle, theta as radius
-        h, r_edges, phi_edges = np.histogram2d(theta_vals, phi_vals, bins=[theta_bins, phi_bins])
-        r_centers = 0.5 * (r_edges[:-1] + r_edges[1:])
-        phi_centers = 0.5 * (phi_edges[:-1] + phi_edges[1:])
-        # R, PHI = np.meshgrid(r_centers, phi_centers, indexing='ij')
-        R, PHI = np.meshgrid(r_edges, phi_edges, indexing='ij')
-        c = ax.pcolormesh(PHI, R, h, cmap='viridis', vmin=0, vmax=vmax_global)
-        local_max = h.max()
-        cb = fig.colorbar(c, ax=ax, pad=0.1)
-        cb.ax.hlines(local_max, *cb.ax.get_xlim(), colors='white', linewidth=2, linestyles='dashed')
-
-    plt.suptitle(r'PRE-CORRECTION. 2D Histogram of $\theta$ vs. $\phi$ for each tt_task4_fit Type', fontsize=16)
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
-    if save_plots:
-        final_filename = f'{fig_idx}_polar_theta_phi_tt_task4_fit_2D_detail.png'
-        fig_idx += 1
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        save_plot_figure(
-            save_fig_path,
-            format='png',
-            alias="polar_theta_phi_definitive_tt_2d_detail_pre",
-        )
-    if show_plots:
-        plt.show()
-    plt.close()
-
-# ---------------------------------------------------------------
-# 1. Build absolute path and sanity-check
-# ---------------------------------------------------------------
-hdf_path = os.path.join(angular_corr_directory, "likelihood_matrices.parquet")
-if not os.path.isfile(hdf_path):
-    print(f"HDF5 file not found: {hdf_path}")
-    correct_angle = bool(config.get("correct_angle", False))
-
-_prof["s_post_read_s"] = round(time.perf_counter() - _t_sec, 2)
-_t_sec = time.perf_counter()
-if correct_angle:
-    print("----------------------------------------------------------------------")
-    print("-------- 1. Correction of the fitted angle --> predicted angle -------")
-    print("----------------------------------------------------------------------")
-
-    # ---------------------------------------------------------------
-    # 2. Load all matrices into memory
-    # ---------------------------------------------------------------
-    matrices = {}
-    n_bins = None
-
-    with pd.HDFStore(hdf_path, mode='r') as store:
-        keys = store.keys()
-        if not keys:
-            raise ValueError(f"{hdf_path} contains no datasets.")
-
-        for key in keys:                     # keys like '/P1', '/P2', …
-            ttype = key.strip('/')           # remove leading slash
-            # df_M = store.get(key)
-            
-            # Reduce the precision to float32 to not kill RAM
-            df_M = store.get(key).astype(np.float16)
-            
-            matrices[ttype] = df_M
-
-            # set n_bins once, based on the first matrix's shape
-            if n_bins is None:
-                size = df_M.shape[0]
-                n_bins = int(np.sqrt(size))
-                if n_bins * n_bins != size:
-                    raise ValueError(f"Matrix size {size} is not a perfect square.")
-
-            print(f"Loaded matrix for {ttype}: shape {df_M.shape}")
-
-    print(f"n_bins detected: {n_bins}")
-
-    # Helpers
-    def flat(u_idx, v_idx, n_bins):
-        return u_idx * n_bins + v_idx
-
-    def wrap_to_pi(angle: float) -> float:
-        return (angle + math.pi) % (2.0 * math.pi) - math.pi
-
-    #%%
-
-    with pd.HDFStore(hdf_path, 'r') as store:
-        print("HDF5 keys:", store.keys())
-
-    def sample_true_angles_nearest(
-        df_fit: pd.DataFrame,
-        matrices: Optional[Dict[str, pd.DataFrame]],
-        n_bins: int,
-        rng: Optional[np.random.Generator] = None,
-        show_progress: bool = True,
-        print_every: int = 10_000
-        ) -> pd.DataFrame:
-        
-        if rng is None:
-            rng = np.random.default_rng()
-
-        matrix_cache = {t: df_m.to_numpy() for t, df_m in matrices.items()}
-        
-        u_edges = np.linspace(-1.0, 1.0, n_bins + 1)
-        v_edges = np.linspace(-1.0, 1.0, n_bins + 1)
-
-        u_fit = np.sin(df_fit["Theta_fit"].values) * np.sin(df_fit["Phi_fit"].values)
-        v_fit = np.sin(df_fit["Theta_fit"].values) * np.cos(df_fit["Phi_fit"].values)
-
-        iu = np.clip(np.digitize(u_fit, u_edges) - 1, 0, n_bins - 2)
-        iv = np.clip(np.digitize(v_fit, v_edges) - 1, 0, n_bins - 2)
-
-        iu += (u_fit - u_edges[iu]) > (u_edges[iu + 1] - u_fit)
-        iv += (v_fit - v_edges[iv]) > (v_edges[iv + 1] - v_fit)
-
-        flat_idx = lambda u, v: u * n_bins + v
-        unflat = lambda k: divmod(k, n_bins)
-
-        N = len(df_fit)
-        theta_pred = np.empty(N, dtype=np.float32)
-        phi_pred = np.empty(N, dtype=np.float32)
-
-        iterator = tqdm(range(N), desc="Sampling true angles (nearest-bin)", unit="evt") if show_progress else range(N)
-
-        for n in iterator:
-            t_type = str(df_fit["tt_task4_fit"].iat[n])   # ensure string
-
-            if t_type not in matrix_cache:
-                raise ValueError(f"LUT not found for type: {t_type}")
-            M = matrix_cache[t_type]
-
-            col_idx = flat_idx(iu[n], iv[n])
-            p = M[:, col_idx]
-            s = p.sum()
-
-            if s == 0:
-                p = np.full_like(p, 1.0 / len(p))
-            else:
-                p /= s
-
-            gen_idx = rng.choice(len(p), p=p)
-            g_u_idx, g_v_idx = unflat(gen_idx)
-
-            u_pred = rng.uniform(u_edges[g_u_idx], u_edges[g_u_idx + 1])
-            v_pred = rng.uniform(v_edges[g_v_idx], v_edges[g_v_idx + 1])
-
-            sin_theta = min(np.hypot(u_pred, v_pred), 1.0)
-            theta_pred[n] = math.asin(sin_theta)
-            phi_pred[n] = wrap_to_pi(math.atan2(u_pred, v_pred))
-
-        df_out = df_fit.copy()
-        df_out["theta"] = theta_pred
-        df_out["phi"] = phi_pred
-        return df_out
-
-    if VERBOSE:
-        print(df.columns.to_list())
-
-    #%%
-
-    df = sample_true_angles_nearest(
-        df_fit=df,
-        matrices=matrices,
-        n_bins=n_bins,
-        rng=np.random.default_rng(),
-        show_progress=True,
-    )
-    
-    # Plotting corrected vs measured angles
-    if task5_plot_enabled("polar_theta_phi_definitive_tt_2d_detail_angle_correction"):
-        VALID_MEASURED_TYPES = ['1234', '123', '124', '234', '134', '12', '13', '14', '23', '24', '34']
-        tt_lists = [ VALID_MEASURED_TYPES ]
-        
-        for tt_list in tt_lists:
-            fig, axes = plt.subplots(2, 2, figsize=(20, 10), sharex='row')
-
-            # Fourth column: Measured (θ_fit, ϕ_fit)
-            axes[0, 0].hist(df['Theta_fit'], bins=theta_bins, histtype='step', color='black', label='All')
-            axes[1, 0].hist(df['Phi_fit'], bins=phi_bins, histtype='step', color='black', label='All')
-            for tt in tt_list:
-                    sel = (df["tt_task4_fit"] == int(tt))
-                    axes[0, 0].hist(df.loc[sel, 'Theta_fit'], bins=theta_bins, histtype='step', label=tt)
-                    axes[1, 0].hist(df.loc[sel, 'Phi_fit'], bins=phi_bins, histtype='step', label=tt)
-                    axes[0, 0].set_title("Measured tracks θ_fit")
-                    axes[1, 0].set_title("Measured tracks ϕ_fit")
-        
-            # Fourth column: Measured (θ_fit, ϕ_fit)
-            axes[0, 1].hist(df['theta'], bins=theta_bins, histtype='step', color='black', label='All')
-            axes[1, 1].hist(df['phi'], bins=phi_bins, histtype='step', color='black', label='All')
-            for tt in tt_list:
-                    sel = (df["tt_task4_fit"] == int(tt))
-                    axes[0, 1].hist(df.loc[sel, 'theta'], bins=theta_bins, histtype='step', label=tt)
-                    axes[1, 1].hist(df.loc[sel, 'phi'], bins=phi_bins, histtype='step', label=tt)
-                    axes[0, 1].set_title("Corrected tracks θ_fit")
-                    axes[1, 1].set_title("Corrected tracks ϕ_fit")
-
-            # Common settings
-            for ax in axes.flat:
-                    ax.legend(fontsize='x-small')
-                    ax.grid(True)
-
-            axes[1, 0].set_xlabel(r'$\phi$ [rad]')
-            axes[0, 0].set_ylabel('Counts')
-            axes[1, 0].set_ylabel('Counts')
-            axes[0, 1].set_xlim(0, np.pi / 2)
-            axes[1, 1].set_xlim(-np.pi, np.pi)
-
-            fig.tight_layout()
-            plt.tight_layout(rect=[0, 0, 1, 0.95])
-            if save_plots:
-                final_filename = f'{fig_idx}_polar_theta_phi_tt_task4_fit_2D_detail_angle_correction.png'
-                fig_idx += 1
-                save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-                plot_list.append(save_fig_path)
-                save_plot_figure(
-                    save_fig_path,
-                    format='png',
-                    alias="polar_theta_phi_definitive_tt_2d_detail_angle_correction",
-                )
-            if show_plots:
-                plt.show()
-            plt.close()
-
-else:
-    print("Angle correction is disabled.")
-    df['theta'] = df['Theta_fit']
-    df['phi'] = df['Phi_fit']
-    df.drop(columns=["Theta_fit", "Phi_fit"], inplace=True, errors="ignore")
-
-gc.collect()
-
-if task5_plot_enabled("polar_theta_phi_definitive_tt_2d_detail_final"):
-    
-    theta_left_filter = 0
-    theta_right_filter = np.pi / 2.5
-        
-    phi_left_filter = -np.pi
-    phi_right_filter = np.pi
-        
-    df_filtered = df
-    # tt_values = sorted(df_filtered[POST_TT_COLUMN].dropna().unique(), key=lambda x: int(x))
-
-    # tt_values = [13, 12, 23, 34, 123, 124, 134, 234, 1234]
-    tt_values = [23, 123, 234, 1234]
-
-    n_tt = len(tt_values)
-    ncols = 2
-    nrows = (n_tt + 1) // ncols
-
-    fig, axes = plt.subplots(nrows, ncols, figsize=(7 * ncols, 7 * nrows), squeeze=False)
-    phi_nbins = 70
-    # theta_nbins = int(round(phi_nbins / 2) + 1)
-    theta_nbins = 40
-    theta_bins = np.linspace(theta_left_filter, theta_right_filter, theta_nbins )
-    phi_bins = np.linspace(phi_left_filter, phi_right_filter, phi_nbins)
-    colors = plt.cm.turbo
-
-    # Select theta/phi range (optional filtering)
-    theta_min, theta_max = theta_left_filter, theta_right_filter    # adjust as needed
-    phi_min, phi_max     = phi_left_filter, phi_right_filter        # adjust as needed
-    
-    vmax_global = df_filtered.groupby(POST_TT_COLUMN).apply(lambda df: np.histogram2d(df["theta"], df["phi"], bins=[theta_bins, phi_bins])[0].max()).max()
-    
-    for idx, tt_val in enumerate(tt_values):
-        row_idx, col_idx = divmod(idx, ncols)
-        ax = axes[row_idx][col_idx]
-
-        df_tt = df_filtered[df_filtered[POST_TT_COLUMN] == tt_val]
-        theta_vals = df_tt['theta'].dropna()
-        phi_vals = df_tt['phi'].dropna()
-
-        # Apply range filtering
-        # Apply range filtering
-        df_tt = df_filtered[df_filtered[POST_TT_COLUMN] == tt_val].copy()
-        mask = (
-            (df_tt['theta'] >= theta_min) & (df_tt['theta'] <= theta_max) &
-            (df_tt['phi'] >= phi_min) & (df_tt['phi'] <= phi_max)
-        )
-        df_tt = df_tt[mask]
-
-        theta_vals = df_tt['theta']
-        phi_vals   = df_tt['phi']
-
-        if len(theta_vals) < 10 or len(phi_vals) < 10:
-            ax.set_visible(False)
-            continue
-
-        # Polar plot settings
-        fig.delaxes(axes[row_idx][col_idx])  # remove the original non-polar Axes
-        ax = fig.add_subplot(nrows, ncols, idx + 1, polar=True)  # add a polar Axes
-        axes[row_idx][col_idx] = ax  # update reference for consistency
-
-        ax.set_facecolor(colors(0.0))  # darkest background in colormap
-        ax.set_title(f'tt_task5_post = {tt_val}', fontsize=14)
-            
-        # Limit in radius in theta_right_filter
-        ax.set_ylim(0, theta_right_filter)
-            
-        # 2D histogram: use phi as angle, theta as radius
-        h, r_edges, phi_edges = np.histogram2d(theta_vals, phi_vals, bins=[theta_bins, phi_bins])
-        r_centers = 0.5 * (r_edges[:-1] + r_edges[1:])
-        phi_centers = 0.5 * (phi_edges[:-1] + phi_edges[1:])
-        # R, PHI = np.meshgrid(r_centers, phi_centers, indexing='ij')
-        R, PHI = np.meshgrid(r_edges, phi_edges, indexing='ij')
-        c = ax.pcolormesh(PHI, R, h, cmap='viridis', vmin=0, vmax=vmax_global)
-        local_max = h.max()
-        cb = fig.colorbar(c, ax=ax, pad=0.1)
-        cb.ax.hlines(local_max, *cb.ax.get_xlim(), colors='white', linewidth=2, linestyles='dashed')
-
-    plt.suptitle(rf'FINAL. Correction = {correct_angle}. 2D Histogram of $\theta$ vs. $\phi$ for each tt_task5_post Type', fontsize=16)
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
-    if save_plots:
-        final_filename = f'{fig_idx}_polar_theta_phi_tt_task5_post_2D_detail.png'
-        fig_idx += 1
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        save_plot_figure(
-            save_fig_path,
-            format='png',
-            alias="polar_theta_phi_definitive_tt_2d_detail_final",
-        )
-    if show_plots:
-        plt.show()
-    plt.close()
-
-_prof["s_angle_correction_s"] = round(time.perf_counter() - _t_sec, 2)
-_t_sec = time.perf_counter()
-if task5_plot_enabled("theta_efficiency_simple_3v4"):
-    print("--------------- Simple efficiency vs theta (3v4 planes) -------------")
-
-    if POST_TT_COLUMN not in df.columns:
-        print(f"Warning: {POST_TT_COLUMN} column missing, skipping simple efficiency-vs-theta plot.")
-    else:
-        if "theta" not in df.columns:
-            print("Warning: theta column missing, skipping simple efficiency-vs-theta plot.")
-            theta_vals_all = None
-            tt_task5_post_vals = None
-        else:
-            theta_vals_all = pd.to_numeric(df["theta"], errors="coerce")
-            tt_task5_post_vals = pd.to_numeric(df[POST_TT_COLUMN], errors="coerce").fillna(0).astype(int)
-
-        if theta_vals_all is not None and tt_task5_post_vals is not None:
-            right_theta_eff = float(pd.to_numeric(det_theta_right_filter, errors="coerce"))
-            if not np.isfinite(right_theta_eff) or right_theta_eff <= 0:
-                right_theta_eff = np.pi / 2.5
-            n_theta_bins_eff = 10
-            bins_theta_eff = np.linspace(0, right_theta_eff, n_theta_bins_eff + 1)
-            theta_centers_eff = 0.5 * (bins_theta_eff[:-1] + bins_theta_eff[1:])
-
-            theta_np = theta_vals_all.to_numpy(dtype=float, copy=False)
-            tt_task5_post_np = tt_task5_post_vals.to_numpy(dtype=int, copy=False)
-            valid = (
-                np.isfinite(theta_np)
-                & (theta_np >= 0)
-                & (theta_np <= right_theta_eff)
-                & np.isin(tt_task5_post_np, [1234, 134, 124])
-            )
-            theta_vals_eff = theta_np[valid]
-            tt_task5_post_eff = tt_task5_post_np[valid]
-
-            counts_1234, _ = np.histogram(theta_vals_eff[tt_task5_post_eff == 1234], bins=bins_theta_eff)
-            counts_134, _ = np.histogram(theta_vals_eff[tt_task5_post_eff == 134], bins=bins_theta_eff)
-            counts_124, _ = np.histogram(theta_vals_eff[tt_task5_post_eff == 124], bins=bins_theta_eff)
-
-            if counts_1234.sum() == 0:
-                print("Warning: No tt_task5_post==1234 events in theta range, skipping simple efficiency-vs-theta plot.")
-            else:
-                eff_2 = np.full_like(theta_centers_eff, np.nan, dtype=float)
-                eff_3 = np.full_like(theta_centers_eff, np.nan, dtype=float)
-                err_2 = np.full_like(theta_centers_eff, np.nan, dtype=float)
-                err_3 = np.full_like(theta_centers_eff, np.nan, dtype=float)
-                nonzero_den = counts_1234 > 0
-                n4 = counts_1234.astype(float)
-                n134 = counts_134.astype(float)
-                n124 = counts_124.astype(float)
-
-                # Efficiencies requested by user:
-                #   eff_2 = 1 - N134 / N1234
-                #   eff_3 = 1 - N124 / N1234
-                eff_2[nonzero_den] = 1.0 - (n134[nonzero_den] / n4[nonzero_den])
-                eff_3[nonzero_den] = 1.0 - (n124[nonzero_den] / n4[nonzero_den])
-
-                # Poisson error propagation for ratio N3/N4 (independent counts):
-                # sigma_r^2 = (sigma_N3/N4)^2 + (N3*sigma_N4/N4^2)^2, sigma_N = sqrt(N)
-                with np.errstate(divide="ignore", invalid="ignore"):
-                    err_2[nonzero_den] = np.sqrt(
-                        (np.sqrt(n134[nonzero_den]) / n4[nonzero_den]) ** 2
-                        + ((n134[nonzero_den] * np.sqrt(n4[nonzero_den])) / (n4[nonzero_den] ** 2)) ** 2
-                    )
-                    err_3[nonzero_den] = np.sqrt(
-                        (np.sqrt(n124[nonzero_den]) / n4[nonzero_den]) ** 2
-                        + ((n124[nonzero_den] * np.sqrt(n4[nonzero_den])) / (n4[nonzero_den] ** 2)) ** 2
-                    )
-
-                valid_w2 = nonzero_den & np.isfinite(eff_2) & np.isfinite(err_2) & (err_2 > 0)
-                valid_w3 = nonzero_den & np.isfinite(eff_3) & np.isfinite(err_3) & (err_3 > 0)
-                if np.any(valid_w2):
-                    weights_2 = 1.0 / np.square(err_2[valid_w2])
-                    mean_eff_2 = float(np.sum(weights_2 * eff_2[valid_w2]) / np.sum(weights_2))
-                else:
-                    mean_eff_2 = float(np.nanmean(eff_2[nonzero_den])) if np.any(nonzero_den) else np.nan
-                if np.any(valid_w3):
-                    weights_3 = 1.0 / np.square(err_3[valid_w3])
-                    mean_eff_3 = float(np.sum(weights_3 * eff_3[valid_w3]) / np.sum(weights_3))
-                else:
-                    mean_eff_3 = float(np.nanmean(eff_3[nonzero_den])) if np.any(nonzero_den) else np.nan
-
-                theta_centers_eff_deg = np.degrees(theta_centers_eff)
-                right_theta_eff_deg = np.degrees(right_theta_eff)
-                cos_theta_centers = np.cos(theta_centers_eff)
-                cos_theta_safe = np.clip(np.abs(cos_theta_centers), 1e-6, None)
-                sec_theta_centers = 1.0 / cos_theta_safe
-                valid_eff_bins = nonzero_den & (np.isfinite(eff_2) | np.isfinite(eff_3))
-
-                def _xlimits_from_values(values: np.ndarray, default_limits: tuple[float, float]) -> tuple[float, float]:
-                    vals = np.asarray(values, dtype=float)
-                    vals = vals[np.isfinite(vals)]
-                    if vals.size == 0:
-                        return default_limits
-                    vmin = float(np.min(vals))
-                    vmax = float(np.max(vals))
-                    if vals.size > 1:
-                        unique_vals = np.unique(np.sort(vals))
-                        if unique_vals.size > 1:
-                            step = float(np.median(np.diff(unique_vals)))
-                            if np.isfinite(step) and step > 0:
-                                pad = 0.5 * step
-                            else:
-                                pad = 0.02 * (vmax - vmin if vmax > vmin else 1.0)
-                        else:
-                            pad = 0.05 * max(abs(vmin), 1.0)
-                    else:
-                        pad = 0.05 * max(abs(vmin), 1.0)
-                    if vmax <= vmin:
-                        pad = max(pad, 0.05 * max(abs(vmin), 1.0))
-                    return vmin - pad, vmax + pad
-
-                theta_xlim = _xlimits_from_values(
-                    theta_centers_eff_deg[valid_eff_bins],
-                    (0.0, right_theta_eff_deg),
-                )
-                sec_xlim = _xlimits_from_values(
-                    sec_theta_centers[valid_eff_bins],
-                    (float(np.nanmin(sec_theta_centers)), float(np.nanmax(sec_theta_centers))),
-                )
-
-                fig_eff, (ax_eff, ax_eff_cos) = plt.subplots(
-                    nrows=2,
-                    ncols=1,
-                    figsize=(7, 10),
-                )
-
-                ax_eff.plot(
-                    theta_centers_eff_deg,
-                    eff_2,
-                    marker="o",
-                    linewidth=1.8,
-                    label=r"$\epsilon_2 = 1 - N_{134}/N_{1234}$",
-                    color="tab:blue",
-                )
-                ax_eff.plot(
-                    theta_centers_eff_deg,
-                    eff_3,
-                    marker="s",
-                    linewidth=1.8,
-                    label=r"$\epsilon_3 = 1 - N_{124}/N_{1234}$",
-                    color="tab:green",
-                )
-                ax_eff.fill_between(
-                    theta_centers_eff_deg,
-                    np.clip(eff_2 - err_2, 0.0, 1.05),
-                    np.clip(eff_2 + err_2, 0.0, 1.05),
-                    alpha=0.2,
-                    color="tab:blue",
-                )
-                ax_eff.fill_between(
-                    theta_centers_eff_deg,
-                    np.clip(eff_3 - err_3, 0.0, 1.05),
-                    np.clip(eff_3 + err_3, 0.0, 1.05),
-                    alpha=0.2,
-                    color="tab:green",
-                )
-                if np.isfinite(mean_eff_2):
-                    ax_eff.axhline(
-                        mean_eff_2,
-                        linestyle="--",
-                        linewidth=1.4,
-                        alpha=0.35,
-                        color="tab:blue",
-                        label=rf"w-mean $\epsilon_2$ = {mean_eff_2:.3f}",
-                    )
-                if np.isfinite(mean_eff_3):
-                    ax_eff.axhline(
-                        mean_eff_3,
-                        linestyle="--",
-                        linewidth=1.4,
-                        alpha=0.35,
-                        color="tab:green",
-                        label=rf"w-mean $\epsilon_3$ = {mean_eff_3:.3f}",
-                    )
-                ax_eff.set_xlim(*theta_xlim)
-                ax_eff.set_ylim(0.5, 1.05)
-                ax_eff.set_ylabel("Efficiency")
-                ax_eff.set_title("Simple Angular Efficiencies (3-plane vs 4-plane)")
-                ax_eff.grid(True, alpha=0.3)
-                ax_eff.legend(fontsize="small")
-
-                ax_eff_cos.plot(
-                    sec_theta_centers,
-                    eff_2,
-                    marker="o",
-                    linewidth=1.8,
-                    label=r"$\epsilon_2$ vs $\sec(\theta_{\mathrm{bin}})$",
-                    color="tab:blue",
-                )
-                ax_eff_cos.plot(
-                    sec_theta_centers,
-                    eff_3,
-                    marker="s",
-                    linewidth=1.8,
-                    label=r"$\epsilon_3$ vs $\sec(\theta_{\mathrm{bin}})$",
-                    color="tab:green",
-                )
-                ax_eff_cos.fill_between(
-                    sec_theta_centers,
-                    np.clip(eff_2 - err_2, 0.0, 1.05),
-                    np.clip(eff_2 + err_2, 0.0, 1.05),
-                    alpha=0.2,
-                    color="tab:blue",
-                )
-                ax_eff_cos.fill_between(
-                    sec_theta_centers,
-                    np.clip(eff_3 - err_3, 0.0, 1.05),
-                    np.clip(eff_3 + err_3, 0.0, 1.05),
-                    alpha=0.2,
-                    color="tab:green",
-                )
-                ax_eff_cos.set_xlim(*sec_xlim)
-                ax_eff_cos.set_ylim(0.5, 1.05)
-                ax_eff_cos.set_xlabel(r"$\sec(\theta_{\mathrm{bin}}) = 1/\cos(\theta_{\mathrm{bin}})$")
-                ax_eff_cos.set_ylabel("Efficiency")
-                ax_eff_cos.set_title(r"Efficiency vs $\sec(\theta_{\mathrm{bin}})$")
-                ax_eff_cos.grid(True, alpha=0.3)
-                ax_eff_cos.legend(fontsize="small")
-                plt.tight_layout()
-
-                if save_plots:
-                    final_filename = f"{fig_idx}_theta_efficiency_simple_3v4.png"
-                    fig_idx += 1
-                    save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-                    plot_list.append(save_fig_path)
-                    save_plot_figure(save_fig_path, format="png", alias="theta_efficiency_simple_3v4")
-                if show_plots:
-                    plt.show()
-                plt.close()
-
-working_df = df
 
 # Final task-rate plot included in the Task 5 PDF.
 if save_plots and task5_plot_enabled("acquisition_rate_vs_time_by_task_tt_with_histograms"):
@@ -4003,7 +3276,7 @@ _t_sec = time.perf_counter()
 # Path to save the cleaned dataframe
 # Create output directory if it does not exist.
 os.makedirs(f"{output_directory}", exist_ok=True)
-OUT_PATH = f"{output_directory}/corrected_{basename_no_ext}.parquet"
+OUT_PATH = f"{output_directory}/postprocessed_{basename_no_ext}.parquet"
 KEY = "df"  # HDF5 key name
 
 # Ensure output directory exists
@@ -4111,7 +3384,7 @@ record_filter_metric(
 )
 
 print(
-    f"Writing corrected parquet: rows={len(working_df)} cols={len(working_df.columns)} -> {OUT_PATH}"
+    f"Writing postprocessed parquet: rows={len(working_df)} cols={len(working_df.columns)} -> {OUT_PATH}"
 )
 if VERBOSE:
     print("Columns before saving fit->corr parquet:")
@@ -4328,7 +3601,7 @@ if joined_analysis_active and joined_source_file_column in working_df.columns:
     for joined_record in joined_input_records:
         joined_file_name = joined_record["file_name"]
         joined_basename = joined_record["basename_no_ext"]
-        joined_out_path = os.path.join(output_directory, f"corrected_{joined_basename}.parquet")
+        joined_out_path = os.path.join(output_directory, f"postprocessed_{joined_basename}.parquet")
         joined_mask = working_df[joined_source_file_column].astype(str).eq(joined_file_name)
         joined_output_df = working_df.loc[joined_mask].drop(
             columns=[joined_source_file_column, joined_source_basename_column],
@@ -4341,7 +3614,7 @@ if joined_analysis_active and joined_source_file_column in working_df.columns:
             compression=_preferred_parquet_compression(),
             index=False,
         )
-        print(f"Corrected joined-analysis dataframe saved to: {joined_out_path} rows={len(joined_output_df)}")
+        print(f"Postprocessed joined-analysis dataframe saved to: {joined_out_path} rows={len(joined_output_df)}")
 else:
     output_df = working_df.drop(
         columns=[joined_source_file_column, joined_source_basename_column],
@@ -4354,7 +3627,7 @@ else:
         compression=_preferred_parquet_compression(),
         index=False,
     )
-    print(f"Corrected dataframe saved to: {OUT_PATH}")
+    print(f"Postprocessed dataframe saved to: {OUT_PATH}")
 _prof["s_output_write_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
 

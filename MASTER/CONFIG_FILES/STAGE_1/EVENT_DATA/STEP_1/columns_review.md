@@ -844,7 +844,7 @@ z_p4
 
 
 ## TASK_5 -> OUT
-### from the ~/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_2/INPUT_FILES/COMPLETED/*_*.parquet
+### from the ~/DATAFLOW_v3/STATIONS/MINGO04/STAGE_1/EVENT_DATA/{STEP_2/INPUT_FILES,STEP_1_TO_2_OUTPUT}/**/postprocessed_*.parquet
 
 acquisition_type
 datetime

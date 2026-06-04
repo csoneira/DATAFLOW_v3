@@ -101,6 +101,7 @@ def extract_datetime_from_basename(name: str) -> pd.Timestamp | pd.NaT:
         "cleaned_",
         "calibrated_",
         "fitted_",
+        "postprocessed_",
         "corrected_",
         "accumulated_",
         "listed_",

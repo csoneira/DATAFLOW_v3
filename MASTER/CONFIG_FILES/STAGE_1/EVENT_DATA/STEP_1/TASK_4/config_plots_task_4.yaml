@@ -18,8 +18,8 @@ plots:
   trigger_types_tracking_and_list: usual
   trigger_types_tracking_and_raw: usual
   trigger_types_definitive_tt_and_raw: usual
-  timtrack_results_hexbin_combination_projections: usual
-  timtrack_results_scatter_combination_projections: usual
+  timtrack_results_hexbin_combination_projections: essential
+  timtrack_results_scatter_combination_projections: essential
   theta_det_theta_zoom_tracking_tt: usual
   polar_theta_phi_definitive_tt_2d: usual
   polar_theta_phi_tracking_tt_2d: usual

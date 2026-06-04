@@ -215,6 +215,7 @@ TASK2_PLOT_ALIASES: tuple[str, ...] = (
     "calibration_subsample_uncalibrated_removed_zeroes",
     "calibration_subsample_calibrated_removed_zeroes",
     "calibrated_filtered_removed_zeroes",
+    "calibrated_filtered_removed_zeroes_per_plane_combination",
     "calibrated_filtered_removed_zeroes_st",
     "dx_vs_tsum",
     "dx_vs_travel_time",
@@ -14712,65 +14713,100 @@ if task2_plot_requested("calibration_subsample_uncalibrated_removed_zeroes", ess
             plt.show()
         plt.close(fig)
 
-if task2_plot_requested("calibrated_filtered_removed_zeroes", essential=True):
+def _plot_task2_calibrated_filtered_removed_zeroes(
+    plot_source_df: pd.DataFrame,
+    *,
+    title: str,
+    filename_stem: str,
+    alias: str,
+) -> None:
+    global fig_idx
     filtered_plot_columns = [
         col
-        for col in final_filtered_working_df.columns
+        for col in plot_source_df.columns
         if any(token in col for token in ("Q_sum", "Q_dif", "T_sum", "T_dif"))
     ]
-    if filtered_plot_columns:
-        plot_df = final_filtered_working_df.loc[:, filtered_plot_columns]
-        cols_per_row = 8
-        num_columns = len(filtered_plot_columns)
-        num_rows = max(1, (num_columns + cols_per_row - 1) // cols_per_row)
-        fig, axes = plt.subplots(
-            num_rows,
-            cols_per_row,
-            figsize=(20, num_rows * 2),
-            sharex="col",
+    if not filtered_plot_columns:
+        return
+
+    plot_df = plot_source_df.loc[:, filtered_plot_columns]
+    cols_per_row = 8
+    num_columns = len(filtered_plot_columns)
+    num_rows = max(1, (num_columns + cols_per_row - 1) // cols_per_row)
+    fig, axes = plt.subplots(
+        num_rows,
+        cols_per_row,
+        figsize=(20, num_rows * 2),
+        sharex="col",
+    )
+    axes = np.atleast_1d(axes).flatten()
+
+    for i, col in enumerate(filtered_plot_columns):
+        y = plot_df[col]
+        if "Q_sum" in col:
+            color = Q_sum_color
+        elif "Q_dif" in col:
+            color = Q_dif_color
+        elif "T_sum" in col:
+            color = T_sum_color
+        elif "T_dif" in col:
+            color = T_dif_color
+        else:
+            color = "tab:blue"
+
+        y_nonzero = y[(y != 0) & np.isfinite(y)]
+        axes[i].hist(y_nonzero, bins=100, alpha=0.5, color=color)
+        axes[i].set_title(col)
+        if "Q_sum" in col:
+            axes[i].set_yscale("log")
+
+    for j in range(i + 1, len(axes)):
+        fig.delaxes(axes[j])
+
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    fig.suptitle(title, fontsize=20)
+
+    if save_plots:
+        final_filename = f"{fig_idx}_{filename_stem}.png"
+        fig_idx += 1
+        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+        plot_list.append(save_fig_path)
+        save_plot_figure(
+            save_fig_path,
+            fig=fig,
+            alias=alias,
+            format="png",
         )
-        axes = np.atleast_1d(axes).flatten()
+    if show_plots:
+        plt.show()
+    plt.close(fig)
+    del plot_df
 
-        for i, col in enumerate(filtered_plot_columns):
-            y = plot_df[col]
-            if "Q_sum" in col:
-                color = Q_sum_color
-            elif "Q_dif" in col:
-                color = Q_dif_color
-            elif "T_sum" in col:
-                color = T_sum_color
-            elif "T_dif" in col:
-                color = T_dif_color
-            else:
-                color = "tab:blue"
 
-            y_nonzero = y[(y != 0) & np.isfinite(y)]
-            axes[i].hist(y_nonzero, bins=100, alpha=0.5, color=color)
-            axes[i].set_title(col)
-            if "Q_sum" in col:
-                axes[i].set_yscale("log")
+if task2_plot_requested("calibrated_filtered_removed_zeroes", essential=True):
+    _plot_task2_calibrated_filtered_removed_zeroes(
+        final_filtered_working_df,
+        title="Calibrated filtered data (removed zeroes)",
+        filename_stem="calibrated_filtered_removed_zeroes",
+        alias="calibrated_filtered_removed_zeroes",
+    )
 
-        for j in range(i + 1, len(axes)):
-            fig.delaxes(axes[j])
-
-        fig.tight_layout(rect=[0, 0, 1, 0.95])
-        fig.suptitle("Calibrated filtered data (removed zeroes)", fontsize=20)
-
-        if save_plots:
-            final_filename = f"{fig_idx}_calibrated_filtered_removed_zeroes.png"
-            fig_idx += 1
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            save_plot_figure(
-                save_fig_path,
-                fig=fig,
-                alias="calibrated_filtered_removed_zeroes",
-                format="png",
+if task2_plot_requested("calibrated_filtered_removed_zeroes_per_plane_combination", essential=True):
+    if "tt_task2_cal" not in final_filtered_working_df.columns:
+        print("Skipping calibrated_filtered_removed_zeroes_per_plane_combination: tt_task2_cal column is missing.")
+    else:
+        tt_values = pd.to_numeric(final_filtered_working_df["tt_task2_cal"], errors="coerce")
+        for tt_value in sorted(tt_values[np.isfinite(tt_values)].unique()):
+            tt_mask = tt_values.eq(tt_value)
+            if not bool(tt_mask.any()):
+                continue
+            tt_label = normalize_tt_label(tt_value)
+            _plot_task2_calibrated_filtered_removed_zeroes(
+                final_filtered_working_df.loc[tt_mask],
+                title=f"Calibrated filtered data (removed zeroes), tt_task2_cal={tt_label}",
+                filename_stem=f"calibrated_filtered_removed_zeroes_per_plane_combination_tt_{tt_label}",
+                alias="calibrated_filtered_removed_zeroes_per_plane_combination",
             )
-        if show_plots:
-            plt.show()
-        plt.close(fig)
-        del plot_df
 
 if task2_plot_requested("time_calibrated_filtered_removed_zeroes", essential=True):
     time_plot_columns = [

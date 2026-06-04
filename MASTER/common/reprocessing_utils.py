@@ -39,6 +39,7 @@ QA_REPROCESSING_FILENAME_PREFIXES: tuple[str, ...] = (
     "calibrated_",
     "listed_",
     "fitted_",
+    "postprocessed_",
     "corrected_",
     "post_",
 )
