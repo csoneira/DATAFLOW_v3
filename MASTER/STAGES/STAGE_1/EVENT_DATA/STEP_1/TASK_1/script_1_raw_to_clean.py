@@ -4058,20 +4058,20 @@ for joined_record in joined_input_records:
         and joined_stem.startswith("raw_")
     )
     if joined_is_task0_raw_parquet:
-        joined_read_df = pd.read_parquet(joined_path)
-        joined_read_df = canonicalize_step1_columns(joined_read_df)
-        joined_read_df = add_topology_task1_channel(joined_read_df)
+        joined_frame = pd.read_parquet(joined_path)
+        joined_frame = canonicalize_step1_columns(joined_frame)
+        joined_frame = add_topology_task1_channel(joined_frame)
         if limit:
-            joined_read_df = joined_read_df.head(int(limit_number)).copy()
-        if "datetime" in joined_read_df.columns:
-            joined_read_df["datetime"] = pd.to_datetime(joined_read_df["datetime"], errors="coerce")
-        if "acquisition_type" not in joined_read_df.columns:
-            if "column_6" in joined_read_df.columns:
-                joined_read_df = joined_read_df.rename(columns={"column_6": "acquisition_type"})
+            joined_frame = joined_frame.head(int(limit_number)).copy()
+        if "datetime" in joined_frame.columns:
+            joined_frame["datetime"] = pd.to_datetime(joined_frame["datetime"], errors="coerce")
+        if "acquisition_type" not in joined_frame.columns:
+            if "column_6" in joined_frame.columns:
+                joined_frame = joined_frame.rename(columns={"column_6": "acquisition_type"})
             else:
                 raise ValueError(f"Task 1 raw parquet is missing acquisition_type: {joined_path}")
-        joined_read_lines = len(joined_read_df)
-        joined_written_lines = len(joined_read_df)
+        joined_read_lines = len(joined_frame)
+        joined_written_lines = len(joined_frame)
     else:
         raise ValueError(
             "Task 1 now requires Task 0 raw parquet input; refusing non-raw-parquet file: "
@@ -4079,10 +4079,10 @@ for joined_record in joined_input_records:
         )
     read_lines += int(joined_read_lines)
     written_lines += int(joined_written_lines)
-    if not joined_read_df.empty:
-        joined_read_df.loc[:, joined_source_file_column] = joined_record["file_name"]
-        joined_read_df.loc[:, joined_source_basename_column] = joined_record["basename_no_ext"]
-        joined_frames.append(joined_read_df)
+    if not joined_frame.empty:
+        joined_frame.loc[:, joined_source_file_column] = joined_record["file_name"]
+        joined_frame.loc[:, joined_source_basename_column] = joined_record["basename_no_ext"]
+        joined_frames.append(joined_frame)
     print(
         "Raw dataframe loaded for Task 1 joined analysis: "
         f"{joined_path} read_lines={joined_read_lines} valid_lines={joined_written_lines}"
