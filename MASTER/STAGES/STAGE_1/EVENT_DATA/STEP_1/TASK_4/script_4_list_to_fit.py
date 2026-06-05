@@ -1831,8 +1831,19 @@ def fmahd(npar, vin1, vin2, merr): # Mahalanobis distance
     for i in range(npar):
         d = vin1[i] - vin2[i]
         m = merr_diag[i]
-        if m != 0.0:
+        if not np.isfinite(d) or not np.isfinite(m):
+            return float("inf")
+        if m > 0.0:
             acc += d * d / m
+        elif m < 0.0:
+            return float("inf")
+    if not np.isfinite(acc):
+        return float("inf")
+    if acc < 0.0:
+        if acc > -1e-12:
+            acc = 0.0
+        else:
+            return float("inf")
     return math.sqrt(acc)
 
 def solve_only(matrix, rhs):
@@ -2179,8 +2190,6 @@ def apply_task4_final_filter(
         rows_with_small = int(small_mask.any(axis=1).sum())
         summary["values_zeroed"] = total_small
         summary["rows_with_small_values"] = rows_with_small
-        if apply_changes and total_small > 0:
-            working = working.mask(small_mask, 0)
         record_filter_metric(
             "small_values_zeroed_event_pct",
             rows_with_small,
@@ -2197,7 +2206,7 @@ def apply_task4_final_filter(
 
     task4_pre_event_block_summary = normalize_task4_event_component_blocks(
         working,
-        apply_changes=apply_changes,
+        apply_changes=False,
     )
     summary["pre_event_rows_affected"] = int(task4_pre_event_block_summary["rows_affected"])
     summary["pre_event_values_zeroed"] = int(task4_pre_event_block_summary["values_zeroed"])
@@ -2378,23 +2387,17 @@ def apply_task4_final_filter(
     if not apply_changes:
         return df_input, pd.DataFrame(), summary
 
-    filtered_df = working.loc[final_mask].copy()
     rejected_df = working.loc[~final_mask].copy()
-    task4_post_event_block_summary = normalize_task4_event_component_blocks(
-        filtered_df,
-        apply_changes=True,
-    )
-    summary["post_event_rows_affected"] = int(task4_post_event_block_summary["rows_affected"])
-    summary["post_event_values_zeroed"] = int(task4_post_event_block_summary["values_zeroed"])
-    summary["values_zeroed"] = int(summary["values_zeroed"]) + int(
-        task4_post_event_block_summary["values_zeroed"]
-    )
+    working.loc[:, "passes_task_4"] = np.where(final_mask, np.uint8(1), np.uint8(0))
+    working.loc[:, "filter_task4_final_pass"] = final_mask
+    summary["post_event_rows_affected"] = 0
+    summary["post_event_values_zeroed"] = 0
     if not rejected_df.empty:
         rejected_df["reject_stage"] = "final_filtering"
         rejected_df["reject_reason"] = fail_reason_parts[~final_mask]
         rejected_df["zero_count"] = zero_count_per_row[~final_mask]
         rejected_df["primary_zero_col"] = primary_zero_col[~final_mask]
-    return filtered_df, rejected_df, summary
+    return working, rejected_df, summary
 
 
 # -----------------------------------------------------------------------------
@@ -6443,6 +6446,9 @@ for iteration in range(repeat + 1):
             timtrack_converged_arr[pos] = 1
         timtrack_iterations_arr[pos] = istp
         timtrack_conv_distance_arr[pos] = dist
+        if not np.isfinite(dist):
+            timtrack_converged_arr[pos] = 1
+            continue
 
         vsf = vs
         fitted += 1
@@ -6577,6 +6583,8 @@ for iteration in range(repeat + 1):
 
                         _tt_loo_refits_total += 1
                         _tt_loo_timtrack_iterations_total += int(istp_loo)
+                        if not np.isfinite(dist_loo):
+                            continue
                         y_res = vs[2] - y_ref
                         ts_res = (vs[4] + _half_lenx_ss) - ts_ref
                         td_res = (vs[0] * ss) - td_ref
@@ -10665,13 +10673,15 @@ component_cols = [col for col in component_cols if col in working_df.columns]
 if component_cols:
     component_data = working_df[component_cols].fillna(0)
     all_zero_mask = (component_data == 0).all(axis=1)
-    removed_all_zero = int(all_zero_mask.sum())
-    if removed_all_zero > 0:
-        working_df = working_df.loc[~all_zero_mask].copy()
+    flagged_all_zero = int(all_zero_mask.sum())
+    if "passes_task_4" not in working_df.columns:
+        working_df.loc[:, "passes_task_4"] = np.uint8(1)
+    working_df.loc[all_zero_mask, "passes_task_4"] = np.uint8(0)
+    working_df.loc[:, "filter_task4_all_components_nonzero_pass"] = ~all_zero_mask
     record_filter_metric(
-        "all_components_zero_rows_removed_pct",
-        removed_all_zero,
-        len(working_df) + removed_all_zero if (len(working_df) + removed_all_zero) else 0,
+        "all_components_zero_rows_flagged_pct",
+        flagged_all_zero,
+        len(working_df) if len(working_df) else 0,
     )
 
 # Refresh the trigger columns after any late plane-component changes.
@@ -10807,11 +10817,24 @@ upstream_offender_count_cols = [
     )
     if col_name in working_df.columns
 ]
+task4_pass_filter_cols = [
+    col_name
+    for col_name in (
+        "passes_task_1",
+        "passes_task_2",
+        "passes_task_3",
+        "passes_task_4",
+        "filter_task4_final_pass",
+        "filter_task4_all_components_nonzero_pass",
+    )
+    if col_name in working_df.columns
+]
 
 columns_to_keep = (
     tt_columns_present
     + param_hash_cols
     + upstream_offender_count_cols
+    + task4_pass_filter_cols
     + [
         # New definitions
         'x', 'x_err', 'y', 'y_err', 'theta', 'theta_err', 'phi', 'phi_err', 's', 's_err',
@@ -10834,7 +10857,7 @@ if keep_all_columns_output:
         f"retaining full dataframe with {len(working_df.columns)} columns."
     )
 else:
-    working_df = working_df[columns_to_keep]
+    working_df = working_df.filter(items=columns_to_keep)
 
 # Path to save the cleaned dataframe
 # Create output directory if it does not exist.
@@ -10858,10 +10881,6 @@ if VERBOSE:
 
 # # Pattern for P1_Q_sum_*, P2_Q_sum_*, P3_Q_sum_*, P4_Q_sum_*
 # Q_SUM_PATTERN = re.compile(r'^P[1-4]_Q_sum_.*$')
-
-# # If Q*_F_* and Q*_B_* are zero for all cases, remove the row
-# Q_cols = collect_columns(working_df.columns, Q_SUM_PATTERN)
-# working_df = working_df[(working_df[Q_cols] != 0).any(axis=1)]
 
 print(f"Original number of events in the dataframe: {original_number_of_events}")
 if not globals().get("task4_final_filter_applied", False):

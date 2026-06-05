@@ -24,7 +24,7 @@ step_1_overrides:
   # Leave a value blank to defer to each TASK_*/config_task_*.yaml.
   # Use create_plots: null to force plots off for all tasks.
   complete_reanalysis: true
-  create_plots: null
+  create_plots: essential
   keep_all_columns_output: true
   save_removed_channel_values: false
   save_time_slewing_pair_residuals: false

@@ -1317,6 +1317,7 @@ def zero_strip_component_blocks(
     self_trigger_mode: bool = False,
     snapshot_originals=None,
     log_changes: bool = True,
+    apply_changes: bool = True,
 ) -> dict[str, int]:
     """Zero per-strip Q/T components together when any component in the block is zero."""
     strip_labels: list[tuple[int, int]] = []
@@ -1399,15 +1400,16 @@ def zero_strip_component_blocks(
                 f"Plane {plane}, Strip {strip}: {set_to_zero} out of {total_events} events affected ({(set_to_zero / total_events) * 100:.2f}%)"
             )
 
-    q_sum_values[any_zero] = 0
-    q_diff_values[any_zero] = 0
-    t_sum_values[any_zero] = 0
-    t_diff_values[any_zero] = 0
+    if apply_changes:
+        q_sum_values[any_zero] = 0
+        q_diff_values[any_zero] = 0
+        t_sum_values[any_zero] = 0
+        t_diff_values[any_zero] = 0
 
-    df.loc[:, q_sum_cols] = q_sum_values
-    df.loc[:, q_diff_cols] = q_diff_values
-    df.loc[:, t_sum_cols] = t_sum_values
-    df.loc[:, t_diff_cols] = t_diff_values
+        df.loc[:, q_sum_cols] = q_sum_values
+        df.loc[:, q_diff_cols] = q_diff_values
+        df.loc[:, t_sum_cols] = t_sum_values
+        df.loc[:, t_diff_cols] = t_diff_values
     return {
         "rows_affected": int(np.count_nonzero(np.any(partial_zero, axis=1))),
         "values_zeroed": int(values_zeroed),
@@ -1536,11 +1538,15 @@ def _task2_strip_component_columns_map(df: pd.DataFrame) -> dict[tuple[int, int]
     strip_map: dict[tuple[int, int], dict[str, str]] = {}
     for plane in range(1, 5):
         for strip in range(1, 5):
+            def _prefer_cal(column_name: str) -> str:
+                cal_column_name = f"{column_name}_cal"
+                return cal_column_name if cal_column_name in df.columns else column_name
+
             cols = {
-                "Q_sum": f"p{plane}_s{strip}_qsum",
-                "Q_dif": f"p{plane}_s{strip}_qdif",
-                "T_sum": f"p{plane}_s{strip}_tsum",
-                "T_dif": f"p{plane}_s{strip}_tdif",
+                "Q_sum": _prefer_cal(f"p{plane}_s{strip}_qsum"),
+                "Q_dif": _prefer_cal(f"p{plane}_s{strip}_qdif"),
+                "T_sum": _prefer_cal(f"p{plane}_s{strip}_tsum"),
+                "T_dif": _prefer_cal(f"p{plane}_s{strip}_tdif"),
             }
             if all(col in df.columns for col in cols.values()):
                 strip_map[(plane, strip)] = cols
@@ -1641,6 +1647,10 @@ def apply_task2_unified_strip_combination_filter(
             },
             "selected_offender_count_by_row": pd.Series(0, index=df_input.index, dtype=int),
             "resolution_exact_by_row": pd.Series(True, index=df_input.index, dtype=bool),
+            "selected_offender_mask_by_strip": {
+                strip_key: pd.Series(False, index=df_input.index, dtype=bool)
+                for strip_key in TASK2_STRIP_KEYS
+            },
             "relation_stats": relation_stats,
         }
 
@@ -2012,6 +2022,7 @@ def apply_task2_unified_strip_combination_filter(
             if strip_key not in strip_map or not np.any(fail_mask):
                 continue
             cols = strip_map[strip_key]
+            # Legacy destructive mode only; final working_df calls use apply_changes=False.
             df_input.loc[fail_mask, list(cols.values())] = 0
 
     top_offenders = sorted(
@@ -2036,6 +2047,10 @@ def apply_task2_unified_strip_combination_filter(
             f"top={top_offenders_str}"
         )
 
+    summary["selected_offender_mask_by_strip"] = {
+        strip_key: pd.Series(strip_fail_masks.get(strip_key, np.zeros(len(df_input), dtype=bool)), index=df_input.index, dtype=bool)
+        for strip_key in TASK2_STRIP_KEYS
+    }
     summary["selected_offender_counts"] = {
         strip_key: int(offender_hit_counts.get(strip_key, 0))
         for strip_key in TASK2_STRIP_KEYS
@@ -3458,15 +3473,15 @@ def _restore_original_values(rows: pd.DataFrame) -> pd.DataFrame:
 
 def append_removed_rows(rows: pd.DataFrame) -> None:
     """Append fully removed rows with original index and pre-modification values preserved."""
-    global removed_rows_df
+    global diagnostic_removed_rows_df
     if not track_removed_rows_task2 or rows.empty:
         return
     rows_to_add = _restore_original_values(rows)
-    if not removed_rows_df.empty:
-        rows_to_add = rows_to_add.loc[~rows_to_add.index.isin(removed_rows_df.index)]
+    if not diagnostic_removed_rows_df.empty:
+        rows_to_add = rows_to_add.loc[~rows_to_add.index.isin(diagnostic_removed_rows_df.index)]
         if rows_to_add.empty:
             return
-    removed_rows_df = pd.concat([removed_rows_df, rows_to_add], ignore_index=False, sort=False)
+    diagnostic_removed_rows_df = pd.concat([diagnostic_removed_rows_df, rows_to_add], ignore_index=False, sort=False)
 
 def append_removed_rows_from_mask(frame: pd.DataFrame, removed_mask: pd.Series) -> None:
     if not track_removed_rows_task2 or frame.empty:
@@ -5753,7 +5768,7 @@ def _summarize_tsum_pair_residuals(
 
 def _build_pair_fit_slewing_event_solutions(
     source_df: pd.DataFrame,
-    slewing_fit_df: pd.DataFrame,
+    calibration_slewing_fit_df: pd.DataFrame,
     *,
     context_label: str,
 ) -> tuple[dict[object, dict[str, float]], dict[str, object], pd.DataFrame]:
@@ -5769,7 +5784,7 @@ def _build_pair_fit_slewing_event_solutions(
         "per_strip_median": {},
         "per_strip_std": {},
     }
-    if source_df.empty or slewing_fit_df.empty:
+    if source_df.empty or calibration_slewing_fit_df.empty:
         return {}, diagnostics, pd.DataFrame()
 
     pair_residuals_df = _build_tsum_pair_residuals(
@@ -5809,7 +5824,7 @@ def _build_pair_fit_slewing_event_solutions(
 
     fit_records_by_pair = {
         (str(label1), str(label2)): group.copy()
-        for (label1, label2), group in slewing_fit_df.groupby(["label1", "label2"], observed=True)
+        for (label1, label2), group in calibration_slewing_fit_df.groupby(["label1", "label2"], observed=True)
     }
     if not fit_records_by_pair:
         return {}, diagnostics, pair_residuals_df
@@ -5936,7 +5951,10 @@ def _apply_slewing_solutions_to_dataframe(
                 continue
             plane, strip = parsed
             column_name = f"p{plane}_s{strip}_tsum"
-            if column_name not in target_df.columns:
+            cal_column_name = f"{column_name}_cal"
+            if cal_column_name in target_df.columns:
+                column_name = cal_column_name
+            elif column_name not in target_df.columns:
                 continue
             updates_by_column[column_name].append((row_index, float(slewing_value)))
 
@@ -5976,7 +5994,7 @@ def _apply_slewing_solutions_to_dataframe(
         delta_values = np.asarray(valid_deltas, dtype=float)
         target_df.loc[valid_indices, column_name] = current_values + delta_values
         corrected_count += len(valid_indices)
-        strip_label = column_name.replace("T", "P", 1).replace("_T_sum_", "s")
+        strip_label = column_name.removesuffix("_cal").replace("p", "P", 1).replace("_s", "s").replace("_tsum", "")
         applied_values_by_strip[strip_label].extend(delta_values.tolist())
 
     return {
@@ -6435,6 +6453,12 @@ def apply_per_channel_polynomial_slewing_to_dataframe(
             label = f"P{plane}s{strip}"
             q_column = f"p{plane}_s{strip}_qsum"
             t_column = f"p{plane}_s{strip}_tsum"
+            q_cal_column = f"{q_column}_cal"
+            t_cal_column = f"{t_column}_cal"
+            if q_cal_column in target_df.columns:
+                q_column = q_cal_column
+            if t_cal_column in target_df.columns:
+                t_column = t_cal_column
             if q_column not in target_df.columns or t_column not in target_df.columns:
                 diagnostics["skipped_missing_curve_hits"] = (
                     int(diagnostics["skipped_missing_curve_hits"]) + len(target_df.index)
@@ -6778,7 +6802,7 @@ def _choose_slewing_application_sign(
 
 def plot_slewing_per_strip_from_pair_fit(
     pair_residuals_df: pd.DataFrame,
-    slewing_fit_df: pd.DataFrame,
+    calibration_slewing_fit_df: pd.DataFrame,
 ) -> pd.DataFrame:
     global fig_idx
     alias = "slewing_per_strip_from_pair_fit"
@@ -6787,7 +6811,7 @@ def plot_slewing_per_strip_from_pair_fit(
     if pair_residuals_df.empty:
         print("Warning: no pair residual data available for per-strip slewing diagnostic.")
         return pd.DataFrame()
-    if slewing_fit_df.empty:
+    if calibration_slewing_fit_df.empty:
         print("Warning: no fitted pair slewing records available for per-strip slewing diagnostic.")
         return pd.DataFrame()
     required_columns = {
@@ -6809,7 +6833,7 @@ def plot_slewing_per_strip_from_pair_fit(
 
     fit_records_by_pair = {
         (str(label1), str(label2)): group.copy()
-        for (label1, label2), group in slewing_fit_df.groupby(["label1", "label2"], observed=True)
+        for (label1, label2), group in calibration_slewing_fit_df.groupby(["label1", "label2"], observed=True)
     }
     if not fit_records_by_pair:
         print("Warning: per-strip slewing diagnostic skipped; no usable pair fit groups.")
@@ -9358,7 +9382,7 @@ global_variables["joined_analysis_time_tolerance_hours"] = float(joined_analysis
 #     print(f" - {col}")
 
 # Track rows that later drop out of Task 2 so their original indexed values stay inspectable.
-removed_rows_df = working_df.iloc[0:0].copy()
+diagnostic_removed_rows_df = working_df.iloc[0:0].copy()
 tracking_base_index = working_df.index.copy()
 original_columns_store: dict[str, pd.Series] = {}
 # Ensure param_hash is persisted for downstream tasks.
@@ -9452,18 +9476,16 @@ if create_debug_plots and "tt_task1_clean" in working_df.columns:
         fig_idx=debug_fig_idx,
     )
 n_before_tt_task1_clean = len(working_df)
-append_removed_rows_from_mask(working_df, working_df["tt_task1_clean"].isna())
-working_df = working_df.dropna(subset=["tt_task1_clean"])
+task2_input_tt_task1_clean_valid = working_df["tt_task1_clean"].notna()
+working_df.loc[:, "filter_task2_input_tt_task1_clean_valid"] = task2_input_tt_task1_clean_valid.to_numpy(dtype=bool)
 record_filter_metric(
-    "tt_task1_clean_nan_rows_removed_pct",
-    n_before_tt_task1_clean - len(working_df),
+    "tt_task1_clean_nan_rows_flagged_pct",
+    int((~task2_input_tt_task1_clean_valid).sum()),
     original_number_of_events if original_number_of_events else 0,
 )
 # Track which indices were removed by each row-dropping filter for diagnostic plots.
 _diag_rejected_tt_task1_clean_idx = (
-    diagnostic_unzeroed_df.index.difference(working_df.index)
-    if diagnostic_unzeroed_df is not None
-    else working_df.index[:0]
+    working_df.index[~task2_input_tt_task1_clean_valid]
 )
 _diag_idx_after_tt_task1_clean = working_df.index.copy()
 
@@ -9512,7 +9534,7 @@ print("----------------------------------------------------------------------")
 
 calibration_work_df = working_df.copy()
 calibration_work_df_qfb = working_df.copy()
-calibration_subsample_uncalibrated_plot_df: pd.DataFrame | None = None
+plot_calibration_subsample_uncalibrated_df: pd.DataFrame | None = None
 
 _strict_calibration_mask = build_task2_strict_calibration_mask_from_raw(
     calibration_work_df,
@@ -9620,7 +9642,7 @@ calibration_subsample_uncalibrated_plot_columns = [
     if any(token in col for token in ("Q_sum", "Q_dif", "T_sum", "T_dif"))
 ]
 if calibration_subsample_uncalibrated_plot_columns:
-    calibration_subsample_uncalibrated_plot_df = calibration_work_df.loc[
+    plot_calibration_subsample_uncalibrated_df = calibration_work_df.loc[
         :,
         calibration_subsample_uncalibrated_plot_columns,
     ].copy()
@@ -11129,17 +11151,17 @@ y_lookup = {
     3: y_pos_T[0],
     4: y_pos_T[1],
 }
-time_pair_residuals_df = pd.DataFrame()
+calibration_time_pair_residuals_df = pd.DataFrame()
 pair_offset_lookup: dict[tuple[str, str], float] = {}
 if _need_time_pair_residuals:
-    time_pair_residuals_df = _build_tsum_pair_residuals(
+    calibration_time_pair_residuals_df = _build_tsum_pair_residuals(
         calibration_work_df,
         y_lookup=y_lookup,
         z_positions=z_positions,
         tdiff_to_x=tdiff_to_x,
         c_mm_ns=c_mm_ns,
     )
-    print(f"Built T_sum pair residual table with {len(time_pair_residuals_df)} rows.")
+    print(f"Built T_sum pair residual table with {len(calibration_time_pair_residuals_df)} rows.")
     if slewing_correction:
         print(
             "slewing_correction=True: active slewing correction is currently disabled. "
@@ -11161,7 +11183,7 @@ if (not _defer_tsum_calibration_until_late_slot) and _need_slewing_observables:
     if _requested_slewing_aliases:
         print("Requested slewing plot aliases:", ", ".join(_requested_slewing_aliases))
     
-    slew_df = time_pair_residuals_df
+    slew_df = calibration_time_pair_residuals_df
 
     if _plot_timing_summary:
         timing_summary_df = slew_df.copy()
@@ -12084,11 +12106,11 @@ if (not _defer_tsum_calibration_until_late_slot) and time_calibration_mode is no
                 label1 = f"P{plane_a}s{strip_a}"
                 label2 = f"P{plane_b}s{strip_b}"
                 pair_mask = (
-                    (time_pair_residuals_df["label1"] == label1)
-                    & (time_pair_residuals_df["label2"] == label2)
+                    (calibration_time_pair_residuals_df["label1"] == label1)
+                    & (calibration_time_pair_residuals_df["label2"] == label2)
                 )
                 values = pd.to_numeric(
-                    time_pair_residuals_df.loc[pair_mask, "delta_t_corrected"],
+                    calibration_time_pair_residuals_df.loc[pair_mask, "delta_t_corrected"],
                     errors="coerce",
                 ).dropna().to_numpy(dtype=float)
                 vectors.append(values)
@@ -12592,7 +12614,7 @@ if _need_pre_tsum_offset_pair_residuals:
         "Building charge-calibrated, pre-T_sum-offset residual table for "
         "T_sum calibration and Q-cut delta-T diagnostics."
     )
-    time_pair_residuals_df = _build_tsum_pair_residuals(
+    calibration_time_pair_residuals_df = _build_tsum_pair_residuals(
         calibration_work_df,
         y_lookup=y_lookup,
         z_positions=z_positions,
@@ -12601,7 +12623,7 @@ if _need_pre_tsum_offset_pair_residuals:
     )
     print(
         "Built charge-calibrated pre-T_sum-offset T_sum pair residual table with "
-        f"{len(time_pair_residuals_df)} rows."
+        f"{len(calibration_time_pair_residuals_df)} rows."
     )
 
 if time_calibration_mode is not None:
@@ -12610,7 +12632,7 @@ if time_calibration_mode is not None:
     print("----------------------------------------------------------------------")
     if calculate_T_sum_calibration:
         Tsum_cal = calculate_task2_tsum_calibration_from_pair_residuals(
-            time_pair_residuals_df,
+            calibration_time_pair_residuals_df,
         )
     if apply_T_sum_calibration:
         print(f"Final calibration in times used (mode={time_calibration_mode}):", _format_value_for_print(Tsum_cal))
@@ -12621,17 +12643,17 @@ if (
     _plot_slewing_delta_t_centroid_by_qsum_cuts
     or _plot_slewing_delta_t_centroid_vs_qsum_cut
 ):
-    plot_slewing_delta_t_centroid_by_qsum_cuts(time_pair_residuals_df)
+    plot_slewing_delta_t_centroid_by_qsum_cuts(calibration_time_pair_residuals_df)
 
-if not time_pair_residuals_df.empty and pair_offset_lookup:
-    time_pair_residuals_df = time_pair_residuals_df.copy()
-    time_pair_residuals_df["pair_offset_used"] = [
+if not calibration_time_pair_residuals_df.empty and pair_offset_lookup:
+    calibration_time_pair_residuals_df = calibration_time_pair_residuals_df.copy()
+    calibration_time_pair_residuals_df["pair_offset_used"] = [
         pair_offset_lookup.get((str(label1), str(label2)), np.nan)
-        for label1, label2 in zip(time_pair_residuals_df["label1"], time_pair_residuals_df["label2"])
+        for label1, label2 in zip(calibration_time_pair_residuals_df["label1"], calibration_time_pair_residuals_df["label2"])
     ]
-    time_pair_residuals_df["delta_t_centered_by_pair_offset"] = (
-        pd.to_numeric(time_pair_residuals_df["delta_t_corrected"], errors="coerce")
-        - pd.to_numeric(time_pair_residuals_df["pair_offset_used"], errors="coerce")
+    calibration_time_pair_residuals_df["delta_t_centered_by_pair_offset"] = (
+        pd.to_numeric(calibration_time_pair_residuals_df["delta_t_corrected"], errors="coerce")
+        - pd.to_numeric(calibration_time_pair_residuals_df["pair_offset_used"], errors="coerce")
     )
     print(
         "Centered pre-slewing T_sum pair residuals using high-Q selected "
@@ -12693,7 +12715,7 @@ if apply_T_sum_calibration:
     else:
         print("Skipping calibration-sample T_sum filtering and strip zeroing (config disabled).")
 
-slewing_fit_df = pd.DataFrame()
+calibration_slewing_fit_df = pd.DataFrame()
 per_channel_slewing_model: dict[str, object] = {}
 per_channel_slewing_diagnostics: dict[str, object] = {}
 calibration_slewing_event_solutions: dict[object, dict[str, float]] = {}
@@ -12711,7 +12733,7 @@ if (
         "Rebuilding T_sum pair residual table from the time- and "
         "charge-calibrated calibration subsample for slewing diagnostics."
     )
-    time_pair_residuals_df = _build_tsum_pair_residuals(
+    calibration_time_pair_residuals_df = _build_tsum_pair_residuals(
         calibration_work_df,
         y_lookup=y_lookup,
         z_positions=z_positions,
@@ -12720,14 +12742,14 @@ if (
     )
     print(
         "Built post-calibration T_sum pair residual table with "
-        f"{len(time_pair_residuals_df)} rows."
+        f"{len(calibration_time_pair_residuals_df)} rows."
     )
-    time_pair_residuals_df = _apply_slewing_qsum_coordinate_transform(
-        time_pair_residuals_df,
+    calibration_time_pair_residuals_df = _apply_slewing_qsum_coordinate_transform(
+        calibration_time_pair_residuals_df,
     )
-    _save_tsum_pair_residuals(time_pair_residuals_df)
-    plot_slewing_pair_delta_t_qsum1_qsum2_contours(time_pair_residuals_df)
-    plot_slewing_delta_t_vs_qsum2_by_qsum1_bins(time_pair_residuals_df)
+    _save_tsum_pair_residuals(calibration_time_pair_residuals_df)
+    plot_slewing_pair_delta_t_qsum1_qsum2_contours(calibration_time_pair_residuals_df)
+    plot_slewing_delta_t_vs_qsum2_by_qsum1_bins(calibration_time_pair_residuals_df)
     _plot_slewing_fit_requested_now = task2_plot_requested(
         "slewing_delta_t_vs_qsum2_by_qsum1_bins_fit",
         essential=True,
@@ -12738,19 +12760,19 @@ if (
         or _plot_slewing_per_strip_from_pair_fit
     )
     if _need_legacy_pair_fit_slewing:
-        slewing_fit_df = calculate_slewing_delta_t_vs_qsum2_by_qsum1_bins_fit(
-            time_pair_residuals_df,
+        calibration_slewing_fit_df = calculate_slewing_delta_t_vs_qsum2_by_qsum1_bins_fit(
+            calibration_time_pair_residuals_df,
             save_coefficients=not _plot_slewing_fit_requested_now,
         )
         if _plot_slewing_fit_requested_now:
             plot_slewing_delta_t_vs_qsum2_by_qsum1_bins_fit(
-                time_pair_residuals_df,
+                calibration_time_pair_residuals_df,
                 save_coefficients=True,
             )
-        plot_slewing_per_strip_from_pair_fit(time_pair_residuals_df, slewing_fit_df)
+        plot_slewing_per_strip_from_pair_fit(calibration_time_pair_residuals_df, calibration_slewing_fit_df)
     if apply_slewing_correction_from_pair_fit and slewing_application_mode == "per_channel_polynomial":
         per_channel_slewing_model, per_channel_slewing_diagnostics = fit_per_channel_polynomial_slewing_model(
-            time_pair_residuals_df,
+            calibration_time_pair_residuals_df,
             context_label="calibration subsample",
         )
         store_per_channel_polynomial_slewing_metadata(
@@ -12762,7 +12784,7 @@ if (
             context_label="calibration subsample",
         )
     if apply_slewing_correction_from_pair_fit and slewing_application_mode == "pair_event_solution":
-        if slewing_fit_df.empty:
+        if calibration_slewing_fit_df.empty:
             print(
                 "apply_slewing_correction_from_pair_fit=True but no pair-fit "
                 "slewing table is available; skipping event-wise slewing application."
@@ -12774,7 +12796,7 @@ if (
                 calibration_slewing_before_pair_residuals_df,
             ) = _build_pair_fit_slewing_event_solutions(
                 calibration_work_df,
-                slewing_fit_df,
+                calibration_slewing_fit_df,
                 context_label="calibration subsample",
             )
             if calibration_slewing_event_solutions:
@@ -12831,17 +12853,29 @@ if apply_T_dif_calibration:
     for plane in range(1, 5):
         for strip in range(1, 5):
             column_name = f'p{plane}_s{strip}_tdif'
-            mask = working_df[column_name] != 0
-            snapshot_column_if_changed(working_df, column_name, mask)
-            working_df.loc[mask, column_name] -= Tdiff_cal[plane - 1][strip - 1]
+            cal_column_name = f"{column_name}_cal"
+            source_values = pd.to_numeric(working_df[column_name], errors="coerce").fillna(0).to_numpy(dtype=float)
+            corrected_values = source_values.copy()
+            mask = source_values != 0
+            corrected_values[mask] = source_values[mask] - Tdiff_cal[plane - 1][strip - 1]
+            target_dtype = working_df[column_name].dtype
+            if pd.api.types.is_float_dtype(target_dtype):
+                corrected_values = np.asarray(corrected_values, dtype=target_dtype)
+            working_df.loc[:, cal_column_name] = corrected_values
 
 if apply_T_sum_calibration:
     for plane in range(1, 5):
         for strip in range(1, 5):
             column_name = f'p{plane}_s{strip}_tsum'
-            mask = working_df[column_name] != 0
-            snapshot_column_if_changed(working_df, column_name, mask)
-            working_df.loc[mask, column_name] += Tsum_cal[plane - 1][strip - 1]
+            cal_column_name = f"{column_name}_cal"
+            source_values = pd.to_numeric(working_df[column_name], errors="coerce").fillna(0).to_numpy(dtype=float)
+            corrected_values = source_values.copy()
+            mask = source_values != 0
+            corrected_values[mask] = source_values[mask] + Tsum_cal[plane - 1][strip - 1]
+            target_dtype = working_df[column_name].dtype
+            if pd.api.types.is_float_dtype(target_dtype):
+                corrected_values = np.asarray(corrected_values, dtype=target_dtype)
+            working_df.loc[:, cal_column_name] = corrected_values
 
 print(
     "Skipping post-application T_dif/T_sum filtering on working_df; "
@@ -12852,14 +12886,26 @@ for plane in range(1, 5):
     for strip in range(1, 5):
         q_dif_col = f'p{plane}_s{strip}_qdif'
         q_sum_col = f'p{plane}_s{strip}_qsum'
+        q_dif_cal_col = f"{q_dif_col}_cal"
+        q_sum_cal_col = f"{q_sum_col}_cal"
 
-        q_dif_mask = working_df[q_dif_col] != 0
-        snapshot_column_if_changed(working_df, q_dif_col, q_dif_mask)
-        working_df.loc[q_dif_mask, q_dif_col] -= (QF_pedestal[plane - 1][strip - 1] - QB_pedestal[plane - 1][strip - 1]) / 2
+        q_dif_values = pd.to_numeric(working_df[q_dif_col], errors="coerce").fillna(0).to_numpy(dtype=float)
+        q_dif_corrected = q_dif_values.copy()
+        q_dif_mask = q_dif_values != 0
+        q_dif_corrected[q_dif_mask] = q_dif_values[q_dif_mask] - (QF_pedestal[plane - 1][strip - 1] - QB_pedestal[plane - 1][strip - 1]) / 2
+        q_dif_dtype = working_df[q_dif_col].dtype
+        if pd.api.types.is_float_dtype(q_dif_dtype):
+            q_dif_corrected = np.asarray(q_dif_corrected, dtype=q_dif_dtype)
+        working_df.loc[:, q_dif_cal_col] = q_dif_corrected
 
-        q_sum_mask = working_df[q_sum_col] != 0
-        snapshot_column_if_changed(working_df, q_sum_col, q_sum_mask)
-        working_df.loc[q_sum_mask, q_sum_col] -= (QF_pedestal[plane - 1][strip - 1] + QB_pedestal[plane - 1][strip - 1]) / 2
+        q_sum_values = pd.to_numeric(working_df[q_sum_col], errors="coerce").fillna(0).to_numpy(dtype=float)
+        q_sum_corrected = q_sum_values.copy()
+        q_sum_mask = q_sum_values != 0
+        q_sum_corrected[q_sum_mask] = q_sum_values[q_sum_mask] - (QF_pedestal[plane - 1][strip - 1] + QB_pedestal[plane - 1][strip - 1]) / 2
+        q_sum_dtype = working_df[q_sum_col].dtype
+        if pd.api.types.is_float_dtype(q_sum_dtype):
+            q_sum_corrected = np.asarray(q_sum_corrected, dtype=q_sum_dtype)
+        working_df.loc[:, q_sum_cal_col] = q_sum_corrected
 
 if charge_front_back_mode is not None:
     for key in [1, 2, 3, 4]:
@@ -12871,8 +12917,8 @@ if charge_front_back_mode is not None:
                 continue
             coeffs = np.asarray(coeffs, dtype=float)
 
-            column_name = f'p{key}_s{strip}_qdif'
-            q_sum_column_name = f'p{key}_s{strip}_qsum'
+            column_name = f'p{key}_s{strip}_qdif_cal'
+            q_sum_column_name = f'p{key}_s{strip}_qsum_cal'
             if column_name not in working_df.columns or q_sum_column_name not in working_df.columns:
                 continue
 
@@ -12885,7 +12931,6 @@ if charge_front_back_mode is not None:
             corrected_values = qdif_values.copy()
             corrected_values[live_mask] = qdif_values[live_mask] - polynomial(qsum_values[live_mask], *coeffs)
 
-            snapshot_column_if_changed(working_df, column_name, live_mask)
             target_dtype = working_df[column_name].dtype
             working_df.loc[:, column_name] = corrected_values.astype(target_dtype, copy=False)
 
@@ -12899,8 +12944,8 @@ if apply_Q_TDIF_calibration:
                 continue
             coeffs = np.asarray(coeffs, dtype=float)
 
-            tdif_col = f"p{plane}_s{strip}_tdif"
-            qdif_col = f"p{plane}_s{strip}_qdif"
+            tdif_col = f"p{plane}_s{strip}_tdif_cal"
+            qdif_col = f"p{plane}_s{strip}_qdif_cal"
             if tdif_col not in working_df.columns or qdif_col not in working_df.columns:
                 continue
 
@@ -12917,7 +12962,6 @@ if apply_Q_TDIF_calibration:
 
             corrected_values = qdif_values.copy()
             corrected_values[mask] = qdif_values[mask] - polynomial(tdif_values[mask], *coeffs)
-            snapshot_column_if_changed(working_df, qdif_col, mask)
             target_dtype = working_df[qdif_col].dtype
             if pd.api.types.is_float_dtype(target_dtype):
                 corrected_values = np.asarray(corrected_values, dtype=target_dtype)
@@ -12941,7 +12985,7 @@ if apply_slewing_correction_from_pair_fit:
                 per_channel_slewing_model,
                 context_label="working_df_after_deferred_charge_calibrations",
             )
-    elif slewing_fit_df.empty:
+    elif calibration_slewing_fit_df.empty:
         print(
             "Skipping pair-fit slewing application to working_df: no fitted "
             "slewing table is available."
@@ -12953,7 +12997,7 @@ if apply_slewing_correction_from_pair_fit:
             _working_slewing_before_pair_residuals_df,
         ) = _build_pair_fit_slewing_event_solutions(
             working_df,
-            slewing_fit_df,
+            calibration_slewing_fit_df,
             context_label="working_df_after_deferred_charge_calibrations",
         )
         if working_slewing_event_solutions:
@@ -13002,6 +13046,7 @@ task2_pre_strip_block_summary = zero_strip_component_blocks(
     working_df,
     snapshot_originals=snapshot_original_columns_once,
     log_changes=False,
+    apply_changes=False,
 )
 print(
     "[task2-strip-block-normalization] "
@@ -13037,7 +13082,18 @@ strip_combination_summary = apply_task2_unified_strip_combination_filter(
     working_df,
     limits_by_relation=task2_strip_combination_limits_by_relation,
     snapshot_originals=snapshot_original_columns_once,
+    apply_changes=False,
 )
+passes_task_2 = np.full(len(working_df), np.uint16(0xFFFF), dtype=np.uint16)
+strip_fail_masks = strip_combination_summary.get("selected_offender_mask_by_strip", {})
+if isinstance(strip_fail_masks, dict):
+    for bit_idx, strip_key in enumerate(TASK2_STRIP_KEYS):
+        fail_series = strip_fail_masks.get(strip_key)
+        if fail_series is None:
+            continue
+        fail_mask = fail_series.reindex(working_df.index, fill_value=False).to_numpy(dtype=bool)
+        passes_task_2[fail_mask] &= np.uint16(~(1 << bit_idx) & 0xFFFF)
+working_df.loc[:, "passes_task_2"] = passes_task_2
 relation_stats = strip_combination_summary.get("relation_stats", {})
 _task2_empty_relation_summary = _task2_empty_strip_combination_relation_summary()
 _same_strip_relation_summary = relation_stats.get("same_strip", {})
@@ -13299,6 +13355,7 @@ task2_post_strip_block_summary = zero_strip_component_blocks(
     working_df,
     snapshot_originals=snapshot_original_columns_once,
     log_changes=False,
+    apply_changes=False,
 )
 print(
     "[task2-strip-block-normalization] "
@@ -13626,14 +13683,15 @@ if create_debug_plots and "tt_task2_cal" in working_df.columns:
         fig_idx=debug_fig_idx,
     )
 tt_task2_cal_mask = working_df["tt_task2_cal"].notna() & (working_df["tt_task2_cal"] >= 10)
-append_removed_rows_from_mask(working_df, ~tt_task2_cal_mask)
-working_df = working_df.loc[tt_task2_cal_mask].copy()
+working_df.loc[:, "filter_task2_tt_task2_cal_pass"] = tt_task2_cal_mask.to_numpy(dtype=bool)
+if "passes_task_2" in working_df.columns:
+    working_df.loc[~tt_task2_cal_mask, "passes_task_2"] = np.uint16(0)
 record_filter_metric(
-    "tt_task2_cal_lt_10_rows_removed_pct",
+    "tt_task2_cal_lt_10_rows_flagged_pct",
     tt_task2_cal_total - int(tt_task2_cal_mask.sum()),
     tt_task2_cal_total if tt_task2_cal_total else 0,
 )
-_diag_rejected_tt_task2_cal_idx = _diag_idx_after_q_sum.difference(working_df.index)
+_diag_rejected_tt_task2_cal_idx = working_df.index[~tt_task2_cal_mask]
 refresh_global_count_metadata(
     working_df,
     ("tt_task1_clean", "tt_task2_cal", "transferred_task2_clean_to_cal"),
@@ -13943,7 +14001,7 @@ if any(_diag_requested[a] for a in _DIAG_ALIASES):
     if _diag_requested.get("strip_pair_matrix_by_planepair", False):
         if not track_removed_rows_task2:
             print("Task 2 strip-pair removed-row overlay disabled (track_removed_rows_task2=False).")
-        removed_plot_df = removed_rows_df if track_removed_rows_task2 else removed_rows_df.iloc[0:0].copy()
+        removed_plot_df = diagnostic_removed_rows_df if track_removed_rows_task2 else diagnostic_removed_rows_df.iloc[0:0].copy()
         fig_idx = plot_task2_strip_pair_matrix_by_planepair(
             working_df,
             removed_plot_df,
@@ -14078,8 +14136,8 @@ if task2_plot_requested("calibration_subsample_calibrated_removed_zeroes", essen
         del plot_df
 
 if task2_plot_requested("calibration_subsample_uncalibrated_removed_zeroes", essential=True):
-    if calibration_subsample_uncalibrated_plot_df is not None and not calibration_subsample_uncalibrated_plot_df.empty:
-        plot_df = calibration_subsample_uncalibrated_plot_df
+    if plot_calibration_subsample_uncalibrated_df is not None and not plot_calibration_subsample_uncalibrated_df.empty:
+        plot_df = plot_calibration_subsample_uncalibrated_df
         cols_per_row = 8
         num_columns = len(plot_df.columns)
         num_rows = max(1, (num_columns + cols_per_row - 1) // cols_per_row)
@@ -14575,16 +14633,16 @@ if track_removed_rows_task2:
         tracking_output_directory,
         f"original_cols_{basename_no_ext}",
     )
-    original_columns_df = build_original_columns_frame()
+    diagnostic_original_columns_df = build_original_columns_frame()
 
-    removed_rows_df.to_parquet(
+    diagnostic_removed_rows_df.to_parquet(
         f"{removed_rows_base}.parquet",
         engine="pyarrow",
         compression="zstd",
         index=True,
     )
-    removed_rows_df.to_csv(f"{removed_rows_base}.csv", index=True)
-    original_columns_df.to_parquet(
+    diagnostic_removed_rows_df.to_csv(f"{removed_rows_base}.csv", index=True)
+    diagnostic_original_columns_df.to_parquet(
         f"{original_cols_base}.parquet",
         engine="pyarrow",
         compression="zstd",

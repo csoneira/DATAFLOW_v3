@@ -93,7 +93,7 @@ def main() -> int:
     df["raw_tt"] = rng.choice([12, 13, 14, 23, 24, 34], size=n_rows, p=[0.15, 0.15, 0.15, 0.2, 0.2, 0.15])
 
     working_df = df.copy()
-    removed_rows_df = working_df.iloc[0:0].copy()
+    diagnostic_removed_rows_df = working_df.iloc[0:0].copy()
     tracking_base_index = working_df.index.copy()
     original_columns_store: dict[str, pd.Series] = {}
 
@@ -114,11 +114,11 @@ def main() -> int:
         return restored
 
     def append_removed_rows(rows: pd.DataFrame) -> None:
-        nonlocal removed_rows_df
+        nonlocal diagnostic_removed_rows_df
         nonlocal_removed_rows = restore_original_values(rows)
         if not args.track_removed_rows or nonlocal_removed_rows.empty:
             return
-        removed_rows_df = pd.concat([removed_rows_df, nonlocal_removed_rows], ignore_index=False, sort=False)
+        diagnostic_removed_rows_df = pd.concat([diagnostic_removed_rows_df, nonlocal_removed_rows], ignore_index=False, sort=False)
 
     component_cols = [col for col in working_df.columns if col.startswith(("Q", "T"))]
     q_front_cols = [col for col in working_df.columns if col.startswith("Q") and "_F_" in col]
@@ -181,13 +181,13 @@ def main() -> int:
         removed_rows_path = OUT_DIR / f"removed_rows_{args.basename}.parquet"
         removed_rows_csv_path = OUT_DIR / f"removed_rows_{args.basename}.csv"
         original_cols_path = OUT_DIR / f"original_cols_{args.basename}.parquet"
-        original_columns_df = pd.DataFrame(
+        diagnostic_original_columns_df = pd.DataFrame(
             {col: series.reindex(tracking_base_index) for col, series in original_columns_store.items()},
             index=tracking_base_index,
         )
-        removed_rows_df.to_parquet(removed_rows_path, engine="pyarrow", compression="zstd", index=True)
-        removed_rows_df.to_csv(removed_rows_csv_path, index=True)
-        original_columns_df.to_parquet(original_cols_path, engine="pyarrow", compression="zstd", index=True)
+        diagnostic_removed_rows_df.to_parquet(removed_rows_path, engine="pyarrow", compression="zstd", index=True)
+        diagnostic_removed_rows_df.to_csv(removed_rows_csv_path, index=True)
+        diagnostic_original_columns_df.to_parquet(original_cols_path, engine="pyarrow", compression="zstd", index=True)
     else:
         removed_rows_path = None
         removed_rows_csv_path = None
@@ -200,11 +200,11 @@ def main() -> int:
         retained_mask = retained_tt.str.contains(str(pi)) & retained_tt.str.contains(str(pj))
         retained_pair_df = working_df.loc[retained_mask]
 
-        removed_pair_df = removed_rows_df.iloc[0:0].copy()
-        if args.track_removed_rows and "raw_tt" in removed_rows_df.columns:
-            removed_tt = removed_rows_df["raw_tt"].apply(normalize_tt_label).astype(str)
+        removed_pair_df = diagnostic_removed_rows_df.iloc[0:0].copy()
+        if args.track_removed_rows and "raw_tt" in diagnostic_removed_rows_df.columns:
+            removed_tt = diagnostic_removed_rows_df["raw_tt"].apply(normalize_tt_label).astype(str)
             removed_mask = removed_tt.str.contains(str(pi)) & removed_tt.str.contains(str(pj))
-            removed_pair_df = removed_rows_df.loc[removed_mask]
+            removed_pair_df = diagnostic_removed_rows_df.loc[removed_mask]
 
         total_pair_events = len(retained_pair_df) + len(removed_pair_df)
         if total_pair_events < channel_pair_min_events:
@@ -375,7 +375,7 @@ def main() -> int:
         print(f"Removed rows saved to: {removed_rows_path}")
         print(f"Removed rows CSV saved to: {removed_rows_csv_path}")
         print(f"Original columns saved to: {original_cols_path}")
-        print(f"Tracked removed rows: {len(removed_rows_df)}")
+        print(f"Tracked removed rows: {len(diagnostic_removed_rows_df)}")
     else:
         print("Removed-row tracking disabled.")
     return 0

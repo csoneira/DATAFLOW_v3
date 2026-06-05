@@ -172,21 +172,21 @@ def restore_original_values(
 def append_removed_rows_from_mask(
     frame: pd.DataFrame,
     removed_mask: pd.Series,
-    removed_rows_df: pd.DataFrame,
+    diagnostic_removed_rows_df: pd.DataFrame,
     original_columns_store: dict[str, pd.Series],
     enabled: bool,
 ) -> pd.DataFrame:
     if not enabled or frame.empty:
-        return removed_rows_df
+        return diagnostic_removed_rows_df
     aligned_mask = removed_mask.reindex(frame.index, fill_value=False)
     if not aligned_mask.any():
-        return removed_rows_df
+        return diagnostic_removed_rows_df
     rows_to_add = restore_original_values(frame.loc[aligned_mask].copy(), original_columns_store, enabled)
-    if not removed_rows_df.empty:
-        rows_to_add = rows_to_add.loc[~rows_to_add.index.isin(removed_rows_df.index)]
+    if not diagnostic_removed_rows_df.empty:
+        rows_to_add = rows_to_add.loc[~rows_to_add.index.isin(diagnostic_removed_rows_df.index)]
         if rows_to_add.empty:
-            return removed_rows_df
-    return pd.concat([removed_rows_df, rows_to_add], ignore_index=False, sort=False)
+            return diagnostic_removed_rows_df
+    return pd.concat([diagnostic_removed_rows_df, rows_to_add], ignore_index=False, sort=False)
 
 
 def build_original_columns_frame(
@@ -745,7 +745,7 @@ def main() -> None:
 
     rng = np.random.default_rng(42)
     working_df = build_synthetic_df(args.n_events, rng)
-    removed_rows_df = working_df.iloc[0:0].copy()
+    diagnostic_removed_rows_df = working_df.iloc[0:0].copy()
     tracking_base_index = working_df.index.copy()
     original_columns_store: dict[str, pd.Series] = {}
     track_removed_rows_task2 = True
@@ -789,10 +789,10 @@ def main() -> None:
                 working_df.loc[low_cal_idx, col] = 0.0
 
     qsum_mask = (working_df[q_sum_columns] != 0).any(axis=1)
-    removed_rows_df = append_removed_rows_from_mask(
+    diagnostic_removed_rows_df = append_removed_rows_from_mask(
         working_df,
         ~qsum_mask,
-        removed_rows_df,
+        diagnostic_removed_rows_df,
         original_columns_store,
         track_removed_rows_task2,
     )
@@ -800,10 +800,10 @@ def main() -> None:
 
     component_data = working_df[component_columns].fillna(0)
     all_zero_mask = (component_data == 0).all(axis=1)
-    removed_rows_df = append_removed_rows_from_mask(
+    diagnostic_removed_rows_df = append_removed_rows_from_mask(
         working_df,
         all_zero_mask,
-        removed_rows_df,
+        diagnostic_removed_rows_df,
         original_columns_store,
         track_removed_rows_task2,
     )
@@ -816,10 +816,10 @@ def main() -> None:
         + working_df["cal_tt"].fillna(0).astype(int).astype(str)
     )
     cal_tt_mask = working_df["cal_tt"].notna() & (working_df["cal_tt"] >= 10)
-    removed_rows_df = append_removed_rows_from_mask(
+    diagnostic_removed_rows_df = append_removed_rows_from_mask(
         working_df,
         ~cal_tt_mask,
-        removed_rows_df,
+        diagnostic_removed_rows_df,
         original_columns_store,
         track_removed_rows_task2,
     )
@@ -827,7 +827,7 @@ def main() -> None:
 
     png_paths = plot_strip_pair_matrices(
         working_df,
-        removed_rows_df,
+        diagnostic_removed_rows_df,
         original_columns_store,
         figure_dir,
         args.basename,
@@ -847,8 +847,8 @@ def main() -> None:
     removed_rows_csv_path = figure_dir / f"removed_rows_{args.basename}.csv"
     original_cols_path = figure_dir / f"original_cols_{args.basename}.parquet"
 
-    removed_rows_df.to_parquet(removed_rows_path, engine="pyarrow", compression="zstd", index=True)
-    removed_rows_df.to_csv(removed_rows_csv_path, index=True)
+    diagnostic_removed_rows_df.to_parquet(removed_rows_path, engine="pyarrow", compression="zstd", index=True)
+    diagnostic_removed_rows_df.to_csv(removed_rows_csv_path, index=True)
     build_original_columns_frame(tracking_base_index, original_columns_store).to_parquet(
         original_cols_path,
         engine="pyarrow",
@@ -857,7 +857,7 @@ def main() -> None:
     )
 
     print(f"Retained rows: {len(working_df)}")
-    print(f"Removed rows: {len(removed_rows_df)}")
+    print(f"Removed rows: {len(diagnostic_removed_rows_df)}")
     print(
         "Strip-combination filter: "
         f"valid={strip_combination_summary['valid_pair_observations']} "

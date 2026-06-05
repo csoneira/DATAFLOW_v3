@@ -185,7 +185,6 @@ TASK1_PLOT_ALIASES: tuple[str, ...] = (
     "channel_contagion_by_tt",
     "channel_contamination_matrix_32_raw",
     "channel_contagion_by_tt_task0_raw",
-    "channel_histograms_self_trigger",
     "tsum_spread_histograms_filtered_og",
     "tq_scatter_raw_by_tt",
     "tq_scatter_filtered_by_tt",
@@ -862,6 +861,7 @@ def apply_task1_channel_qt_mismatch_filter(
     df_input: pd.DataFrame,
     *,
     snapshot_originals=None,
+    apply_changes: bool = True,
 ) -> dict[str, object]:
     task1_channel_pairs: list[tuple[str, str]] = []
     for plane in range(1, 5):
@@ -880,6 +880,7 @@ def apply_task1_channel_qt_mismatch_filter(
     back_row_mask = pd.Series(False, index=df_input.index)
     channel_qt_mismatch_channels = 0
     channel_qt_values_zeroed = 0
+    mismatch_mask_by_channel: dict[tuple[int, str, int], pd.Series] = {}
 
     if task1_channel_pairs and not df_input.empty:
         for q_col, t_col in task1_channel_pairs:
@@ -892,6 +893,12 @@ def apply_task1_channel_qt_mismatch_filter(
                 continue
             if snapshot_originals is not None:
                 snapshot_originals(df_input, [q_col, t_col])
+            match = re.match(r"^p([1-4])_s([1-4])_(ef|eb)_q$", q_col)
+            if match:
+                plane = int(match.group(1))
+                strip = int(match.group(2))
+                side = "F" if match.group(3) == "ef" else "B"
+                mismatch_mask_by_channel[(plane, side, strip)] = mismatch_mask
             row_mismatch_mask |= mismatch_mask
             q_only_row_mask |= q_only_mask
             t_only_row_mask |= t_only_mask
@@ -902,7 +909,9 @@ def apply_task1_channel_qt_mismatch_filter(
             channel_qt_mismatch_channels += int(mismatch_mask.sum())
             channel_qt_values_zeroed += int((q_values[mismatch_mask] != 0).sum())
             channel_qt_values_zeroed += int((t_values[mismatch_mask] != 0).sum())
-            df_input.loc[mismatch_mask, [q_col, t_col]] = 0
+            if apply_changes:
+                # Legacy destructive mode only; final working_df calls use apply_changes=False.
+                df_input.loc[mismatch_mask, [q_col, t_col]] = 0
 
     return {
         "task1_channel_pairs": task1_channel_pairs,
@@ -918,6 +927,7 @@ def apply_task1_channel_qt_mismatch_filter(
         "front_rows": int(front_row_mask.sum()),
         "back_rows": int(back_row_mask.sum()),
         "mismatch_channels": int(channel_qt_mismatch_channels),
+        "mismatch_mask_by_channel": mismatch_mask_by_channel,
     }
 
 
@@ -1393,6 +1403,7 @@ def apply_task1_plane_combination_filter(
             if not np.any(fail_mask):
                 continue
             cols = channel_map[channel_key]
+            # Legacy destructive mode only; final working_df calls use apply_changes=False.
             df_input.loc[fail_mask, [cols["Q"], cols["T"]]] = 0
 
     top_offenders = sorted(
@@ -1420,6 +1431,10 @@ def apply_task1_plane_combination_filter(
     summary["selected_offender_counts"] = {
         channel_key: int(offender_hit_counts.get(channel_key, 0))
         for channel_key in TASK1_CHANNEL_KEYS
+    }
+    summary["selected_offender_mask_by_channel"] = {
+        channel_key: pd.Series(fail_mask, index=df_input.index, dtype=bool)
+        for channel_key, fail_mask in channel_fail_masks.items()
     }
     summary["selected_offender_count_by_row"] = pd.Series(
         selected_offender_count_by_row,
@@ -2377,12 +2392,12 @@ def _build_task1_input_dataframe(
 
     value_columns = [f"column_{i}" for i in range(6, expected_columns)]
     value_data = raw_matrix[:, 6:].astype(np.float32, copy=False)
-    read_df = pd.DataFrame(value_data, columns=value_columns, copy=False)
+    parsed_df = pd.DataFrame(value_data, columns=value_columns, copy=False)
     # Stable per-file event identity: raw file line number before any Task 1 filtering.
-    read_df.insert(0, "event_id", np.asarray(event_ids, dtype=np.int64))
-    read_df.insert(0, "datetime", datetime_series)
-    read_df["column_6"] = np.rint(raw_matrix[:, 6]).astype(np.int8, copy=False)
-    return read_df, read_lines, written_lines
+    parsed_df.insert(0, "event_id", np.asarray(event_ids, dtype=np.int64))
+    parsed_df.insert(0, "datetime", datetime_series)
+    parsed_df["column_6"] = np.rint(raw_matrix[:, 6]).astype(np.int8, copy=False)
+    return parsed_df, read_lines, written_lines
 
 
 def _zpos_from_conf(row):
@@ -2411,15 +2426,15 @@ def _restore_original_values(rows: pd.DataFrame) -> pd.DataFrame:
 
 def append_removed_rows(rows: pd.DataFrame) -> None:
     """Append fully removed rows with original index and pre-modification values preserved."""
-    global removed_rows_df
+    global diagnostic_removed_rows_df
     if not track_removed_rows or rows.empty:
         return
     rows_to_add = _restore_original_values(rows)
-    if not removed_rows_df.empty:
-        rows_to_add = rows_to_add.loc[~rows_to_add.index.isin(removed_rows_df.index)]
+    if not diagnostic_removed_rows_df.empty:
+        rows_to_add = rows_to_add.loc[~rows_to_add.index.isin(diagnostic_removed_rows_df.index)]
         if rows_to_add.empty:
             return
-    removed_rows_df = pd.concat([removed_rows_df, rows_to_add], ignore_index=False, sort=False)
+    diagnostic_removed_rows_df = pd.concat([diagnostic_removed_rows_df, rows_to_add], ignore_index=False, sort=False)
 
 def append_removed_rows_from_mask(frame: pd.DataFrame, removed_mask: pd.Series) -> None:
     if not track_removed_rows or frame.empty:
@@ -4088,14 +4103,14 @@ for joined_record in joined_input_records:
         f"{joined_path} read_lines={joined_read_lines} valid_lines={joined_written_lines}"
     )
 if joined_frames:
-    read_df = pd.concat(joined_frames, ignore_index=True, sort=False)
+    working_df = pd.concat(joined_frames, ignore_index=True, sort=False)
 else:
-    read_df = pd.DataFrame()
+    working_df = pd.DataFrame()
 joined_analysis_active = len(joined_input_records) > 1
 if joined_analysis_active:
     print(
         "Joined analysis active: "
-        f"files={len(joined_input_records)} total_rows={len(read_df)} primary={file_name}"
+        f"files={len(joined_input_records)} total_rows={len(working_df)} primary={file_name}"
     )
 global_variables["joined_analysis_files_requested"] = int(joined_analysis_files)
 global_variables["joined_analysis_files_used"] = int(len(joined_input_records))
@@ -4136,9 +4151,9 @@ if task1_plot_enabled("event_total_charge_raw"):
             for endpoint in ("ef", "eb")
         ),
     ]
-    raw_total_charge_columns = [col for col in raw_total_charge_columns if col in read_df.columns]
+    raw_total_charge_columns = [col for col in raw_total_charge_columns if col in working_df.columns]
     if raw_total_charge_columns:
-        raw_total_charge = read_df.loc[:, raw_total_charge_columns].sum(axis=1, skipna=True)
+        raw_total_charge = working_df.loc[:, raw_total_charge_columns].sum(axis=1, skipna=True)
         raw_total_charge = raw_total_charge[np.isfinite(raw_total_charge.to_numpy())]
         if not raw_total_charge.empty:
             raw_total_charge_plot = raw_total_charge.clip(lower=0, upper=2000)
@@ -4169,28 +4184,35 @@ print("----------------------------------------------------------------------")
 print("-------------------------- Filter 1: by date -------------------------")
 print("----------------------------------------------------------------------")
 
-read_df = read_df.loc[read_df["datetime"].between(left_limit_time, right_limit_time)]
-if not pd.api.types.is_datetime64_any_dtype(read_df["datetime"]):
+task1_datetime_in_range_mask = working_df["datetime"].between(left_limit_time, right_limit_time)
+working_df.loc[:, "filter_task1_datetime_in_range_pass"] = task1_datetime_in_range_mask.to_numpy(dtype=bool)
+if not pd.api.types.is_datetime64_any_dtype(working_df["datetime"]):
     raise ValueError("The index is not a DatetimeIndex. Check 'datetime' column formatting.")
 
-# Print the count frequency of the acquisition types.
-print(read_df["acquisition_type"].value_counts())
-# Take only the rows in which acquisition_type is equal to 1
-
-selected_mask = read_df["acquisition_type"] == 1
-self_trigger_mask = read_df["acquisition_type"] == 2
-self_trigger = bool(self_trigger_mask.any())  # If self-trigger rows exist, define an indicator as True
-
-raw_data_len = int(selected_mask.sum())
-if raw_data_len == 0 and not self_trigger:
-    print("No coincidence nor self-trigger events.")
+if working_df.empty:
+    print("No valid rows found after reading Task 0 raw parquet input.")
     sys.exit(1)
 
+if "acquisition_type" not in working_df.columns:
+    raise ValueError(
+        "Task 1 expected Task 0 raw parquet input with an acquisition_type column."
+    )
+
+bad_acquisition_type_mask = working_df["acquisition_type"] != 1
+if bad_acquisition_type_mask.any():
+    bad_counts = working_df.loc[
+        bad_acquisition_type_mask, "acquisition_type"
+    ].value_counts(dropna=False)
+    raise ValueError(
+        "Task 1 expected only coincidence rows from Task 0 raw_*.parquet input "
+        "with acquisition_type == 1, but found non-1 acquisition_type values:\n"
+        f"{bad_counts}"
+    )
+
+print(working_df["acquisition_type"].value_counts())
+
 # Note that the middle between start and end time could also be taken. This is for calibration storage.
-if "datetime" in read_df.columns:
-    datetime_series = pd.to_datetime(read_df.loc[selected_mask, "datetime"], errors="coerce").dropna()
-else:
-    datetime_series = pd.Series(dtype="datetime64[ns]")
+datetime_series = pd.to_datetime(working_df["datetime"], errors="coerce").dropna()
 if datetime_series.empty:
     print(
         f"Warning: No valid datetime rows found in {file_name}; moving file to ERROR and skipping."
@@ -4202,20 +4224,6 @@ if datetime_series.empty:
     sys.exit(0)
 datetime_value = datetime_series.iloc[0]
 end_datetime_value = datetime_series.iloc[-1]
-
-if self_trigger:
-    print(read_df.loc[self_trigger_mask])
-    if "datetime" in read_df.columns:
-        datetime_series_st = pd.to_datetime(read_df.loc[self_trigger_mask, "datetime"], errors="coerce").dropna()
-    else:
-        datetime_series_st = pd.Series(dtype="datetime64[ns]")
-    if datetime_series_st.empty:
-        print("Warning: Self-trigger dataframe has no valid datetime values; skipping self-trigger timestamp suffix.")
-    else:
-        datetime_value_st = datetime_series_st.iloc[0]
-        end_datetime_value_st = datetime_series_st.iloc[-1]
-        datetime_str_st = str(datetime_value_st)
-        save_filename_suffix_st = datetime_str_st.replace(' ', "_").replace(':', ".").replace('-', ".")
 
 start_time = datetime_value
 end_time = end_datetime_value
@@ -4382,13 +4390,13 @@ for key, idx_range in column_indices.items():
         channel_rename_map[source_column] = target_column
         named_channel_columns.append(target_column)
 
-if all(column in read_df.columns for column in named_channel_columns):
+if all(column in working_df.columns for column in named_channel_columns):
     # Task 0 raw parquet already owns the detector channel naming.
     channel_source_columns = named_channel_columns
     channel_rename_map = {}
-elif not all(column in read_df.columns for column in channel_source_columns):
-    missing_named = [column for column in named_channel_columns if column not in read_df.columns]
-    missing_legacy = [column for column in channel_source_columns if column not in read_df.columns]
+elif not all(column in working_df.columns for column in channel_source_columns):
+    missing_named = [column for column in named_channel_columns if column not in working_df.columns]
+    missing_legacy = [column for column in channel_source_columns if column not in working_df.columns]
     raise ValueError(
         "Task 1 input is missing detector channel columns. "
         f"missing_named={missing_named[:8]} missing_legacy={missing_legacy[:8]}"
@@ -4397,23 +4405,22 @@ elif not all(column in read_df.columns for column in channel_source_columns):
 task1_join_source_columns = [
     col
     for col in (joined_source_file_column, joined_source_basename_column)
-    if col in read_df.columns
+    if col in working_df.columns
 ]
 task1_preserved_raw_columns = [
     col
-    for col in ("tt_task0_acq", "tt_task0_raw", "param_hash")
-    if col in read_df.columns
+    for col in ("tt_task0_acq", "tt_task0_raw", "param_hash", "acquisition_type", "filter_task1_datetime_in_range_pass")
+    if col in working_df.columns
 ]
 if keep_all_columns_output:
-    working_df = read_df.loc[selected_mask].copy()
+    working_df = working_df.copy()
 else:
-    working_df = read_df.loc[
-        selected_mask,
-        ["event_id", "datetime", *task1_join_source_columns, *task1_preserved_raw_columns, *channel_source_columns],
-    ].copy()
+    working_df = working_df.filter(
+        items=["event_id", "datetime", *task1_join_source_columns, *task1_preserved_raw_columns, *channel_source_columns],
+    ).copy()
 working_df = working_df.rename(columns=channel_rename_map)
 # Track rows that later drop out of Task 1 so their original indexed values stay inspectable.
-removed_rows_df = working_df.iloc[0:0].copy()
+diagnostic_removed_rows_df = working_df.iloc[0:0].copy()
 tracking_base_index = working_df.index.copy()
 original_columns_store: dict[str, pd.Series] = {}
 channel_pair_plot_reference_df = pd.DataFrame(index=working_df.index)
@@ -4433,19 +4440,6 @@ working_df = working_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"
 # print("Columns right after initial assignment (before tt_task0_raw computation):")
 # for col in working_df.columns:
 #     print(f" - {col}")
-
-if self_trigger:
-    if keep_all_columns_output:
-        working_st_df = read_df.loc[self_trigger_mask].copy()
-    else:
-        working_st_df = read_df.loc[
-            self_trigger_mask,
-            ["event_id", "datetime", *task1_preserved_raw_columns, *channel_source_columns],
-        ].copy()
-    working_st_df = working_st_df.rename(columns=channel_rename_map)
-    working_st_df = working_st_df.rename(columns=lambda col: col.replace("_diff_", "_dif_"))
-    
-del read_df
 
 # ----------------------------------------------------------------------------------
 # Count the number of non-zero entries per channel in the whole dataframe ----------
@@ -4499,12 +4493,6 @@ for tt_value, count in sorted(tt_task0_raw_counts.items()):
     percentage = (count / total_events) * 100
     print(f"  Raw TT {tt_value}: {count} events ({percentage:.2f}%)")
 
-if self_trigger:
-    if "tt_task0_raw" in working_st_df.columns:
-        working_st_df.loc[:, "tt_task0_raw"] = pd.to_numeric(working_st_df["tt_task0_raw"], errors="coerce").fillna(0).astype(int)
-    else:
-        working_st_df = compute_tt(working_st_df, "tt_task0_raw")
-
 _task1_self_plot_limits = task1_channel_combination_limits_by_relation.get("self", {})
 T_F_left_pre_cal = float(_task1_self_plot_limits.get("t_sum_left", channel_combination_t_sum_left))
 T_F_right_pre_cal = float(_task1_self_plot_limits.get("t_sum_right", channel_combination_t_sum_right))
@@ -4514,14 +4502,6 @@ Q_F_left_pre_cal = float(_task1_self_plot_limits.get("q_sum_left", channel_combi
 Q_F_right_pre_cal = float(_task1_self_plot_limits.get("q_sum_right", channel_combination_q_sum_right))
 Q_B_left_pre_cal = Q_F_left_pre_cal
 Q_B_right_pre_cal = Q_F_right_pre_cal
-T_F_left_pre_cal_ST = T_F_left_pre_cal
-T_F_right_pre_cal_ST = T_F_right_pre_cal
-T_B_left_pre_cal_ST = T_B_left_pre_cal
-T_B_right_pre_cal_ST = T_B_right_pre_cal
-Q_F_left_pre_cal_ST = Q_F_left_pre_cal
-Q_F_right_pre_cal_ST = Q_F_right_pre_cal
-Q_B_left_pre_cal_ST = Q_B_left_pre_cal
-Q_B_right_pre_cal_ST = Q_B_right_pre_cal
 _prof["s_tt_task0_raw_overview_s"] = round(time.perf_counter() - _t_tt_task0_raw_overview, 2)
 
 _debug_plot_filter_group(
@@ -4566,33 +4546,6 @@ if task1_plot_enabled("channel_contagion_by_tt_task0_raw"):
         working_df, "tt_task0_raw", "raw", fig_idx, base_directories["figure_directory"],
         save_plots, show_plots, plot_list,
     )
-
-if self_trigger:
-    if task1_plot_enabled("tsum_spread_diagnostics"):
-   
-        event_counts = working_st_df['tt_task0_raw'].value_counts()
-
-        plt.figure(figsize=(10, 6))
-        event_counts.plot(kind='bar', alpha=0.7)
-        plt.title(f'Number of Events per Raw TT Label, {start_time}')
-        plt.xlabel('Raw TT Label')
-        plt.ylabel('Number of Events')
-        plt.xticks(rotation=45)
-        plt.tight_layout()
-        if save_plots:
-            final_filename = f'{fig_idx}_raw_TT_ST.png'
-            fig_idx += 1
-
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            save_plot_figure(save_fig_path, format='png')
-
-        if show_plots: plt.show()
-        plt.close()
-
-# -----------------------------------------------------------------------------
-# New channel-wise plot -------------------------------------------------------
-# -----------------------------------------------------------------------------
 
 if task1_plot_enabled("channel_histograms_raw"):
     # Create the grand figure for T values
@@ -4674,88 +4627,6 @@ if task1_plot_enabled("channel_histograms_raw"):
 
     if show_plots: plt.show()
     plt.close(fig_Q)
-
-if self_trigger:
-    if task1_plot_enabled("channel_histograms_self_trigger"):
-   
-        # Create the grand figure for T values
-        fig_T, axes_T = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
-        axes_T = axes_T.flatten()
-        
-        for plane in range(1, 5):
-            for strip in range(1, 5):
-                panel_idx = (plane - 1) * 4 + (strip - 1)
-                col_F = f'p{plane}_s{strip}_ef_t'
-                col_B = f'p{plane}_s{strip}_eb_t'
-                y_F = working_st_df[col_F]
-                y_B = working_st_df[col_B]
-                
-                # Plot histograms with T-specific clipping and bins
-                axes_T[panel_idx].hist(y_F[(y_F != 0) & (y_F > T_clip_min_ST) & (y_F < T_clip_max_ST)], 
-                                    bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
-                axes_T[panel_idx].hist(y_B[(y_B != 0) & (y_B > T_clip_min_ST) & (y_B < T_clip_max_ST)], 
-                                    bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
-                axes_T[panel_idx].axvline(x=T_F_left_pre_cal_ST, color='red', linestyle='--', label='T_left_pre_cal_ST')
-                axes_T[panel_idx].axvline(x=T_F_right_pre_cal_ST, color='blue', linestyle='--', label='T_right_pre_cal_ST')
-                axes_T[panel_idx].set_title(f'{col_F} vs {col_B}')
-                axes_T[panel_idx].legend()
-                
-                if log_scale:
-                    axes_T[panel_idx].set_yscale('log')  # For T values
-
-        plt.tight_layout()
-        plt.subplots_adjust(top=0.9)
-        plt.suptitle(f"SELF TRIGGER. Grand Figure for T values, mingo0{station}\n{start_time}", fontsize=16)
-        
-        if save_plots:
-            final_filename = f'{fig_idx}_grand_figure_T_ST.png'
-            fig_idx += 1
-
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            save_plot_figure(save_fig_path, format='png')
-
-        if show_plots: plt.show()
-        plt.close(fig_T)
-
-        # Create the grand figure for Q values
-        fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
-        axes_Q = axes_Q.flatten()
-        
-        for plane in range(1, 5):
-            for strip in range(1, 5):
-                panel_idx = (plane - 1) * 4 + (strip - 1)
-                col_F = f'p{plane}_s{strip}_ef_q'
-                col_B = f'p{plane}_s{strip}_eb_q'
-                y_F = working_st_df[col_F]
-                y_B = working_st_df[col_B]
-                
-                # Plot histograms with Q-specific clipping and bins
-                axes_Q[panel_idx].hist(y_F[(y_F != 0) & (y_F > Q_clip_min_ST) & (y_F < Q_clip_max_ST)], 
-                                    bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
-                axes_Q[panel_idx].hist(y_B[(y_B != 0) & (y_B > Q_clip_min_ST) & (y_B < Q_clip_max_ST)], 
-                                    bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
-                axes_Q[panel_idx].axvline(x=Q_F_left_pre_cal_ST, color='red', linestyle='--', label='Q_left_pre_cal_ST')
-                axes_Q[panel_idx].axvline(x=Q_F_right_pre_cal_ST, color='blue', linestyle='--', label='Q_right_pre_cal_ST')
-                axes_Q[panel_idx].set_title(f'{col_F} vs {col_B}')
-                axes_Q[panel_idx].legend()
-                
-                if log_scale:
-                    axes_Q[panel_idx].set_yscale('log')  # For Q values
-
-        plt.tight_layout()
-        plt.subplots_adjust(top=0.9)
-        plt.suptitle(f"SELF TRIGGER. Grand Figure for Q values, mingo0{station}\n{start_time}", fontsize=16)
-        if save_plots:
-            final_filename = f'{fig_idx}_grand_figure_Q_ST.png'
-            fig_idx += 1
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            save_plot_figure(save_fig_path, format='png')
-        if show_plots: plt.show()
-        plt.close(fig_Q)
-
-# -----------------------------------------------------------------------------------------------
 
 if task1_plot_enabled("tq_scatter_raw"):
     # Initialize figure and axes for scatter plot of Time vs Charge
@@ -4896,31 +4767,6 @@ _debug_plot_filter_group(
     [Q_F_left_pre_cal, Q_F_right_pre_cal],
     "Q_side_left/right_pre_cal",
 )
-
-if self_trigger:
-    working_st_df.fillna(0, inplace=True)
-
-    st_T_F_cols = collect_columns(working_st_df.columns, T_FRONT_PATTERN)
-    st_T_B_cols = collect_columns(working_st_df.columns, T_BACK_PATTERN)
-    st_Q_F_cols = collect_columns(working_st_df.columns, Q_FRONT_PATTERN)
-    st_Q_B_cols = collect_columns(working_st_df.columns, Q_BACK_PATTERN)
-
-    _debug_plot_filter_group(
-        working_st_df,
-        st_T_F_cols + st_T_B_cols,
-        [T_F_left_pre_cal_ST, T_F_right_pre_cal_ST],
-        "T_side_left/right_pre_cal_ST",
-    )
-    _debug_plot_filter_group(
-        working_st_df,
-        st_Q_F_cols + st_Q_B_cols,
-        [Q_F_left_pre_cal_ST, Q_F_right_pre_cal_ST],
-        "Q_side_left/right_pre_cal_ST",
-    )
-
-# -----------------------------------------------------------------------------
-# New channel-wise plot -------------------------------------------------------
-# -----------------------------------------------------------------------------
 
 if task1_plot_enabled("channel_histograms_filtered"):
     # Create the grand figure for T values
@@ -5185,64 +5031,6 @@ if task1_plot_enabled("tq_scatter_filtered_by_tt"):
             plt.show()
         plt.close(fig_TQ)
 
-if self_trigger:
-    if task1_plot_enabled("tq_scatter_filtered"):
-        # Initialize figure and axes for scatter plot of Time vs Charge
-        fig_TQ, axes_TQ = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
-        axes_TQ = axes_TQ.flatten()
-
-        # Iterate over each plane (T1, T2, T3, T4)
-        for plane in range(1, 5):
-            for strip in range(1, 5):
-                panel_idx = (plane - 1) * 4 + (strip - 1)
-                col_F = f'p{plane}_s{strip}_ef_t'  # Time F column
-                col_B = f'p{plane}_s{strip}_eb_t'  # Time B column
-                
-                y_F = working_st_df[col_F]  # Time values for front
-                y_B = working_st_df[col_B]  # Time values for back
-                
-                charge_col_F = f'p{plane}_s{strip}_ef_q'  # Corresponding charge column for front
-                charge_col_B = f'p{plane}_s{strip}_eb_q'  # Corresponding charge column for back
-                
-                charge_F = working_st_df[charge_col_F]  # Charge values for front
-                charge_B = working_st_df[charge_col_B]  # Charge values for back
-                
-                # Apply clipping ranges to the data
-                mask_F = (y_F != 0) & (y_F > T_clip_min_ST) & (y_F < T_clip_max_ST) & (charge_F > Q_clip_min_ST) & (charge_F < Q_clip_max_ST)
-                mask_B = (y_B != 0) & (y_B > T_clip_min_ST) & (y_B < T_clip_max_ST) & (charge_B > Q_clip_min_ST) & (charge_B < Q_clip_max_ST)
-                
-                # Plot scatter plots for Time F vs Charge F and Time B vs Charge B
-                axes_TQ[panel_idx].scatter(charge_F[mask_F], y_F[mask_F], alpha=0.5, label=f'{col_F} (F)', color='green', s=1)
-                axes_TQ[panel_idx].scatter(charge_B[mask_B], y_B[mask_B], alpha=0.5, label=f'{col_B} (B)', color='orange', s=1)
-                
-                # Plot threshold lines for time and charge
-                axes_TQ[panel_idx].axhline(y=T_F_left_pre_cal_ST, color='red', linestyle='--', label='T_left_pre_cal_ST')
-                axes_TQ[panel_idx].axhline(y=T_F_right_pre_cal_ST, color='blue', linestyle='--', label='T_right_pre_cal_ST')
-                axes_TQ[panel_idx].axvline(x=Q_F_left_pre_cal_ST, color='red', linestyle='--', label='Q_left_pre_cal_ST')
-                axes_TQ[panel_idx].axvline(x=Q_F_right_pre_cal_ST, color='blue', linestyle='--', label='Q_right_pre_cal_ST')
-                
-                axes_TQ[panel_idx].set_title(f'{col_F} vs {col_B}')
-                axes_TQ[panel_idx].legend()
-
-        plt.tight_layout()
-        plt.subplots_adjust(top=0.9)
-        plt.suptitle(f"SELF TRIGGER. Scatter Plot for T vs Q values, mingo0{station}\n{start_time}", fontsize=16)
-        if save_plots:
-            final_filename = f'{fig_idx}_scatter_plot_TQ_filtered_ST.png'
-            fig_idx += 1
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            save_plot_figure(save_fig_path, format='png')
-        if show_plots:
-            plt.show()
-        plt.close(fig_TQ)
-    
-
-# -----------------------------------------------------------------------------
-# Comprobation of emptiness of the columns
-# -----------------------------------------------------------------------------
-
-# Count the number of nonzero values in each column
 nonzero_counts = (working_df != 0).sum()
 
 # Identify columns with fewer than 100 nonzero values
@@ -5924,12 +5712,14 @@ for channel_key in TASK1_CHANNEL_KEYS:
 task1_pre_channel_qt_summary = apply_task1_channel_qt_mismatch_filter(
     working_df,
     snapshot_originals=snapshot_original_columns_once,
+    apply_changes=False,
 )
 plane_combination_summary = apply_task1_plane_combination_filter(
     working_df,
     relation_limits_by_type=task1_channel_combination_limits_by_relation,
     snapshot_originals=snapshot_original_columns_once,
     removed_value_pass_label="plane_combination_filter",
+    apply_changes=False,
 )
 for component_key, _component_label in TASK1_CHANNEL_COMBINATION_COMPONENT_LABELS:
     plane_combination_summary.setdefault(f"failed_pair_{component_key}", 0)
@@ -5945,6 +5735,7 @@ for component_key, _component_label in TASK1_CHANNEL_COMBINATION_COMPONENT_LABEL
 task1_post_channel_qt_summary = apply_task1_channel_qt_mismatch_filter(
     working_df,
     snapshot_originals=snapshot_original_columns_once,
+    apply_changes=False,
 )
 row_mismatch_mask = (
     task1_pre_channel_qt_summary["row_mismatch_mask"]
@@ -6265,16 +6056,35 @@ if _plot_channel_combination_filter_by_tt:
     )
 
 print(f"Original number of events in the dataframe: {original_number_of_events}")
-# Compute clean trigger types after channel-only regularization, then drop the
-# final single-plane / null combinations so Task 1 hands off only multi-plane events.
+# Task 1 channel pass bitmask. Bit 0 is the first TASK1_CHANNEL_KEYS entry,
+# bit 31 is the last; 1 means the channel survived all Task 1 channel checks.
+passes_task_1 = np.full(len(working_df), np.uint32(0xFFFFFFFF), dtype=np.uint32)
+for bit_idx, channel_key in enumerate(TASK1_CHANNEL_KEYS):
+    channel_fail_masks = plane_combination_summary.get("selected_offender_mask_by_channel", {})
+    fail_series = channel_fail_masks.get(channel_key) if isinstance(channel_fail_masks, dict) else None
+    if fail_series is None:
+        fail_mask = np.zeros(len(working_df), dtype=bool)
+    else:
+        fail_mask = fail_series.reindex(working_df.index, fill_value=False).to_numpy(dtype=bool)
+    for mismatch_summary in (task1_pre_channel_qt_summary, task1_post_channel_qt_summary):
+        mismatch_masks = mismatch_summary.get("mismatch_mask_by_channel", {})
+        mismatch_series = mismatch_masks.get(channel_key) if isinstance(mismatch_masks, dict) else None
+        if mismatch_series is not None:
+            fail_mask |= mismatch_series.reindex(working_df.index, fill_value=False).to_numpy(dtype=bool)
+    if not np.any(fail_mask):
+        continue
+    passes_task_1[fail_mask] &= np.uint32(~(1 << bit_idx) & 0xFFFFFFFF)
+working_df.loc[:, "passes_task_1"] = passes_task_1
+
+# Compute clean trigger types after channel-only regularization. Keep every row
+# and record the final trigger-condition failure instead of removing events.
 working_df = compute_tt(working_df, "tt_task1_clean")
 tt_task1_clean_total = len(working_df)
 tt_task1_clean_mask = working_df["tt_task1_clean"].notna() & (working_df["tt_task1_clean"] >= 10)
 channel_qt_removed_tt_task1_clean = int((~tt_task1_clean_mask & row_mismatch_mask.reindex(working_df.index, fill_value=False)).sum())
-append_removed_rows_from_mask(working_df, ~tt_task1_clean_mask)
-working_df = working_df.loc[tt_task1_clean_mask].copy()
+working_df.loc[:, "filter_task1_tt_task1_clean_pass"] = tt_task1_clean_mask.to_numpy(dtype=bool)
 record_filter_metric(
-    "tt_task1_clean_lt_10_rows_removed_pct",
+    "tt_task1_clean_lt_10_rows_flagged_pct",
     tt_task1_clean_total - int(tt_task1_clean_mask.sum()),
     tt_task1_clean_total if tt_task1_clean_total else 0,
 )
@@ -6785,7 +6595,7 @@ if save_removed_channel_values:
 else:
     print("Removed channel-value export skipped: save_removed_channel_values is false.")
 
-if track_removed_rows and not removed_rows_df.empty:
+if track_removed_rows and not diagnostic_removed_rows_df.empty:
     tracking_output_directory = base_directories["tracking_directory"]
     os.makedirs(tracking_output_directory, exist_ok=True)
 
@@ -6797,18 +6607,18 @@ if track_removed_rows and not removed_rows_df.empty:
         tracking_output_directory,
         f"original_cols_{basename_no_ext}",
     )
-    removed_rows_df.to_parquet(
+    diagnostic_removed_rows_df.to_parquet(
         f"{removed_rows_base}.parquet",
         engine="pyarrow",
         compression="zstd",
         index=True,
     )
-    removed_rows_df.to_csv(f"{removed_rows_base}.csv", index=True)
+    diagnostic_removed_rows_df.to_csv(f"{removed_rows_base}.csv", index=True)
     print(f"Removed-row tracking parquet saved to: {removed_rows_base}.parquet")
     print(f"Removed-row tracking CSV saved to: {removed_rows_base}.csv")
     if original_columns_store:
-        original_columns_df = build_original_columns_frame()
-        original_columns_df.to_parquet(
+        diagnostic_original_columns_df = build_original_columns_frame()
+        diagnostic_original_columns_df.to_parquet(
             f"{original_cols_base}.parquet",
             engine="pyarrow",
             compression="zstd",

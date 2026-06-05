@@ -1478,6 +1478,7 @@ def normalize_task3_plane_component_blocks(
     df_input: pd.DataFrame,
     *,
     snapshot_originals=None,
+    apply_changes: bool = True,
 ) -> dict[str, int]:
     """Zero each final plane block when any core Q/T component is zero."""
     plane_map = collect_task3_plane_final_map(df_input)
@@ -1543,17 +1544,18 @@ def normalize_task3_plane_component_blocks(
         values_zeroed += int(np.count_nonzero(t_dif_values[plane_mask, idx]))
         values_zeroed += int(np.count_nonzero(y_values[plane_mask, idx]))
 
-    q_sum_values[any_core_zero] = 0
-    q_dif_values[any_core_zero] = 0
-    t_sum_values[any_core_zero] = 0
-    t_dif_values[any_core_zero] = 0
-    y_values[any_core_zero] = 0
+    if apply_changes:
+        q_sum_values[any_core_zero] = 0
+        q_dif_values[any_core_zero] = 0
+        t_sum_values[any_core_zero] = 0
+        t_dif_values[any_core_zero] = 0
+        y_values[any_core_zero] = 0
 
-    df_input.loc[:, q_sum_cols] = q_sum_values
-    df_input.loc[:, q_dif_cols] = q_dif_values
-    df_input.loc[:, t_sum_cols] = t_sum_values
-    df_input.loc[:, t_dif_cols] = t_dif_values
-    df_input.loc[:, y_cols] = y_values
+        df_input.loc[:, q_sum_cols] = q_sum_values
+        df_input.loc[:, q_dif_cols] = q_dif_values
+        df_input.loc[:, t_sum_cols] = t_sum_values
+        df_input.loc[:, t_dif_cols] = t_dif_values
+        df_input.loc[:, y_cols] = y_values
     return {
         "rows_affected": int(np.count_nonzero(np.any(partial_zero, axis=1))),
         "values_zeroed": int(values_zeroed),
@@ -1675,6 +1677,10 @@ def apply_task3_plane_combination_filter(
             },
             "selected_offender_count_by_row": pd.Series(0, index=df_input.index, dtype=int),
             "resolution_exact_by_row": pd.Series(True, index=df_input.index, dtype=bool),
+            "selected_offender_mask_by_plane": {
+                plane_key: pd.Series(False, index=df_input.index, dtype=bool)
+                for plane_key in TASK3_PLANE_KEYS
+            },
         }
 
     plane_fail_masks = {
@@ -2084,6 +2090,7 @@ def apply_task3_plane_combination_filter(
             summary["values_zeroed"] += int((values[fail_mask] != 0).sum())
         any_row_affected |= fail_mask
         if apply_changes:
+            # Legacy destructive mode only; final working_df calls use apply_changes=False.
             df_input.loc[fail_mask, list(cols.values())] = 0
 
     summary["rows_affected"] = int(np.count_nonzero(any_row_affected))
@@ -2111,6 +2118,10 @@ def apply_task3_plane_combination_filter(
             f"top={top_offenders_str}"
         )
 
+    summary["selected_offender_mask_by_plane"] = {
+        plane_key: pd.Series(plane_fail_masks.get(plane_key, np.zeros(len(df_input), dtype=bool)), index=df_input.index, dtype=bool)
+        for plane_key in TASK3_PLANE_KEYS
+    }
     summary["selected_offender_counts"] = {
         plane_key: int(offender_hit_counts.get(plane_key, 0))
         for plane_key in TASK3_PLANE_KEYS
@@ -6846,11 +6857,20 @@ print(
 plane_raw_values: dict[int, dict[str, np.ndarray]] = {}
 final_columns: dict[str, np.ndarray] = {}
 
+def _task3_prefer_calibrated_strip_column(column_name: str) -> str:
+    cal_column_name = f"{column_name}_cal"
+    if cal_column_name in working_df.columns:
+        return cal_column_name
+    if column_name in working_df.columns:
+        print(f"Warning: Task 3 using uncalibrated fallback column {column_name}; {cal_column_name} is missing.")
+        return column_name
+    return column_name
+
 for i_plane in range(1, 5):
-    t_sum_cols = [f'p{i_plane}_s{i+1}_tsum' for i in range(4)]
-    t_dif_cols = [f'p{i_plane}_s{i+1}_tdif' for i in range(4)]
-    q_sum_cols = [f'p{i_plane}_s{i+1}_qsum' for i in range(4)]
-    q_dif_cols = [f'p{i_plane}_s{i+1}_qdif' for i in range(4)]
+    t_sum_cols = [_task3_prefer_calibrated_strip_column(f'p{i_plane}_s{i+1}_tsum') for i in range(4)]
+    t_dif_cols = [_task3_prefer_calibrated_strip_column(f'p{i_plane}_s{i+1}_tdif') for i in range(4)]
+    q_sum_cols = [_task3_prefer_calibrated_strip_column(f'p{i_plane}_s{i+1}_qsum') for i in range(4)]
+    q_dif_cols = [_task3_prefer_calibrated_strip_column(f'p{i_plane}_s{i+1}_qdif') for i in range(4)]
 
     t_sums = working_df[t_sum_cols].astype(float).fillna(0).to_numpy(copy=False)
     t_difs = working_df[t_dif_cols].astype(float).fillna(0).to_numpy(copy=False)
@@ -7053,7 +7073,7 @@ vals_normalized = vals.copy()
 vals_normalized[has_signal] = vals_normalized[has_signal] - baseline_vals[has_signal, np.newaxis] + 1
 vals_normalized[~nonzero_mask] = 0
 vals_normalized[~has_signal] = 0
-working_df[cols] = vals_normalized
+working_df.loc[:, cols] = vals_normalized
 for i_plane in range(1, 5):
     plane_raw_values[i_plane]["T_sum"] = vals_normalized[:, i_plane - 1].copy()
 filter6_cols: list[str] = []
@@ -7173,6 +7193,7 @@ if filter6_cols and task3_any_plot_enabled(
 task3_pre_plane_block_summary = normalize_task3_plane_component_blocks(
     working_df,
     snapshot_originals=snapshot_original_columns_once,
+    apply_changes=False,
 )
 print(
     "[task3-plane-block-normalization] "
@@ -7227,7 +7248,18 @@ plane_combination_summary = apply_task3_plane_combination_filter(
     detector_y_sum_left=plane_combination_detector_y_sum_left,
     detector_y_sum_right=plane_combination_detector_y_sum_right,
     detector_y_dif_threshold=plane_combination_detector_y_dif_threshold,
+    apply_changes=False,
 )
+passes_task_3 = np.full(len(working_df), np.uint8(0x0F), dtype=np.uint8)
+plane_fail_masks = plane_combination_summary.get("selected_offender_mask_by_plane", {})
+if isinstance(plane_fail_masks, dict):
+    for bit_idx, plane_key in enumerate(TASK3_PLANE_KEYS):
+        fail_series = plane_fail_masks.get(plane_key)
+        if fail_series is None:
+            continue
+        fail_mask = fail_series.reindex(working_df.index, fill_value=False).to_numpy(dtype=bool)
+        passes_task_3[fail_mask] &= np.uint8(~(1 << bit_idx) & 0x0F)
+working_df.loc[:, "passes_task_3"] = passes_task_3
 
 plane_metric_specs = (
     (
@@ -7327,6 +7359,7 @@ for observable_key, metric_prefix, metric_label, left_limit, right_limit in plan
 task3_post_plane_block_summary = normalize_task3_plane_component_blocks(
     working_df,
     snapshot_originals=snapshot_original_columns_once,
+    apply_changes=False,
 )
 print(
     "[task3-plane-block-normalization] "
@@ -7919,9 +7952,10 @@ if "tt_task3_list" in working_df.columns and task3_plot_enabled("prefilter_tt_ta
         fig_idx=debug_fig_idx,
     )
 tt_task3_list_mask = working_df["tt_task3_list"].notna() & (working_df["tt_task3_list"] >= 10)
-working_df = working_df.loc[tt_task3_list_mask].copy()
+working_df.loc[:, "filter_task3_tt_task3_list_pass"] = tt_task3_list_mask.to_numpy(dtype=bool)
+working_df.loc[~tt_task3_list_mask, "passes_task_3"] = np.uint8(0)
 record_filter_metric(
-    "tt_task3_list_lt_10_rows_removed_pct",
+    "tt_task3_list_lt_10_rows_flagged_pct",
     tt_task3_list_total - int(tt_task3_list_mask.sum()),
     tt_task3_list_total if tt_task3_list_total else 0,
 )

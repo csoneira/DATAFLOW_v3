@@ -3427,13 +3427,12 @@ component_cols = [col for col in component_cols if col in working_df.columns]
 if component_cols:
     component_data = working_df[component_cols].fillna(0)
     all_zero_mask = (component_data == 0).all(axis=1)
-    removed_all_zero = int(all_zero_mask.sum())
-    if removed_all_zero > 0:
-        working_df = working_df.loc[~all_zero_mask].copy()
+    flagged_all_zero = int(all_zero_mask.sum())
+    working_df.loc[:, "filter_task5_all_components_nonzero_pass"] = ~all_zero_mask
     record_filter_metric(
-        "all_components_zero_rows_removed_pct",
-        removed_all_zero,
-        len(working_df) + removed_all_zero if (len(working_df) + removed_all_zero) else 0,
+        "all_components_zero_rows_flagged_pct",
+        flagged_all_zero,
+        len(working_df) if len(working_df) else 0,
     )
 
 print(f"Original number of events in the dataframe: {original_number_of_events}")
@@ -3448,9 +3447,9 @@ if create_debug_plots and POST_TT_COLUMN in working_df.columns:
     )
 tt_task5_post_total = len(working_df)
 tt_task5_post_mask = working_df[POST_TT_COLUMN].notna() & (working_df[POST_TT_COLUMN] >= 10)
-working_df = working_df.loc[tt_task5_post_mask].copy()
+working_df.loc[:, "filter_task5_tt_task5_post_pass"] = tt_task5_post_mask.to_numpy(dtype=bool)
 record_filter_metric(
-    "tt_task5_post_lt_10_rows_removed_pct",
+    "tt_task5_post_lt_10_rows_flagged_pct",
     tt_task5_post_total - int(tt_task5_post_mask.sum()),
     tt_task5_post_total if tt_task5_post_total else 0,
 )
