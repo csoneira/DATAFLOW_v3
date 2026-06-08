@@ -28,9 +28,9 @@ flowchart TD
 
 ## Critical runtime logs
 
-- `OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/...`
-- `OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/RUN/sim_main_pipeline_cycle.log`
-- `OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/ANCILLARY/...`
+- `OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/...`
+- `OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/RUN/sim_main_pipeline_cycle.log`
+- `OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/ANCILLARY/...`
 
 ## Fast health checks
 
@@ -41,7 +41,7 @@ crontab -l
 pgrep -af "guide_raw_to_corrected.sh -s"
 pgrep -af "run_main_simulation_cycle.sh|run_step.sh -c|step_final_daq_to_station_dat.py"
 
-tail -n 80 $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/RUN/sim_main_pipeline_cycle.log
+tail -n 80 $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/RUN/sim_main_pipeline_cycle.log
 ```
 
 ## Maintenance scripts
@@ -54,8 +54,8 @@ tail -n 80 $HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/RUN/sim_mai
 
 ### Observability and audits
 
-- `OPERATIONS/OBSERVABILITY/AUDIT_PIPELINE_STATES/audit_pipeline_states.py`
-- `OPERATIONS/OBSERVABILITY/SEARCH_FOR_ERRORS/error_finder.py` (if present in environment)
+- `OPERATIONS/OPERATIONS_SCRIPTS/OBSERVABILITY/AUDIT_PIPELINE_STATES/audit_pipeline_states.py`
+- `OPERATIONS/OPERATIONS_SCRIPTS/OBSERVABILITY/SEARCH_FOR_ERRORS/error_finder.py` (if present in environment)
 
 ## Incident triage order
 

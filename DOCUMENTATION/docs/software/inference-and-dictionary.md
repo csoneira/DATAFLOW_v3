@@ -28,7 +28,7 @@ flowchart LR
 ## Main code locations
 
 - Build/test workflows: `MINGO_DICTIONARY_CREATION_AND_TEST/`
-- Runtime usage in pipeline: `MASTER/common/simulated_data_utils.py`
+- Runtime usage in pipeline: `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/common/simulated_data_utils.py`
 
 ## Operational notes
 

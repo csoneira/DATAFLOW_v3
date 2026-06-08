@@ -41,12 +41,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--token-file",
         type=Path,
-        default=root / "OPERATIONS" / "NOTIFICATIONS" / "TELEGRAM_BOT" / "API_TOKEN.txt",
+        default=root / "OPERATIONS" / "OPERATIONS_SCRIPTS" / "NOTIFICATIONS" / "TELEGRAM_BOT" / "API_TOKEN.txt",
     )
     parser.add_argument(
         "--chat-ids-file",
         type=Path,
-        default=root / "OPERATIONS" / "NOTIFICATIONS" / "TELEGRAM_BOT" / "ALERT_CHAT_IDS.txt",
+        default=root / "OPERATIONS" / "OPERATIONS_SCRIPTS" / "NOTIFICATIONS" / "TELEGRAM_BOT" / "ALERT_CHAT_IDS.txt",
     )
     parser.add_argument("--chat-ids", default="")
     parser.add_argument("--source", default="run_step")

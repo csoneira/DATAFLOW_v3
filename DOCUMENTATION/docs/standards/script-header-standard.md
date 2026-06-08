@@ -6,7 +6,7 @@ Canonical source document:
 - `DOCS/REPO_DOCS/SCRIPT_HEADER_STANDARD.md`
 
 Automated application tool:
-- `OPERATIONS/DEVELOPER_TOOLS/standardize_script_headers.py`
+- `OPERATIONS/OPERATIONS_SCRIPTS/DEVELOPER_TOOLS/standardize_script_headers.py`
 
 ## Required marker
 
@@ -109,12 +109,12 @@ Notes: Keep references stable and document external dependencies.
 
 ```bash
 # dry-run
-python3 OPERATIONS/DEVELOPER_TOOLS/standardize_script_headers.py
+python3 OPERATIONS/OPERATIONS_SCRIPTS/DEVELOPER_TOOLS/standardize_script_headers.py
 
 # apply headers
-python3 OPERATIONS/DEVELOPER_TOOLS/standardize_script_headers.py --apply
+python3 OPERATIONS/OPERATIONS_SCRIPTS/DEVELOPER_TOOLS/standardize_script_headers.py --apply
 
 # refresh existing standardized headers
-python3 OPERATIONS/DEVELOPER_TOOLS/standardize_script_headers.py --apply --refresh
+python3 OPERATIONS/OPERATIONS_SCRIPTS/DEVELOPER_TOOLS/standardize_script_headers.py --apply --refresh
 ```
 

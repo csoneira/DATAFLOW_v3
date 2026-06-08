@@ -12,13 +12,13 @@
 .pytest_cache/
 .venv/
 .vscode/
-OPERATIONS_RUNTIME/
+OPERATIONS/OPERATIONS_RUNTIME/
 
 # Top-level data/archive trees that should not be mirrored
 .ATTIC/
-LOG_BACKUP/hosts/
-LOG_BACKUP/runtime/
-STATIONS/
+OPERATIONS/OPERATIONS_RUNTIME/REMOTE_LOG_BACKUP/hosts/
+OPERATIONS/OPERATIONS_RUNTIME/REMOTE_LOG_BACKUP/
+MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/
 VARIOUS/
 SIMULATION_DATA_JUNK/
 STATIONS_FEB_26/
@@ -48,7 +48,7 @@ MINGO_DIGITAL_TWIN/PLOTTERS/STEPS/OUTPUT_FILES/
 
 # Bundled unpacker runtime data/logs. Keep the unpacker source, skip raw/runtime
 # detector dumps and generated runtime state.
-MASTER/STAGES/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES/system/
+MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES/system/
 **/rawData/***
 
 # Known standalone generated data files outside output trees

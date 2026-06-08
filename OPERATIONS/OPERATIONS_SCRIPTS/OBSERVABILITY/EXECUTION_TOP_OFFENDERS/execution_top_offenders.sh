@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
-# Script: OPERATIONS/OBSERVABILITY/EXECUTION_TOP_OFFENDERS/execution_top_offenders.sh
+# Script: OPERATIONS/OPERATIONS_SCRIPTS/OBSERVABILITY/EXECUTION_TOP_OFFENDERS/execution_top_offenders.sh
 # Purpose: Execution top offenders.
 # Owner: DATAFLOW_v3 contributors
 # Sign-off: csoneira <csoneira@ucm.es>
 # Last Updated: 2026-03-02
 # Runtime: bash
-# Usage: bash OPERATIONS/OBSERVABILITY/EXECUTION_TOP_OFFENDERS/execution_top_offenders.sh [options]
+# Usage: bash OPERATIONS/OPERATIONS_SCRIPTS/OBSERVABILITY/EXECUTION_TOP_OFFENDERS/execution_top_offenders.sh [options]
 # Inputs: CLI args, config files, environment variables, and/or upstream files.
 # Outputs: Files, logs, or process-level side effects.
 # Notes: Keep behavior configuration-driven and reproducible.
@@ -16,7 +16,7 @@
 set -euo pipefail
 
 BASE_DIR="${BASE_DIR:-$HOME/DATAFLOW_v3}"
-LOG_DIR="${BASE_DIR}/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/EXECUTION_TOP_OFFENDERS"
+LOG_DIR="${BASE_DIR}/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/EXECUTION_TOP_OFFENDERS"
 LOG_FILE="${LOG_FILE:-$LOG_DIR/execution_top_offenders.log}"
 LOCK_FILE="/tmp/dataflow_execution_top_offenders.lock"
 

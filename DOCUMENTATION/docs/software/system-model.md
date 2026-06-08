@@ -6,9 +6,9 @@ This page is the fastest accurate mental model of DATAFLOW_v3 software.
 
 | Pillar | Question answered | Main path |
 | --- | --- | --- |
-| Analysis software | What happened in real (or simulated) station data? | `MASTER/` -> `STATIONS/` |
+| Analysis software | What happened in real (or simulated) station data? | `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/` -> `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/` |
 | Simulation digital twin | What should the detector produce under controlled assumptions? | `MINGO_DIGITAL_TWIN/` |
-| Dictionary-based inference | How do measured observables map to physics quantities? | `MINGO_DICTIONARY_CREATION_AND_TEST/`, `MASTER/common/` |
+| Dictionary-based inference | How do measured observables map to physics quantities? | `MINGO_DICTIONARY_CREATION_AND_TEST/`, `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/common/` |
 
 ## System relationship
 

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
-# Script: OPERATIONS/MAINTENANCE/CLEANERS/clean_dataflow.sh
+# Script: OPERATIONS/OPERATIONS_SCRIPTS/MAINTENANCE/CLEANERS/clean_dataflow.sh
 # Purpose: Clean dataflow.
 # Owner: DATAFLOW_v3 contributors
 # Sign-off: csoneira <csoneira@ucm.es>
 # Last Updated: 2026-05-08
 # Runtime: bash
-# Usage: bash OPERATIONS/MAINTENANCE/CLEANERS/clean_dataflow.sh [options]
+# Usage: bash OPERATIONS/OPERATIONS_SCRIPTS/MAINTENANCE/CLEANERS/clean_dataflow.sh [options]
 # Inputs: CLI args, config files, environment variables, and/or upstream files.
 # Outputs: Files, logs, or process-level side effects.
 # Notes: Keep behavior configuration-driven and reproducible.
@@ -87,7 +87,7 @@ TEMP_ROOTS=(
   "$DATAFLOW_ROOT"
   "${DATAFLOW_CLEAN_SAFE_ROOT:-$DATAFLOW_PARENT/SAFE_DATAFLOW_v3}"
 )
-CRON_LOG_DIR="${DATAFLOW_CLEAN_CRON_LOG_DIR:-$DATAFLOW_ROOT/OPERATIONS_RUNTIME/CRON_LOGS}"
+CRON_LOG_DIR="${DATAFLOW_CLEAN_CRON_LOG_DIR:-$DATAFLOW_ROOT/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS}"
 SIM_JUNK_BASE="${DATAFLOW_CLEAN_SIM_JUNK_BASE:-$DATAFLOW_PARENT/SIMULATION_DATA_JUNK}"
 PLOTS_KEEP_FRESHEST="${DATAFLOW_CLEAN_PLOTS_KEEP_FRESHEST:-5}"
 KEEP_FINAL_TRIGGER_PCT="${DATAFLOW_CLEAN_KEEP_FINAL_TRIGGER_PCT:-90}"
@@ -583,9 +583,9 @@ clean_temps() {
 
     local base
     for base in \
-      "$root"/MASTER/STAGES/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/mingo*/data/daqData \
-      "$root"/STATIONS/MINGO*/STAGE_0/*/system/devices/TRB3/mingo*/data/daqData \
-      "$root"/STATIONS/MINGO*/STAGE_0/*/*/system/devices/TRB3/mingo*/data/daqData; do
+      "$root"/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES/system/devices/TRB3/mingo*/data/daqData \
+      "$root"/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO*/STAGE_0/*/system/devices/TRB3/mingo*/data/daqData \
+      "$root"/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO*/STAGE_0/*/*/system/devices/TRB3/mingo*/data/daqData; do
       [[ -d "$base" ]] || continue
       if [[ -n ${seen_bases["$base"]:-} ]]; then
         continue

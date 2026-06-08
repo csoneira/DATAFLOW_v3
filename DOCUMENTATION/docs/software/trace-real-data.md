@@ -17,11 +17,11 @@ flowchart LR
 
 | Segment | Owner path |
 | --- | --- |
-| Ingestion and queueing | `MASTER/STAGES/STAGE_0/` |
-| Event/lab-log transformations | `MASTER/STAGES/STAGE_1/` |
-| Corrections and merges | `MASTER/STAGES/STAGE_2/` |
-| Final analytics/enrichment | `MASTER/STAGES/STAGE_3/` |
-| Output/state materialization | `STATIONS/MINGO0X/...` |
+| Ingestion and queueing | `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_0/` |
+| Event/lab-log transformations | `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/` |
+| Corrections and merges | `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_2/` |
+| Final analytics/enrichment | `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_3/` |
+| Output/state materialization | `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0X/...` |
 
 ## Validation checkpoints
 

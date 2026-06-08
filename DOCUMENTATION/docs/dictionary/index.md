@@ -97,14 +97,14 @@ _The original plot comes from the file
 ## Using and maintaining the dictionary
 
 When a dictionary CSV is placed in the analysis pipeline (typically under
-`MASTER/CONFIG_FILES/dictionary/` or copied alongside a processing run), the
-helper `MASTER/common/simulated_data_utils.py` exposes the function
+`MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/dictionary/` or copied alongside a processing run), the
+helper `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/common/simulated_data_utils.py` exposes the function
 `get_flux_from_rates(rates, efficiency, config_hash=None)` which performs the
 interpolation.  The same function is used for real station data and for
 simulation-based validation runs.
 
 ```python
-from MASTER.common.simulated_data_utils import get_flux_from_rates
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.simulated_data_utils import get_flux_from_rates
 
 rates = {...}          # strip-level rates dictionary
 eff = 0.88             # estimated from coincidence data
@@ -136,7 +136,7 @@ this ensures reproducibility of past analyses.
 For workflows involving real data, the analysis pipeline includes a cron entry
 that triggers a monthly dictionary refresh and notifies analysts via telegram
 if large discrepancies are observed.  See
-`OPERATIONS/NOTIFICATIONS/TELEGRAM_BOT` for alert configuration.
+`OPERATIONS/OPERATIONS_SCRIPTS/NOTIFICATIONS/TELEGRAM_BOT` for alert configuration.
 
 > **Note:** keeping the dictionary up to date is critical for maintaining flux
 > scale accuracy.  See the `MINGO_DICTIONARY_CREATION_AND_TEST/README.md` for

@@ -76,7 +76,7 @@ operator on shutdown.  Other log‑based checks include:
 The station crontab includes tasks to auto‑clear swap, solve stale locks and
 flush old logs (see `CONFIG/add_to_crontab.info`).  There is also a
 `persistent_telegram_bot_check.sh` script that ensures the Telegram notification
-bot is running; failures are logged under `OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/TELEGRAM_BOT`.
+bot is running; failures are logged under `OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/TELEGRAM_BOT`.
 
 Operators should review the `error_finder.py` output periodically to catch
 Python tracebacks or abnormal log entries.

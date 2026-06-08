@@ -233,7 +233,7 @@ disable that check).
 The main orchestration cycle (`ORCHESTRATOR/core/run_main_simulation_cycle.sh`)
 implements file-based locking (`sim_enqueue.lock`, `sim_processing.lock`,
 `sim_final.lock`) to prevent concurrent executions and rotates logs under
-`OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/`.  Look in the `*_cron.log` files for
+`OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/`.  Look in the `*_cron.log` files for
 recent failures or use `grep -i error` on the entire directory.
 
 Each SIM_RUN has its own `run.log` file inside the directory; examine it when

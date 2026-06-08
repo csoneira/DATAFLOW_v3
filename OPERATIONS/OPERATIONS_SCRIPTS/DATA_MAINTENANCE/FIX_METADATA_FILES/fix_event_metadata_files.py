@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 DATAFLOW_v3 Script Header v1
-Script: OPERATIONS/DATA_MAINTENANCE/FIX_METADATA_FILES/fix_event_metadata_files.py
+Script: OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/FIX_METADATA_FILES/fix_event_metadata_files.py
 Purpose: Repair Stage 1 event metadata CSVs by splitting embedded rows and removing malformed records.
 Owner: DATAFLOW_v3 contributors
 Sign-off: csoneira <csoneira@ucm.es>
 Last Updated: 2026-05-05
 Runtime: python3
-Usage: python3 OPERATIONS/DATA_MAINTENANCE/FIX_METADATA_FILES/fix_event_metadata_files.py [options]
+Usage: python3 OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/FIX_METADATA_FILES/fix_event_metadata_files.py [options]
 Inputs: CLI args, config files, environment variables, and/or upstream files.
 Outputs: Files, logs, plots, or stdout/stderr side effects.
 Notes: Keep behavior configuration-driven and reproducible.
@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Iterable
 
 CSV_FIELD_LIMIT = 131072
-METADATA_GLOB = "STATIONS/MINGO0*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/METADATA/task_*_metadata_*.csv"
+METADATA_GLOB = "MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/METADATA/task_*_metadata_*.csv"
 EMBEDDED_ROW_START_RE = re.compile(r"(?<![\r\n])(mi\d{13},)")
 STATUS_SENTINEL_BASENAME_RE = re.compile(r"^__task\d+_startup_station_\d+__$")
 BASENAME_COLUMNS = ("filename_base", "basename")
@@ -68,7 +68,7 @@ class FileStats:
 
 
 def detect_repo_root(start: Path) -> Path:
-    """Ascend upwards until a directory containing STATIONS/ is found."""
+    """Ascend upwards until a directory containing MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/ is found."""
     for parent in [start] + list(start.parents):
         if (parent / "STATIONS").is_dir():
             return parent
@@ -88,7 +88,7 @@ def parse_args() -> argparse.Namespace:
         "--root",
         type=Path,
         default=default_root,
-        help=f"Repository root containing STATIONS/ (default: {default_root})",
+        help=f"Repository root containing MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/ (default: {default_root})",
     )
     parser.add_argument(
         "--dry-run",

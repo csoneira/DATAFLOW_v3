@@ -1,6 +1,11 @@
-# LOG_BACKUP
+# Remote Log Backup
 
-This directory contains an append-safe backup for the remote log trees on `mingo01`, `mingo02`, `mingo03`, and `mingo04`.
+The scripts in this directory maintain an append-safe backup for the remote log
+trees on `mingo01`, `mingo02`, `mingo03`, and `mingo04`.
+
+Mutable backup data is stored separately under:
+
+`OPERATIONS/OPERATIONS_RUNTIME/REMOTE_LOG_BACKUP/`
 
 ## Layout
 
@@ -23,19 +28,19 @@ This directory contains an append-safe backup for the remote log trees on `mingo
 Run the backup manually:
 
 ```bash
-bash /home/mingo/DATAFLOW_v3/LOG_BACKUP/run_log_backup.sh
+bash /home/mingo/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/REMOTE_LOG_BACKUP/run_log_backup.sh
 ```
 
 Install the 12-hour cron entry:
 
 ```bash
-bash /home/mingo/DATAFLOW_v3/LOG_BACKUP/install_log_backup_cron.sh
+bash /home/mingo/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/REMOTE_LOG_BACKUP/install_log_backup_cron.sh
 ```
 
 Print the cron line without installing it:
 
 ```bash
-bash /home/mingo/DATAFLOW_v3/LOG_BACKUP/install_log_backup_cron.sh --print-only
+bash /home/mingo/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/REMOTE_LOG_BACKUP/install_log_backup_cron.sh --print-only
 ```
 
 ## Notes

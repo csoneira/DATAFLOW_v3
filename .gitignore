@@ -3,12 +3,12 @@
 # ----------------------------------------------------------------------
 .github/workflows/bug-detector.yml
 add_to_rclone.info
-/home/mingo/DATAFLOW_v3/OPERATIONS/NOTIFICATIONS/TELEGRAM_BOT/TERMINAL_PASSWORD.txt
+/home/mingo/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/NOTIFICATIONS/TELEGRAM_BOT/TERMINAL_PASSWORD.txt
 
 # ----------------------------------------------------------------------
 # Runtime/generated directories
 # ----------------------------------------------------------------------
-STATIONS/
+MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/
 NOT_ESSENTIAL/
 .ATTIC/
 
@@ -32,7 +32,7 @@ MINGO_DIGITAL_TWIN/INTERSTEPS/
 **/diagnostic_plots/
 
 # Runtime/log/throttle trees
-**/OPERATIONS_RUNTIME/
+OPERATIONS/OPERATIONS_RUNTIME/
 **/EXECUTION_LOGS/
 **/LOG_THROTTLE/
 **/RUNTIME/
@@ -58,8 +58,8 @@ MINGO_DIGITAL_TWIN/INTERSTEPS/
 # Runtime locks and throttle markers
 # ----------------------------------------------------------------------
 *.lock
-MASTER/STAGE_0/REPROCESSING/STEP_2/.unpack_shared.lock
-OPERATIONS_RUNTIME/LOG_THROTTLE/*.ts
+MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_0/REPROCESSING/STEP_2/.unpack_shared.lock
+OPERATIONS/OPERATIONS_RUNTIME/LOG_THROTTLE/*.ts
 
 # ----------------------------------------------------------------------
 # Binary / scientific artifacts
@@ -99,10 +99,10 @@ OPERATIONS_RUNTIME/LOG_THROTTLE/*.ts
 *.json
 *.txt
 
-!OPERATIONS/NOTIFICATIONS/TELEGRAM_BOT/WELCOME_MESSAGE.txt
-!MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/config_parameters.csv
-!MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_*/config_parameters_task_*.csv
-!MASTER/CONFIG_FILES/STAGE_1/LAB_LOGS/config_lab_logs.csv
+!OPERATIONS/OPERATIONS_SCRIPTS/NOTIFICATIONS/TELEGRAM_BOT/WELCOME_MESSAGE.txt
+!MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/config_parameters.csv
+!MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_*/config_parameters_task_*.csv
+!MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/LAB_LOGS/config_lab_logs.csv
 !grafana/**/*.json
 !MINGO_DICTIONARY_CREATION_AND_TEST/config.json
 !MINGO_DICTIONARY_CREATION_AND_TEST/config_step_1.1_method.json

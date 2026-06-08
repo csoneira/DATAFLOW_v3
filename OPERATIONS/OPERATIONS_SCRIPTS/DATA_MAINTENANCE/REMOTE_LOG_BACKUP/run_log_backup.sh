@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Script: LOG_BACKUP/run_log_backup.sh
+# Script: OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/REMOTE_LOG_BACKUP/run_log_backup.sh
 # Purpose: Maintain an append-safe backup of remote MINGO log trees.
 # =============================================================================
 
@@ -11,7 +11,7 @@ show_help() {
 run_log_backup.sh
 
 Pulls /home/rpcuser/logs from mingo01..mingo04 into:
-  LOG_BACKUP/hosts/<host>/current/
+  OPERATIONS/OPERATIONS_RUNTIME/REMOTE_LOG_BACKUP/hosts/<host>/current/
 
 Rules:
   - current/ is an exact mirror of the latest successful remote state.
@@ -25,7 +25,8 @@ Usage:
 
 Options:
   --host NAME           Backup only one host. Can be repeated.
-  --root PATH           Override backup root. Default: ~/DATAFLOW_v3/LOG_BACKUP
+  --root PATH           Override runtime backup root.
+                        Default: ~/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/REMOTE_LOG_BACKUP
   --source-base PATH    Local test source base; expects PATH/<host>/...
   --remote-user USER    Override remote SSH user. Default: rpcuser
   --remote-root PATH    Override remote log root. Default: /home/rpcuser/logs
@@ -137,6 +138,7 @@ backup_one_host() {
   local -a rsync_cmd=(
     rsync
     -rlptz
+    --checksum
     --delete
     --delete-delay
     --backup
@@ -183,7 +185,7 @@ backup_one_host() {
   log "Backup completed for $host"
 }
 
-DEFAULT_BACKUP_ROOT="$HOME/DATAFLOW_v3/LOG_BACKUP"
+DEFAULT_BACKUP_ROOT="$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/REMOTE_LOG_BACKUP"
 DEFAULT_REMOTE_USER="rpcuser"
 DEFAULT_REMOTE_ROOT="/home/rpcuser/logs"
 DEFAULT_HOSTS=(mingo01 mingo02 mingo03 mingo04)

@@ -189,7 +189,7 @@ if [[ -d "${SCRIPT_DIR}/MASTER_STEPS" && -d "${SCRIPT_DIR}/INTERSTEPS" ]]; then
 else
   DT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 fi
-ROOT_RUNTIME_DIR="$(cd "${DT}/.." && pwd)/OPERATIONS_RUNTIME"
+ROOT_RUNTIME_DIR="$(cd "${DT}/.." && pwd)/OPERATIONS/OPERATIONS_RUNTIME"
 SIM_STRUCTURED_LOGS_ENABLED="${SIM_STRUCTURED_LOGS_ENABLED:-1}"
 SIM_LOG_HELPER="$DT/ORCHESTRATOR/helpers/sim_structured_logging.sh"
 if [[ -f "$SIM_LOG_HELPER" ]]; then
@@ -198,7 +198,7 @@ if [[ -f "$SIM_LOG_HELPER" ]]; then
 fi
 RUN_STEP_STRUCTURED_LOG_PATH="${ROOT_RUNTIME_DIR}/CRON_LOGS/SIMULATION/STRUCTURED/run_step.jsonl"
 # lock used to serialize standalone final-step executions (cron or manual).
-FINAL_LOCK="$HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/LOCKS/cron/sim_final.lock"
+FINAL_LOCK="$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/LOCKS/cron/sim_final.lock"
 RUN_STEP_STATE_DIR="${RUN_STEP_STATE_DIR:-${ROOT_RUNTIME_DIR}/STATE/run_step}"
 WORK_CACHE_PATH="${RUN_STEP_STATE_DIR}/work_cache.csv"
 WORK_STATE_PATH="${RUN_STEP_STATE_DIR}/work_state.csv"

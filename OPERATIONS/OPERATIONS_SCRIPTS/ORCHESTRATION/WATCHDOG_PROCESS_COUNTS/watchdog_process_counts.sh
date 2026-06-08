@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
-# Script: OPERATIONS/ORCHESTRATION/WATCHDOG_PROCESS_COUNTS/watchdog_process_counts.sh
+# Script: OPERATIONS/OPERATIONS_SCRIPTS/ORCHESTRATION/WATCHDOG_PROCESS_COUNTS/watchdog_process_counts.sh
 # Purpose: Watchdog process counts.
 # Owner: DATAFLOW_v3 contributors
 # Sign-off: csoneira <csoneira@ucm.es>
 # Last Updated: 2026-03-02
 # Runtime: bash
-# Usage: bash OPERATIONS/ORCHESTRATION/WATCHDOG_PROCESS_COUNTS/watchdog_process_counts.sh [options]
+# Usage: bash OPERATIONS/OPERATIONS_SCRIPTS/ORCHESTRATION/WATCHDOG_PROCESS_COUNTS/watchdog_process_counts.sh [options]
 # Inputs: CLI args, config files, environment variables, and/or upstream files.
 # Outputs: Files, logs, or process-level side effects.
 # Notes: Keep behavior configuration-driven and reproducible.
@@ -16,7 +16,7 @@
 set -euo pipefail
 
 BASE_DIR="${BASE_DIR:-$HOME/DATAFLOW_v3}"
-LOG_DIR="${BASE_DIR}/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/WATCHDOG_PROCESS_COUNTS"
+LOG_DIR="${BASE_DIR}/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/WATCHDOG_PROCESS_COUNTS"
 LOG_FILE="${LOG_FILE:-$LOG_DIR/watchdog_process_counts.log}"
 LOCK_FILE="/tmp/dataflow_watchdog_process_counts.lock"
 CRON_FILE="${WATCHDOG_CRON_FILE:-$BASE_DIR/CONFIG/add_to_crontab.info}"

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
-# Script: OPERATIONS/NOTIFICATIONS/TELEGRAM_BOT/kill_bot_and_restart.sh
+# Script: OPERATIONS/OPERATIONS_SCRIPTS/NOTIFICATIONS/TELEGRAM_BOT/kill_bot_and_restart.sh
 # Purpose: kill_bot_and_restart.sh.
 # Owner: DATAFLOW_v3 contributors
 # Sign-off: csoneira <csoneira@ucm.es>
 # Last Updated: 2026-03-02
 # Runtime: bash
-# Usage: bash OPERATIONS/NOTIFICATIONS/TELEGRAM_BOT/kill_bot_and_restart.sh [options]
+# Usage: bash OPERATIONS/OPERATIONS_SCRIPTS/NOTIFICATIONS/TELEGRAM_BOT/kill_bot_and_restart.sh [options]
 # Inputs: CLI args, config files, environment variables, and/or upstream files.
 # Outputs: Files, logs, or process-level side effects.
 # Notes: Keep behavior configuration-driven and reproducible.
@@ -20,9 +20,9 @@ set -euo pipefail
 
 # ----- CONFIGURE BELOW -----
 SERVICE_NAME=""                          # e.g. my-telegram-bot.service (leave empty if not using systemd)
-BOT_CMD="/bin/bash $HOME/DATAFLOW_v3/OPERATIONS/NOTIFICATIONS/TELEGRAM_BOT/persistent_telegram_bot_check.sh"   # full command to start the bot (used when SERVICE_NAME is empty)
+BOT_CMD="/bin/bash $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/NOTIFICATIONS/TELEGRAM_BOT/persistent_telegram_bot_check.sh"   # full command to start the bot (used when SERVICE_NAME is empty)
 BOT_NAME="mingo_analysis_bot.py"                # pattern used to find running bot with pgrep -f (fallback if BOT_CMD is not unique)
-LOG_FILE="$HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/NOHUP_LOGS/kill_bot_nohup.log"      # where nohup will append logs
+LOG_FILE="$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/NOHUP_LOGS/kill_bot_nohup.log"      # where nohup will append logs
 WAIT_SEC=1                               # seconds to wait for graceful shutdown
 # ----------------------------
 

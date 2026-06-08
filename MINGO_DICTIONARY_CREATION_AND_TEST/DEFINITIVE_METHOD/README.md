@@ -48,7 +48,7 @@ explicit metadata file and one explicit rate column. As long as the metadata
 contains the join key (`param_hash` for `MINGO00`, `filename_base` for real
 data), it works.
 
-The paths are relative to each station directory under `STATIONS/`.
+The paths are relative to each station directory under `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/`.
 
 ## Steps
 

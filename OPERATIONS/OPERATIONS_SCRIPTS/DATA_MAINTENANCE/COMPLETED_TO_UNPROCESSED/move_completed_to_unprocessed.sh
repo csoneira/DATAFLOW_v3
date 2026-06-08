@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
-# Script: OPERATIONS/DATA_MAINTENANCE/COMPLETED_TO_UNPROCESSED/move_completed_to_unprocessed.sh
+# Script: OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/COMPLETED_TO_UNPROCESSED/move_completed_to_unprocessed.sh
 # Purpose: Move completed to unprocessed.
 # Owner: DATAFLOW_v3 contributors
 # Sign-off: csoneira <csoneira@ucm.es>
 # Last Updated: 2026-03-02
 # Runtime: bash
-# Usage: bash OPERATIONS/DATA_MAINTENANCE/COMPLETED_TO_UNPROCESSED/move_completed_to_unprocessed.sh [options]
+# Usage: bash OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/COMPLETED_TO_UNPROCESSED/move_completed_to_unprocessed.sh [options]
 # Inputs: CLI args, config files, environment variables, and/or upstream files.
 # Outputs: Files, logs, or process-level side effects.
 # Notes: Keep behavior configuration-driven and reproducible.
@@ -42,8 +42,8 @@ PREVIEW=0
 DRY_RUN=0
 BASE_DIRS=()
 SKIP_PATTERNS=(
-  "$HOME/DATAFLOW_v3/STATIONS/MINGO0*/STAGE_1/LAB_LOGS"
-  "$HOME/DATAFLOW_v3/STATIONS/MINGO0*/STAGE_1/LAB_LOGS/*"
+  "$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0*/STAGE_1/LAB_LOGS"
+  "$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0*/STAGE_1/LAB_LOGS/*"
 )
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

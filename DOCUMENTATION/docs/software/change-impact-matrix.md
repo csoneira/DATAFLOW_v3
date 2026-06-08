@@ -6,11 +6,11 @@ Use this before modifying code. It is the fastest way to scope risk.
 
 | Change area | Typical files | Immediate risk | Required checks | Required docs update |
 | --- | --- | --- | --- | --- |
-| Analysis stage logic | `MASTER/STAGES/STAGE_*` | Output drift in real + simulated analysis | Stage run sanity + log checks + sample output diff | Analysis page + trace docs |
+| Analysis stage logic | `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_*` | Output drift in real + simulated analysis | Stage run sanity + log checks + sample output diff | Analysis page + trace docs |
 | Simulation physics/electronics | `MINGO_DIGITAL_TWIN/MASTER_STEPS/*` | Synthetic distribution drift, inference bias | Step-level validation + hash/registry checks | Simulation page + sim trace + contracts |
-| Dictionary/reconstruction logic | `MINGO_DICTIONARY_CREATION_AND_TEST/*`, `MASTER/common/simulated_data_utils.py` | Flux/efficiency bias or instability | Validation plots + residual checks + version bump | Inference page + figure/provenance note |
-| Ingestion boundary | `MASTER/STAGES/STAGE_0/SIMULATION/*` | Real/sim comparability break | End-to-end simulated ingest run | Sim trace + interface notes |
-| Scheduling/locks | `OPERATIONS/*`, cron wrappers, orchestrators | Stalls, overlap, process explosion | Process/lock audit + stale-log checks | Operational notes + runbook |
+| Dictionary/reconstruction logic | `MINGO_DICTIONARY_CREATION_AND_TEST/*`, `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/common/simulated_data_utils.py` | Flux/efficiency bias or instability | Validation plots + residual checks + version bump | Inference page + figure/provenance note |
+| Ingestion boundary | `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_0/SIMULATION/*` | Real/sim comparability break | End-to-end simulated ingest run | Sim trace + interface notes |
+| Scheduling/locks | `OPERATIONS/OPERATIONS_SCRIPTS/*`, cron wrappers, orchestrators | Stalls, overlap, process explosion | Process/lock audit + stale-log checks | Operational notes + runbook |
 | Metadata/provenance schemas | registries, sidecars, hash scripts | Loss of auditability/reproducibility | Hash consistency + lineage checks | Invariants + appendices/contracts |
 
 ## Mandatory pre-merge questions

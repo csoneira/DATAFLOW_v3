@@ -184,7 +184,7 @@ def health_snapshot(
     now_ts: float,
     tail_n: int,
 ) -> tuple[list[str], int, str | None]:
-    logs_root = dataflow_root / "OPERATIONS_RUNTIME" / "CRON_LOGS"
+    logs_root = dataflow_root / "OPERATIONS/OPERATIONS_RUNTIME" / "CRON_LOGS"
     step1_logs = sorted(
         (logs_root / "MAIN_ANALYSIS" / "STAGE_1" / "EVENT_DATA" / "STEP_1").glob("guide_raw_to_corrected_*.log")
     )
@@ -487,7 +487,7 @@ def main() -> None:
     sim_params_age = newest_age_seconds([sim_params_path], now_ts)
     sim_cycle_log = (
         intersteps_dir.parent.parent
-        / "OPERATIONS_RUNTIME"
+        / "OPERATIONS/OPERATIONS_RUNTIME"
         / "CRON_LOGS"
         / "SIMULATION"
         / "RUN"

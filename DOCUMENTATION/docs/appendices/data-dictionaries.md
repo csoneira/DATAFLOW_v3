@@ -36,7 +36,7 @@ Typical operational artifacts:
 - DAQ raw files (`.hld`)
 - Derived/legacy files (`.mat`)
 - Slow-control logs (`sensors_bus*`, `Flow*`, `hv*`, `rates*`)
-- Stage outputs under `STATIONS/MINGO0X/`
+- Stage outputs under `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0X/`
 
 Existing detailed pages:
 

@@ -30,7 +30,7 @@
   <text x="68" y="220" class="small">.hld / .dat / logs</text>
 
   <rect x="330" y="160" width="280" height="90" class="box laneA"/>
-  <text x="348" y="196" class="label">MASTER/STAGES 0..3</text>
+  <text x="348" y="196" class="label">MINGO_ANALYSIS_SCRIPTS/STAGES 0..3</text>
   <text x="348" y="220" class="small">ingest -> clean -> correct -> enrich</text>
 
   <rect x="680" y="160" width="250" height="90" class="box common"/>

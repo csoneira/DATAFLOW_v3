@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 DATAFLOW_v3 Script Header v1
-Script: OPERATIONS/NOTIFICATIONS/STATUS_GUI/step1_status_timeline_gui.py
+Script: OPERATIONS/OPERATIONS_SCRIPTS/NOTIFICATIONS/STATUS_GUI/step1_status_timeline_gui.py
 Purpose: Real-time STEP_1 status timeline viewer (Tkinter, X11-friendly).
 Owner: DATAFLOW_v3 contributors
 Sign-off: csoneira <csoneira@ucm.es>
 Last Updated: 2026-03-02
 Runtime: python3
-Usage: python3 OPERATIONS/NOTIFICATIONS/STATUS_GUI/step1_status_timeline_gui.py [options]
+Usage: python3 OPERATIONS/OPERATIONS_SCRIPTS/NOTIFICATIONS/STATUS_GUI/step1_status_timeline_gui.py [options]
 Inputs: CLI args, config files, environment variables, and/or upstream files.
 Outputs: Files, logs, plots, or stdout/stderr side effects.
 Notes: Keep behavior configuration-driven and reproducible.
@@ -27,7 +27,7 @@ from typing import Iterable, Optional
 
 
 STATUS_FILE_GLOB = (
-    "STATIONS/MINGO0*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/METADATA/"
+    "MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0*/STAGE_1/EVENT_DATA/STEP_1/TASK_*/METADATA/"
     "task_*_metadata_status.csv"
 )
 DATE_FORMATS = (
@@ -37,7 +37,7 @@ DATE_FORMATS = (
 )
 STATION_RE = re.compile(r"^MINGO0(\d)$")
 TASK_RE = re.compile(r"^TASK_(\d+)$")
-GUIDE_RELATIVE_PATH = Path("MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh")
+GUIDE_RELATIVE_PATH = Path("MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh")
 DEFAULT_TASK_LABELS = {
     0: "acq_to_raw",
     1: "raw_to_clean",
@@ -522,7 +522,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--repo-root",
         type=Path,
-        default=Path(__file__).resolve().parents[3],
+        default=Path(__file__).resolve().parents[4],
         help="Repository root (default: auto-detected).",
     )
     parser.add_argument(

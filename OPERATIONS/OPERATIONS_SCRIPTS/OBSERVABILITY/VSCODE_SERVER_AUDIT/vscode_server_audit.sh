@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
-# Script: OPERATIONS/OBSERVABILITY/VSCODE_SERVER_AUDIT/vscode_server_audit.sh
+# Script: OPERATIONS/OPERATIONS_SCRIPTS/OBSERVABILITY/VSCODE_SERVER_AUDIT/vscode_server_audit.sh
 # Purpose: Detect stale, high-consuming, suboptimal, and suspicious VS Code server processes.
 # Owner: DATAFLOW_v3 contributors
 # Sign-off: csoneira <csoneira@ucm.es>
 # Last Updated: 2026-03-17
 # Runtime: bash
-# Usage: bash OPERATIONS/OBSERVABILITY/VSCODE_SERVER_AUDIT/vscode_server_audit.sh [options]
+# Usage: bash OPERATIONS/OPERATIONS_SCRIPTS/OBSERVABILITY/VSCODE_SERVER_AUDIT/vscode_server_audit.sh [options]
 # Inputs: Live process table from ps plus CLI thresholds.
 # Outputs: Terminal report and optional kill-plan shell script.
 # Notes: Read-only by default; emits suggestions without killing processes.

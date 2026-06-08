@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 DATAFLOW_v3 Script Header v1
-Script: OPERATIONS/NOTIFICATIONS/STATUS_GUI/csv_column_timeline_gui.py
+Script: OPERATIONS/OPERATIONS_SCRIPTS/NOTIFICATIONS/STATUS_GUI/csv_column_timeline_gui.py
 Purpose: Generic CSV timeline GUI with selectable Y column and X-axis mode.
 Owner: DATAFLOW_v3 contributors
 Sign-off: csoneira <csoneira@ucm.es>
 Last Updated: 2026-04-16
 Runtime: python3
-Usage: python3 OPERATIONS/NOTIFICATIONS/STATUS_GUI/csv_column_timeline_gui.py [options]
+Usage: python3 OPERATIONS/OPERATIONS_SCRIPTS/NOTIFICATIONS/STATUS_GUI/csv_column_timeline_gui.py [options]
 Inputs: Any CSV selected from the GUI or CLI.
 Outputs: GUI or terminal snapshot.
 Notes: Keep behavior configuration-driven and reproducible.
@@ -1087,7 +1087,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--repo-root",
         type=Path,
-        default=Path(__file__).resolve().parents[3],
+        default=Path(__file__).resolve().parents[4],
         help="Repository root (default: auto-detected).",
     )
     parser.add_argument(

@@ -4,7 +4,7 @@ This page defines how DATAFLOW_v3 documentation is maintained as code and operat
 
 ## Ownership model
 
-- Architecture and software behavior pages: contributors changing `MASTER/`, `MINGO_DIGITAL_TWIN/`, or `OPERATIONS/`.
+- Architecture and software behavior pages: contributors changing `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/`, `MINGO_DIGITAL_TWIN/`, or `OPERATIONS/OPERATIONS_SCRIPTS/`.
 - Hardware/operation procedures: operators and hardware maintainers.
 - Governance and standards pages: repository maintainers.
 

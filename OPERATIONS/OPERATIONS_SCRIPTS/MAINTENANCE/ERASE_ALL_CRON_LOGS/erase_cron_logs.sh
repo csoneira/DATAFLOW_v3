@@ -1,26 +1,26 @@
 #!/usr/bin/env bash
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
-# Script: OPERATIONS/MAINTENANCE/ERASE_ALL_CRON_LOGS/erase_cron_logs.sh
-# Purpose: Truncate cron log files under OPERATIONS_RUNTIME/CRON_LOGS.
+# Script: OPERATIONS/OPERATIONS_SCRIPTS/MAINTENANCE/ERASE_ALL_CRON_LOGS/erase_cron_logs.sh
+# Purpose: Truncate cron log files under OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS.
 # Owner: DATAFLOW_v3 contributors
 # Sign-off: csoneira <csoneira@ucm.es>
 # Last Updated: 2026-03-02
 # Runtime: bash
-# Usage: bash OPERATIONS/MAINTENANCE/ERASE_ALL_CRON_LOGS/erase_cron_logs.sh [options]
+# Usage: bash OPERATIONS/OPERATIONS_SCRIPTS/MAINTENANCE/ERASE_ALL_CRON_LOGS/erase_cron_logs.sh [options]
 # Inputs: CLI args, config files, environment variables, and/or upstream files.
 # Outputs: Files, logs, or process-level side effects.
 # Notes: Keep behavior configuration-driven and reproducible.
 # =============================================================================
 
-# Truncate cron log files under OPERATIONS_RUNTIME/CRON_LOGS.
+# Truncate cron log files under OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS.
 set -euo pipefail
 
 usage() {
   cat <<'EOF'
 erase_cron_logs.sh [--dry-run] [--keep-lines N] [--log-dir PATH] [--crontab-file PATH]
 
-Keeps only the most recent N lines in cron logs under OPERATIONS_RUNTIME/CRON_LOGS.
+Keeps only the most recent N lines in cron logs under OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS.
 Targets include:
 1) files declared as redirection targets in CONFIG/add_to_crontab.info
 2) existing regular files found recursively under the cron log directory
@@ -36,7 +36,7 @@ EOF
 
 DRY_RUN=false
 KEEP_LINES="${CRON_LOG_KEEP_LINES:-5000}"
-LOG_DIR="${CRON_LOG_DIR:-$HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS}"
+LOG_DIR="${CRON_LOG_DIR:-$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS}"
 CRONTAB_FILE="${CRONTAB_FILE:-$HOME/DATAFLOW_v3/CONFIG/add_to_crontab.info}"
 
 while (( $# > 0 )); do

@@ -42,7 +42,7 @@ from STEP_SHARED.sim_utils import (
     write_csv_atomic,
     write_text_atomic,
 )
-from MASTER.common.selection_config import (
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.selection_config import (
     SelectionConfig,
     effective_date_ranges_for_station,
     load_master_selection,
@@ -805,7 +805,7 @@ def main() -> None:
 
     default_station_root = (
         Path(__file__).resolve().parents[3]
-        / "MASTER"
+        / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS"
         / "CONFIG_FILES"
         / "STAGE_0"
         / "ONLINE_RUN_DICTIONARY"
@@ -837,7 +837,7 @@ def main() -> None:
     )
     z_override = _z_positions_from_override(physics_cfg.get("z_positions_override_mm"))
     if adapt_z_positions or adapt_trigger_combinations:
-        selection = load_master_selection(REPO_ROOT / "MASTER" / "CONFIG_FILES")
+        selection = load_master_selection(REPO_ROOT / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS" / "CONFIG_FILES")
         selected_station_ids = _selected_station_ids_for_z_adaptation(station_files, selection)
         effective_ranges_by_station = {
             station_id: list(_effective_step0_date_ranges(station_id, selection=selection) or ())

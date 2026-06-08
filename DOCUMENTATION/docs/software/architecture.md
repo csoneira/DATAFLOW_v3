@@ -7,11 +7,11 @@ DATAFLOW_v3 is a coupled scientific software system with two production-grade pi
 - **MASTER analysis mother code** processes both real station inputs and simulated station-format inputs.
 - **Digital twin pipeline** generates synthetic station-like data through deterministic stepwise simulation.
 
-The system is designed so simulated outputs can move through the same `MASTER` downstream assumptions as real outputs, with outputs materialized in `STATIONS/`.
+The system is designed so simulated outputs can move through the same `MASTER` downstream assumptions as real outputs, with outputs materialized in `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/`.
 
 ![Dual-pipeline architecture](/assets/figures/architecture/figure_dual_pipeline_architecture.svg)
 
-*Figure 1. DATAFLOW_v3 dual-pipeline architecture with convergence through simulation ingestion into `MASTER/STAGE_0`, then output materialization in `STATIONS/`.*
+*Figure 1. DATAFLOW_v3 dual-pipeline architecture with convergence through simulation ingestion into `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGE_0`, then output materialization in `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/`.*
 
 ## Logical component graph
 
@@ -33,10 +33,10 @@ flowchart LR
 
 | Domain | Main paths | Purpose |
 | --- | --- | --- |
-| Analysis and station outputs | `MASTER/`, `STATIONS/` | `MASTER` runs analysis stages for real/simulated inputs; `STATIONS` stores station-scoped outputs and processing state |
+| Analysis and station outputs | `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/`, `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/` | `MASTER` runs analysis stages for real/simulated inputs; `STATIONS` stores station-scoped outputs and processing state |
 | Simulation | `MINGO_DIGITAL_TWIN/` | Physics + electronics modeling from muon generation to DAQ-style output |
-| Inference/dictionary | `MINGO_DICTIONARY_CREATION_AND_TEST/`, `MASTER/common` | Build and consume lookup tables for flux/efficiency inference |
-| Orchestration and observability | `OPERATIONS/`, `OPERATIONS_RUNTIME/` | Scheduling, locking, health audits, logs, runtime state |
+| Inference/dictionary | `MINGO_DICTIONARY_CREATION_AND_TEST/`, `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/common` | Build and consume lookup tables for flux/efficiency inference |
+| Orchestration and observability | `OPERATIONS/OPERATIONS_SCRIPTS/`, `OPERATIONS/OPERATIONS_RUNTIME/` | Scheduling, locking, health audits, logs, runtime state |
 
 ## Shared contracts across domains
 

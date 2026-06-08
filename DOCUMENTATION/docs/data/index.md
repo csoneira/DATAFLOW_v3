@@ -68,7 +68,7 @@ are normally archived under `/media/externalDisk/hlds/`.  These contain the
 full time‑stamp and width information for each hit and are read using the
 `daq_anal` utility on the station.  For pipeline ingestion, `.hld` files are
 converted to `.dat` format by the digital twin (simulated data) or by
-`MASTER/STAGES/STAGE_0/SIMULATION/ingest_simulated_station_data.py` when
+`MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_0/SIMULATION/ingest_simulated_station_data.py` when
 processing real data.
 
 ## Recommended workflows

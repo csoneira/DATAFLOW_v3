@@ -35,11 +35,11 @@ sys.path.append(str(REPO_ROOT))
 from STEP_SHARED.sim_utils import param_mesh_lock, write_csv_atomic, write_text_atomic
 
 
-ROOT_RUNTIME_DIR = REPO_ROOT / "OPERATIONS_RUNTIME"
+ROOT_RUNTIME_DIR = REPO_ROOT / "OPERATIONS/OPERATIONS_RUNTIME"
 DEFAULT_FREQUENCY_CONFIG = ROOT_DIR / "CONFIG_FILES" / "sim_main_pipeline_frequency.conf"
 DEFAULT_SIMULATED_DATA_DIR = ROOT_DIR / "SIMULATED_DATA"
 DEFAULT_SIMULATED_DATA_FILES_DIR = DEFAULT_SIMULATED_DATA_DIR / "FILES"
-DEFAULT_STATIONS_STEP1_DIR = REPO_ROOT / "STATIONS" / "MINGO00" / "STAGE_1" / "EVENT_DATA" / "STEP_1"
+DEFAULT_STATIONS_STEP1_DIR = REPO_ROOT / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / "MINGO00" / "STAGE_1" / "EVENT_DATA" / "STEP_1"
 DEFAULT_PARAM_MESH_PATH = ROOT_DIR / "INTERSTEPS" / "STEP_0_TO_1" / "param_mesh.csv"
 DEFAULT_PARAM_MESH_METADATA_PATH = ROOT_DIR / "INTERSTEPS" / "STEP_0_TO_1" / "param_mesh_metadata.json"
 IGNORED_QUEUE_PREFIXES = ("removed_channel_values_", "removed_rows_")
@@ -227,7 +227,7 @@ def main() -> None:
     parser.add_argument(
         "--stations-step1-dir",
         default=str(DEFAULT_STATIONS_STEP1_DIR),
-        help="Path to STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1",
+        help="Path to MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1",
     )
     parser.add_argument(
         "--param-mesh",

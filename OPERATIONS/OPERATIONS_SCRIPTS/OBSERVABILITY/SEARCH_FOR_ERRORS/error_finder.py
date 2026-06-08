@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 DATAFLOW_v3 Script Header v1
-Script: OPERATIONS/OBSERVABILITY/SEARCH_FOR_ERRORS/error_finder.py
+Script: OPERATIONS/OPERATIONS_SCRIPTS/OBSERVABILITY/SEARCH_FOR_ERRORS/error_finder.py
 Purpose: Scan cron log files for Tracebacks and store the stack traces in a single report.
 Owner: DATAFLOW_v3 contributors
 Sign-off: csoneira <csoneira@ucm.es>
 Last Updated: 2026-03-02
 Runtime: python3
-Usage: python3 OPERATIONS/OBSERVABILITY/SEARCH_FOR_ERRORS/error_finder.py [options]
+Usage: python3 OPERATIONS/OPERATIONS_SCRIPTS/OBSERVABILITY/SEARCH_FOR_ERRORS/error_finder.py [options]
 Inputs: CLI args, config files, environment variables, and/or upstream files.
 Outputs: Files, logs, plots, or stdout/stderr side effects.
 Notes: Keep behavior configuration-driven and reproducible.
@@ -29,12 +29,12 @@ def resolve_project_root() -> Path:
     dataflow_root = os.environ.get("DATAFLOW_ROOT")
     if dataflow_root:
         candidate = Path(dataflow_root).expanduser()
-        if (candidate / "OPERATIONS_RUNTIME").is_dir():
+        if (candidate / "OPERATIONS/OPERATIONS_RUNTIME").is_dir():
             return candidate
 
     script_path = Path(__file__).resolve()
     for candidate in script_path.parents:
-        if (candidate / "OPERATIONS_RUNTIME").is_dir() and (candidate / "MINGO_DIGITAL_TWIN").is_dir():
+        if (candidate / "OPERATIONS/OPERATIONS_RUNTIME").is_dir() and (candidate / "MINGO_DIGITAL_TWIN").is_dir():
             return candidate
 
     parents = script_path.parents
@@ -42,7 +42,7 @@ def resolve_project_root() -> Path:
 
 
 PROJECT_ROOT = resolve_project_root()
-LOG_DIR = PROJECT_ROOT / "OPERATIONS_RUNTIME" / "CRON_LOGS"
+LOG_DIR = PROJECT_ROOT / "OPERATIONS/OPERATIONS_RUNTIME" / "CRON_LOGS"
 SCRIPT_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = SCRIPT_DIR / "ERROR_SUMMARIES"
 OUTPUT_FILE = OUTPUT_DIR / "cron_tracebacks.log"

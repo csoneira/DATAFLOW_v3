@@ -21,7 +21,7 @@ Key behavior:
 - Supports fixed geometry override via `z_positions_override_mm` in physics config.
 - Supports `adapt_z_positions_for_station_date_range`, which filters the allowed
   geometry roster to the station-config rows overlapping the active
-  `MASTER/CONFIG_FILES/config_selection.yaml` stations/date ranges.
+  `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/config_selection.yaml` stations/date ranges.
   When this is enabled, `z_positions_override_mm` is ignored.
 - Supports `adapt_trigger_combinations_for_station_date_range`, which copies the
   `C1..C4` trigger combinations from those same selected station-config rows so

@@ -40,7 +40,7 @@ This file expands the short titles stored in `versions.csv`.
   active X span was slightly relaxed again to the current recommendation of
   284.888 mm total width.
   Added a Step 0 option to adapt the allowed `z_positions` roster to the
-  selected real-station date ranges in `MASTER/CONFIG_FILES/config_selection.yaml`,
+  selected real-station date ranges in `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/config_selection.yaml`,
   so the simulation mesh can be restricted to geometries that actually exist in
   the real-data comparison window.
   Extended that Step 0 adaptation so the same selected station-config rows also
@@ -48,7 +48,7 @@ This file expands the short titles stored in `versions.csv`.
   `(z positions, trigger case)` combinations in the simulation mesh.
 
 - Advisory tuning framework:
-  Created and organized the `MASTER/ANCILLARY/SIMULATION_TUNING` area as an advisory-only framework.
+  Created and organized the `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/SIMULATION_TUNING` area as an advisory-only framework.
   Added shared tuning config and helpers.
   Implemented studies for:
   - active-strip-length / `T_dif`

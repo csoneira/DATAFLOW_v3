@@ -388,7 +388,7 @@ def main() -> int:
 
     roots = [
         repo_root / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA",
-        repo_root / "STATIONS" / "MINGO00",
+        repo_root / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / "MINGO00",
     ]
     roots.extend(args.root)
 

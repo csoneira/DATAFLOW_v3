@@ -20,13 +20,13 @@ usage() {
 Restart simulation pipeline from a clean state while archiving previous outputs.
 
 What gets archived/moved out:
-  - STATIONS/MINGO00
+  - MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00
   - MINGO_DIGITAL_TWIN/SIMULATED_DATA
   - MINGO_DIGITAL_TWIN/INTERSTEPS
   - MINGO_DIGITAL_TWIN/PLOTTERS/EXECUTION runtime history/plot artifacts
 
 What gets recreated empty:
-  - STATIONS/MINGO00
+  - MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00
   - MINGO_DIGITAL_TWIN/SIMULATED_DATA/FILES
   - MINGO_DIGITAL_TWIN/INTERSTEPS/STEP_0_TO_1
 
@@ -72,7 +72,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 DT_DIR="${ROOT_DIR}/MINGO_DIGITAL_TWIN"
-MINGO00_DIR="${ROOT_DIR}/STATIONS/MINGO00"
+MINGO00_DIR="${ROOT_DIR}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00"
 SIMULATED_DATA_DIR="${DT_DIR}/SIMULATED_DATA"
 INTERSTEPS_DIR="${DT_DIR}/INTERSTEPS"
 
@@ -170,11 +170,11 @@ mkdir -p "${INTERSTEPS_DIR}/STEP_0_TO_1"
   echo "archive_dir=${ARCHIVE_DIR}"
   echo "status=completed"
   echo "moved_items_total=${moved_items}"
-  echo "moved_station_dir=STATIONS/MINGO00"
+  echo "moved_station_dir=MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00"
   echo "moved_simulated_data_dir=MINGO_DIGITAL_TWIN/SIMULATED_DATA"
   echo "moved_intersteps_dir=MINGO_DIGITAL_TWIN/INTERSTEPS"
   echo "moved_plotter_runtime_files=${reset_plotter_items}"
-  echo "recreated_station_dir=STATIONS/MINGO00"
+  echo "recreated_station_dir=MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00"
   echo "recreated_simulated_data_dir=MINGO_DIGITAL_TWIN/SIMULATED_DATA/FILES"
   echo "recreated_intersteps_dir=MINGO_DIGITAL_TWIN/INTERSTEPS/STEP_0_TO_1"
   for rel_path in "${PLOTTER_FILES_TO_RESET[@]}"; do

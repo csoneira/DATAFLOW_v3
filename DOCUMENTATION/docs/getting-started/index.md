@@ -23,11 +23,11 @@ pip install -r CONFIG/requirements.list
 
 ```text
 DATAFLOW_v3/
-├─ MASTER/                # Mother analysis code (real + simulated input processing)
-├─ STATIONS/              # Per-station trees and output locations (MINGO00..MINGO04)
+├─ MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/                # Mother analysis code (real + simulated input processing)
+├─ MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/              # Per-station trees and output locations (MINGO00..MINGO04)
 ├─ MINGO_DIGITAL_TWIN/    # STEP_0..STEP_FINAL simulation pipeline
-├─ OPERATIONS/            # Orchestration/observability utilities
-├─ OPERATIONS_RUNTIME/    # Runtime locks, logs, status markers
+├─ OPERATIONS/OPERATIONS_SCRIPTS/            # Orchestration/observability utilities
+├─ OPERATIONS/OPERATIONS_RUNTIME/    # Runtime locks, logs, status markers
 ├─ DOCS/                  # Repository governance and runbooks
 └─ DOCUMENTATION/         # MkDocs site source
 ```

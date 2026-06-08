@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
-# Script: OPERATIONS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh
+# Script: OPERATIONS/OPERATIONS_SCRIPTS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh
 # Purpose: Resource gate.
 # Owner: DATAFLOW_v3 contributors
 # Sign-off: csoneira <csoneira@ucm.es>
 # Last Updated: 2026-03-02
 # Runtime: bash
-# Usage: bash OPERATIONS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh [options]
+# Usage: bash OPERATIONS/OPERATIONS_SCRIPTS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh [options]
 # Inputs: CLI args, config files, environment variables, and/or upstream files.
 # Outputs: Files, logs, or process-level side effects.
 # Notes: Keep behavior configuration-driven and reproducible.
@@ -16,8 +16,8 @@
 set -euo pipefail
 
 BASE_DIR="${BASE_DIR:-$HOME/DATAFLOW_v3}"
-CONFIG_FILE="${CONFIG_FILE:-$BASE_DIR/MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/config_step_1.yaml}"
-LOG_DIR="${BASE_DIR}/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/RESOURCE_GATE"
+CONFIG_FILE="${CONFIG_FILE:-$BASE_DIR/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/config_step_1.yaml}"
+LOG_DIR="${BASE_DIR}/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/RESOURCE_GATE"
 LOG_FILE="${LOG_FILE:-$LOG_DIR/resource_gate.log}"
 
 TAG="resource_gate"

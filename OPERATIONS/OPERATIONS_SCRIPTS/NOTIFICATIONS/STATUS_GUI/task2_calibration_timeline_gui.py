@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 DATAFLOW_v3 Script Header v1
-Script: OPERATIONS/NOTIFICATIONS/STATUS_GUI/task2_calibration_timeline_gui.py
+Script: OPERATIONS/OPERATIONS_SCRIPTS/NOTIFICATIONS/STATUS_GUI/task2_calibration_timeline_gui.py
 Purpose: Real-time TASK_2 calibration metadata timeline viewer (Tkinter, X11-friendly).
 Owner: DATAFLOW_v3 contributors
 Sign-off: csoneira <csoneira@ucm.es>
 Last Updated: 2026-04-22
 Runtime: python3
-Usage: python3 OPERATIONS/NOTIFICATIONS/STATUS_GUI/task2_calibration_timeline_gui.py [options]
-Inputs: TASK_2 calibration metadata CSV files under STATIONS/MINGO0*/...
+Usage: python3 OPERATIONS/OPERATIONS_SCRIPTS/NOTIFICATIONS/STATUS_GUI/task2_calibration_timeline_gui.py [options]
+Inputs: TASK_2 calibration metadata CSV files under MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0*/...
 Outputs: GUI or terminal snapshot.
 Notes: Keep behavior configuration-driven and reproducible.
 """
@@ -29,7 +29,7 @@ from typing import Iterable, Optional
 
 
 CALIBRATION_FILE_GLOB = (
-    "STATIONS/MINGO0*/STAGE_1/EVENT_DATA/STEP_1/TASK_2/METADATA/"
+    "MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0*/STAGE_1/EVENT_DATA/STEP_1/TASK_2/METADATA/"
     "task_2_metadata_calibration.csv"
 )
 DATE_FORMATS = (
@@ -1099,7 +1099,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--repo-root",
         type=Path,
-        default=Path(__file__).resolve().parents[3],
+        default=Path(__file__).resolve().parents[4],
         help="Repository root (default: auto-detected).",
     )
     parser.add_argument(

@@ -29,9 +29,9 @@ import pandas as pd
 
 SCRIPT_PATH = Path(__file__).resolve()
 NOISE_CONTROL_PLANE_COMBINATION_REPORT_CANDIDATES = (
-    SCRIPT_PATH.parents[3] / "MASTER" / "ANCILLARY" / "PLOTTERS" / "METADATA" / "NOISE_CONTROL" / "PLOTS" / "noise_control_plane_combination_rate_report.pdf",
-    Path("/home/rpcuser/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/METADATA/NOISE_CONTROL/PLOTS/noise_control_plane_combination_rate_report.pdf"),
-    Path("/home/mingo/DATAFLOW_v3/MASTER/ANCILLARY/PLOTTERS/METADATA/NOISE_CONTROL/PLOTS/noise_control_plane_combination_rate_report.pdf"),
+    SCRIPT_PATH.parents[3] / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS" / "ANCILLARY" / "PLOTTERS" / "METADATA" / "NOISE_CONTROL" / "PLOTS" / "noise_control_plane_combination_rate_report.pdf",
+    Path("/home/rpcuser/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/PLOTTERS/METADATA/NOISE_CONTROL/PLOTS/noise_control_plane_combination_rate_report.pdf"),
+    Path("/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/PLOTTERS/METADATA/NOISE_CONTROL/PLOTS/noise_control_plane_combination_rate_report.pdf"),
 )
 
 # Check if a station number is provided

@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-CONFIG_DIR = Path("/home/mingo/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_0/ONLINE_RUN_DICTIONARY")
+CONFIG_DIR = Path("/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_0/ONLINE_RUN_DICTIONARY")
 OUTPUT_TABLE_PATH = Path(__file__).with_name("calculate_limits_table.csv")
 OUTPUT_PLOT_PATH = Path(__file__).with_name("calculate_limits.png")
 

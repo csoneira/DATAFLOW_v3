@@ -37,7 +37,7 @@ REPO_ROOT = DT_ROOT.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from MASTER.common.plot_utils import pdf_save_rasterized_page
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.plot_utils import pdf_save_rasterized_page
 
 DEFAULT_FREQUENCY_CONFIG = DT_ROOT / "CONFIG_FILES" / "sim_main_pipeline_frequency.conf"
 DEFAULT_MESH_PATH = DT_ROOT / "INTERSTEPS" / "STEP_0_TO_1" / "param_mesh.csv"
@@ -132,7 +132,7 @@ def _mi_id_set(paths) -> set[str]:
 def count_pending_files() -> dict[str, int]:
     simulated_data_dir = DT_ROOT / "SIMULATED_DATA"
     simulated_data_files_dir = simulated_data_dir / "FILES"
-    stations_step1_dir = REPO_ROOT / "STATIONS" / "MINGO00" / "STAGE_1" / "EVENT_DATA" / "STEP_1"
+    stations_step1_dir = REPO_ROOT / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / "MINGO00" / "STAGE_1" / "EVENT_DATA" / "STEP_1"
 
     sim_root_files = (
         [path for path in simulated_data_dir.glob("mi*.dat") if path.is_file()]

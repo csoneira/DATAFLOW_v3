@@ -6,7 +6,7 @@ The operational pipeline processes real station data. The digital twin creates s
 
 ## Where should I look first during an incident?
 
-Start with cron status, process presence, and the latest logs in `OPERATIONS_RUNTIME/CRON_LOGS/`, then move to queue/consistency checks.
+Start with cron status, process presence, and the latest logs in `OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/`, then move to queue/consistency checks.
 
 ## Can I rerun a simulation step safely?
 

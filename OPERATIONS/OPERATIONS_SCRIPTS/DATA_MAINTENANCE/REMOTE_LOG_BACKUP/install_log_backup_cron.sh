@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Script: LOG_BACKUP/install_log_backup_cron.sh
+# Script: OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/REMOTE_LOG_BACKUP/install_log_backup_cron.sh
 # Purpose: Install a 12-hour cron entry for the log backup runner.
 # =============================================================================
 
@@ -10,7 +10,7 @@ show_help() {
   cat <<'EOF'
 install_log_backup_cron.sh
 
-Installs a cron entry for LOG_BACKUP/run_log_backup.sh.
+Installs a cron entry for the remote-log-backup runner.
 
 Usage:
   bash install_log_backup_cron.sh [options]
@@ -33,9 +33,10 @@ require_option_value() {
   fi
 }
 
-BACKUP_ROOT="${LOG_BACKUP_ROOT:-$HOME/DATAFLOW_v3/LOG_BACKUP}"
-RUNNER_PATH="${LOG_BACKUP_RUNNER_PATH:-$BACKUP_ROOT/run_log_backup.sh}"
-CRON_LOG_PATH="${LOG_BACKUP_CRON_LOG_PATH:-$BACKUP_ROOT/runtime/cron/log_backup.cron.log}"
+SCRIPTS_ROOT="${LOG_BACKUP_SCRIPTS_ROOT:-$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/REMOTE_LOG_BACKUP}"
+RUNTIME_ROOT="${LOG_BACKUP_ROOT:-$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/REMOTE_LOG_BACKUP}"
+RUNNER_PATH="${LOG_BACKUP_RUNNER_PATH:-$SCRIPTS_ROOT/run_log_backup.sh}"
+CRON_LOG_PATH="${LOG_BACKUP_CRON_LOG_PATH:-$RUNTIME_ROOT/cron/log_backup.cron.log}"
 CRON_SCHEDULE="${LOG_BACKUP_CRON_SCHEDULE:-0 */12 * * *}"
 PRINT_ONLY=false
 CRON_MARKER="# DATAFLOW_v3_LOG_BACKUP"

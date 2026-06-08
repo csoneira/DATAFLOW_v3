@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 DATAFLOW_v3 Script Header v1
-Script: OPERATIONS/OBSERVABILITY/AUDIT_PIPELINE_STATES/audit_pipeline_states.py
+Script: OPERATIONS/OPERATIONS_SCRIPTS/OBSERVABILITY/AUDIT_PIPELINE_STATES/audit_pipeline_states.py
 Purpose: !/usr/bin/env python3.
 Owner: DATAFLOW_v3 contributors
 Sign-off: csoneira <csoneira@ucm.es>
 Last Updated: 2026-03-02
 Runtime: python3
-Usage: python3 OPERATIONS/OBSERVABILITY/AUDIT_PIPELINE_STATES/audit_pipeline_states.py [options]
+Usage: python3 OPERATIONS/OPERATIONS_SCRIPTS/OBSERVABILITY/AUDIT_PIPELINE_STATES/audit_pipeline_states.py [options]
 Inputs: CLI args, config files, environment variables, and/or upstream files.
 Outputs: Files, logs, plots, or stdout/stderr side effects.
 Notes: Keep behavior configuration-driven and reproducible.
@@ -27,10 +27,11 @@ from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-STATIONS_ROOT = REPO_ROOT / "STATIONS"
+STATIONS_ROOT = REPO_ROOT / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS"
 PROCESSED_ROOT = (
     REPO_ROOT
     / "OPERATIONS"
+    / "OPERATIONS_SCRIPTS"
     / "DATA_MAINTENANCE"
     / "UPDATE_EXECUTION_CSVS"
     / "OUTPUT_FILES"
@@ -441,7 +442,7 @@ def station_inventory_entries(station: str) -> List[Dict[str, str]]:
         "reject_list",
         raw_brought,
         "Already-brought raw .dat files (skipped by bring_data_and_config_files.sh).",
-        "MASTER/STAGES/STAGE_0/NEW_FILES/bring_data_and_config_files.sh",
+        "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_0/NEW_FILES/bring_data_and_config_files.sh",
         count_csv_rows(raw_brought),
     )
 
@@ -450,7 +451,7 @@ def station_inventory_entries(station: str) -> List[Dict[str, str]]:
         "import_list",
         imported,
         "Simulation Stage 0 imported basenames (station 0).",
-        "MASTER/STAGES/STAGE_0/SIMULATION/ingest_simulated_station_data.py",
+        "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_0/SIMULATION/ingest_simulated_station_data.py",
         count_csv_rows(imported),
     )
 
@@ -460,7 +461,7 @@ def station_inventory_entries(station: str) -> List[Dict[str, str]]:
             "reject_list",
             hld_brought,
             "Reprocessing Step 1: HLD basenames already brought.",
-            "MASTER/STAGES/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh",
+            "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh",
             count_csv_rows(hld_brought),
         )
 
@@ -469,7 +470,7 @@ def station_inventory_entries(station: str) -> List[Dict[str, str]]:
             "reject_list",
             dat_unpacked,
             "Reprocessing Step 2: dat files already unpacked.",
-            "MASTER/STAGES/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh",
+            "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh",
             count_csv_rows(dat_unpacked),
         )
 
@@ -478,7 +479,7 @@ def station_inventory_entries(station: str) -> List[Dict[str, str]]:
         "processed_list",
         processed,
         "Basenames extracted from STEP_3/TASK_2 outputs (used as reject list).",
-        "OPERATIONS/DATA_MAINTENANCE/UPDATE_EXECUTION_CSVS/update_execution_csvs.sh",
+        "OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/UPDATE_EXECUTION_CSVS/update_execution_csvs.sh",
         count_csv_rows(processed),
     )
 
@@ -487,7 +488,7 @@ def station_inventory_entries(station: str) -> List[Dict[str, str]]:
         "queue_dir",
         stage0_to_1,
         "Raw .dat files ready for STEP_1/TASK_1.",
-        "MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_1/script_1_raw_to_clean.py",
+        "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_1/script_1_raw_to_clean.py",
         count_dir_files(stage0_to_1),
     )
 
@@ -506,7 +507,7 @@ def station_inventory_entries(station: str) -> List[Dict[str, str]]:
                 label,
                 path,
                 f"STEP_1/TASK_{task} {suffix} files.",
-                f"MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_{task}/script_{task}_*.py",
+                f"MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_{task}/script_{task}_*.py",
                 count_dir_files(path),
             )
         for suffix, kind in (
@@ -520,7 +521,7 @@ def station_inventory_entries(station: str) -> List[Dict[str, str]]:
                 kind,
                 path,
                 f"STEP_1/TASK_{task} metadata CSV.",
-                f"MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_{task}/script_{task}_*.py",
+                f"MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_{task}/script_{task}_*.py",
                 count_csv_rows(path),
             )
 
@@ -529,7 +530,7 @@ def station_inventory_entries(station: str) -> List[Dict[str, str]]:
         "output_dir",
         step1_to_2,
         "STEP_1 final corrected outputs (task 5).",
-        "MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_post.py",
+        "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_post.py",
         count_dir_files(step1_to_2),
     )
 
@@ -540,7 +541,7 @@ def station_inventory_entries(station: str) -> List[Dict[str, str]]:
             f"step2_queue_{label.lower()}",
             path,
             f"STEP_2 {label} files.",
-            "MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_2/corrected_to_accumulated.py",
+            "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_2/corrected_to_accumulated.py",
             count_dir_files(path),
         )
     for name in ("step_2_metadata_execution.csv", "step_2_metadata_specific.csv"):
@@ -549,7 +550,7 @@ def station_inventory_entries(station: str) -> List[Dict[str, str]]:
             "metadata_execution" if "execution" in name else "metadata_specific",
             path,
             "STEP_2 metadata CSV.",
-            "MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_2/corrected_to_accumulated.py",
+            "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_2/corrected_to_accumulated.py",
             count_csv_rows(path),
         )
 
@@ -558,7 +559,7 @@ def station_inventory_entries(station: str) -> List[Dict[str, str]]:
         "output_dir",
         step2_to_3,
         "STEP_2 accumulated outputs.",
-        "MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_2/corrected_to_accumulated.py",
+        "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_2/corrected_to_accumulated.py",
         count_dir_files(step2_to_3),
     )
 
@@ -568,7 +569,7 @@ def station_inventory_entries(station: str) -> List[Dict[str, str]]:
         "output_dir",
         task1_to_2,
         "STEP_3/TASK_1_TO_2 daily accumulated outputs.",
-        "MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_3/TASK_1/accumulated_distributor.py",
+        "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_3/TASK_1/accumulated_distributor.py",
         count_dir_files_recursive(task1_to_2),
     )
     task1_archive = step3_root / "TASK_1" / "INPUT_FILES"
@@ -576,7 +577,7 @@ def station_inventory_entries(station: str) -> List[Dict[str, str]]:
         "archive_dir",
         task1_archive,
         "STEP_3/TASK_1 archive of accumulated files.",
-        "MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_3/TASK_1/accumulated_distributor.py",
+        "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_3/TASK_1/accumulated_distributor.py",
         count_dir_files(task1_archive),
     )
     task2_output = step3_root / "TASK_2" / "OUTPUT_FILES"
@@ -584,7 +585,7 @@ def station_inventory_entries(station: str) -> List[Dict[str, str]]:
         "output_dir",
         task2_output,
         "STEP_3/TASK_2 joined outputs (event_data_YYYY_MM_DD.csv).",
-        "MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_3/TASK_2/distributed_joiner.py",
+        "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_3/TASK_2/distributed_joiner.py",
         count_dir_files_recursive(task2_output),
     )
 
@@ -1195,7 +1196,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument(
         "--log-roots",
-        default=str(REPO_ROOT / "OPERATIONS_RUNTIME" / "CRON_LOGS" / "MAIN_ANALYSIS"),
+        default=str(REPO_ROOT / "OPERATIONS/OPERATIONS_RUNTIME" / "CRON_LOGS" / "MAIN_ANALYSIS"),
         help="Comma-separated log roots to scan when --scan-logs is enabled.",
     )
     args = parser.parse_args(argv)

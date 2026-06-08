@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 DATAFLOW_v3 Script Header v1
-Script: OPERATIONS/NOTIFICATIONS/TELEGRAM_BOT/mingo_analysis_bot.py
+Script: OPERATIONS/OPERATIONS_SCRIPTS/NOTIFICATIONS/TELEGRAM_BOT/mingo_analysis_bot.py
 Purpose: Telegram bot that serves analysis PDFs on demand.
 Owner: DATAFLOW_v3 contributors
 Sign-off: csoneira <csoneira@ucm.es>
 Last Updated: 2026-03-02
 Runtime: python3
-Usage: python3 OPERATIONS/NOTIFICATIONS/TELEGRAM_BOT/mingo_analysis_bot.py [options]
+Usage: python3 OPERATIONS/OPERATIONS_SCRIPTS/NOTIFICATIONS/TELEGRAM_BOT/mingo_analysis_bot.py [options]
 Inputs: CLI args, config files, environment variables, and/or upstream files.
 Outputs: Files, logs, plots, or stdout/stderr side effects.
 Notes: Keep behavior configuration-driven and reproducible.
@@ -24,7 +24,7 @@ from pathlib import Path
 import telebot
 
 
-BASE_DIR = Path(__file__).resolve().parents[3]
+BASE_DIR = Path(__file__).resolve().parents[4]
 TELEGRAM_DIR = Path(__file__).resolve().parent
 TOKEN_PATH = TELEGRAM_DIR / "API_TOKEN.txt"
 RESTART_SCRIPT = TELEGRAM_DIR / "kill_bot_and_restart.sh"
@@ -34,7 +34,7 @@ WELCOME_MESSAGE_PATH = TELEGRAM_DIR / "WELCOME_MESSAGE.txt"
 PDF_TARGETS = {
     "definitive_execution_report": {
         "path": BASE_DIR
-        / "MASTER"
+        / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS"
         / "ANCILLARY"
         / "PLOTTERS"
         / "DEFINITIVE_EXECUTION"
@@ -44,7 +44,7 @@ PDF_TARGETS = {
     },
     "filter_metadata_report": {
         "path": BASE_DIR
-        / "MASTER"
+        / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS"
         / "ANCILLARY"
         / "PLOTTERS"
         / "METADATA"
@@ -55,7 +55,7 @@ PDF_TARGETS = {
     },
     "noise_control_metadata_report": {
         "path": BASE_DIR
-        / "MASTER"
+        / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS"
         / "ANCILLARY"
         / "PLOTTERS"
         / "METADATA"
@@ -66,7 +66,7 @@ PDF_TARGETS = {
     },
     "noise_control_metadata_rate_report": {
         "path": BASE_DIR
-        / "MASTER"
+        / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS"
         / "ANCILLARY"
         / "PLOTTERS"
         / "METADATA"
@@ -77,7 +77,7 @@ PDF_TARGETS = {
     },
     "noise_control_efficiency_report": {
         "path": BASE_DIR
-        / "MASTER"
+        / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS"
         / "ANCILLARY"
         / "PLOTTERS"
         / "METADATA"
@@ -88,7 +88,7 @@ PDF_TARGETS = {
     },
     "noise_control_efficiency_task1": {
         "path": BASE_DIR
-        / "MASTER"
+        / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS"
         / "ANCILLARY"
         / "PLOTTERS"
         / "METADATA"
@@ -99,7 +99,7 @@ PDF_TARGETS = {
     },
     "noise_control_efficiency_task2": {
         "path": BASE_DIR
-        / "MASTER"
+        / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS"
         / "ANCILLARY"
         / "PLOTTERS"
         / "METADATA"
@@ -110,7 +110,7 @@ PDF_TARGETS = {
     },
     "noise_control_efficiency_task3": {
         "path": BASE_DIR
-        / "MASTER"
+        / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS"
         / "ANCILLARY"
         / "PLOTTERS"
         / "METADATA"
@@ -121,7 +121,7 @@ PDF_TARGETS = {
     },
     "noise_control_plane_combination_rate_report": {
         "path": BASE_DIR
-        / "MASTER"
+        / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS"
         / "ANCILLARY"
         / "PLOTTERS"
         / "METADATA"
@@ -132,7 +132,7 @@ PDF_TARGETS = {
     },
     "trigger_rate_metadata_report": {
         "path": BASE_DIR
-        / "MASTER"
+        / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS"
         / "ANCILLARY"
         / "PLOTTERS"
         / "METADATA"
@@ -143,7 +143,7 @@ PDF_TARGETS = {
     },
     "configurations_metadata_report": {
         "path": BASE_DIR
-        / "MASTER"
+        / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS"
         / "ANCILLARY"
         / "PLOTTERS"
         / "METADATA"
@@ -154,7 +154,7 @@ PDF_TARGETS = {
     },
     "rates_metadata_report": {
         "path": BASE_DIR
-        / "MASTER"
+        / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS"
         / "ANCILLARY"
         / "PLOTTERS"
         / "RATES"
@@ -164,7 +164,7 @@ PDF_TARGETS = {
     },
     "task4_chi2_four_plane_report": {
         "path": BASE_DIR
-        / "MASTER"
+        / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS"
         / "ANCILLARY"
         / "PLOTTERS"
         / "TASK_4"
@@ -174,7 +174,7 @@ PDF_TARGETS = {
     },
     "execution_metadata_report": {
         "path": BASE_DIR
-        / "MASTER"
+        / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS"
         / "ANCILLARY"
         / "PLOTTERS"
         / "METADATA"
@@ -185,7 +185,7 @@ PDF_TARGETS = {
     },
     "efficiency_metadata_report": {
         "path": BASE_DIR
-        / "MASTER"
+        / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS"
         / "ANCILLARY"
         / "PLOTTERS"
         / "METADATA"
@@ -196,7 +196,7 @@ PDF_TARGETS = {
     },
     "efficiencies_three_to_four_report": {
         "path": BASE_DIR
-        / "MASTER"
+        / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS"
         / "ANCILLARY"
         / "PLOTTERS"
         / "METADATA"
@@ -207,7 +207,7 @@ PDF_TARGETS = {
     },
     "simulated_data_evolution_report": {
         "path": BASE_DIR
-        / "MASTER"
+        / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS"
         / "ANCILLARY"
         / "PLOTTERS"
         / "SIMULATED_DATA_EVOLUTION"
@@ -276,7 +276,12 @@ BOT_COMMAND_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 CLEANER_SCRIPT = (
-    BASE_DIR / "OPERATIONS" / "MAINTENANCE" / "CLEANERS" / "clean_dataflow.sh"
+    BASE_DIR
+    / "OPERATIONS"
+    / "OPERATIONS_SCRIPTS"
+    / "MAINTENANCE"
+    / "CLEANERS"
+    / "clean_dataflow.sh"
 )
 MAX_MESSAGE_CHARS = 3500
 TERMINAL_COMMAND_TIMEOUT_SEC = 300

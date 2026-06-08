@@ -10,15 +10,15 @@ import sys
 import pandas as pd
 import pyarrow.parquet as pq
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
-from MASTER.common.step1_shared import canonicalize_step1_columns
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.step1_shared import canonicalize_step1_columns
 
 
 OUTPUT_PATH = Path(
-    "/home/mingo/DATAFLOW_v3/MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/columns_review.md"
+    "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/columns_review.md"
 )
 
 
@@ -34,11 +34,11 @@ SECTIONS = [
     Section(
         title="TASK_0 -> TASK_1",
         display_pattern=(
-            "~/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            "~/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
             "TASK_1/INPUT_FILES/COMPLETED_DIRECTORY/raw_*.parquet"
         ),
         glob_pattern=(
-            "/home/mingo/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
             "TASK_1/INPUT_FILES/COMPLETED_DIRECTORY/raw_*.parquet"
         ),
         exclude_prefixes=("selftrigger_",),
@@ -46,68 +46,68 @@ SECTIONS = [
     Section(
         title="TASK_0 -> SELFTRIGGER",
         display_pattern=(
-            "~/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            "~/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
             "TASK_0/OUTPUT_FILES/selftrigger_raw_*.parquet"
         ),
         glob_pattern=(
-            "/home/mingo/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
             "TASK_0/OUTPUT_FILES/selftrigger_raw_*.parquet"
         ),
     ),
     Section(
         title="TASK_1 -> TASK_2",
         display_pattern=(
-            "~/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            "~/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
             "TASK_2/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
         ),
         glob_pattern=(
-            "/home/mingo/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
             "TASK_2/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
         ),
     ),
     Section(
         title="TASK_2 -> TASK_3",
         display_pattern=(
-            "~/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            "~/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
             "TASK_3/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
         ),
         glob_pattern=(
-            "/home/mingo/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
             "TASK_3/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
         ),
     ),
     Section(
         title="TASK_3 -> TASK_4",
         display_pattern=(
-            "~/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            "~/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
             "TASK_4/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
         ),
         glob_pattern=(
-            "/home/mingo/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
             "TASK_4/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
         ),
     ),
     Section(
         title="TASK_4 -> TASK_5",
         display_pattern=(
-            "~/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            "~/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
             "TASK_5/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
         ),
         glob_pattern=(
-            "/home/mingo/DATAFLOW_v3/STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
             "TASK_5/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
         ),
     ),
     Section(
         title="TASK_5 -> OUT",
         display_pattern=(
-            "~/DATAFLOW_v3/STATIONS/MINGO04/STAGE_1/EVENT_DATA/"
+            "~/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO04/STAGE_1/EVENT_DATA/"
             "{STEP_2/INPUT_FILES,STEP_1_TO_2_OUTPUT}/**/postprocessed_*.parquet"
         ),
         glob_pattern=(
-            "/home/mingo/DATAFLOW_v3/STATIONS/MINGO04/STAGE_1/EVENT_DATA/STEP_2/"
+            "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO04/STAGE_1/EVENT_DATA/STEP_2/"
             "INPUT_FILES/**/postprocessed_*.parquet",
-            "/home/mingo/DATAFLOW_v3/STATIONS/MINGO04/STAGE_1/EVENT_DATA/"
+            "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO04/STAGE_1/EVENT_DATA/"
             "STEP_1_TO_2_OUTPUT/**/postprocessed_*.parquet",
         ),
     ),

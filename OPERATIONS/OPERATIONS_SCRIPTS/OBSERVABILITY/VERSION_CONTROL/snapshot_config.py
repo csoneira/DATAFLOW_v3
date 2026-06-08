@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 DATAFLOW_v3 Script Header v1
-Script: OPERATIONS/OBSERVABILITY/VERSION_CONTROL/snapshot_config.py
+Script: OPERATIONS/OPERATIONS_SCRIPTS/OBSERVABILITY/VERSION_CONTROL/snapshot_config.py
 Purpose: Persist snapshots of the main config files when they change.
 Owner: DATAFLOW_v3 contributors
 Sign-off: csoneira <csoneira@ucm.es>
 Last Updated: 2026-03-02
 Runtime: python3
-Usage: python3 OPERATIONS/OBSERVABILITY/VERSION_CONTROL/snapshot_config.py [options]
+Usage: python3 OPERATIONS/OPERATIONS_SCRIPTS/OBSERVABILITY/VERSION_CONTROL/snapshot_config.py [options]
 Inputs: CLI args, config files, environment variables, and/or upstream files.
 Outputs: Files, logs, plots, or stdout/stderr side effects.
 Notes: Keep behavior configuration-driven and reproducible.
@@ -24,18 +24,18 @@ from typing import Callable, Optional, Sequence, Tuple
 
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
-from MASTER.common.execution_logger import start_timer
-from MASTER.common.path_config import get_master_config_root, get_repo_root
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.execution_logger import start_timer
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.path_config import get_master_config_root, get_repo_root
 
 start_timer(__file__)
 
 REPO_ROOT = get_repo_root()
 CONFIG_ROOT = get_master_config_root()
-SNAPSHOT_ROOT = REPO_ROOT / "OPERATIONS_RUNTIME" / "CONFIG_FILES"
+SNAPSHOT_ROOT = REPO_ROOT / "OPERATIONS/OPERATIONS_RUNTIME" / "CONFIG_FILES"
 
 YAML_CONFIG_TARGETS: Sequence[Tuple[Path, Path, str, str]] = (
     (

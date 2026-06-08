@@ -15,7 +15,7 @@ It defines for each step:
 
 ## Operational stage interfaces
 
-Operational stages are split as STAGE_0..STAGE_3, implemented in `MASTER/` (mother code), with handoffs and materialized outputs in station trees under `STATIONS/`.
+Operational stages are split as STAGE_0..STAGE_3, implemented in `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/` (mother code), with handoffs and materialized outputs in station trees under `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/`.
 
 Key interface assumptions:
 

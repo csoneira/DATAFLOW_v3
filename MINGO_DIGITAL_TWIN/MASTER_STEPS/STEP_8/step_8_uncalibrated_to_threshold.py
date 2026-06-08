@@ -55,7 +55,7 @@ from STEP_SHARED.sim_utils import (
     save_with_metadata,
     write_chunked_output,
 )
-from MASTER.common.tot_charge_calibration import (
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.tot_charge_calibration import (
     TotChargeCalibration,
     default_tot_charge_calibration_path,
 )

@@ -7,7 +7,7 @@ q_fee_sigma_ns: 0.4
 # 60 fC under the inverse TOT calibration is about 0.13792 ns.
 charge_threshold: 0.13792
 charge_conversion_model: tot_curve_inverse
-tot_to_charge_calibration_path: MASTER/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/TOT_TO_CHARGE_CAL/tot_to_charge_calibration.csv
+tot_to_charge_calibration_path: MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/CALIBRATIONS_AND_LUTS/TOT_TO_CHARGE_CAL/tot_to_charge_calibration.csv
 # Fallback only if the TOT calibration file is unavailable.
 # Slope from linear regression of Width[ns] vs Fast_Charge[fC].
 q_to_time_factor: 0.1468290836084766

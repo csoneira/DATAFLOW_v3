@@ -13,8 +13,8 @@ DATAFLOW_v3 combines two upstream sources that converge into analysis workflows:
 
 ## Path summary
 
-- Real data: station DAQ/log sources -> `MASTER` STAGE_0 -> STAGE_1 -> STAGE_2 -> STAGE_3 -> outputs in `STATIONS/`
-- Simulated data: STEP_0 -> STEP_1..STEP_10 -> STEP_FINAL `.dat` -> `MASTER` STAGE_0 -> STAGE_1..STAGE_3 -> outputs in `STATIONS/`
+- Real data: station DAQ/log sources -> `MASTER` STAGE_0 -> STAGE_1 -> STAGE_2 -> STAGE_3 -> outputs in `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/`
+- Simulated data: STEP_0 -> STEP_1..STEP_10 -> STEP_FINAL `.dat` -> `MASTER` STAGE_0 -> STAGE_1..STAGE_3 -> outputs in `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/`
 
 ## Data products and directories
 
@@ -22,10 +22,10 @@ DATAFLOW_v3 combines two upstream sources that converge into analysis workflows:
 | --- | --- |
 | Simulation intersteps | `MINGO_DIGITAL_TWIN/INTERSTEPS/STEP_N_TO_N+1/` |
 | Simulated `.dat` files | `MINGO_DIGITAL_TWIN/SIMULATED_DATA/FILES/` |
-| Runtime cron logs | `OPERATIONS_RUNTIME/CRON_LOGS/` |
-| Runtime locks | `OPERATIONS_RUNTIME/LOCKS/` |
-| Operational station trees | `STATIONS/MINGO0X/` |
-| Materialized analysis outputs | `STATIONS/MINGO0X/STAGE_*/...` |
+| Runtime cron logs | `OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/` |
+| Runtime locks | `OPERATIONS/OPERATIONS_RUNTIME/LOCKS/` |
+| Operational station trees | `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0X/` |
+| Materialized analysis outputs | `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0X/STAGE_*/...` |
 
 ## Key formats
 

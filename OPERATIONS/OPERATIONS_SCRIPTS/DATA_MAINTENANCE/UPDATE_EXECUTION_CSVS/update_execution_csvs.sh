@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
-# Script: OPERATIONS/DATA_MAINTENANCE/UPDATE_EXECUTION_CSVS/update_execution_csvs.sh
+# Script: OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/UPDATE_EXECUTION_CSVS/update_execution_csvs.sh
 # Purpose: Update execution csvs.
 # Owner: DATAFLOW_v3 contributors
 # Sign-off: csoneira <csoneira@ucm.es>
 # Last Updated: 2026-03-02
 # Runtime: bash
-# Usage: bash OPERATIONS/DATA_MAINTENANCE/UPDATE_EXECUTION_CSVS/update_execution_csvs.sh [options]
+# Usage: bash OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/UPDATE_EXECUTION_CSVS/update_execution_csvs.sh [options]
 # Inputs: CLI args, config files, environment variables, and/or upstream files.
 # Outputs: Files, logs, or process-level side effects.
 # Notes: Keep behavior configuration-driven and reproducible.
@@ -110,10 +110,10 @@ fi
 process_station() {
   local station_code="$1"
   local station="MINGO${station_code}"
-  local task_output="$REPO_ROOT/STATIONS/${station}/STAGE_1/EVENT_DATA/STEP_3/TASK_2/OUTPUT_FILES"
+  local task_output="$REPO_ROOT/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/${station}/STAGE_1/EVENT_DATA/STEP_3/TASK_2/OUTPUT_FILES"
   local processed_csv="$OUTPUT_ROOT/${station}_processed_basenames.csv"
-  local hld_csv="$REPO_ROOT/STATIONS/${station}/STAGE_0/REPROCESSING/STEP_1/METADATA/hld_files_brought.csv"
-  local dat_csv="$REPO_ROOT/STATIONS/${station}/STAGE_0/REPROCESSING/STEP_2/METADATA/dat_files_unpacked.csv"
+  local hld_csv="$REPO_ROOT/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/${station}/STAGE_0/REPROCESSING/STEP_1/METADATA/hld_files_brought.csv"
+  local dat_csv="$REPO_ROOT/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/${station}/STAGE_0/REPROCESSING/STEP_2/METADATA/dat_files_unpacked.csv"
 
   if [[ ! -d "$task_output" ]]; then
     log "[${station}] Task 2 output directory not found: $task_output (skipping)"

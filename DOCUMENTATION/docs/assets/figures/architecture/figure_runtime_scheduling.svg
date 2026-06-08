@@ -47,7 +47,7 @@
 
   <rect x="300" y="380" width="850" height="92" class="box gate"/>
   <text x="320" y="418" class="label">Runtime observability</text>
-  <text x="320" y="442" class="small">OPERATIONS_RUNTIME/CRON_LOGS, lock files, status CSVs, audit scripts</text>
+  <text x="320" y="442" class="small">OPERATIONS/OPERATIONS_RUNTIME: cron logs, locks, status CSVs</text>
 
   <line x1="220" y1="136" x2="300" y2="126" class="flow"/>
   <line x1="220" y1="136" x2="300" y2="266" class="flow"/>

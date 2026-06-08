@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
-# Script: OPERATIONS/DATA_MAINTENANCE/FLUSH_FROM_UNPROCESSED/flush_from_unprocessed.sh
+# Script: OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/FLUSH_FROM_UNPROCESSED/flush_from_unprocessed.sh
 # Purpose: Flush from unprocessed.
 # Owner: DATAFLOW_v3 contributors
 # Sign-off: csoneira <csoneira@ucm.es>
 # Last Updated: 2026-03-02
 # Runtime: bash
-# Usage: bash OPERATIONS/DATA_MAINTENANCE/FLUSH_FROM_UNPROCESSED/flush_from_unprocessed.sh [options]
+# Usage: bash OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/FLUSH_FROM_UNPROCESSED/flush_from_unprocessed.sh [options]
 # Inputs: CLI args, config files, environment variables, and/or upstream files.
 # Outputs: Files, logs, or process-level side effects.
 # Notes: Keep behavior configuration-driven and reproducible.
@@ -33,9 +33,9 @@ usage() {
   cat <<'EOF'
 Usage: flush_from_unprocessed.sh [--dry-run] [--no-filter]
 
-Removes files under STATIONS/*/UNPROCESSED* whose basename (after the first
+Removes files under MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/*/UNPROCESSED* whose basename (after the first
 underscore, extension trimmed) appears in any *_processed_basenames.csv under
-OPERATIONS/DATA_MAINTENANCE/UPDATE_EXECUTION_CSVS/OUTPUT_FILES.
+OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/UPDATE_EXECUTION_CSVS/OUTPUT_FILES.
 
 Options:
   --dry-run     Show which files would be removed without deleting them.
@@ -70,7 +70,7 @@ done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-PROCESSED_DIR="$REPO_ROOT/OPERATIONS/DATA_MAINTENANCE/UPDATE_EXECUTION_CSVS/OUTPUT_FILES"
+PROCESSED_DIR="$REPO_ROOT/OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/UPDATE_EXECUTION_CSVS/OUTPUT_FILES"
 STATIONS_ROOT="$REPO_ROOT/STATIONS"
 
 if ! $NO_FILTER && [[ ! -d "$PROCESSED_DIR" ]]; then

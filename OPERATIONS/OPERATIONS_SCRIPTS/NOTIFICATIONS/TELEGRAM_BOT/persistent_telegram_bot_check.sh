@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
-# Script: OPERATIONS/NOTIFICATIONS/TELEGRAM_BOT/persistent_telegram_bot_check.sh
+# Script: OPERATIONS/OPERATIONS_SCRIPTS/NOTIFICATIONS/TELEGRAM_BOT/persistent_telegram_bot_check.sh
 # Purpose: Ensures mingo_analysis_bot.py is running. If not, starts it detached and logs the.
 # Owner: DATAFLOW_v3 contributors
 # Sign-off: csoneira <csoneira@ucm.es>
 # Last Updated: 2026-03-02
 # Runtime: bash
-# Usage: bash OPERATIONS/NOTIFICATIONS/TELEGRAM_BOT/persistent_telegram_bot_check.sh [options]
+# Usage: bash OPERATIONS/OPERATIONS_SCRIPTS/NOTIFICATIONS/TELEGRAM_BOT/persistent_telegram_bot_check.sh [options]
 # Inputs: CLI args, config files, environment variables, and/or upstream files.
 # Outputs: Files, logs, or process-level side effects.
 # Notes: Keep behavior configuration-driven and reproducible.
@@ -20,8 +20,8 @@
 set -euo pipefail
 
 PYTHON_BIN="${PYTHON_BIN:-/usr/bin/python3}"
-BOT_SCRIPT="${BOT_SCRIPT:-$HOME/DATAFLOW_v3/OPERATIONS/NOTIFICATIONS/TELEGRAM_BOT/mingo_analysis_bot.py}"
-LOG_DIR="${LOG_DIR:-$HOME/DATAFLOW_v3/OPERATIONS_RUNTIME/CRON_LOGS}"
+BOT_SCRIPT="${BOT_SCRIPT:-$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/NOTIFICATIONS/TELEGRAM_BOT/mingo_analysis_bot.py}"
+LOG_DIR="${LOG_DIR:-$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS}"
 LOG_FILE="${LOG_FILE:-${LOG_DIR}/bot_analysis.log}"
 PROCESS_PATTERN="${PYTHON_BIN} ${BOT_SCRIPT}"
 

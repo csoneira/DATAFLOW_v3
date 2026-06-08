@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 DATAFLOW_v3 Script Header v1
-Script: OPERATIONS/ORCHESTRATION/SOLVE_STALE_LOCKS/solve_stale_locks.py
+Script: OPERATIONS/OPERATIONS_SCRIPTS/ORCHESTRATION/SOLVE_STALE_LOCKS/solve_stale_locks.py
 Purpose: Check for stale STEP_1 and unpacker lock files.
 Owner: DATAFLOW_v3 contributors
 Sign-off: csoneira <csoneira@ucm.es>
 Last Updated: 2026-03-02
 Runtime: python3
-Usage: python3 OPERATIONS/ORCHESTRATION/SOLVE_STALE_LOCKS/solve_stale_locks.py [options]
+Usage: python3 OPERATIONS/OPERATIONS_SCRIPTS/ORCHESTRATION/SOLVE_STALE_LOCKS/solve_stale_locks.py [options]
 Inputs: CLI args, config files, environment variables, and/or upstream files.
 Outputs: Files, logs, plots, or stdout/stderr side effects.
 Notes: Keep behavior configuration-driven and reproducible.
@@ -26,10 +26,10 @@ from pathlib import Path
 from typing import Iterable
 
 
-DEFAULT_LOCK_DIR = Path.home() / "DATAFLOW_v3" / "OPERATIONS_RUNTIME" / "LOCKS"
+DEFAULT_LOCK_DIR = Path.home() / "DATAFLOW_v3" / "OPERATIONS/OPERATIONS_RUNTIME" / "LOCKS"
 UNPACK_LOCK_NAME = ".unpack_shared.lock"
 DEFAULT_LOG_FILE = (
-    Path.home() / "DATAFLOW_v3" / "OPERATIONS_RUNTIME" / "CRON_LOGS" / "solve_stale_locks.log"
+    Path.home() / "DATAFLOW_v3" / "OPERATIONS/OPERATIONS_RUNTIME" / "CRON_LOGS" / "solve_stale_locks.log"
 )
 # Task-level locks should clear faster so the pipeline does not get stuck if a task died
 # before releasing its lock.

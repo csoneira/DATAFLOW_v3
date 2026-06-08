@@ -1,26 +1,26 @@
 # Analysis Software (MASTER + STATIONS)
 
-`MASTER` is the analysis mother code: it processes raw miniTRASGO station data and also processes simulated station-format inputs. Resulting station-scoped artifacts are materialized under `STATIONS/`.
+`MASTER` is the analysis mother code: it processes raw miniTRASGO station data and also processes simulated station-format inputs. Resulting station-scoped artifacts are materialized under `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/`.
 
 ## At a glance
 
 | Item | Value |
 | --- | --- |
 | Upstream inputs | Real station DAQ/log streams + simulated `.dat` |
-| Core engine | `MASTER/STAGES/STAGE_0..3` |
-| Materialized outputs | `STATIONS/MINGO0X/...` |
+| Core engine | `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_0..3` |
+| Materialized outputs | `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0X/...` |
 | Promotion gate | Stage progression and QA checks |
 
 ## Stage model
 
 | Stage | Purpose | Main location |
 | --- | --- | --- |
-| STAGE 0 | Acquire and buffer raw input files | `MASTER/STAGES/STAGE_0/` |
-| STAGE 1 | Event cleaning and lab-log alignment | `MASTER/STAGES/STAGE_1/` |
-| STAGE 2 | Environmental corrections and source integration | `MASTER/STAGES/STAGE_2/` |
-| STAGE 3 | NMDB integration and enriched analytics | `MASTER/STAGES/STAGE_3/` |
+| STAGE 0 | Acquire and buffer raw input files | `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_0/` |
+| STAGE 1 | Event cleaning and lab-log alignment | `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/` |
+| STAGE 2 | Environmental corrections and source integration | `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_2/` |
+| STAGE 3 | NMDB integration and enriched analytics | `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_3/` |
 
-Per-station trees and outputs live under `STATIONS/MINGO00` to `STATIONS/MINGO04`.
+Per-station trees and outputs live under `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00` to `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO04`.
 
 ## Stage interaction diagram
 
@@ -43,7 +43,7 @@ flowchart LR
 
 ## Operational characteristics
 
-- Cron-managed jobs with lock files and runtime logs in `OPERATIONS_RUNTIME/`.
+- Cron-managed jobs with lock files and runtime logs in `OPERATIONS/OPERATIONS_RUNTIME/`.
 - Per-station workflows with explicit queue/reprocessing metadata.
 - Analysis jobs and ancillary jobs coordinated by resource-gate wrappers.
 
@@ -57,11 +57,11 @@ flowchart LR
 
 ## Key scripts and helpers
 
-- `MASTER/STAGES/STAGE_0/SIMULATION/ingest_simulated_station_data.py`
-- `MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh`
-- `MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_2/guide_corrected_to_accumulated.sh`
-- `MASTER/STAGES/STAGE_1/EVENT_DATA/STEP_3/guide_accumulated_to_joined.sh`
-- `OPERATIONS/OBSERVABILITY/AUDIT_PIPELINE_STATES/audit_pipeline_states.py`
+- `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_0/SIMULATION/ingest_simulated_station_data.py`
+- `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh`
+- `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_2/guide_corrected_to_accumulated.sh`
+- `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_3/guide_accumulated_to_joined.sh`
+- `OPERATIONS/OPERATIONS_SCRIPTS/OBSERVABILITY/AUDIT_PIPELINE_STATES/audit_pipeline_states.py`
 
 ## Primary operational references
 

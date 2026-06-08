@@ -23,7 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
-from MASTER.common.selection_config import extract_selection
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.selection_config import extract_selection
 
 
 def _load_step0_module():
