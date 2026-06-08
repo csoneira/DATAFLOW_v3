@@ -1,6 +1,6 @@
 selection:
   # Non-empty list overrides station selection in lower-level configs.
-  stations: [2]
+  stations: [0, 2]
   event_markers:
     - date: 2024-03-24 16:00:00
       label: March Forbush Decrease

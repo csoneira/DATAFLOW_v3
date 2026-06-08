@@ -319,11 +319,16 @@ def add_topology_task2_strip(df: pd.DataFrame) -> pd.DataFrame:
     if not all(col in df.columns for col in columns):
         return df
     values = df.loc[:, columns].apply(pd.to_numeric, errors="coerce").fillna(0).to_numpy(copy=False)
-    df.loc[:, "topology_task2_strip"] = [
-        "".join("1" if value != 0 else "0" for value in row)
+    topology_values = [
+        "".join("1" if np.isfinite(value) and value > 0 else "0" for value in row)
         for row in values
     ]
-    return df
+    if "topology_task2_strip" in df.columns:
+        df = df.drop(columns=["topology_task2_strip"])
+    return pd.concat(
+        [df, pd.DataFrame({"topology_task2_strip": topology_values}, index=df.index)],
+        axis=1,
+    ).copy()
 
 
 def add_topology_task3_plane(df: pd.DataFrame) -> pd.DataFrame:
@@ -332,7 +337,7 @@ def add_topology_task3_plane(df: pd.DataFrame) -> pd.DataFrame:
         return df
     values = df.loc[:, columns].apply(pd.to_numeric, errors="coerce").fillna(0).to_numpy(copy=False)
     df.loc[:, "topology_task3_plane"] = [
-        "".join("1" if value != 0 else "0" for value in row)
+        "".join("1" if np.isfinite(value) and value > 0 else "0" for value in row)
         for row in values
     ]
     return df

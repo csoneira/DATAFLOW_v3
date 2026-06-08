@@ -923,8 +923,18 @@ def ensure_global_count_keys(prefixes: Iterable[str]) -> None:
             global_variables.setdefault(f"{prefix}_{tt_value}_count", 0)
 
 
+def _task4_tt_charge_columns(columns: list[str]) -> list[str]:
+    return [
+        col
+        for col in columns
+        if str(col).lower().endswith("_q")
+        or "_qsum" in str(col).lower()
+        or "_q_sum" in str(col).lower()
+    ]
+
+
 def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:
-    """Compute trigger type based on planes with non-zero charge."""
+    """Compute trigger type based on planes with positive charge."""
     tt_str = pd.Series("", index=df.index, dtype="object")
     for plane in range(1, 5):
         if columns_map:
@@ -936,8 +946,10 @@ def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[s
                 for col in (f"p{plane}_s{strip}_ef_q", f"p{plane}_s{strip}_eb_q")
                 if col in df.columns
             ]
+        charge_columns = _task4_tt_charge_columns(charge_columns)
         if charge_columns:
-            has_charge = df.loc[:, charge_columns].ne(0).any(axis=1)
+            charge_values = df.loc[:, charge_columns].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+            has_charge = charge_values.gt(0.0).any(axis=1)
             tt_str = tt_str.where(~has_charge, tt_str + str(plane))
     tt_values = tt_str.replace("", "0").astype(int)
     target_dtype = df[column_name].dtype if column_name in df.columns else None
@@ -1025,10 +1037,16 @@ def refresh_task4_trigger_columns(
     if "tt_task3_list" not in df_output.columns:
         df_output = compute_tt(df_output, "tt_task3_list", TASK4_EXTENSION_TT_COLUMNS)
     else:
-        df_output.loc[:, "tt_task3_list"] = (
+        target_dtype = df_output["tt_task3_list"].dtype
+        tt_task3_values = (
             pd.to_numeric(df_output["tt_task3_list"], errors="coerce")
             .fillna(0)
-            .astype(int)
+            .astype(np.int32)
+        )
+        if pd.api.types.is_integer_dtype(target_dtype):
+            tt_task3_values = np.asarray(tt_task3_values, dtype=target_dtype)
+        df_output.loc[:, "tt_task3_list"] = (
+            tt_task3_values
         )
     tt_task4_fit_series = compute_tt_task4_fit_from_charge(df_output)
     if TASK4_PRIMARY_TT_COLUMN in df_output.columns and pd.api.types.is_integer_dtype(df_output[TASK4_PRIMARY_TT_COLUMN].dtype):
@@ -6338,10 +6356,7 @@ for iteration in range(repeat + 1):
         _td_row = _tt_Tdif[pos]
         _y_row  = _tt_Y[pos]
         _valid_plane_mask = (
-            (_q_row != 0.0)
-            & (_ts_row != 0.0)
-            & (_td_row != 0.0)
-            & (_y_row != 0.0)
+            (_q_row > 0.0)
             & np.isfinite(_q_row)
             & np.isfinite(_ts_row)
             & np.isfinite(_td_row)
@@ -7332,6 +7347,11 @@ if time_window_fitting:
         for plane in range(1, 5)
         if f"p{plane}_tsum" in working_df.columns
     ]
+    q_sum_cols = [
+        f"p{plane}_qsum"
+        for plane in range(1, 5)
+        if f"p{plane}_tsum" in working_df.columns and f"p{plane}_qsum" in working_df.columns
+    ]
     if not t_sum_cols:
         t_sum_cols = [
             f"p{plane}_s{strip}_tsum"
@@ -7339,11 +7359,28 @@ if time_window_fitting:
             for strip in range(1, 5)
             if f"p{plane}_s{strip}_tsum" in working_df.columns
         ]
+        q_sum_cols = [
+            f"p{plane}_s{strip}_qsum"
+            for plane in range(1, 5)
+            for strip in range(1, 5)
+            if f"p{plane}_s{strip}_tsum" in working_df.columns
+            and f"p{plane}_s{strip}_qsum" in working_df.columns
+        ]
     t_sum_all = (
         working_df[t_sum_cols].to_numpy(dtype=float, copy=False)
         if t_sum_cols
         else np.empty((len(working_df), 0), dtype=float)
     )
+    q_sum_all = (
+        working_df[q_sum_cols].to_numpy(dtype=float, copy=False)
+        if q_sum_cols and len(q_sum_cols) == len(t_sum_cols)
+        else np.empty((len(working_df), 0), dtype=float)
+    )
+    if q_sum_all.shape[1] != t_sum_all.shape[1]:
+        print(
+            "Warning: Task 4 time-window fitting could not align Q_sum columns "
+            "with T_sum columns; falling back to legacy T_sum != 0 activity."
+        )
 
     for tt_task4_fit_value in tt_task4_fit_values:
         mask = tt_task4_fit_arr == tt_task4_fit_value
@@ -7352,23 +7389,27 @@ if time_window_fitting:
         if n_selected > 0:
             print(f"\nProcessing tt_task4_fit: {tt_task4_fit_value} with {n_selected} events.")
         t_sum_data = t_sum_all[mask]
+        q_sum_data = q_sum_all[mask] if q_sum_all.shape[1] == t_sum_all.shape[1] else np.empty((n_selected, 0), dtype=float)
         if t_sum_data.size == 0:
             print(f"\n[Warning] Skipping tt_task4_fit {tt_task4_fit_value}: no canonical tsum columns.")
             continue
-        
-        nonzero_rows = np.any(t_sum_data != 0, axis=1)
-        if not np.any(nonzero_rows):
-            print(f"\n[Warning] Skipping tt_task4_fit {tt_task4_fit_value}: no non-zero T_sum data.")
+
+        if q_sum_data.shape[1] == t_sum_data.shape[1]:
+            active_mask = np.isfinite(q_sum_data) & (q_sum_data > 0)
+        else:
+            active_mask = np.isfinite(t_sum_data) & (t_sum_data != 0)
+        active_rows = np.any(active_mask, axis=1)
+        if not np.any(active_rows):
+            print(f"\n[Warning] Skipping tt_task4_fit {tt_task4_fit_value}: no positive-charge T_sum data.")
             continue
 
-        nonzero_mask = t_sum_data != 0
-        nonzero_counts = nonzero_mask.sum(axis=1, keepdims=True)
-        nonzero_sums = (t_sum_data * nonzero_mask).sum(axis=1, keepdims=True)
+        active_counts = active_mask.sum(axis=1, keepdims=True)
+        active_sums = (t_sum_data * active_mask).sum(axis=1, keepdims=True)
         row_stat = np.divide(
-            nonzero_sums,
-            nonzero_counts,
-            out=np.zeros_like(nonzero_sums, dtype=float),
-            where=nonzero_counts > 0,
+            active_sums,
+            active_counts,
+            out=np.zeros_like(active_sums, dtype=float),
+            where=active_counts > 0,
         )
         abs_dev = np.abs(t_sum_data - row_stat)
         counts_per_width = np.empty(half_widths.shape[0], dtype=float)
@@ -7376,7 +7417,7 @@ if time_window_fitting:
         for start in range(0, half_widths.shape[0], width_chunk_size):
             stop = min(start + width_chunk_size, half_widths.shape[0])
             half_chunk = half_widths[start:stop]
-            in_window = nonzero_mask[:, :, None] & (abs_dev[:, :, None] <= half_chunk[None, None, :])
+            in_window = active_mask[:, :, None] & (abs_dev[:, :, None] <= half_chunk[None, None, :])
             count_in_window = in_window.sum(axis=1)
             counts_per_width[start:stop] = count_in_window.mean(axis=0)
         
@@ -7732,10 +7773,15 @@ compute_timtrack_gaussian_sigma_chi2(
     quantile=0.99,
     output_col="tim_th_chi_sigmafit_1234",
 )
-cond = base_cond & pd.to_numeric(
+chi1234_cond = base_cond & pd.to_numeric(
     working_df["tim_th_chi_sigmafit_1234"], errors="coerce"
 ).lt(100)
-df_plot_ancillary = working_df.loc[cond].copy()
+df_plot_ancillary_1234_chi = working_df.loc[chi1234_cond].copy()
+print(
+    "Task 4 plot ancillary rows: "
+    f"all_tt={len(df_plot_ancillary)}, "
+    f"tt1234_chi_lt_100={len(df_plot_ancillary_1234_chi)}"
+)
 # Efficiency diagnostics should use the full activity-based event table,
 # not the chi2/charge-clipped ancillary subset used for other plots.
 # Efficiency inputs come from the post-TimTrack, post-final-filter data frame.
@@ -9494,12 +9540,12 @@ if (
         
         axis_limits = {
             # Static
-            'x': [-pos_filter, pos_filter],
-            'y': [-pos_filter, pos_filter],
-            'det_x': [-pos_filter, pos_filter],
-            'det_y': [-pos_filter, pos_filter],
-            'tim_x': [-pos_filter, pos_filter],
-            'tim_y': [-pos_filter, pos_filter],
+            'x': [-strip_half, strip_half],
+            'y': [-width_half, width_half],
+            'det_x': [-strip_half, strip_half],
+            'det_y': [-width_half, width_half],
+            'tim_x': [-strip_half, strip_half],
+            'tim_y': [-width_half, width_half],
             'theta': [theta_left_filter, theta_right_filter],
             'phi': [phi_left_filter, phi_right_filter],
             'det_theta': [det_theta_left_filter, det_theta_right_filter],
@@ -9544,6 +9590,35 @@ if (
         x_like_cols = {"x", "det_x", "tim_x"}
         y_like_cols = {"y", "det_y", "tim_y"}
 
+        def _finite_axis_limit(values: pd.Series) -> list[float] | None:
+            numeric_values = pd.to_numeric(values, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+            numeric_values = numeric_values[numeric_values != 0]
+            if numeric_values.empty:
+                return None
+            left = float(numeric_values.min())
+            right = float(numeric_values.max())
+            if not np.isfinite(left) or not np.isfinite(right):
+                return None
+            if left == right:
+                pad = max(abs(left) * 0.05, 1.0)
+                left -= pad
+                right += pad
+            return [left, right]
+
+        def _safe_set_xlim(axis, limits) -> None:
+            if limits is None:
+                return
+            left, right = float(limits[0]), float(limits[1])
+            if np.isfinite(left) and np.isfinite(right) and left < right:
+                axis.set_xlim(left, right)
+
+        def _safe_set_ylim(axis, limits) -> None:
+            if limits is None:
+                return
+            left, right = float(limits[0]), float(limits[1])
+            if np.isfinite(left) and np.isfinite(right) and left < right:
+                axis.set_ylim(left, right)
+
         # Apply filters
         for col, min_val, max_val in filter_conditions:
             if col not in df.columns:
@@ -9556,9 +9631,18 @@ if (
         auto_limits = {}
         for col in columns_of_interest:
             if col in axis_limits:
-                auto_limits[col] = axis_limits[col]
+                configured_limits = axis_limits[col]
+                if (
+                    len(configured_limits) == 2
+                    and np.isfinite(float(configured_limits[0]))
+                    and np.isfinite(float(configured_limits[1]))
+                    and float(configured_limits[0]) < float(configured_limits[1])
+                ):
+                    auto_limits[col] = [float(configured_limits[0]), float(configured_limits[1])]
+                else:
+                    auto_limits[col] = _finite_axis_limit(df[col])
             else:
-                auto_limits[col] = [df[col].min(), df[col].max()]
+                auto_limits[col] = _finite_axis_limit(df[col])
         
         for i in range(num_var):
             for j in range(num_var):
@@ -9570,11 +9654,15 @@ if (
                     ax.axis('off')  # Leave the lower triangle blank
                 elif i == j:
                     # Diagonal: 1D histogram
-                    hist_data = df[x_col]
-                    # Remove nans
-                    hist_data = hist_data[~np.isnan(hist_data)]
+                    hist_data = pd.to_numeric(df[x_col], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
                     # Remove zeroes
                     hist_data = hist_data[hist_data != 0]
+                    if hist_data.empty:
+                        ax.text(0.5, 0.5, "no finite data", ha="center", va="center", transform=ax.transAxes)
+                        ax.set_xticks([])
+                        ax.set_yticks([])
+                        _safe_set_xlim(ax, auto_limits[x_col])
+                        continue
                     hist, bins = np.histogram(hist_data, bins=num_bins)
                     bin_centers = 0.5 * (bins[1:] + bins[:-1])
                     norm = plt.Normalize(hist.min(), hist.max())
@@ -9585,7 +9673,7 @@ if (
                     
                     ax.set_xticks([])
                     ax.set_yticks([])
-                    ax.set_xlim(auto_limits[x_col])
+                    _safe_set_xlim(ax, auto_limits[x_col])
                     
                     # Use log-scale for count-heavy positive histograms.
                     if x_col.startswith('charge') or x_col == 'tim_th_chi_sigmafit_1234':
@@ -9593,17 +9681,25 @@ if (
                     
                 else:
                     # Lower triangle: density/scatter view
-                    x_data = df[x_col]
-                    y_data = df[y_col]
+                    x_data = pd.to_numeric(df[x_col], errors="coerce")
+                    y_data = pd.to_numeric(df[y_col], errors="coerce")
                     # Remove zeroes and nans
-                    cond = (x_data != 0) & (y_data != 0) & (~np.isnan(x_data)) & (~np.isnan(y_data))
+                    cond = (
+                        (x_data != 0)
+                        & (y_data != 0)
+                        & np.isfinite(x_data)
+                        & np.isfinite(y_data)
+                    )
                     x_data = x_data[cond]
                     y_data = y_data[cond]
                     if plot_mode == "scatter":
                         ax.scatter(x_data, y_data, s=3, alpha=0.20, color="tab:blue", linewidths=0, rasterized=True)
                         ax.set_facecolor("white")
                     else:
-                        ax.hexbin(x_data, y_data, gridsize=num_bins, cmap='turbo')
+                        if len(x_data) > 0:
+                            ax.hexbin(x_data, y_data, gridsize=num_bins, cmap='turbo')
+                        else:
+                            ax.text(0.5, 0.5, "no finite data", ha="center", va="center", transform=ax.transAxes)
                         ax.set_facecolor(plt.cm.turbo(0))
                     
                     if (
@@ -9625,8 +9721,8 @@ if (
                         ax.plot(rect_x, rect_y, color='white', linewidth=1)
                     
                     # Apply determined limits
-                    ax.set_xlim(auto_limits[x_col])
-                    ax.set_ylim(auto_limits[y_col])
+                    _safe_set_xlim(ax, auto_limits[x_col])
+                    _safe_set_ylim(ax, auto_limits[y_col])
                 
                 if i != num_var - 1:
                     ax.set_xticklabels([])
@@ -9674,18 +9770,42 @@ if (
     #     ([("tt_task4_fit", 1234, 1234)], "1-2-3-4 cases"),
     # ]
     
-    df_cases_1 = [
-        ([(task4_plot_tt_column, 12, 12)], "1-2 cases"),
-        ([(task4_plot_tt_column, 23, 23)], "2-3 cases"),
-        ([(task4_plot_tt_column, 34, 34)], "3-4 cases"),
-        ([(task4_plot_tt_column, 123, 123)], "1-2-3 cases"),
-        ([(task4_plot_tt_column, 234, 234)], "2-3-4 cases"),
-        ([(task4_plot_tt_column, 1234, 1234)], "1-2-3-4 cases"),
-        ([(task4_plot_tt_column, 13, 13)], "1-3 cases"),
-        ([(task4_plot_tt_column, 14, 14)], "1-4 cases"),
-        ([(task4_plot_tt_column, 124, 124)], "1-2-4 cases"),
-        ([(task4_plot_tt_column, 134, 134)], "1-3-4 cases"),
-    ]
+    _task4_projection_tt_order = (12, 13, 14, 23, 24, 34, 123, 124, 134, 234, 1234)
+
+    def _task4_available_tt_projection_cases(
+        df: pd.DataFrame,
+        tt_column: str,
+    ) -> list[tuple[list[tuple[str, int, int]], str]]:
+        if tt_column not in df.columns:
+            return []
+        tt_numeric = pd.to_numeric(df[tt_column], errors="coerce")
+        tt_counts = tt_numeric.value_counts(dropna=True)
+        available = {
+            int(tt_value): int(count)
+            for tt_value, count in tt_counts.items()
+            if np.isfinite(float(tt_value)) and int(tt_value) > 0 and int(count) > 0
+        }
+        ordered_values = [tt_value for tt_value in _task4_projection_tt_order if tt_value in available]
+        ordered_values.extend(sorted(tt_value for tt_value in available if tt_value not in ordered_values))
+        return [
+            (
+                [(tt_column, int(tt_value), int(tt_value))],
+                f"{tt_column} = {int(tt_value)} (n={available[int(tt_value)]})",
+            )
+            for tt_value in ordered_values
+        ]
+
+    df_cases_1 = _task4_available_tt_projection_cases(df_plot_ancillary, task4_plot_tt_column)
+    if df_cases_1:
+        print(
+            "Task 4 timtrack_results_hexbin_combination_projections TT cases: "
+            + ", ".join(title for _, title in df_cases_1)
+        )
+    else:
+        print(
+            "Task 4 timtrack_results_hexbin_combination_projections skipped: "
+            f"no positive {task4_plot_tt_column} cases found."
+        )
     
 
     df_cases_1234 = [
@@ -9697,6 +9817,24 @@ if (
         ([("tt_task4_fit", 1234, 1234), ("tim_th_chi_sigmafit_1234", 20, 40)], "1-2-3-4 tt_task4_fit cases, 20 < chi2 < 40"),
         ([("tt_task4_fit", 1234, 1234), ("tim_th_chi_sigmafit_1234", 40, 1000)], "1-2-3-4 tt_task4_fit cases, 40 < chi2"),
     ]
+
+    def _task4_relevant_charge_columns_for_title(title: str, df_columns: pd.Index) -> list[str]:
+        match = re.search(r"=\s*(\d+)", title)
+        plane_label = match.group(1) if match else title.split()[0]
+        planes = [int(value) for value in re.findall(r"[1-4]", plane_label)]
+        if not planes:
+            planes = [1, 2, 3, 4]
+        relevant_columns: list[str] = []
+        for plane in planes:
+            for candidate in (
+                f"tim_charge_{plane}",
+                f"p{plane}_qsum",
+                f"charge_{plane}",
+            ):
+                if candidate in df_columns:
+                    relevant_columns.append(candidate)
+                    break
+        return relevant_columns
 
     df_cases_2 = [
         ([(task4_plot_tt_column, 1234, 1234)], "1-2-3-4 cases"),
@@ -9997,9 +10135,11 @@ if (
                 force=True,
             )
 
-    # A pure theta vs phi map
-    plot_col = ['tim_x', 'tim_y', 'tim_xp', 'tim_yp', 'tim_s', 'tim_th_chi_sigmafit_1234']
+    # TimTrack projections per actual fitted plane combination. Use the generic
+    # chi column here; tim_th_chi_sigmafit_1234 is only defined for 1234 events.
     for filters, title in df_cases_1:
+        relevant_charges = _task4_relevant_charge_columns_for_title(title, df_plot_ancillary.columns)
+        plot_col = ['tim_x', 'tim_y', 'tim_xp', 'tim_yp', 'tim_s', 'tim_th_chi'] + relevant_charges
         fig_idx = plot_hexbin_matrix(
             df_plot_ancillary,
             plot_col,
@@ -10074,11 +10214,12 @@ if (
     for filters, title in df_cases_1234_chi_study:
 
         # Define the columns - interest dynamically
+        relevant_charges = _task4_relevant_charge_columns_for_title(title, df_plot_ancillary_1234_chi.columns)
         columns_of_interest = ['tim_x', 'tim_y', 'tim_theta', 'tim_phi', 'tim_s', 'tim_th_chi_sigmafit_1234'] + relevant_charges
         
         if (create_essential_plots or create_plots) and task4_plot_enabled("timtrack_results_scatter_combination_projections"):
             fig_idx = plot_hexbin_matrix(
-                df_plot_ancillary,
+                df_plot_ancillary_1234_chi,
                 columns_of_interest,
                 filters,
                 f"{title} [scatter]",
@@ -10201,6 +10342,7 @@ if create_plots:
     plt.close()
 
 del df_plot_ancillary
+del df_plot_ancillary_1234_chi
 gc.collect()
 
 if create_plots and task4_plot_enabled("events_per_second_by_plane_cardinality_double_row"):

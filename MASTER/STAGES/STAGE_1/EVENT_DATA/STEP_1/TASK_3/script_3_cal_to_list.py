@@ -1421,8 +1421,18 @@ def detect_streamer_threshold(
 
     return None
 
+def _task3_tt_charge_columns(columns: list[str]) -> list[str]:
+    return [
+        col
+        for col in columns
+        if str(col).lower().endswith("_q")
+        or "_qsum" in str(col).lower()
+        or "_q_sum" in str(col).lower()
+    ]
+
+
 def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:
-    """Compute trigger type based on planes with non-zero charge."""
+    """Compute trigger type based on planes with positive charge."""
     tt_str = pd.Series("", index=df.index, dtype="object")
     for plane in range(1, 5):
         if columns_map:
@@ -1442,8 +1452,10 @@ def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[s
                 ]
                 if col in df.columns
             ]
+        charge_columns = _task3_tt_charge_columns(charge_columns)
         if charge_columns:
-            has_charge = df.loc[:, charge_columns].ne(0).any(axis=1)
+            charge_values = df.loc[:, charge_columns].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+            has_charge = charge_values.gt(0.0).any(axis=1)
             tt_str = tt_str.where(~has_charge, tt_str + str(plane))
     df.loc[:, column_name] = tt_str.replace("", "0").astype(int)
     return df
@@ -5272,13 +5284,14 @@ if task3_plot_enabled("incoming_parquet_main_columns_debug"):
 tt_task2_cal_columns: dict[int, list[str]] = {}
 for plane in range(1, 5):
     tt_task2_cal_columns[plane] = [
-        f"p{plane}_s{strip}_tsum" for strip in range(1, 5) if f"p{plane}_s{strip}_tsum" in working_df.columns
-    ] + [
-        f"p{plane}_s{strip}_tdif" for strip in range(1, 5) if f"p{plane}_s{strip}_tdif" in working_df.columns
-    ] + [
-        f"p{plane}_s{strip}_qsum" for strip in range(1, 5) if f"p{plane}_s{strip}_qsum" in working_df.columns
-    ] + [
-        f"p{plane}_s{strip}_qdif" for strip in range(1, 5) if f"p{plane}_s{strip}_qdif" in working_df.columns
+        (
+            f"p{plane}_s{strip}_qsum_cal"
+            if f"p{plane}_s{strip}_qsum_cal" in working_df.columns
+            else f"p{plane}_s{strip}_qsum"
+        )
+        for strip in range(1, 5)
+        if f"p{plane}_s{strip}_qsum_cal" in working_df.columns
+        or f"p{plane}_s{strip}_qsum" in working_df.columns
     ]
 
 # Keep tt_task2_cal from Task 2 when present; compute only if missing.
@@ -5466,12 +5479,26 @@ print("----------------------------------------------------------------------")
 print("---------------- Binary topology of active strips --------------------")
 print("----------------------------------------------------------------------")
 
+def _task3_prefer_calibrated_strip_column(column_name: str) -> str:
+    cal_column_name = f"{column_name}_cal"
+    if cal_column_name in working_df.columns:
+        return cal_column_name
+    if column_name in working_df.columns:
+        print(f"Warning: Task 3 using uncalibrated fallback column {column_name}; {cal_column_name} is missing.")
+        return column_name
+    return column_name
+
 # Collect new columns in a dict first
 active_strip_cols = {}
 
 for plane_id in range(1, 5):
-    cols = [f'p{plane_id}_s{i}_qsum' for i in range(1, 5)]
-    Q_plane = working_df[cols].values  # shape (N, 4)
+    cols = [_task3_prefer_calibrated_strip_column(f'p{plane_id}_s{i}_qsum') for i in range(1, 5)]
+    Q_plane = (
+        working_df[cols]
+        .apply(pd.to_numeric, errors="coerce")
+        .fillna(0)
+        .to_numpy(dtype=float)
+    )  # shape (N, 4)
     active_strips_binary = (Q_plane > 0).astype(int)
     binary_strings = [''.join(map(str, row)) for row in active_strips_binary]
     active_strip_cols[f'active_strips_P{plane_id}'] = binary_strings
@@ -6605,7 +6632,16 @@ if y_new_method:
             list(map(int, s)) for s in working_df[f'active_strips_P{plane_id}']
         ])
         
-        q_plane = working_df[[f'p{plane_id}_s{i}_qsum' for i in range(1, 5)]].values  # shape (N, 4)
+        q_plane_cols = [
+            _task3_prefer_calibrated_strip_column(f'p{plane_id}_s{i}_qsum')
+            for i in range(1, 5)
+        ]
+        q_plane = (
+            working_df[q_plane_cols]
+            .apply(pd.to_numeric, errors="coerce")
+            .fillna(0)
+            .to_numpy(dtype=float)
+        )  # shape (N, 4)
         
         # Take only active strips' charges
         q_active = topo_binary * q_plane
@@ -6651,12 +6687,22 @@ else:
     y_columns = {}
 
     for plane_id in range(1, 5):
-        q_plane = working_df[[f'p{plane_id}_s{i}_qsum' for i in range(1, 5)]].to_numpy(dtype=float)
+        q_plane_cols = [
+            _task3_prefer_calibrated_strip_column(f'p{plane_id}_s{i}_qsum')
+            for i in range(1, 5)
+        ]
+        q_plane = (
+            working_df[q_plane_cols]
+            .apply(pd.to_numeric, errors="coerce")
+            .fillna(0)
+            .to_numpy(dtype=float)
+        )
         y_vec = y_pos_P1_and_P3 if plane_id in [1, 3] else y_pos_P2_and_P4
         widths_vec = y_width_P1_and_P3 if plane_id in [1, 3] else y_width_P2_and_P4
 
-        total_charge = q_plane.sum(axis=1)
-        max_strip_idx = q_plane.argmax(axis=1)
+        positive_q_plane = np.where(np.isfinite(q_plane) & (q_plane > 0.0), q_plane, 0.0)
+        total_charge = positive_q_plane.sum(axis=1)
+        max_strip_idx = positive_q_plane.argmax(axis=1)
         y_position = np.zeros(len(working_df), dtype=float)
 
         nonzero_mask = total_charge > 0
@@ -6671,6 +6717,19 @@ else:
 
     working_df = pd.concat([working_df, pd.DataFrame(y_columns, index=working_df.index)], axis=1)
     _prof["s_y_position_core_s"] = round(time.perf_counter() - _t_y_position_core, 2)
+
+for plane_id in range(1, 5):
+    q_col = f"p{plane_id}_qsum"
+    y_col = f"p{plane_id}_ypos"
+    if q_col not in working_df.columns or y_col not in working_df.columns:
+        continue
+    active_plane = pd.to_numeric(working_df[q_col], errors="coerce").fillna(0.0).gt(0.0)
+    zero_y_active = active_plane & pd.to_numeric(working_df[y_col], errors="coerce").fillna(0.0).eq(0.0)
+    print(
+        f"Task 3 Y diagnostic P{plane_id}: "
+        f"active_qsum_rows={int(active_plane.sum())}, "
+        f"active_rows_with_ypos_zero={int(zero_y_active.sum())}"
+    )
 
 if task3_plot_enabled("y_position_by_tt_task2_cal"):
 
@@ -6857,15 +6916,6 @@ print(
 plane_raw_values: dict[int, dict[str, np.ndarray]] = {}
 final_columns: dict[str, np.ndarray] = {}
 
-def _task3_prefer_calibrated_strip_column(column_name: str) -> str:
-    cal_column_name = f"{column_name}_cal"
-    if cal_column_name in working_df.columns:
-        return cal_column_name
-    if column_name in working_df.columns:
-        print(f"Warning: Task 3 using uncalibrated fallback column {column_name}; {cal_column_name} is missing.")
-        return column_name
-    return column_name
-
 for i_plane in range(1, 5):
     t_sum_cols = [_task3_prefer_calibrated_strip_column(f'p{i_plane}_s{i+1}_tsum') for i in range(4)]
     t_dif_cols = [_task3_prefer_calibrated_strip_column(f'p{i_plane}_s{i+1}_tdif') for i in range(4)]
@@ -6918,6 +6968,33 @@ for i_plane in range(1, 5):
     final_columns[f'p{i_plane}_qdif'] = q_dif_final
 
 working_df = pd.concat([working_df, pd.DataFrame(final_columns, index=working_df.index)], axis=1)
+
+tsum_cols = [f"p{plane}_tsum" for plane in range(1, 5)]
+qsum_cols = [f"p{plane}_qsum" for plane in range(1, 5)]
+if all(col in working_df.columns for col in [*tsum_cols, *qsum_cols]):
+    tsum_values = working_df.loc[:, tsum_cols].apply(pd.to_numeric, errors="coerce").fillna(0).to_numpy(dtype=float)
+    qsum_values = working_df.loc[:, qsum_cols].apply(pd.to_numeric, errors="coerce").fillna(0).to_numpy(dtype=float)
+    positive_charge_mask = np.isfinite(qsum_values) & (qsum_values > 0)
+    has_positive_charge = positive_charge_mask.any(axis=1)
+    first_positive_plane_idx = np.where(has_positive_charge, positive_charge_mask.argmax(axis=1), 0)
+    row_indices = np.arange(len(working_df))
+    reference_tsum = np.zeros(len(working_df), dtype=float)
+    reference_tsum[has_positive_charge] = tsum_values[
+        row_indices[has_positive_charge],
+        first_positive_plane_idx[has_positive_charge],
+    ]
+    tsum_relative = tsum_values.copy()
+    tsum_relative[has_positive_charge] = (
+        tsum_relative[has_positive_charge]
+        - reference_tsum[has_positive_charge, np.newaxis]
+        + 1.0
+    )
+    tsum_relative[~positive_charge_mask] = 0
+    tsum_relative[~has_positive_charge] = 0
+    working_df.loc[:, tsum_cols] = tsum_relative
+    for i_plane in range(1, 5):
+        plane_raw_values[i_plane]["T_sum"] = tsum_relative[:, i_plane - 1].copy()
+
 _prof["s_rpc_vars_core_s"] = round(time.perf_counter() - _t_rpc_vars_core, 2)
 
 def _plot_task3_rpc_variables_hexbin(
@@ -7056,26 +7133,9 @@ if task3_plot_enabled("rpc_variables_hexbin_low_charge"):
 _prof["s_rpc_vars_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
-print("------ Put Tsum in reference to the first strip that is not zero -----")
+print("---- Tsum already referenced to first positive-charge plane -----------")
 print("----------------------------------------------------------------------")
 
-cols = ["p1_tsum", "p2_tsum", "p3_tsum", "p4_tsum"]
-vals = working_df[cols].to_numpy()
-nonzero_mask = vals != 0
-has_signal = nonzero_mask.any(axis=1)
-first_nonzero_idx = np.where(has_signal, nonzero_mask.argmax(axis=1), 0)
-row_indices = np.arange(len(working_df))
-baseline_vals = np.zeros(len(working_df))
-baseline_vals[has_signal] = vals[row_indices[has_signal], first_nonzero_idx[has_signal]]
-
-# Normalize only events with signal; keep missing planes and empty events at 0.
-vals_normalized = vals.copy()
-vals_normalized[has_signal] = vals_normalized[has_signal] - baseline_vals[has_signal, np.newaxis] + 1
-vals_normalized[~nonzero_mask] = 0
-vals_normalized[~has_signal] = 0
-working_df.loc[:, cols] = vals_normalized
-for i_plane in range(1, 5):
-    plane_raw_values[i_plane]["T_sum"] = vals_normalized[:, i_plane - 1].copy()
 filter6_cols: list[str] = []
 for i_plane in range(1, 5):
     filter6_cols.extend([

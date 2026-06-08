@@ -23,7 +23,7 @@ plots:
   grand_figure_t_dif_cal: usual
   grand_figure_t_dif_cal_st: usual
   uncalibrated: usual
-  uncalibrated_per_plane_combination: essential
+  uncalibrated_per_plane_combination: usual
   total_charge_per_plane_uncalibrated: usual
   calibration_charge_gates: usual
   tsum_spread_histograms_og: usual
@@ -33,8 +33,8 @@ plots:
   calibrated_filtered: usual
   calibration_subsample_uncalibrated_removed_zeroes: usual
   calibration_subsample_calibrated_removed_zeroes: usual
-  calibrated_filtered_removed_zeroes: usual
-  calibrated_filtered_removed_zeroes_per_plane_combination: essential
+  calibrated_filtered_removed_zeroes: essential
+  calibrated_filtered_removed_zeroes_per_plane_combination: usual
   calibrated_filtered_removed_zeroes_st: usual
   dx_vs_tsum: usual
   dx_vs_travel_time: usual
@@ -43,11 +43,11 @@ plots:
   slewing_delta_t_centroid_vs_qsum_cut: usual
   slewing_pair_delta_t_qsum1_qsum2_contour: usual
   slewing_delta_t_vs_qsum2_by_qsum1_bins: usual
-  slewing_delta_t_vs_qsum2_by_qsum1_bins_fit: false
-  slewing_per_strip_from_pair_fit: false
+  slewing_delta_t_vs_qsum2_by_qsum1_bins_fit: usual
+  slewing_per_strip_from_pair_fit: usual
   slewing_per_channel_polynomial_curves: usual
   slewing_relative_tsum_vs_qsum_after_correction: usual
-  slewing_relative_tsum_vs_qsum_after_correction_logscale: usual
+  slewing_relative_tsum_vs_qsum_after_correction_logscale: essential
   slewing_3d: usual
   slewing_3d_fitproj: usual
   model_validation_simple: usual

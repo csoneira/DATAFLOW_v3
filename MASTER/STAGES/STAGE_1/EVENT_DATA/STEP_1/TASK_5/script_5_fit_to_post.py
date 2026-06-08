@@ -633,9 +633,19 @@ def process_file(source_path, dest_path):
     return True
 
 
-# Helper: compute trigger types based on non-zero charge columns
+# Helper: compute trigger types based on positive charge columns
+def _task5_tt_charge_columns(columns: list[str]) -> list[str]:
+    return [
+        col
+        for col in columns
+        if str(col).lower().endswith("_q")
+        or "_qsum" in str(col).lower()
+        or "_q_sum" in str(col).lower()
+    ]
+
+
 def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[str]] | None = None) -> pd.DataFrame:
-    """Compute trigger type based on planes with non-zero charge."""
+    """Compute trigger type based on planes with positive charge."""
     tt_str = pd.Series("", index=df.index, dtype="object")
     for plane in range(1, 5):
         if columns_map:
@@ -655,8 +665,10 @@ def compute_tt(df: pd.DataFrame, column_name: str, columns_map: dict[int, list[s
                 ]
                 if col in df.columns
             ]
+        charge_columns = _task5_tt_charge_columns(charge_columns)
         if charge_columns:
-            has_charge = df.loc[:, charge_columns].ne(0).any(axis=1)
+            charge_values = df.loc[:, charge_columns].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+            has_charge = charge_values.gt(0.0).any(axis=1)
             tt_str = tt_str.where(~has_charge, tt_str + str(plane))
     df.loc[:, column_name] = tt_str.replace("", "0").astype(int)
     return df

@@ -14,8 +14,8 @@ plots:
   y_position_by_tt_task2_cal: usual
   strip_variable_pairgrid: usual
   self_trigger_strip_variable_pairgrid: usual
-  rpc_variables_hexbin: usual
-  rpc_variables_hexbin_per_plane_combination: essential
+  rpc_variables_hexbin: essential
+  rpc_variables_hexbin_per_plane_combination: usual
   rpc_variables_hexbin_low_charge: usual
   filter6_tsum_debug: debug
   filter6_tdif_debug: debug
@@ -25,7 +25,7 @@ plots:
   filtered_rpc_tsum_vs_qsum_scatter: usual
   filtered_rpc_tsum_vs_qsum_scatter_per_combination: usual
   filtered_rpc_tsum_vs_qsum_hexbin: usual
-  filtered_rpc_variables_hexbin: usual
+  filtered_rpc_variables_hexbin: essential
   prefilter_qsum_nonzero_debug: debug
   prefilter_tt_task3_list_debug: debug
   tt_task3_list_qsum_pairgrid: usual
