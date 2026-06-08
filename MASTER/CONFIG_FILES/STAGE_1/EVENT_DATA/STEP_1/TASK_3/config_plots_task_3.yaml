@@ -15,7 +15,7 @@ plots:
   strip_variable_pairgrid: usual
   self_trigger_strip_variable_pairgrid: usual
   rpc_variables_hexbin: essential
-  rpc_variables_hexbin_per_plane_combination: usual
+  rpc_variables_hexbin_per_plane_combination: essential
   rpc_variables_hexbin_low_charge: usual
   filter6_tsum_debug: debug
   filter6_tdif_debug: debug

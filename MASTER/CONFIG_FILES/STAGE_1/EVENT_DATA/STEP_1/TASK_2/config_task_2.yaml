@@ -8,9 +8,10 @@ complete_reanalysis: true
 article_format: false
 # create_plots options: null | debug | usual | essential | all
 # Task 2 plot alias statuses live in config_plots_task_2.yaml
-create_plots: null
+create_plots: essential
 keep_all_columns_output: false
 filter_parameter_config_csv: config_filter_parameters_task_2.csv
+calibration_subsample_config_yaml: config_calibration_subsample_task_2.yaml
 # Optional filter-parameter overlay. Keep true to apply
 # config_filter_parameters_task_2.csv bounds/thresholds.
 use_filter_parameter_config: true
@@ -63,12 +64,8 @@ slewing_relative_tsum_vs_qsum_qsum_clip_right: 50
 joined_analysis_files: 15
 joined_analysis_time_tolerance_hours: 24
 time_window_filtering: false
-charge_share_prefilter: false
-calibration_dataframe_filtering: true
-# Plane topologies admitted in the Task 2 calibration subsample.
-# Labels use plane numbers; e.g. 123 means planes 1, 2 and 3 present,
-# with the omitted plane required to be absent.
-task2_calibration_plane_topologies: [1234, 123, 234, 124, 134]
+# All hard filters defining and evolving calibration_df live only in:
+# config_calibration_subsample_task_2.yaml
 old_timing_method: true
 # Calibration behaviour flags (moved here from config_parameters_task_2.csv)
 validate_pos_cal: true

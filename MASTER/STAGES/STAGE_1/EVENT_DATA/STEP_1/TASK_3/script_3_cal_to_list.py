@@ -7045,9 +7045,9 @@ def _plot_task3_rpc_variables_hexbin(
             (q_sum,  q_diff, f'{q_sum_col} vs {q_dif_col}')
         ]
 
-        for offset, (x, yv, title) in enumerate(plot_pairs):
+        for offset, (x, yv, subplot_title) in enumerate(plot_pairs):
             ax = axes[base_idx + offset]
-            _task3_plot_quantile_hexbin(ax, x, yv, title, gridsize=50, cmap="turbo")
+            _task3_plot_quantile_hexbin(ax, x, yv, subplot_title, gridsize=50, cmap="turbo")
 
     plt.tight_layout()
     plt.subplots_adjust(top=0.92)
@@ -7978,9 +7978,9 @@ if task3_plot_enabled("rpc_variables_hexbin_per_plane_combination"):
         if not bool(tt_mask.any()):
             continue
         tt_label = normalize_tt_label(tt_value)
-        title = f"tt_task3_list={tt_label}"
+        title = f"tt_task3_list = {tt_label}"
         if joined_input_records:
-            title = f"{title} (files={len(joined_input_records)})"
+            title = f"{title} (files processed={len(joined_input_records)})"
         _plot_task3_rpc_variables_hexbin(
             working_df.loc[tt_mask],
             title=title,

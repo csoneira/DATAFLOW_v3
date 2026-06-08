@@ -46,8 +46,8 @@ plots:
   slewing_delta_t_vs_qsum2_by_qsum1_bins_fit: usual
   slewing_per_strip_from_pair_fit: usual
   slewing_per_channel_polynomial_curves: usual
-  slewing_relative_tsum_vs_qsum_after_correction: usual
-  slewing_relative_tsum_vs_qsum_after_correction_logscale: essential
+  slewing_relative_tsum_vs_qsum_after_correction: essential
+  slewing_relative_tsum_vs_qsum_after_correction_logscale: usual
   slewing_3d: usual
   slewing_3d_fitproj: usual
   model_validation_simple: usual
