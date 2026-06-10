@@ -10253,8 +10253,14 @@ if q_dif_t_dif_correction_mode == "file":
 
 # sys.exit("DEBUG: Exiting after loading reprocessing parameters.")
 
-ITINERARY_FILE_PATH = Path(
-    f"{home_path}/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
+ITINERARY_FILE_PATH = (
+    repo_root
+    / "MINGO_ANALYSIS"
+    / "MINGO_ANALYSIS_SCRIPTS"
+    / "ANCILLARY"
+    / "CALIBRATIONS_AND_LUTS"
+    / "TIME_CALIBRATION_ITINERARIES"
+    / "itineraries.csv"
 )
 global index_of_cal_plot
 index_of_cal_plot = 1
@@ -10518,7 +10524,6 @@ if apply_charge_side:
 
         # Load calibration
         home_path = str(resolve_home_path_from_config(config))
-        #tot_to_charge_cal_path = f"{home_path}/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/TOT_TO_CHARGE_CAL/tot_to_charge_calibration.csv"
         tot_to_charge_cal_path = f"{home_path}/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/CALIBRATIONS_AND_LUTS/TOT_TO_CHARGE_CAL/tot_to_charge_calibration.csv"
         FEE_calibration_df = pd.read_csv(tot_to_charge_cal_path)
         FEE_calibration = {
@@ -12568,7 +12573,7 @@ if (not _defer_tsum_calibration_until_late_slot) and time_calibration_mode is no
         try:
             itineraries = load_itineraries_from_file(ITINERARY_FILE_PATH, echo_entries=False, header_suffix="")
         except (FileNotFoundError, ValueError) as itinerary_error:
-            print(itinerary_error)
+            print(f"Task 2 itinerary loading failed: {itinerary_error}", force=True)
             sys.exit(1)
 
         def has_duplicate_sublists(lst):

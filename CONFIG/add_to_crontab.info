@@ -249,14 +249,14 @@ MASTER_STAGE_ROOT=/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/
 # --------------------------------------------------------------------------------
 
 # STAGE_1 - EVENT_DATA - ACCUMULATOR -----------------------------------
-* * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh --tag step1_step2_accumulate -- /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/LOCKS/cron/guide_corrected_to_accumulated_all.lock /bin/bash $MASTER_STAGE_ROOT/STAGE_1/EVENT_DATA/STEP_2/guide_corrected_to_accumulated.sh --no-loop >> $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_2/guide_corrected_to_accumulated_all.log 2>&1
+#* * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh --tag step1_step2_accumulate -- /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/LOCKS/cron/guide_corrected_to_accumulated_all.lock /bin/bash $MASTER_STAGE_ROOT/STAGE_1/EVENT_DATA/STEP_2/guide_corrected_to_accumulated.sh --no-loop >> $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_2/guide_corrected_to_accumulated_all.log 2>&1
 
 # --------------------------------------------------------------------------------
 # STEP_3
 # --------------------------------------------------------------------------------
 
 # STAGE_1 - EVENT_DATA - STEP_3 DISTRIBUTOR -----------------------------------
-* * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh --tag step1_step3_joined -- /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/LOCKS/cron/guide_accumulated_to_joined_all.lock /bin/bash $MASTER_STAGE_ROOT/STAGE_1/EVENT_DATA/STEP_3/guide_accumulated_to_joined.sh --no-loop >> $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_3/guide_accumulated_to_joined_all.log 2>&1
+#* * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/ORCHESTRATION/RESOURCE_GATE/resource_gate.sh --tag step1_step3_joined -- /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/LOCKS/cron/guide_accumulated_to_joined_all.lock /bin/bash $MASTER_STAGE_ROOT/STAGE_1/EVENT_DATA/STEP_3/guide_accumulated_to_joined.sh --no-loop >> $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/MAIN_ANALYSIS/STAGE_1/EVENT_DATA/STEP_3/guide_accumulated_to_joined_all.log 2>&1
 
 # --------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------

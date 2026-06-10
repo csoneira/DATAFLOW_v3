@@ -18,3 +18,5 @@
 - [ ] Clean the /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ORCHESTRATOR of redudancies, imprecissions and complexities. Maybe not as many scripts are needed.
 
 
+
+- [ ] Check that all the scripts that are executed from crontab produce outputs into the /home/mingo/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS, so that only seeing that i can see if everything is ok or something gives errors. Try, especially in the task scripts, that there are no silent errors, but always gives the reason to stop.

@@ -496,7 +496,16 @@ print("----------------------------------------------------------------------")
 
 # Load calibration
 home_path = str(resolve_home_path_from_config(config))
-tot_to_charge_cal_path = f"{home_path}/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/TOT_TO_CHARGE_CAL/tot_to_charge_calibration.csv"
+tot_to_charge_cal_path = (
+    Path(home_path)
+    / "DATAFLOW_v3"
+    / "MINGO_ANALYSIS"
+    / "MINGO_ANALYSIS_SCRIPTS"
+    / "ANCILLARY"
+    / "CALIBRATIONS_AND_LUTS"
+    / "TOT_TO_CHARGE_CAL"
+    / "tot_to_charge_calibration.csv"
+)
 FEE_calibration_df = pd.read_csv(tot_to_charge_cal_path)
 FEE_calibration = {
     "Width": FEE_calibration_df['Width'].tolist(),

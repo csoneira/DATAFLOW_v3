@@ -5759,8 +5759,14 @@ if status_execution_date is not None:
 execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
 print("Execution time is:", execution_time)
 
-ITINERARY_FILE_PATH = Path(
-    f"{home_path}/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/TIME_CALIBRATION_ITINERARIES/itineraries.csv"
+ITINERARY_FILE_PATH = (
+    repo_root
+    / "MINGO_ANALYSIS"
+    / "MINGO_ANALYSIS_SCRIPTS"
+    / "ANCILLARY"
+    / "CALIBRATIONS_AND_LUTS"
+    / "TIME_CALIBRATION_ITINERARIES"
+    / "itineraries.csv"
 )
 globals().update(
     initialize_task4_runtime_context(
