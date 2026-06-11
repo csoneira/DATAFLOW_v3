@@ -133,10 +133,15 @@ def _assign_step_ids(mesh: pd.DataFrame, *, intersteps_dir: Path | None = None) 
 def _sample_range(rng: np.random.Generator, value: object, name: str) -> float:
     if isinstance(value, (int, float)):
         return float(value)
+    if isinstance(value, list) and len(value) == 1:
+        return float(value[0])
     if isinstance(value, list) and len(value) == 2:
         lo, hi = float(value[0]), float(value[1])
         return float(rng.uniform(lo, hi))
-    raise ValueError(f"{name} must be a number or a 2-value list [min, max].")
+    raise ValueError(
+        f"{name} must be a number, a one-value list [value], "
+        "or a 2-value list [min, max]."
+    )
 
 
 def _sample_efficiencies(

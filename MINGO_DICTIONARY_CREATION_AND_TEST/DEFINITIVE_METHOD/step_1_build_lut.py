@@ -36,6 +36,7 @@ from simple_common import (
 
 log = logging.getLogger("definitive_method.step1")
 SIMULATED_EFF_COLUMNS = [f"sim_eff_{idx}" for idx in range(1, 5)]
+LUT_EFF_COLUMNS = [f"eff_lut_{idx}" for idx in range(1, 5)]
 EMPIRICAL_SUPPORT_COLUMNS = [f"support_eff_empirical_{idx}" for idx in range(1, 5)]
 
 
@@ -55,7 +56,7 @@ def _aggregate_flux_cells(dataframe: pd.DataFrame, flux_bin_count: int) -> tuple
     work["flux_bin_index"] = work["flux_bin_index"].astype(int)
 
     aggregated = (
-        work.groupby([*SIMULATED_EFF_COLUMNS, "flux_bin_index"], dropna=False)
+        work.groupby([*LUT_EFF_COLUMNS, "flux_bin_index"], dropna=False)
         .agg(
             support_rows=("rate_hz", "size"),
             rate_median=("rate_hz", "median"),
@@ -74,10 +75,10 @@ def _aggregate_flux_cells(dataframe: pd.DataFrame, flux_bin_count: int) -> tuple
     aggregated["flux_bin_lo"] = aggregated["flux_bin_index"].map(lambda idx: float(flux_edges[int(idx)]))
     aggregated["flux_bin_hi"] = aggregated["flux_bin_index"].map(lambda idx: float(flux_edges[int(idx) + 1]))
     aggregated["flux_bin_center"] = 0.5 * (aggregated["flux_bin_lo"] + aggregated["flux_bin_hi"])
-    aggregated["distance_to_perfect"] = _distance_to_perfect(aggregated, SIMULATED_EFF_COLUMNS)
-    aggregated["eff_mean"] = aggregated[SIMULATED_EFF_COLUMNS].mean(axis=1)
-    aggregated["eff_span"] = aggregated[SIMULATED_EFF_COLUMNS].max(axis=1) - aggregated[SIMULATED_EFF_COLUMNS].min(axis=1)
-    return aggregated.sort_values([*SIMULATED_EFF_COLUMNS, "flux_bin_center"]).reset_index(drop=True), flux_edges
+    aggregated["distance_to_perfect"] = _distance_to_perfect(aggregated, LUT_EFF_COLUMNS)
+    aggregated["eff_mean"] = aggregated[LUT_EFF_COLUMNS].mean(axis=1)
+    aggregated["eff_span"] = aggregated[LUT_EFF_COLUMNS].max(axis=1) - aggregated[LUT_EFF_COLUMNS].min(axis=1)
+    return aggregated.sort_values([*LUT_EFF_COLUMNS, "flux_bin_center"]).reset_index(drop=True), flux_edges
 
 
 def _fit_reference_polynomial(
@@ -220,8 +221,8 @@ def _build_lut_table(
     merged["cell_scale_factor"] = pd.to_numeric(merged["reference_rate_median"], errors="coerce") / pd.to_numeric(
         merged["rate_median"], errors="coerce"
     )
-    empirical_grouped = assign_efficiency_bins(merged, CANONICAL_EFF_COLUMNS, efficiency_bin_width, suffix="__lookup")
-    lookup_group_columns = [f"{column}__lookup" for column in CANONICAL_EFF_COLUMNS]
+    empirical_grouped = assign_efficiency_bins(merged, LUT_EFF_COLUMNS, efficiency_bin_width, suffix="__lookup")
+    lookup_group_columns = [f"{column}__lookup" for column in LUT_EFF_COLUMNS]
     lut = (
         empirical_grouped.groupby(lookup_group_columns, dropna=False)
         .agg(
@@ -238,8 +239,8 @@ def _build_lut_table(
             support_eff_empirical_4=(CANONICAL_EFF_COLUMNS[3], "median"),
         )
         .reset_index()
-        .rename(columns={f"{column}__lookup": column for column in CANONICAL_EFF_COLUMNS})
-        .sort_values(CANONICAL_EFF_COLUMNS)
+        .rename(columns={f"{column}__lookup": column for column in LUT_EFF_COLUMNS})
+        .sort_values(LUT_EFF_COLUMNS)
         .reset_index(drop=True)
     )
     lut = lut.loc[lut["n_flux_bins"] >= int(min_flux_bins_per_lut_entry)].copy()
@@ -331,7 +332,7 @@ def _plot_reference_asymptote(
             f"Flux bin {int(flux_bin_index)}\n"
             f"center ~ {float(ref_row['flux_bin_center']):.3f}, cells = {int(ref_row['reference_cell_count'])}"
         )
-        ax.set_xlabel("Distance to perfect (simulated eff space)")
+        ax.set_xlabel("Distance to perfect (selected LUT efficiency space)")
         ax.set_ylabel("Rate [Hz]")
         ax.set_xlim(-0.01, x_max)
         ax.grid(alpha=0.25)
@@ -351,7 +352,7 @@ def _build_case_inputs(training_df: pd.DataFrame, rate_spec: dict[str, Any], eff
     case_df = case_df.loc[np.isfinite(case_df["rate_hz"]) & (case_df["rate_hz"] > 0.0)].copy()
     if case_df.empty:
         raise ValueError(f"No positive-rate training rows remain for {rate_spec['name']}.")
-    case_df = assign_efficiency_bins(case_df, SIMULATED_EFF_COLUMNS, efficiency_bin_width, suffix="")
+    case_df = assign_efficiency_bins(case_df, LUT_EFF_COLUMNS, efficiency_bin_width, suffix="")
     return case_df
 
 
@@ -366,6 +367,19 @@ def run(config_path: str | Path | None = None) -> Path:
     meta_path = files_dir(config) / "step1_lut_meta.json"
 
     training_df = pd.read_csv(training_path, low_memory=False)
+    efficiency_source = str(config.get("lut_efficiency_source", "simulated")).strip().lower()
+    if efficiency_source == "metadata":
+        efficiency_source = "observed"
+    if efficiency_source not in {"simulated", "observed"}:
+        raise ValueError("lut_efficiency_source must be 'simulated', 'observed', or 'metadata'.")
+    source_columns = SIMULATED_EFF_COLUMNS if efficiency_source == "simulated" else CANONICAL_EFF_COLUMNS
+    missing_source_columns = [column for column in source_columns if column not in training_df.columns]
+    if missing_source_columns:
+        raise ValueError(f"Training data is missing LUT efficiency source columns: {missing_source_columns}")
+    training_df[LUT_EFF_COLUMNS] = training_df[source_columns].apply(pd.to_numeric, errors="coerce")
+    log.info("Selected LUT efficiency source: %s", efficiency_source)
+    log.info("Selected LUT coordinate columns: %s", ", ".join(LUT_EFF_COLUMNS))
+    log.info("Rows entering LUT: %d", len(training_df))
     meta0 = {}
     if meta0_path.exists():
         meta0 = json.loads(meta0_path.read_text(encoding="utf-8"))
@@ -419,7 +433,7 @@ def run(config_path: str | Path | None = None) -> Path:
         reference_curve.to_csv(reference_curve_path, index=False)
         lut_df.to_csv(detailed_lut_path, index=False)
         line_table.to_csv(line_table_path, index=False)
-        simple_case_lut = lut_df[CANONICAL_EFF_COLUMNS + ["scale_factor"]].rename(
+        simple_case_lut = lut_df[LUT_EFF_COLUMNS + ["scale_factor"]].rename(
             columns={"scale_factor": rate_spec["scale_factor_column"]}
         )
         simple_case_lut.to_csv(simple_lut_path, index=False)
@@ -438,8 +452,9 @@ def run(config_path: str | Path | None = None) -> Path:
             "rate_column": rate_spec["rate_column"],
                 "canonical_rate_column": rate_spec["canonical_rate_column"],
                 "training_rows_used": int(len(case_training)),
-                "reference_efficiency_space": "simulated",
-                "lookup_efficiency_space": "empirical",
+                "reference_efficiency_space": efficiency_source,
+                "lookup_efficiency_space": efficiency_source,
+                "lut_coordinate_columns": LUT_EFF_COLUMNS,
                 "aggregated_flux_cells_rows": int(len(aggregated_cells)),
             "reference_cells_rows": int(len(reference_cells)),
             "reference_curve_rows": int(len(reference_curve)),
@@ -464,12 +479,15 @@ def run(config_path: str | Path | None = None) -> Path:
         if combined_lut is None:
             combined_lut = simple_case_lut.copy()
         else:
-            combined_lut = combined_lut.merge(simple_case_lut, on=CANONICAL_EFF_COLUMNS, how="outer")
+            combined_lut = combined_lut.merge(simple_case_lut, on=LUT_EFF_COLUMNS, how="outer")
 
     if combined_lut is None or combined_lut.empty:
         raise ValueError("No LUT rows were produced for any rate case.")
 
-    combined_lut = combined_lut.sort_values(CANONICAL_EFF_COLUMNS, kind="mergesort").reset_index(drop=True)
+    combined_lut = combined_lut.sort_values(LUT_EFF_COLUMNS, kind="mergesort").reset_index(drop=True)
+    four_plane_source = "scale_factor__tt_task5_post_1234_rate_hz"
+    if four_plane_source in combined_lut.columns and "scale_factor__four_plane_robust_hz" not in combined_lut.columns:
+        combined_lut["scale_factor__four_plane_robust_hz"] = combined_lut[four_plane_source]
     combined_lut.to_csv(combined_lut_path, index=False)
 
     write_json(
@@ -479,6 +497,8 @@ def run(config_path: str | Path | None = None) -> Path:
             "source_training_file": str(training_path),
             "combined_lut_file": str(combined_lut_path),
             "combined_lut_row_count": int(len(combined_lut)),
+            "lut_efficiency_source": efficiency_source,
+            "lut_coordinate_columns": LUT_EFF_COLUMNS,
             "combined_lut_rate_columns": [rate_spec["scale_factor_column"] for rate_spec in rate_specs],
             "rate_cases": case_meta_rows,
             "step0_meta": meta0,
@@ -486,6 +506,7 @@ def run(config_path: str | Path | None = None) -> Path:
     )
 
     log.info("Wrote combined multi-rate LUT to %s", combined_lut_path)
+    log.info("Rows written to combined LUT: %d", len(combined_lut))
     return combined_lut_path
 
 

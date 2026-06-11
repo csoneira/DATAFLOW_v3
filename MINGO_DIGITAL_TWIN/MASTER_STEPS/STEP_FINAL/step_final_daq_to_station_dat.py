@@ -1376,20 +1376,61 @@ def main() -> None:
     mesh_dir = Path(cfg.get("param_mesh_dir", "../../INTERSTEPS/STEP_0_TO_1"))
     if not mesh_dir.is_absolute():
         mesh_dir = Path(__file__).resolve().parent / mesh_dir
-    mesh_mismatch_strategy_raw = str(
-        cfg.get("param_mesh_mismatch_strategy", "auto_repair")
+    mesh_mismatch_strategy = str(
+        cfg.get("param_mesh_mismatch_strategy", "skip")
     ).strip().lower()
-    if mesh_mismatch_strategy_raw == "skip":
-        # Never allow mismatch "skip" mode because it can starve STEP_FINAL.
-        _log_warn(
-            "param_mesh_mismatch_strategy=skip is deprecated; "
-            "forcing auto_repair mode to avoid output starvation."
-        )
-    elif mesh_mismatch_strategy_raw not in {"auto_repair", "repair", "never_skip", ""}:
-        # Be permissive so config drift cannot stop file generation.
+    if mesh_mismatch_strategy not in {"skip", "exact_only", ""}:
         _log_warn(
             "Unknown param_mesh_mismatch_strategy="
-            f"{mesh_mismatch_strategy_raw!r}; forcing auto_repair mode."
+            f"{mesh_mismatch_strategy!r}; using safe exact-match-only skip mode."
+        )
+        mesh_mismatch_strategy = "skip"
+
+    # Avoid opening and parsing every stale STEP_10_TO_FINAL directory. The
+    # current mesh is the source of truth for which SIM_RUN lineages STEP_FINAL
+    # may inspect.
+    try:
+        _, selection_mesh_path = resolve_param_mesh(
+            mesh_dir,
+            cfg.get("param_mesh_sim_run", "none"),
+            cfg.get("seed"),
+        )
+        selection_mesh = normalize_param_mesh_ids(pd.read_csv(selection_mesh_path))
+        step_id_columns = [f"step_{idx}_id" for idx in range(1, 11)]
+        if all(column in selection_mesh.columns for column in step_id_columns):
+            if "done" in selection_mesh.columns:
+                selection_done = (
+                    pd.to_numeric(selection_mesh["done"], errors="coerce")
+                    .fillna(0)
+                    .astype(int)
+                )
+                selection_mesh = selection_mesh.loc[selection_done != 1]
+            allowed_sim_runs = {
+                "SIM_RUN_"
+                + "_".join(
+                    f"{int(float(row[column])):03d}"
+                    for column in step_id_columns
+                )
+                for _, row in selection_mesh.iterrows()
+                if all(pd.notna(row[column]) for column in step_id_columns)
+            }
+            selected_before_mesh_filter = len(sim_runs)
+            sim_runs = [sim_run for sim_run in sim_runs if sim_run in allowed_sim_runs]
+            _log_info(
+                "Filtered STEP_FINAL inputs by current param_mesh lineage: "
+                f"selected_before={selected_before_mesh_filter}, "
+                f"selected_after={len(sim_runs)}, "
+                f"stale_or_unmatched_skipped={selected_before_mesh_filter - len(sim_runs)}."
+            )
+        else:
+            _log_warn(
+                "Current param_mesh lacks a complete step_1_id..step_10_id lineage; "
+                "falling back to per-input exact-match checks."
+            )
+    except (FileNotFoundError, OSError, ValueError, pd.errors.EmptyDataError) as exc:
+        _log_warn(
+            "Could not prefilter STEP_FINAL inputs by current param_mesh lineage; "
+            f"falling back to per-input exact-match checks: {exc}"
         )
 
     requested_rows = int(cfg.get("target_rows", 50000))
@@ -1529,100 +1570,18 @@ def main() -> None:
                     id_mask &= mesh[col].astype("string").str.strip().eq(normalized)
                 return mesh[id_mask]
 
-            # Deterministic priority: match by step-id chain first.
+            # A STEP_FINAL input may only consume its own param_mesh lineage.
+            # Physical-parameter-only matching is unsafe because stale SIM_RUN
+            # directories can share parameters with current pending mesh rows.
             candidates = _step_id_filter(_base_mask(include_done=False, require_pending_param_set=True))
             if candidates.empty:
                 candidates = _step_id_filter(_base_mask(include_done=False, require_pending_param_set=False))
             if candidates.empty:
-                candidates = _z_filter(_base_mask(include_done=False, require_pending_param_set=True))
-            if candidates.empty:
-                candidates = _z_filter(_base_mask(include_done=False, require_pending_param_set=False))
-            if candidates.empty:
-                candidates = _z_filter(_base_mask(include_done=True, require_pending_param_set=False))
-
-            # Auto-repair 1: remap one pending row with matching geometry
-            # to the incoming combo.
-            _log_warn(
-                        f"HEYYYYY"
-                    )
-            if candidates.empty:
-                z_only_mask = pd.Series(True, index=mesh.index)
-                z_only_mask &= mesh["done"] != 1
-                z_candidates = _z_filter(z_only_mask)
-                if not z_candidates.empty:
-                    _log_warn(
-                        f"HEYYYYY"
-                    )
-                    remap_index = int(z_candidates.index[0])
-                    mesh.loc[remap_index, "cos_n"] = float(step1_cfg.get("cos_n"))
-                    
-                    mesh.loc[remap_index, "flux_cm2_min"] = float(step1_cfg.get("flux_cm2_min"))
-                    mesh.loc[remap_index, "eff_p1"] = float(effs[0])
-                    mesh.loc[remap_index, "eff_p2"] = float(effs[1])
-                    mesh.loc[remap_index, "eff_p3"] = float(effs[2])
-                    mesh.loc[remap_index, "eff_p4"] = float(effs[3])
-                    mesh.loc[remap_index, "z_p1"] = float(z_positions[0])
-                    mesh.loc[remap_index, "z_p2"] = float(z_positions[1])
-                    mesh.loc[remap_index, "z_p3"] = float(z_positions[2])
-                    mesh.loc[remap_index, "z_p4"] = float(z_positions[3])
-                    for idx, raw_step_id in enumerate(sim_run_step_ids[:10], start=1):
-                        col = f"step_{idx}_id"
-                        if col not in mesh.columns:
-                            continue
-                        try:
-                            mesh.loc[remap_index, col] = f"{int(raw_step_id):03d}"
-                        except (TypeError, ValueError):
-                            mesh.loc[remap_index, col] = str(raw_step_id)
-                    if has_param_set_id:
-                        mesh.loc[remap_index, "param_set_id"] = pd.NA
-                    if has_param_date:
-                        mesh.loc[remap_index, "param_date"] = pd.NA
-                    mesh.loc[remap_index, "done"] = 0
-                    
-                    _log_warn(
-                        "Hey. No exact param_mesh match found; "
-                        f"auto-remapped pending row index={remap_index} for sim_run={sim_run}."
-                    )
-                    candidates = mesh.loc[[remap_index]]
-
-            # Auto-repair 2: append a new row if nothing usable exists.
-            if candidates.empty:
-                auto_row = {col: pd.NA for col in mesh.columns}
-                auto_row["done"] = 0
-                auto_row["cos_n"] = float(step1_cfg.get("cos_n"))
-                auto_row["flux_cm2_min"] = float(step1_cfg.get("flux_cm2_min"))
-                auto_row["eff_p1"] = float(effs[0])
-                auto_row["eff_p2"] = float(effs[1])
-                auto_row["eff_p3"] = float(effs[2])
-                auto_row["eff_p4"] = float(effs[3])
-                auto_row["z_p1"] = float(z_positions[0])
-                auto_row["z_p2"] = float(z_positions[1])
-                auto_row["z_p3"] = float(z_positions[2])
-                auto_row["z_p4"] = float(z_positions[3])
-                for idx, raw_step_id in enumerate(sim_run_step_ids[:10], start=1):
-                    col = f"step_{idx}_id"
-                    if col not in mesh.columns:
-                        continue
-                    try:
-                        auto_row[col] = f"{int(raw_step_id):03d}"
-                    except (TypeError, ValueError):
-                        auto_row[col] = str(raw_step_id)
-                if has_param_set_id:
-                    auto_row["param_set_id"] = pd.NA
-                if has_param_date:
-                    auto_row["param_date"] = pd.NA
-                append_index = int(len(mesh))
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore", FutureWarning)
-                    mesh.loc[append_index] = auto_row
                 _log_warn(
-                    "Hey. No matching param_mesh row found; "
-                    f"auto-appended row index={append_index} for sim_run={sim_run}."
+                    "Skipping stale or unmatched STEP_FINAL input without modifying param_mesh: "
+                    f"sim_run={sim_run}."
                 )
-                _log_warn(
-                        f"!!!!!!!!!!!!!!!!!!!!!! cos_n is {mesh.loc[remap_index, 'cos_n']}."
-                    )
-                candidates = mesh.loc[[append_index]]
+                continue
 
             if len(candidates) > 1:
                 ranked = candidates.copy()
@@ -1878,6 +1837,16 @@ def main() -> None:
                     f"Cut {out_name} at midnight: wrote {rows_written}/{len(payloads)} rows."
                 )
             selected_rows = rows_written
+            trigger_time_span_seconds = (
+                float((last_time - start_time).total_seconds())
+                if last_time is not None
+                else 0.0
+            )
+            trigger_rate_hz = (
+                float(rows_written - 1) / trigger_time_span_seconds
+                if rows_written > 1 and trigger_time_span_seconds > 0
+                else 0.0
+            )
             next_start = (
                 last_time + timedelta(seconds=1)
                 if last_time is not None
@@ -1897,6 +1866,7 @@ def main() -> None:
                 "param_mesh": str(mesh_path),
                 "start_time": start_time.isoformat(),
                 "rate_hz": rate_hz,
+                "trigger_rate_hz": trigger_rate_hz,
                 "target_rows": requested_for_file,
                 "requested_rows": requested_for_file,
                 "selected_rows": selected_rows,
@@ -1929,8 +1899,10 @@ def main() -> None:
                 "z_plane_4": z_vals[3],
                 "efficiencies": json.dumps(step3_cfg.get("efficiencies", [])),
                 "trigger_combinations": json.dumps(step9_cfg.get("trigger_combinations", [])),
+                "original_rows": total_rows,
                 "requested_rows": requested_for_file,
                 "selected_rows": selected_rows,
+                "trigger_rate_hz": trigger_rate_hz,
                 "sample_start_index": sample_start_index,
             }
             new_param_rows.append(row)
@@ -1951,10 +1923,18 @@ def main() -> None:
                 df_params = pd.concat([df_params, pd.DataFrame(new_param_rows)], ignore_index=True)
             else:
                 df_params = pd.DataFrame(new_param_rows)
+            if "original_rows" in df_params.columns and "requested_rows" in df_params.columns:
+                ordered_columns = list(df_params.columns)
+                ordered_columns.remove("original_rows")
+                requested_rows_index = ordered_columns.index("requested_rows")
+                ordered_columns.insert(requested_rows_index, "original_rows")
+                df_params = df_params.loc[:, ordered_columns]
             write_csv_atomic(df_params, sim_params_path, index=False)
 
             _log_info(
-                f"Saved {out_path} (param_set_id={param_set_id}, requested_rows={requested_for_file}, selected_rows={selected_rows})"
+                f"Saved {out_path} (param_set_id={param_set_id}, "
+                f"requested_rows={requested_for_file}, selected_rows={selected_rows}, "
+                f"trigger_rate_hz={trigger_rate_hz:.6f})"
             )
 
         if skipped_subsample_rows_due_short:

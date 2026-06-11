@@ -29,3 +29,13 @@ Notes:
 - `input_collect` controls how multiple SIM_RUN inputs are matched.
 - STEP FINAL assigns `param_set_id` and `param_date` in the parameter mesh.
 - `.dat` outputs start with `# param_hash=<sha256>` matching `step_final_simulation_params.csv`.
+- Each new simulation-parameter row records `trigger_rate_hz`, measured as
+  `(selected_rows - 1) / (last_timestamp - first_timestamp)` for its `.dat` file.
+- Each new row records `original_rows`, the total available STEP 10 input rows
+  before STEP_FINAL sampling, immediately before `requested_rows`.
+- Output multiplicity is controlled independently from STEP_0 `repeat_samples`:
+  STEP_FINAL writes `files_per_station_conf + len(subsample_rows)` files per
+  parameter set. The default runtime config keeps `subsample_rows` empty.
+- STEP FINAL requires an exact `SIM_RUN` step-ID lineage match in the current
+  parameter mesh. Stale or unmatched final-stage inputs are skipped and never
+  remap, append, or consume current mesh rows.

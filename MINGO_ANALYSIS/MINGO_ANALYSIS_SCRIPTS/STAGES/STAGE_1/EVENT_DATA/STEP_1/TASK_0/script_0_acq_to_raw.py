@@ -300,6 +300,7 @@ for directory in directories.values():
 
 csv_path = directories["metadata"] / f"task_{task_number}_metadata_execution.csv"
 csv_path_status = directories["metadata"] / f"task_{task_number}_metadata_status.csv"
+csv_path_trigger_type = directories["metadata"] / f"task_{task_number}_metadata_trigger_type.csv"
 
 selected_input_file = CLI_ARGS.input_file_flag or CLI_ARGS.input_file
 user_file_selection = bool(selected_input_file)
@@ -631,6 +632,30 @@ save_metadata(
     preferred_fieldnames=tuple(metadata_row.keys()),
     replace_existing_basename=True,
 )
+
+trigger_type_row = {
+    "filename_base": basename_no_ext,
+    "execution_timestamp": execution_timestamp,
+    "param_hash": str(simulated_param_hash) if simulated_param_hash else "",
+    "count_rate_denominator_seconds": int(total_duration_seconds),
+}
+task0_acq_counts = (
+    pd.to_numeric(read_df["tt_task0_acq"], errors="coerce")
+    .fillna(0)
+    .astype(int)
+    .value_counts()
+)
+for tt_value in (0, 1, 2, 3, 4, 12, 13, 14, 23, 24, 34, 123, 124, 134, 234, 1234):
+    count = int(task0_acq_counts.get(tt_value, 0))
+    trigger_type_row[f"tt_task0_acq_{tt_value}_count"] = count
+    trigger_type_row[f"tt_task0_acq_{tt_value}_rate_hz"] = rate_hz(count, total_duration_seconds)
+save_metadata(
+    csv_path_trigger_type,
+    trigger_type_row,
+    preferred_fieldnames=tuple(trigger_type_row.keys()),
+    replace_existing_basename=True,
+)
+print(f"Task 0 trigger-type metadata updated at: {csv_path_trigger_type}", force=True)
 
 if not user_file_selection and completed_file_path is not None and processing_file_path.exists():
     if completed_file_path.exists():

@@ -461,6 +461,10 @@ def run(config_path: str | Path | None = None) -> Path:
         if not case_lut_path.exists():
             raise FileNotFoundError(f"Per-rate LUT not found for {rate_spec['name']}: {case_lut_path}")
         case_lut = pd.read_csv(case_lut_path, low_memory=False)
+        lut_coordinate_columns = [f"eff_lut_{idx}" for idx in range(1, 5)]
+        matching_lut = case_lut.copy()
+        if all(column in matching_lut.columns for column in lut_coordinate_columns):
+            matching_lut[CANONICAL_EFF_COLUMNS] = matching_lut[lut_coordinate_columns].to_numpy()
 
         case_real, filter_meta = _prepare_case_real_dataframe(
             real_df,
@@ -468,7 +472,7 @@ def run(config_path: str | Path | None = None) -> Path:
             efficiency_bin_width=efficiency_bin_width,
         )
         query_columns = [f"{column}__bin" for column in CANONICAL_EFF_COLUMNS]
-        exact_lut = case_lut[CANONICAL_EFF_COLUMNS + ["scale_factor"]].rename(
+        exact_lut = matching_lut[CANONICAL_EFF_COLUMNS + ["scale_factor"]].rename(
             columns={column: f"{column}__bin" for column in CANONICAL_EFF_COLUMNS}
         )
         merged = case_real.merge(exact_lut, on=query_columns, how="left")
@@ -484,7 +488,7 @@ def run(config_path: str | Path | None = None) -> Path:
 
         merged = apply_lut_fallback_matches(
             merged,
-            case_lut[CANONICAL_EFF_COLUMNS + ["scale_factor"]],
+            matching_lut[CANONICAL_EFF_COLUMNS + ["scale_factor"]],
             query_columns=query_columns,
             raw_columns=CANONICAL_EFF_COLUMNS,
             match_mode=interpolation_mode,
@@ -521,7 +525,7 @@ def run(config_path: str | Path | None = None) -> Path:
         )
         _plot_lut_vs_real_efficiency_coverage(
             merged,
-            case_lut,
+            matching_lut,
             plot_3,
             rate_column_name=rate_spec["rate_column"],
         )
