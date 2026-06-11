@@ -296,7 +296,7 @@ def main() -> None:
     parser.add_argument(
         "--fit-degree",
         type=int,
-        default=1,
+        default=2,
         help=(
             "Polynomial degree for extrapolation to mean efficiency = 1. "
             "Use 1 for linear or 2 for quadratic."

@@ -70,6 +70,7 @@ STEP1_METADATA_OUTPUT_TYPES: Tuple[str, ...] = (
     "efficiency",
     "execution",
     "filter",
+    "gate_test",
     "noise_control",
     "pattern",
     "profiling",

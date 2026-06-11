@@ -39,6 +39,15 @@ BACKPRESSURE_CONFIG_DEFAULT = ROOT_DIR / "CONFIG_FILES" / "sim_main_pipeline_fre
 SIMULATED_DATA_DIR_DEFAULT = ROOT_DIR / "SIMULATED_DATA"
 SIMULATED_DATA_FILES_DIR_DEFAULT = SIMULATED_DATA_DIR_DEFAULT / "FILES"
 STATIONS_STEP1_DIR_DEFAULT = ROOT_DIR.parent / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / "MINGO00" / "STAGE_1" / "EVENT_DATA" / "STEP_1"
+SIM_IMPORT_HISTORY_DEFAULT = (
+    ROOT_DIR.parent
+    / "MINGO_ANALYSIS"
+    / "MINGO_ANALYSIS_STATIONS"
+    / "MINGO00"
+    / "STAGE_0"
+    / "SIMULATION"
+    / "imported_basenames_history.csv"
+)
 sys.path.append(str(ROOT_DIR))
 sys.path.append(str(ROOT_DIR / "MASTER_STEPS"))
 
@@ -203,6 +212,36 @@ def build_sim_filename(timestamp: datetime) -> str:
     day_of_year = timestamp.timetuple().tm_yday
     year = timestamp.year
     return f"mi00{year % 100:02d}{day_of_year:03d}{timestamp:%H%M%S}.dat"
+
+
+def load_import_history_high_watermark(path: Path) -> tuple[int, date] | None:
+    """Return the latest lifetime-imported simulation ID/date encoded in basenames."""
+    if not path.exists():
+        return None
+    try:
+        history = pd.read_csv(path, usecols=["basename"])
+    except (OSError, ValueError, pd.errors.EmptyDataError) as exc:
+        _log_warn(f"Could not read simulation import history high-water mark from {path}: {exc}")
+        return None
+
+    latest_date: date | None = None
+    for raw_basename in history["basename"].dropna().astype(str):
+        match = re.fullmatch(r"mi00(\d{2})(\d{3})\d{6}(?:\.dat)?", Path(raw_basename).name)
+        if match is None:
+            continue
+        year = 2000 + int(match.group(1))
+        day_of_year = int(match.group(2))
+        try:
+            candidate_date = date(year, 1, 1) + timedelta(days=day_of_year - 1)
+        except ValueError:
+            continue
+        if latest_date is None or candidate_date > latest_date:
+            latest_date = candidate_date
+
+    if latest_date is None:
+        return None
+    param_set_id = (latest_date - date(2000, 1, 1)).days + 1
+    return param_set_id, latest_date
 
 
 def load_output_registry(path: Path) -> dict:
@@ -1345,6 +1384,20 @@ def main() -> None:
     _log_info(f"Input dir: {input_dir}")
     _log_info(f"Output dir: {output_dir}")
     _log_info(f"Dat output dir: {dat_output_dir}")
+    import_history_high_watermark = load_import_history_high_watermark(
+        SIM_IMPORT_HISTORY_DEFAULT
+    )
+    if import_history_high_watermark is not None:
+        history_param_set_id, history_param_date = import_history_high_watermark
+        _log_info(
+            "Lifetime import history high-water mark: "
+            f"param_set_id={history_param_set_id}, param_date={history_param_date.isoformat()}"
+        )
+    else:
+        _log_warn(
+            "No lifetime import history high-water mark available; "
+            "new output identity will use the current mesh and simulation params only."
+        )
     relocated = relocate_root_dat_files(output_dir, dat_output_dir)
     if relocated > 0:
         _log_info(f"Relocated legacy root .dat files into FILES/: moved={relocated}")
@@ -1628,7 +1681,38 @@ def main() -> None:
                     sim_params_df = ensure_param_hash_column(sim_params_df)
                     sim_params_needs_write = True
                 sim_params_combo_keys = build_sim_params_combo_keys(sim_params_df)
-            if pd.isna(existing_param_set_id) or pd.isna(existing_param_date):
+            identity_conflicts_with_import_history = False
+            if (
+                import_history_high_watermark is not None
+                and pd.notna(existing_param_set_id)
+                and pd.notna(existing_param_date)
+            ):
+                _, history_param_date = import_history_high_watermark
+                assigned_param_date = parse_param_datetime(str(existing_param_date)).date()
+                current_output_exists = False
+                if sim_params_df is not None and "param_set_id" in sim_params_df.columns:
+                    current_output_exists = bool(
+                        (
+                            pd.to_numeric(sim_params_df["param_set_id"], errors="coerce")
+                            == int(existing_param_set_id)
+                        ).any()
+                    )
+                identity_conflicts_with_import_history = (
+                    assigned_param_date <= history_param_date and not current_output_exists
+                )
+                if identity_conflicts_with_import_history:
+                    _log_warn(
+                        "Reassigning pending mesh identity because its param_date is already "
+                        "covered by lifetime import history: "
+                        f"param_set_id={int(existing_param_set_id)}, "
+                        f"param_date={assigned_param_date.isoformat()}, "
+                        f"history_high_watermark={history_param_date.isoformat()}."
+                    )
+            if (
+                pd.isna(existing_param_set_id)
+                or pd.isna(existing_param_date)
+                or identity_conflicts_with_import_history
+            ):
                 existing_ids = pd.to_numeric(mesh["param_set_id"], errors="coerce").dropna()
                 if sim_params_df is not None and "param_set_id" in sim_params_df.columns:
                     sim_ids = pd.to_numeric(sim_params_df["param_set_id"], errors="coerce").dropna()
@@ -1637,16 +1721,29 @@ def main() -> None:
                             existing_ids = sim_ids
                         else:
                             existing_ids = pd.concat([existing_ids, sim_ids], ignore_index=True)
+                if import_history_high_watermark is not None:
+                    history_param_set_id, _ = import_history_high_watermark
+                    existing_ids = pd.concat(
+                        [existing_ids, pd.Series([history_param_set_id])],
+                        ignore_index=True,
+                    )
                 next_id = int(existing_ids.max()) + 1 if not existing_ids.empty else 1
                 if sim_params_df is not None and "param_date" in sim_params_df.columns:
                     existing_dates = sim_params_df["param_date"].dropna()
                 else:
                     existing_dates = mesh["param_date"].dropna()
-                if not existing_dates.empty:
-                    last_date = parse_param_datetime(str(existing_dates.iloc[-1])).date()
-                    next_date = last_date + timedelta(days=1)
-                else:
-                    next_date = date(2000, 1, 1)
+                parsed_existing_dates = [
+                    parse_param_datetime(str(value)).date()
+                    for value in existing_dates
+                ]
+                if import_history_high_watermark is not None:
+                    _, history_param_date = import_history_high_watermark
+                    parsed_existing_dates.append(history_param_date)
+                next_date = (
+                    max(parsed_existing_dates) + timedelta(days=1)
+                    if parsed_existing_dates
+                    else date(2000, 1, 1)
+                )
                 mesh.loc[param_row.name, "param_set_id"] = next_id
                 mesh.loc[param_row.name, "param_date"] = next_date.isoformat()
                 param_set_id = next_id

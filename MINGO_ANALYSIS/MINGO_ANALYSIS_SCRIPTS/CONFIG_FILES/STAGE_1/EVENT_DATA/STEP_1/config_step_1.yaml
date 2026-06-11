@@ -41,6 +41,7 @@ metadata_outputs:
   efficiency: true
   execution: true
   filter: false
+  gate_test: true
   noise_control: false
   pattern: false
   profiling: true

@@ -336,6 +336,7 @@ def main() -> None:
             imported_history.update(history_recovered_from_tasks)
 
         moved = 0
+        skipped_already_in_history = 0
         history_new_from_ingest: list[str] = []
         for dat_file in sorted(source_dir.glob("*.dat")):
             name = dat_file.name
@@ -343,6 +344,7 @@ def main() -> None:
                 continue
             basename = dat_file.stem
             if basename in imported_history:
+                skipped_already_in_history += 1
                 continue
             dest_path = stage01_dir / dat_file.name
             shutil.move(dat_file, dest_path)
@@ -378,6 +380,7 @@ def main() -> None:
             f"history recovered_from_tasks={len(history_recovered_from_tasks)}; "
             f"history new_from_ingest={len(history_new_from_ingest)}; "
             f"history recovered_from_live={len(history_recovered_from_live)}; "
+            f"source skipped_already_in_history={skipped_already_in_history}; "
             f"live sync added {added_count}, removed {removed_count}, live count={len(live_truth)}; "
             f"history count={len(imported_history)}; "
             f"sim_params_total={len(sim_param_basenames)}, sim_params_missing_from_history={sim_params_missing_from_history}; "

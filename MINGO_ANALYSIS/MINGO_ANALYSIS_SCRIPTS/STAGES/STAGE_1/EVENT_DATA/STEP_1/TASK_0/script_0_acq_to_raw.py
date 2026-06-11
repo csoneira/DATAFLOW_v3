@@ -86,6 +86,13 @@ TASK0_PLOT_ALIASES: tuple[str, ...] = (
     "acquisition_rate_vs_time_by_task_tt_with_histograms",
 )
 task0_plot_status_by_alias: dict[str, str] = {}
+TASK0_GATE_TEST_CHARGE_COLUMNS: tuple[str, ...] = tuple(
+    f"p{plane}_s{strip}_{end}_q"
+    for plane in range(1, 5)
+    for strip in range(1, 5)
+    for end in ("ef", "eb")
+)
+TASK0_GATE_TEST_QUANTILES: tuple[float, ...] = tuple(index / 10 for index in range(10))
 
 
 def safe_move(source_path: str | Path, dest_path: str | Path) -> str:
@@ -105,6 +112,63 @@ def task0_plot_enabled(alias: str) -> bool:
     if not task0_plot_status_by_alias:
         return True
     return step1_task_plot_enabled(alias, task0_plot_status_by_alias, plot_mode)
+
+
+def build_task0_gate_test_metadata(
+    frame: pd.DataFrame,
+    *,
+    filename_base: str,
+    execution_timestamp: str,
+    param_hash: str,
+    denominator_seconds: int,
+) -> dict[str, object]:
+    metadata: dict[str, object] = {
+        "filename_base": filename_base,
+        "execution_timestamp": execution_timestamp,
+        "param_hash": param_hash,
+        "count_rate_denominator_seconds": int(denominator_seconds),
+        "gate_test_source_tt_task0_acq": 1234,
+        "gate_test_charge_column_count": len(TASK0_GATE_TEST_CHARGE_COLUMNS),
+        "gate_test_quantile_count": len(TASK0_GATE_TEST_QUANTILES),
+        "gate_test_comparison": "finite_and_greater_than_or_equal_to_quantile",
+    }
+    missing_columns = [
+        column for column in TASK0_GATE_TEST_CHARGE_COLUMNS if column not in frame.columns
+    ]
+    metadata["gate_test_missing_charge_column_count"] = len(missing_columns)
+    metadata["gate_test_missing_charge_columns"] = ",".join(missing_columns)
+
+    tt_values = pd.to_numeric(
+        frame["tt_task0_acq"] if "tt_task0_acq" in frame.columns else pd.Series(0, index=frame.index),
+        errors="coerce",
+    )
+    if missing_columns:
+        source_view = pd.DataFrame()
+    else:
+        source_view = frame.loc[
+            tt_values.eq(1234),
+            list(TASK0_GATE_TEST_CHARGE_COLUMNS),
+        ].apply(pd.to_numeric, errors="coerce")
+    source_tt_1234_count = int(tt_values.eq(1234).sum())
+    metadata["gate_test_tt_task0_acq_1234_count"] = source_tt_1234_count
+    metadata["gate_test_tt_task0_acq_1234_rate_hz"] = rate_hz(
+        source_tt_1234_count,
+        denominator_seconds,
+    )
+
+    for quantile_index, quantile_fraction in enumerate(TASK0_GATE_TEST_QUANTILES):
+        gate_label = f"q{quantile_index:02d}"
+        if source_view.empty:
+            count = 0
+        else:
+            thresholds = source_view.quantile(quantile_fraction)
+            gate_mask = source_view.notna().all(axis=1) & source_view.ge(thresholds, axis="columns").all(axis=1)
+            count = int(gate_mask.sum())
+        metadata[f"gate_test_{gate_label}_quantile"] = quantile_fraction
+        metadata[f"gate_test_{gate_label}_count"] = count
+        metadata[f"gate_test_{gate_label}_rate_hz"] = rate_hz(count, denominator_seconds)
+
+    return metadata
 
 
 def _build_temp_pdf_path(target_path: Path) -> Path:
@@ -301,6 +365,7 @@ for directory in directories.values():
 csv_path = directories["metadata"] / f"task_{task_number}_metadata_execution.csv"
 csv_path_status = directories["metadata"] / f"task_{task_number}_metadata_status.csv"
 csv_path_trigger_type = directories["metadata"] / f"task_{task_number}_metadata_trigger_type.csv"
+csv_path_gate_test = directories["metadata"] / f"task_{task_number}_metadata_gate_test.csv"
 
 selected_input_file = CLI_ARGS.input_file_flag or CLI_ARGS.input_file
 user_file_selection = bool(selected_input_file)
@@ -656,6 +721,27 @@ save_metadata(
     replace_existing_basename=True,
 )
 print(f"Task 0 trigger-type metadata updated at: {csv_path_trigger_type}", force=True)
+
+gate_test_row = build_task0_gate_test_metadata(
+    read_df,
+    filename_base=basename_no_ext,
+    execution_timestamp=execution_timestamp,
+    param_hash=str(simulated_param_hash) if simulated_param_hash else "",
+    denominator_seconds=total_duration_seconds,
+)
+if gate_test_row["gate_test_missing_charge_column_count"]:
+    print(
+        "Warning: Task 0 gate-test metadata cannot evaluate all endpoint-charge gates; "
+        f"missing columns: {gate_test_row['gate_test_missing_charge_columns']}",
+        force=True,
+    )
+save_metadata(
+    csv_path_gate_test,
+    gate_test_row,
+    preferred_fieldnames=tuple(gate_test_row.keys()),
+    replace_existing_basename=True,
+)
+print(f"Task 0 gate-test metadata updated at: {csv_path_gate_test}", force=True)
 
 if not user_file_selection and completed_file_path is not None and processing_file_path.exists():
     if completed_file_path.exists():

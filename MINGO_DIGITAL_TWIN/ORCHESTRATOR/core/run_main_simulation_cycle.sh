@@ -45,6 +45,7 @@ if [[ "${SIM_STRUCTURED_LOGS_ENABLED}" != "0" && "${SIM_STRUCTURED_LOGS_ENABLED}
   SIM_STRUCTURED_LOGS_ENABLED="1"
 fi
 SIM_CYCLE_STRUCTURED_LOG_PATH="${ROOT_RUNTIME_DIR}/CRON_LOGS/SIMULATION/STRUCTURED/sim_cycle.jsonl"
+SIM_CYCLE_DETAIL_LOG_PATH="${ROOT_RUNTIME_DIR}/CRON_LOGS/SIMULATION/RUN/sim_main_pipeline_cycle_detail.log"
 SIM_LOG_HELPER="${DT_DIR}/ORCHESTRATOR/helpers/sim_structured_logging.sh"
 if [[ -f "${SIM_LOG_HELPER}" ]]; then
   # shellcheck disable=SC1090
@@ -595,6 +596,24 @@ run_stage() {
   return "${rc}"
 }
 
+run_stage_to_detail_log() {
+  local stage="$1"
+  shift
+  local rc=0
+
+  mkdir -p "$(dirname "${SIM_CYCLE_DETAIL_LOG_PATH}")"
+  log_info "stage=${stage} status=start detail_log=${SIM_CYCLE_DETAIL_LOG_PATH}"
+  if "$@" >> "${SIM_CYCLE_DETAIL_LOG_PATH}" 2>&1; then
+    log_info "stage=${stage} status=ok detail_log=${SIM_CYCLE_DETAIL_LOG_PATH}"
+    return 0
+  fi
+
+  rc=$?
+  log_warn "stage=${stage} status=failed rc=${rc} detail_log=${SIM_CYCLE_DETAIL_LOG_PATH}"
+  tail -n 40 "${SIM_CYCLE_DETAIL_LOG_PATH}" 2>/dev/null || true
+  return "${rc}"
+}
+
 # Cascade cleanup: once step N+1 has produced valid output, step N's
 # intermediate SIM_RUN (which was step N+1's input) is no longer needed.
 cleanup_consumed_intermediates() {
@@ -744,7 +763,7 @@ run_processing_phase() {
 
   # Invariant: the processing phase runs STEP_FINAL exactly once below under
   # sim_final.lock, so run_step.sh all must never invoke STEP_FINAL itself.
-  if ! run_stage "run_step_all" /usr/bin/env \
+  if ! run_stage_to_detail_log "run_step_all" /usr/bin/env \
     RUN_STEP_STRICT_LINE_CLOSURE="${RUN_STEP_STRICT_LINE_CLOSURE:-0}" \
     RUN_STEP_OBLITERATE_UNINTERESTING_STEP1_LINES="${RUN_STEP_OBLITERATE_UNINTERESTING_STEP1_LINES:-0}" \
     RUN_STEP_CHECK_PARAM_MESH_CONSISTENCY="${RUN_STEP_CHECK_PARAM_MESH_CONSISTENCY:-0}" \
