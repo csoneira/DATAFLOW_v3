@@ -2,7 +2,7 @@
 """
 DATAFLOW_v3 Script Header v1
 Script: MINGO_DIGITAL_TWIN/ORCHESTRATOR/maintenance/sanitize_sim_runs.py
-Purpose: !/usr/bin/env python3.
+Purpose: Remove completed, broken, or stale INTERSTEPS SIM_RUN directories under explicit safeguards.
 Owner: DATAFLOW_v3 contributors
 Sign-off: csoneira <csoneira@ucm.es>
 Last Updated: 2026-03-02
@@ -192,12 +192,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--intersteps-dir",
-        default="~/DATAFLOW_v3/MINGO_DIGITAL_TWIN/INTERSTEPS",
+        default="~/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS",
         help="Base INTERSTEPS directory.",
     )
     parser.add_argument(
         "--param-mesh",
-        default="~/DATAFLOW_v3/MINGO_DIGITAL_TWIN/INTERSTEPS/STEP_0_TO_1/param_mesh.csv",
+        default="~/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv",
         help="Path to param_mesh.csv.",
     )
     parser.add_argument(

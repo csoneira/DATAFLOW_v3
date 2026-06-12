@@ -204,6 +204,7 @@ brought_csv_header="hld_name,bring_timesamp"
 processed_csv="${REPO_ROOT}/OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/UPDATE_EXECUTION_CSVS/OUTPUT_FILES/MINGO0${station}_processed_basenames.csv"
 config_file_shared="${MASTER_DIR}/CONFIG_FILES/STAGE_0/REPROCESSING/config_reprocessing.yaml"
 config_file_step="${MASTER_DIR}/CONFIG_FILES/STAGE_0/REPROCESSING/STEP_1/config_step_1.yaml"
+reprocessing_policy_script="${MASTER_DIR}/common/reprocessing_policy.py"
 
 is_reprocessing_step_enabled() {
   local station_id="$1"
@@ -358,6 +359,24 @@ if ! is_reprocessing_step_enabled "$station" 1; then
   log_info "Skipping station ${station}: STEP_1 disabled by reprocessing_run_matrix."
   exit 0
 fi
+
+resolve_reprocessing_policy_field() {
+  local field="$1"
+  python3 "$reprocessing_policy_script" \
+    --shared "$config_file_shared" \
+    --local "$config_file_step" \
+    --step 1 \
+    --station "$station" \
+    --field "$field"
+}
+
+if [[ "$(resolve_reprocessing_policy_field stations)" != "true" ]]; then
+  log_info "Skipping station ${station}: not included in the resolved STEP_1 stations policy."
+  exit 0
+fi
+
+reprocess_completed=$(resolve_reprocessing_policy_field reprocess_completed_stations)
+log_info "Resolved STEP_1 policy: station=${station}, reprocess_completed=${reprocess_completed}."
 
 # STATUS_CSV="${metadata_directory}/bring_reprocessing_files_status.csv"
 # if ! STATUS_TIMESTAMP="$(python3 "$STATUS_HELPER" append "$STATUS_CSV")"; then
@@ -681,13 +700,6 @@ initial_brought_count=${#brought_basenames[@]}
 fi
 log_info "Basenames already recorded as brought: ${#brought_basenames[@]}"
 
-skip_processed_exclusion=false
-config_key="use_processed_as_reject_list_${station}"
-config_setting=$(read_config_value "$config_key" | tr '[:upper:]' '[:lower:]')
-if [[ "$config_setting" == "true" ]]; then
-  skip_processed_exclusion=true
-fi
-
 random_batch_size=1
 random_batch_key="random_basenames_per_run_${station}"
 random_batch_raw=$(read_config_value "$random_batch_key" | tr -d '[:space:]')
@@ -696,8 +708,8 @@ if [[ "$random_batch_raw" =~ ^[0-9]+$ ]] && (( random_batch_raw >= 1 )); then
 fi
 
 declare -A processed_basenames=()
-if $skip_processed_exclusion; then
-  log_info "${config_key} is true in STEP_1/shared reprocessing config; NOT excluding processed basenames."
+if $reprocess_completed; then
+  log_info "Station ${station} is in reprocess_completed_stations; processed basenames remain eligible."
 else
   if [[ -s "$processed_csv" ]]; then
     {
@@ -720,7 +732,7 @@ if $random_mode; then
   mapfile -t random_candidates < <(
     for base in "${metadata_basenames[@]}"; do
       [[ -n ${brought_basenames["$base"]+_} ]] && continue
-      if ! $skip_processed_exclusion && [[ -z ${qa_retry_basenames["$base"]+_} ]] && [[ -n ${processed_basenames["$base"]+_} ]]; then
+      if ! $reprocess_completed && [[ -z ${qa_retry_basenames["$base"]+_} ]] && [[ -n ${processed_basenames["$base"]+_} ]]; then
         continue
       fi
       printf '%s\n' "$base"
@@ -745,7 +757,7 @@ elif $newest_mode; then
   mapfile -t newest_candidates < <(
     for base in "${metadata_basenames[@]}"; do
       [[ -n ${brought_basenames["$base"]+_} ]] && continue
-      if ! $skip_processed_exclusion && [[ -z ${qa_retry_basenames["$base"]+_} ]] && [[ -n ${processed_basenames["$base"]+_} ]]; then
+      if ! $reprocess_completed && [[ -z ${qa_retry_basenames["$base"]+_} ]] && [[ -n ${processed_basenames["$base"]+_} ]]; then
         continue
       fi
       printf '%s\n' "$base"
@@ -796,7 +808,7 @@ else
 
   for base in "${metadata_basenames[@]}"; do
     [[ -n ${brought_basenames["$base"]+_} ]] && continue
-    if ! $skip_processed_exclusion && [[ -z ${qa_retry_basenames["$base"]+_} ]] && [[ -n ${processed_basenames["$base"]+_} ]]; then
+    if ! $reprocess_completed && [[ -z ${qa_retry_basenames["$base"]+_} ]] && [[ -n ${processed_basenames["$base"]+_} ]]; then
       continue
     fi
     [[ "$base" < "$start_bound" ]] && continue

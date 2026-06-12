@@ -1,5 +1,7 @@
 random_basenames_per_run_1: 3
-use_processed_as_reject_list_1: true
-use_processed_as_reject_list_2: true
-use_processed_as_reject_list_3: true
-use_processed_as_reject_list_4: true
+
+# Stations this step may process.
+stations: [0, 1, 2, 3, 4]
+
+# Stations whose basenames may be processed again even when already completed.
+reprocess_completed_stations: []

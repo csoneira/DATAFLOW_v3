@@ -38,7 +38,7 @@ import pandas as pd
 
 DATAFLOW_ROOT = Path("/home/mingo/DATAFLOW_v3")
 STATIONS_BASE = DATAFLOW_ROOT / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS"
-SIMULATION_PARAMS_CSV = DATAFLOW_ROOT / "MINGO_DIGITAL_TWIN/SIMULATED_DATA/step_final_simulation_params.csv"
+SIMULATION_PARAMS_CSV = DATAFLOW_ROOT / "MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/step_final_simulation_params.csv"
 EFF_COLS = [
     "eff1_robust_xyphi",
     "eff2_robust_xyphi",

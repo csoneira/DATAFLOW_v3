@@ -33,7 +33,7 @@ Boundary markers (first appearance of each effect):
 flowchart TB
 
 subgraph SETUP["SETUP"]
-  S0["STEP 0: Parameter mesh creation\n- Sample cos_n, flux, efficiencies, z-planes\n- Assign step IDs\nOutput: INTERSTEPS/STEP_0_TO_1/param_mesh.csv"]:::setup
+  S0["STEP 0: Parameter mesh creation\n- Sample cos_n, flux, efficiencies, z-planes\n- Assign step IDs\nOutput: SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv"]:::setup
 end
 
 subgraph MU["MUONS (primary particle + transport)"]
@@ -60,7 +60,7 @@ end
 
 subgraph OUT["OUTPUT (representation only)"]
   direction TB
-  SF["STEP FINAL: Station .dat formatting\nOutput: SIMULATED_DATA/FILES/mi00YYDDDHHMMSS.dat"]:::fmt
+  SF["STEP FINAL: Station .dat formatting\nOutput: SIMULATION_OUTPUTS/SIMULATED_DATA/FILES/mi00YYDDDHHMMSS.dat"]:::fmt
 end
 
 S0 --> S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8 --> S9 --> S10 --> SF
@@ -75,10 +75,10 @@ classDef fmt fill:#f2f2f2,stroke:#333333,stroke-width:1px,color:#0b2233;
 ## Directory layout
 - `MASTER_STEPS/STEP_<X>`: per-step scripts and configs.
 - `MASTER_STEPS/STEP_SHARED`: shared utilities (sim-run registry, chunked I/O, geometry helpers).
-- `INTERSTEPS/STEP_<X>_TO_<Y>`: per-step outputs and sim-run registries.
-- `INTERSTEPS/STEP_0_TO_1`: parameter mesh (param_mesh.csv) for step-ID selection.
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_<X>_TO_<Y>`: per-step outputs and sim-run registries.
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1`: parameter mesh (param_mesh.csv) for step-ID selection.
 - `SIMULATED_DATA`: step_final registries and metadata.
-- `SIMULATED_DATA/FILES`: station-style .dat outputs.
+- `SIMULATION_OUTPUTS/SIMULATED_DATA/FILES`: station-style .dat outputs.
 - `DOCS`: technical documentation, data dictionary, and interface contracts.
 
 ## Running the pipeline

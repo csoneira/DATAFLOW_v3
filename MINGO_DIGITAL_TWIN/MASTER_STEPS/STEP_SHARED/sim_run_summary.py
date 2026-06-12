@@ -65,7 +65,7 @@ def main() -> None:
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
-    intersteps = root / "INTERSTEPS"
+    intersteps = root / "SIMULATION_OUTPUTS" / "INTERSTEPS"
     if not intersteps.exists():
         raise FileNotFoundError(f"INTERSTEPS not found under {root}")
 

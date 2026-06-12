@@ -198,7 +198,7 @@ def plot_muon_flux_tt_comparison(pdf: PdfPages, sample_path: Path | None = None)
                 chain[1] = upstream[1]
                 break
 
-    # as a last resort, look under INTERSTEPS/STEP_1_TO_2 for any available STEP_1 chunks
+    # as a last resort, look under SIMULATION_OUTPUTS/INTERSTEPS/STEP_1_TO_2 for any available STEP_1 chunks
     if 1 not in chain:
         step1_root = Path(__file__).resolve().parents[4] / "INTERSTEPS" / "STEP_1_TO_2"
         if step1_root.exists():

@@ -1126,7 +1126,7 @@ if __name__ == "__main__":
 #   - runs only for MINGO00
 #   - merges only by param_hash
 #   - takes the simulated/original flux only from flux_cm2_min in:
-#       /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATED_DATA/
+#       /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/
 #       step_final_simulation_params.csv
 # ---------------------------------------------------------------------------
 
@@ -1344,7 +1344,7 @@ def _step3_build_simulated_vs_estimated_flux_table(
 
     # -----------------------------------------------------------------------
     # Fallback:
-    # If the current SIMULATED_DATA/step_final_simulation_params.csv has zero
+    # If the current SIMULATION_OUTPUTS/SIMULATED_DATA/step_final_simulation_params.csv has zero
     # overlap with the recovered real-data param_hash values, use the STEP_0
     # training merge. That file is the local product of the param_hash merge
     # between MINGO00 metadata and SIMULATED_DATA and normally preserves

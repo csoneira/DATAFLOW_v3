@@ -5,7 +5,7 @@ This variation adds a Step 0 geometry-aware efficiency correction on top of the 
 ## Purpose
 
 Step 0 reads the MINGO00 metadata selected by `trigger_type_selection`, merges it with
-`MINGO_DIGITAL_TWIN/SIMULATED_DATA/step_final_simulation_params.csv` by `param_hash`, and for each geometry
+`MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/step_final_simulation_params.csv` by `param_hash`, and for each geometry
 configuration plus each plane it fits a polynomial mapping:
 
 - observed real efficiency -> realistic simulated efficiency

@@ -17,13 +17,13 @@ set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$HOME/DATAFLOW_v3}"
 CRONTAB_FILE="${CRONTAB_FILE:-$REPO_ROOT/CONFIG/add_to_crontab.info}"
-CREATE_FILES=false
 QUIET=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --create-files)
-      CREATE_FILES=true
+      # Retained for CLI compatibility. Empty cron log files are intentionally
+      # no longer created.
       shift
       ;;
     --quiet)
@@ -47,8 +47,7 @@ if [[ ! -f "$CRONTAB_FILE" ]]; then
 fi
 
 created_dirs=0
-created_files=0
-
+removed_empty_files=0
 while IFS= read -r target; do
   [[ -z "$target" ]] && continue
   [[ "$target" != /* ]] && continue
@@ -59,10 +58,6 @@ while IFS= read -r target; do
     created_dirs=$((created_dirs + 1))
   fi
 
-  if $CREATE_FILES && [[ ! -e "$target" ]]; then
-    : >"$target"
-    created_files=$((created_files + 1))
-  fi
 done < <(
   awk '
     /^[[:space:]]*#/ {next}
@@ -87,11 +82,22 @@ done < <(
             print p
           }
         }
+        if (tok ~ /\/cron_run_logged\.sh$/ && i + 1 <= NF) {
+          print $(i + 1)
+        }
       }
     }
   ' "$CRONTAB_FILE" | sort -u
 )
 
+cron_log_root="$REPO_ROOT/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS"
+if [[ -d "$cron_log_root" ]]; then
+  while IFS= read -r -d '' empty_path; do
+    rm -f "$empty_path"
+    removed_empty_files=$((removed_empty_files + 1))
+  done < <(find "$cron_log_root" -type f -empty -print0)
+fi
+
 if ! $QUIET; then
-  echo "ensure_cron_log_paths: created_dirs=$created_dirs created_files=$created_files"
+  echo "ensure_cron_log_paths: created_dirs=$created_dirs empty_log_files_created=0 removed_empty_files=$removed_empty_files"
 fi

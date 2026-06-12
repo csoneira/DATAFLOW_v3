@@ -121,6 +121,7 @@ REPO_ROOT="$(dirname "$(dirname "${MASTER_DIR}")")"
 
 config_file_shared="${MASTER_DIR}/CONFIG_FILES/STAGE_0/REPROCESSING/config_reprocessing.yaml"
 config_file_step="${MASTER_DIR}/CONFIG_FILES/STAGE_0/REPROCESSING/STEP_2/config_step_2.yaml"
+reprocessing_policy_script="${MASTER_DIR}/common/reprocessing_policy.py"
 UNPACKER_ROOT="${MASTER_DIR}/STAGES/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES"
 
 is_reprocessing_step_enabled() {
@@ -277,44 +278,23 @@ if ! is_reprocessing_step_enabled "$station" 2; then
     exit 0
 fi
 
-read_config_value() {
-    local key="$1"
-    python3 - "$key" "$config_file_step" "$config_file_shared" <<'PY' || true
-import re
-import sys
-
-key = sys.argv[1]
-paths = [sys.argv[2], sys.argv[3]]
-value = None
-pattern = re.compile(rf"\s*{re.escape(key)}\s*:\s*(\S+)")
-for path in paths:
-    if not path:
-        continue
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            for line in handle:
-                match = pattern.match(line)
-                if match:
-                    value = match.group(1)
-                    break
-    except FileNotFoundError:
-        continue
-    if value:
-        break
-
-if value:
-    print(value.strip())
-PY
+resolve_reprocessing_policy_field() {
+    local field="$1"
+    python3 "$reprocessing_policy_script" \
+        --shared "$config_file_shared" \
+        --local "$config_file_step" \
+        --step 2 \
+        --station "$station" \
+        --field "$field"
 }
 
-
-unpack_anyway=false
-config_key="unpack_anyway_station_${station}"
-config_setting=$(read_config_value "$config_key" | tr '[:upper:]' '[:lower:]')
-if [[ "$config_setting" == "true" ]]; then
-    unpack_anyway=true
+if [[ "$(resolve_reprocessing_policy_field stations)" != "true" ]]; then
+    log_info "Skipping station ${station}: not included in the resolved STEP_2 stations policy."
+    exit 0
 fi
 
+reprocess_completed=$(resolve_reprocessing_policy_field reprocess_completed_stations)
+log_info "Resolved STEP_2 policy: station=${station}, reprocess_completed=${reprocess_completed}."
 
 # --------------------------------------------------------------------------------------------
 # Prevent the script from running multiple instances -----------------------------------------
@@ -351,8 +331,8 @@ echo "------------------------------------------------------"
 echo "unpack_reprocessing_files.sh started on: $(date)"
 echo "Station: ${station_code} (loop_mode=$loop_mode, newest_mode=$newest_mode, max_parallel=$max_parallel)"
 echo "Running the script..."
-if $unpack_anyway; then
-    echo "Config ${config_key} is true: duplicate-protection checks are disabled."
+if $reprocess_completed; then
+    echo "Station ${station} is in reprocess_completed_stations: duplicate-protection checks are disabled."
 fi
 
 STATIONS_BASE="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS"
@@ -676,8 +656,8 @@ route_dat_outputs() {
         destination_dir="${STATIONS_BASE}/MINGO${dest_station}/STAGE_0_TO_1"
         mkdir -p "$destination_dir"
         if [[ -e "$destination_dir/$fname" ]]; then
-            if $unpack_anyway; then
-                echo "unpack_anyway=true: replacing existing $fname in ${destination_dir}."
+            if $reprocess_completed; then
+                echo "reprocess_completed=true: replacing existing $fname in ${destination_dir}."
                 rm -f "$destination_dir/$fname"
             else
                 echo "Skipping $fname — already present in ${destination_dir}."
@@ -775,8 +755,8 @@ process_single_hld() {
 
     load_dat_unpacked_basenames
     load_qa_retry_manifest_basenames
-    if $unpack_anyway; then
-        echo "Loaded ${#dat_unpacked_basenames[@]} previously unpacked basenames (unpack_anyway=true, so they will be reprocessed if present)."
+    if $reprocess_completed; then
+        echo "Loaded ${#dat_unpacked_basenames[@]} previously unpacked basenames (reprocess_completed=true, so they will be reprocessed if present)."
     else
         echo "Loaded ${#dat_unpacked_basenames[@]} previously unpacked basenames as exclusions."
     fi
@@ -857,8 +837,8 @@ process_single_hld() {
             if [[ -n ${dat_unpacked_basenames["$candidate_base"]+_} ]]; then
                 if [[ -n ${qa_retry_basenames["$candidate_base"]+_} ]]; then
                     echo "  -> Re-processing $(basename "$candidate") (active QA retry manifest entry)."
-                elif $unpack_anyway; then
-                    echo "  -> Re-processing $(basename "$candidate") (record exists in dat_files_unpacked.csv; unpack_anyway=true)."
+                elif $reprocess_completed; then
+                    echo "  -> Re-processing $(basename "$candidate") (record exists in dat_files_unpacked.csv; reprocess_completed=true)."
                 else
                     echo "  -> Skipping $(basename "$candidate") (already recorded in dat_files_unpacked.csv)."
                     mv -f "$candidate" "$completed_uncompressed/$(basename "$candidate")"

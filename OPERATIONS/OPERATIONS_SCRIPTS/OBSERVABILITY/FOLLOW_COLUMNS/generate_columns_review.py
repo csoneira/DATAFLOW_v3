@@ -31,6 +31,17 @@ class Section:
 
 
 SECTIONS = [
+    # Section(
+    #     title="TASK_0",
+    #     display_pattern=(
+    #         "~/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+    #         "TASK_0/INPUT_FILES/COMPLETED_DIRECTORY/*.dat"
+    #     ),
+    #     glob_pattern=(
+    #         "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+    #         "TASK_0/INPUT_FILES/COMPLETED_DIRECTORY/*.dat"
+    #     ),
+    # ),
     Section(
         title="TASK_0 -> TASK_1",
         display_pattern=(

@@ -863,6 +863,10 @@ pipeline_already_running() {
         ;;
     esac
     [[ "$cmd" != *"guide_raw_to_corrected.sh"* ]] && continue
+    # cron_run_logged.sh runs the cron command through a pipeline. Its logging
+    # subshell is a sibling, not an ancestor, and its command line includes the
+    # guide arguments. It is not another guide execution.
+    [[ "$cmd" == *"/CRON_RUN_LOGGED/cron_run_logged.sh"* ]] && continue
 
     if command_targets_station "$cmd" "$target_station"; then
       if is_tty; then
@@ -1008,12 +1012,14 @@ while true; do
     fi
     log_info "Running station $station task${task_id} (${task_label}) [selection_order=${selection_order}] ..."
 
-    if ! DATAFLOW_STEP1_SELECTION_ORDER="${selection_order}" python3 -u "$task_script" "$station" "${TASK_VERBOSE_ARGS[@]}"; then
-      log_warn "Task $(basename "$task_script") failed for station $station; continuing to next pair."
+    if DATAFLOW_STEP1_SELECTION_ORDER="${selection_order}" python3 -u "$task_script" "$station" "${TASK_VERBOSE_ARGS[@]}"; then
+      log_info "Completed station $station task${task_id} (${task_label})."
+      log_info "----------"
+    else
+      task_rc=$?
+      log_warn "Task $(basename "$task_script") failed for station $station with exit_code=${task_rc}; continuing to next pair."
       continue
     fi
-    log_info "Completed station $station task${task_id} (${task_label})."
-    log_info "----------"
   done
   iteration=$((iteration + 1))
 done

@@ -1,7 +1,7 @@
 # STEP 0 (Parameter Mesh Setup)
 
 Purpose:
-- Build or extend `INTERSTEPS/STEP_0_TO_1/param_mesh.csv` with sampled parameters.
+- Build or extend `SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv` with sampled parameters.
 - Assign step IDs (`step_1_id`..`step_10_id`) that define SIM_RUN naming downstream.
 
 Inputs:
@@ -10,8 +10,8 @@ Inputs:
 - Station config CSVs under `station_config_root` (P1..P4 plane positions).
 
 Outputs:
-- `INTERSTEPS/STEP_0_TO_1/param_mesh.csv`
-- `INTERSTEPS/STEP_0_TO_1/param_mesh_metadata.json`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh_metadata.json`
 
 Key behavior:
 - Samples `cos_n`, `flux_cm2_min`, efficiencies, and z-plane tuples.

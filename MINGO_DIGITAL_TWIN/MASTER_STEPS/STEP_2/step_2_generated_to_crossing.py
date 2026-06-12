@@ -367,7 +367,7 @@ def main() -> None:
         if input_sim_run_mode == "latest":
             sim_run_dirs = sorted(sim_run_dirs, key=lambda path: path.stat().st_mtime, reverse=True)
         elif input_sim_run_mode == "random":
-            mesh_dir = Path(cfg.get("param_mesh_dir", "../../INTERSTEPS/STEP_0_TO_1"))
+            mesh_dir = Path(cfg.get("param_mesh_dir", "../../SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1"))
             if not mesh_dir.is_absolute():
                 mesh_dir = Path(__file__).resolve().parent / mesh_dir
             try:
@@ -514,7 +514,7 @@ def main() -> None:
         if z_positions_cfg is None:
             raise ValueError("config z_positions is required for Step 2.")
         if isinstance(z_positions_cfg, str) and z_positions_cfg.lower() == "random":
-            mesh_dir = Path(cfg.get("param_mesh_dir", "../../INTERSTEPS/STEP_0_TO_1"))
+            mesh_dir = Path(cfg.get("param_mesh_dir", "../../SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1"))
             if not mesh_dir.is_absolute():
                 mesh_dir = Path(__file__).resolve().parent / mesh_dir
             mesh, mesh_path = resolve_param_mesh(
@@ -574,7 +574,7 @@ def main() -> None:
                 cfg["z_positions"] = z_values
                 param_set_id = None
                 param_date = None
-                mesh_dir = Path(cfg.get("param_mesh_dir", "../../INTERSTEPS/STEP_0_TO_1"))
+                mesh_dir = Path(cfg.get("param_mesh_dir", "../../SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1"))
                 if not mesh_dir.is_absolute():
                     mesh_dir = Path(__file__).resolve().parent / mesh_dir
                 mesh, mesh_path = resolve_param_mesh(

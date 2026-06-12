@@ -2,7 +2,7 @@
 
 Minimal conference-poster workflow for the simulated generated-file trigger rate.
 
-It reads only `MINGO_DIGITAL_TWIN/SIMULATED_DATA/step_final_simulation_params.csv`,
+It reads only `MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/step_final_simulation_params.csv`,
 selects one z-position vector, uses the four simulated efficiencies as LUT
 coordinates, and builds a strictly positive rate scale-factor LUT from
 `trigger_rate_hz`.

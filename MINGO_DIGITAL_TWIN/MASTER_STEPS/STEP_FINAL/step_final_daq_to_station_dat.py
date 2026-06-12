@@ -35,8 +35,10 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 ROOT_RUNTIME_DIR = ROOT_DIR.parent / "OPERATIONS/OPERATIONS_RUNTIME"
 STRUCTURED_LOG_PATH = ROOT_RUNTIME_DIR / "CRON_LOGS" / "SIMULATION" / "STRUCTURED" / "step_final.jsonl"
 STRUCTURED_LOG_ENABLED = os.environ.get("SIM_STRUCTURED_LOGS_ENABLED", "1").strip() != "0"
-BACKPRESSURE_CONFIG_DEFAULT = ROOT_DIR / "CONFIG_FILES" / "sim_main_pipeline_frequency.conf"
-SIMULATED_DATA_DIR_DEFAULT = ROOT_DIR / "SIMULATED_DATA"
+BACKPRESSURE_CONFIG_DEFAULT = (
+    ROOT_DIR / "CONFIG_FILES" / "ORCHESTRATOR" / "sim_main_pipeline_frequency.conf"
+)
+SIMULATED_DATA_DIR_DEFAULT = ROOT_DIR / "SIMULATION_OUTPUTS" / "SIMULATED_DATA"
 SIMULATED_DATA_FILES_DIR_DEFAULT = SIMULATED_DATA_DIR_DEFAULT / "FILES"
 STATIONS_STEP1_DIR_DEFAULT = ROOT_DIR.parent / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / "MINGO00" / "STAGE_1" / "EVENT_DATA" / "STEP_1"
 SIM_IMPORT_HISTORY_DEFAULT = (
@@ -982,13 +984,35 @@ def build_payload(row_dict: dict) -> str:
     return " ".join(parts)
 
 
+SIDECAR_REQUIRED_SOURCE_COLUMNS = (
+    "T_thick_s",
+    "X_gen",
+    "Y_gen",
+    "Theta_gen",
+    "Phi_gen",
+)
+
+
+def build_sidecar_source_record(row_dict: dict, source_row_index: int) -> dict:
+    record = {
+        "sim_event_id": row_dict.get("event_id", pd.NA),
+        "source_row_index": int(source_row_index),
+    }
+    for column in SIDECAR_REQUIRED_SOURCE_COLUMNS:
+        record[column] = row_dict.get(column, pd.NA)
+    if "Z_gen" in row_dict:
+        record["Z_gen"] = row_dict["Z_gen"]
+    return record
+
+
 def sample_payloads(
     input_paths: list[Path],
     target_rows: int,
     chunk_rows: int | None,
     rng: np.random.Generator,
-) -> tuple[list[str], int, list[float] | None]:
+) -> tuple[list[str], pd.DataFrame, int, list[float] | None]:
     reservoir: list[str] = []
+    reservoir_source_rows: list[dict] = []
     offsets: list[float] | None = None
     use_thick: bool | None = None
     seen = 0
@@ -1004,10 +1028,12 @@ def sample_payloads(
                 for row in chunk.itertuples(index=False):
                     row_dict = row._asdict()
                     payload = build_payload(row_dict)
+                    source_record = build_sidecar_source_record(row_dict, seen)
                     thick_time = float(row_dict.get("T_thick_s", 0.0)) if use_thick else None
                     seen += 1
                     if len(reservoir) < target_rows:
                         reservoir.append(payload)
+                        reservoir_source_rows.append(source_record)
                         if use_thick:
                             if offsets is None:
                                 offsets = []
@@ -1016,6 +1042,7 @@ def sample_payloads(
                     pick = int(rng.integers(0, seen))
                     if pick < target_rows:
                         reservoir[pick] = payload
+                        reservoir_source_rows[pick] = source_record
                         if use_thick:
                             if offsets is None:
                                 offsets = [0.0] * target_rows
@@ -1023,7 +1050,7 @@ def sample_payloads(
         except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError) as exc:
             _log_warn(f"Skipping unreadable input during sampling {path}: {exc}")
             continue
-    return reservoir, seen, offsets
+    return reservoir, pd.DataFrame(reservoir_source_rows), seen, offsets
 
 
 def sample_payloads_sequential(
@@ -1033,7 +1060,7 @@ def sample_payloads_sequential(
     rng: np.random.Generator,
     total_rows: int | None = None,
     allow_reuse_when_short: bool = False,
-) -> tuple[list[str], int, list[float] | None, int]:
+) -> tuple[list[str], pd.DataFrame, int, list[float] | None, int]:
     if total_rows is None:
         _, total_rows = collect_input_row_counts(input_paths, chunk_rows)
     if total_rows <= 0:
@@ -1047,6 +1074,7 @@ def sample_payloads_sequential(
 
     if allow_reuse_when_short:
         base_payloads: list[str] = []
+        base_source_rows: list[dict] = []
         base_offsets_raw: list[float] | None = None
         use_thick: bool | None = None
         for path in input_paths:
@@ -1063,6 +1091,9 @@ def sample_payloads_sequential(
                     for row in chunk.itertuples(index=False):
                         row_dict = row._asdict()
                         base_payloads.append(build_payload(row_dict))
+                        base_source_rows.append(
+                            build_sidecar_source_record(row_dict, len(base_source_rows))
+                        )
                         if use_thick:
                             if base_offsets_raw is None:
                                 base_offsets_raw = []
@@ -1084,6 +1115,7 @@ def sample_payloads_sequential(
         )
 
         rotated_payloads = base_payloads[start_idx:] + base_payloads[:start_idx]
+        rotated_source_rows = base_source_rows[start_idx:] + base_source_rows[:start_idx]
 
         rotated_offsets: list[float] | None = None
         cycle_period = 0.0
@@ -1114,23 +1146,27 @@ def sample_payloads_sequential(
 
         if target_rows <= total_rows:
             payloads = rotated_payloads[:target_rows]
+            selected_source_rows = rotated_source_rows[:target_rows]
             offsets = rotated_offsets[:target_rows] if rotated_offsets is not None else None
-            return payloads, total_rows, offsets, start_idx
+            return payloads, pd.DataFrame(selected_source_rows), total_rows, offsets, start_idx
 
         full_cycles, remainder = divmod(target_rows, total_rows)
         payloads: list[str] = []
+        selected_source_rows: list[dict] = []
         offsets: list[float] | None = [] if rotated_offsets is not None else None
         for cycle_idx in range(full_cycles):
             payloads.extend(rotated_payloads)
+            selected_source_rows.extend(rotated_source_rows)
             if offsets is not None and rotated_offsets is not None:
                 shift = cycle_idx * cycle_period
                 offsets.extend([val + shift for val in rotated_offsets])
         if remainder > 0:
             payloads.extend(rotated_payloads[:remainder])
+            selected_source_rows.extend(rotated_source_rows[:remainder])
             if offsets is not None and rotated_offsets is not None:
                 shift = full_cycles * cycle_period
                 offsets.extend([val + shift for val in rotated_offsets[:remainder]])
-        return payloads, total_rows, offsets, start_idx
+        return payloads, pd.DataFrame(selected_source_rows), total_rows, offsets, start_idx
 
     start_idx = int(rng.integers(0, total_rows - target_rows + 1))
     _log_info(f"Sequential sampling start index ({target_rows} rows): {start_idx}")
@@ -1138,8 +1174,10 @@ def sample_payloads_sequential(
     remaining_skip = start_idx
     remaining_take = target_rows
     payloads: list[str] = []
+    selected_source_rows: list[dict] = []
     offsets: list[float] | None = None
     use_thick: bool | None = None
+    source_row_cursor = 0
 
     for path in input_paths:
         try:
@@ -1156,20 +1194,28 @@ def sample_payloads_sequential(
                 chunk_len = len(chunk)
                 if remaining_skip >= chunk_len:
                     remaining_skip -= chunk_len
+                    source_row_cursor += chunk_len
                     continue
 
                 start = remaining_skip
                 remaining_skip = 0
                 take = min(chunk_len - start, remaining_take)
                 subset = chunk.iloc[start : start + take]
-                for row in subset.itertuples(index=False):
+                for subset_index, row in enumerate(subset.itertuples(index=False)):
                     row_dict = row._asdict()
                     payloads.append(build_payload(row_dict))
+                    selected_source_rows.append(
+                        build_sidecar_source_record(
+                            row_dict,
+                            source_row_cursor + start + subset_index,
+                        )
+                    )
                     if use_thick:
                         if offsets is None:
                             offsets = []
                         offsets.append(float(row_dict.get("T_thick_s", 0.0)) or 0.0)
                 remaining_take -= take
+                source_row_cursor += chunk_len
                 if remaining_take == 0:
                     break
             if remaining_take == 0:
@@ -1186,7 +1232,7 @@ def sample_payloads_sequential(
     if offsets is not None and offsets:
         first = offsets[0]
         offsets = [val - first for val in offsets]
-    return payloads, total_rows, offsets, start_idx
+    return payloads, pd.DataFrame(selected_source_rows), total_rows, offsets, start_idx
 
 
 def write_with_timestamps(
@@ -1198,10 +1244,11 @@ def write_with_timestamps(
     offsets_s: list[float] | None = None,
     param_hash: str | None = None,
     truncate_at_day_end: bool = True,
-) -> tuple[int, datetime | None]:
+) -> tuple[int, datetime | None, list[datetime]]:
     day_end = datetime(start_time.year, start_time.month, start_time.day) + timedelta(days=1)
     rows_written = 0
     last_written_time: datetime | None = None
+    written_datetimes: list[datetime] = []
     with output_path.open("w", encoding="ascii") as dst:
         if param_hash:
             dst.write(f"# param_hash={param_hash}\n")
@@ -1233,12 +1280,68 @@ def write_with_timestamps(
             dst.write(" ".join(header + payload.split()) + "\n")
             rows_written += 1
             last_written_time = event_time
+            written_datetimes.append(event_time)
             if offsets_s is None and rate_hz > 0:
                 delta = rng.exponential(1.0 / rate_hz)
                 current_time = event_time + timedelta(seconds=float(delta))
             elif offsets_s is None:
                 current_time = event_time
-    return rows_written, last_written_time
+    return rows_written, last_written_time, written_datetimes
+
+
+def write_sidecar_atomic(
+    selected_source_rows: pd.DataFrame,
+    rows_written: int,
+    dat_output_path: Path,
+    sidecar_output_path: Path,
+    param_hash: str | None,
+    param_set_id: int,
+    param_date: str,
+    sample_start_index: int | None,
+    station_datetimes: list[datetime],
+) -> pd.DataFrame:
+    if rows_written <= 0:
+        raise ValueError("Cannot write a sidecar for an empty .dat output.")
+    if len(selected_source_rows) < rows_written:
+        raise ValueError(
+            "Selected source rows are shorter than the written .dat payload: "
+            f"source_rows={len(selected_source_rows)}, rows_written={rows_written}."
+        )
+    if len(station_datetimes) != rows_written:
+        raise ValueError(
+            "Written station timestamps do not match the written .dat payload: "
+            f"timestamps={len(station_datetimes)}, rows_written={rows_written}."
+        )
+
+    sidecar_df = selected_source_rows.iloc[:rows_written].copy()
+    first_data_line = 2 if param_hash else 1
+    sidecar_df.insert(
+        0,
+        "event_id",
+        np.arange(first_data_line, first_data_line + rows_written, dtype=np.int64),
+    )
+    sidecar_df["file_name"] = dat_output_path.name
+    sidecar_df["param_hash"] = param_hash
+    sidecar_df["param_set_id"] = int(param_set_id)
+    sidecar_df["param_date"] = str(param_date)
+    sidecar_df["sample_start_index"] = sample_start_index
+    sidecar_df["station_datetime"] = pd.to_datetime(station_datetimes)
+
+    ensure_dir(sidecar_output_path.parent)
+    temporary_path = sidecar_output_path.with_name(
+        f".{sidecar_output_path.name}.{os.getpid()}.tmp"
+    )
+    try:
+        sidecar_df.to_parquet(
+            temporary_path,
+            engine="pyarrow",
+            compression="zstd",
+            index=False,
+        )
+        os.replace(temporary_path, sidecar_output_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    return sidecar_df
 
 
 def main() -> None:
@@ -1375,15 +1478,28 @@ def main() -> None:
     input_dir = Path(cfg["input_dir"])
     if not input_dir.is_absolute():
         input_dir = Path(__file__).resolve().parent / input_dir
-    output_dir = Path(cfg.get("output_dir", "../../SIMULATED_DATA"))
+    output_dir = Path(cfg.get("output_dir", "../../SIMULATION_OUTPUTS/SIMULATED_DATA"))
     if not output_dir.is_absolute():
         output_dir = Path(__file__).resolve().parent / output_dir
     dat_output_dir = output_dir / "FILES"
+    write_sidecars = parse_bool(cfg.get("write_sidecars"), True)
+    sidecar_output_dir_value = cfg.get("sidecar_output_dir")
+    if sidecar_output_dir_value:
+        sidecar_output_dir = Path(sidecar_output_dir_value)
+        if not sidecar_output_dir.is_absolute():
+            sidecar_output_dir = Path(__file__).resolve().parent / sidecar_output_dir
+    else:
+        sidecar_output_dir = dat_output_dir.parent / "FILES_SIDECARS"
     ensure_dir(output_dir)
     ensure_dir(dat_output_dir)
+    if write_sidecars:
+        ensure_dir(sidecar_output_dir)
     _log_info(f"Input dir: {input_dir}")
     _log_info(f"Output dir: {output_dir}")
     _log_info(f"Dat output dir: {dat_output_dir}")
+    _log_info(
+        f"Sidecar output: enabled={write_sidecars}, directory={sidecar_output_dir}"
+    )
     import_history_high_watermark = load_import_history_high_watermark(
         SIM_IMPORT_HISTORY_DEFAULT
     )
@@ -1426,7 +1542,7 @@ def main() -> None:
     _log_info(f"SIM_RUNs selected: {len(sim_runs)}")
     processed_sim_runs = 0
 
-    mesh_dir = Path(cfg.get("param_mesh_dir", "../../INTERSTEPS/STEP_0_TO_1"))
+    mesh_dir = Path(cfg.get("param_mesh_dir", "../../SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1"))
     if not mesh_dir.is_absolute():
         mesh_dir = Path(__file__).resolve().parent / mesh_dir
     mesh_mismatch_strategy = str(
@@ -1869,7 +1985,13 @@ def main() -> None:
                                 target_short_warned = True
                             desired_rows = total_rows
 
-                    payloads, _, thick_offsets, sample_start_index = sample_payloads_sequential(
+                    (
+                        payloads,
+                        selected_source_rows,
+                        _,
+                        thick_offsets,
+                        sample_start_index,
+                    ) = sample_payloads_sequential(
                         input_paths,
                         desired_rows,
                         chunk_rows,
@@ -1878,7 +2000,7 @@ def main() -> None:
                         allow_reuse_when_short=allow_reuse_when_short,
                     )
                 else:
-                    payloads, total_rows, thick_offsets = sample_payloads(
+                    payloads, selected_source_rows, total_rows, thick_offsets = sample_payloads(
                         input_paths,
                         desired_rows,
                         chunk_rows,
@@ -1897,6 +2019,11 @@ def main() -> None:
                     f"Skipping file generation for param_set_id={param_set_id}: no payload rows available."
                 )
                 continue
+            if len(selected_source_rows) != len(payloads):
+                raise RuntimeError(
+                    "STEP_FINAL sampled payload/source-row mismatch: "
+                    f"payloads={len(payloads)}, source_rows={len(selected_source_rows)}."
+                )
 
             out_name, start_time = ensure_unique_sim_name(next_start, sim_dir, dir_used_names)
             out_path = sim_dir / out_name
@@ -1913,7 +2040,7 @@ def main() -> None:
                 "sample_start_index": sample_start_index,
             }
             param_hash = compute_param_hash(hash_payload)
-            rows_written, last_time = write_with_timestamps(
+            rows_written, last_time, station_datetimes = write_with_timestamps(
                 payloads,
                 out_path,
                 start_time,
@@ -1926,12 +2053,48 @@ def main() -> None:
 
             if rows_written == 0:
                 out_path.unlink(missing_ok=True)
+                if write_sidecars:
+                    (sidecar_output_dir / f"sidecar_{out_path.stem}.parquet").unlink(
+                        missing_ok=True
+                    )
                 _log_warn(f"Skipping empty output {out_name}; no rows fit before midnight.")
                 continue
 
             if rows_written < len(payloads):
                 _log_warn(
                     f"Cut {out_name} at midnight: wrote {rows_written}/{len(payloads)} rows."
+                )
+            sidecar_file_name: str | None = None
+            sidecar_file_path: Path | None = None
+            sidecar_rows = 0
+            sidecar_columns: list[str] = []
+            if write_sidecars:
+                sidecar_file_name = f"sidecar_{out_path.stem}.parquet"
+                sidecar_file_path = sidecar_output_dir / sidecar_file_name
+                try:
+                    sidecar_df = write_sidecar_atomic(
+                        selected_source_rows=selected_source_rows,
+                        rows_written=rows_written,
+                        dat_output_path=out_path,
+                        sidecar_output_path=sidecar_file_path,
+                        param_hash=param_hash,
+                        param_set_id=int(param_set_id),
+                        param_date=str(param_date),
+                        sample_start_index=sample_start_index,
+                        station_datetimes=station_datetimes,
+                    )
+                except Exception as exc:
+                    out_path.unlink(missing_ok=True)
+                    sidecar_file_path.unlink(missing_ok=True)
+                    raise RuntimeError(
+                        "STEP_FINAL sidecar generation failed; removed the just-written "
+                        f"station file {out_path} to avoid an inconsistent output pair."
+                    ) from exc
+                sidecar_rows = len(sidecar_df)
+                sidecar_columns = list(sidecar_df.columns)
+                _log_info(
+                    f"Saved sidecar {sidecar_file_path} "
+                    f"(rows={sidecar_rows}, columns={len(sidecar_columns)})"
                 )
             selected_rows = rows_written
             trigger_time_span_seconds = (
@@ -1974,6 +2137,10 @@ def main() -> None:
                 "input_collect": input_collect,
                 "thick_time_mode": "offset" if thick_offsets is not None else "poisson",
                 "baseline_meta": baseline_meta,
+                "sidecar_file_name": sidecar_file_name,
+                "sidecar_file_path": str(sidecar_file_path) if sidecar_file_path else None,
+                "sidecar_rows": sidecar_rows,
+                "sidecar_columns": sidecar_columns,
                 "sim_run_configs": {
                     "STEP_10_TO_FINAL": collect_sim_run_configs(input_dir),
                 },
@@ -2001,6 +2168,7 @@ def main() -> None:
                 "selected_rows": selected_rows,
                 "trigger_rate_hz": trigger_rate_hz,
                 "sample_start_index": sample_start_index,
+                "sidecar_file_name": sidecar_file_name,
             }
             new_param_rows.append(row)
 

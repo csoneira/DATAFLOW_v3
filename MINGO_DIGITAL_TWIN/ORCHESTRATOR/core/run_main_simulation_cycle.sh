@@ -2,7 +2,7 @@
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
 # Script: MINGO_DIGITAL_TWIN/ORCHESTRATOR/core/run_main_simulation_cycle.sh
-# Purpose: Run main simulation cycle.
+# Purpose: Coordinate the cron-driven simulation enqueue, processing, STEP_FINAL, and maintenance phases.
 # Owner: DATAFLOW_v3 contributors
 # Sign-off: csoneira <csoneira@ucm.es>
 # Last Updated: 2026-03-02
@@ -34,7 +34,7 @@ set -euo pipefail
 ROOT_DIR="$HOME/DATAFLOW_v3"
 DT_DIR="${ROOT_DIR}/MINGO_DIGITAL_TWIN"
 ROOT_RUNTIME_DIR="${ROOT_DIR}/OPERATIONS/OPERATIONS_RUNTIME"
-INTERSTEPS_DIR="${DT_DIR}/INTERSTEPS"
+INTERSTEPS_DIR="${DT_DIR}/SIMULATION_OUTPUTS/INTERSTEPS"
 RUN_STEP_STATE_DIR_DEFAULT="${ROOT_RUNTIME_DIR}/STATE/run_step"
 SIM_INTERSTEPS_RESET_MARKER="${ROOT_RUNTIME_DIR}/STATE/sim_intersteps_reset_needed.flag"
 SIM_INTERSTEPS_RESET_TRIGGER_PCT="${SIM_INTERSTEPS_RESET_TRIGGER_PCT:-95}"
@@ -60,16 +60,11 @@ STEP0_SCRIPT="${DT_DIR}/MASTER_STEPS/STEP_0/step_0_setup_to_blank.py"
 RUN_STEP_SCRIPT="${DT_DIR}/ORCHESTRATOR/core/run_step.sh"
 STEP_FINAL_SCRIPT="${DT_DIR}/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py"
 STEP_FINAL_CONFIG="${DT_DIR}/MASTER_STEPS/STEP_FINAL/config_step_final_physics.yaml"
-REPAIR_MESH_IDS_SCRIPT="${DT_DIR}/ORCHESTRATOR/maintenance/repair_param_mesh_step_ids.py"
-PRUNE_MESH_SCRIPT="${DT_DIR}/ORCHESTRATOR/maintenance/prune_completed_param_mesh_rows.py"
-PRUNE_FINAL_SCRIPT="${DT_DIR}/ORCHESTRATOR/maintenance/prune_step_final_params.py"
-SANITIZE_SCRIPT="${DT_DIR}/ORCHESTRATOR/maintenance/sanitize_sim_runs.py"
-PURGE_BACKPRESSURE_QUEUE_SCRIPT="${DT_DIR}/ORCHESTRATOR/maintenance/purge_simulation_queue_backpressure.py"
-CASCADE_CLEANUP_HELPER="${DT_DIR}/ORCHESTRATOR/helpers/cascade_cleanup_intersteps.py"
-FREQUENCY_CONFIG_FILE_DEFAULT="${DT_DIR}/CONFIG_FILES/sim_main_pipeline_frequency.conf"
+MAINTENANCE_CLI="${DT_DIR}/ORCHESTRATOR/maintenance/sim_maintenance.py"
+FREQUENCY_CONFIG_FILE_DEFAULT="${DT_DIR}/CONFIG_FILES/ORCHESTRATOR/sim_main_pipeline_frequency.conf"
 
-PARAM_MESH_PATH="${DT_DIR}/INTERSTEPS/STEP_0_TO_1/param_mesh.csv"
-SIMULATED_DATA_DIR="${DT_DIR}/SIMULATED_DATA"
+PARAM_MESH_PATH="${DT_DIR}/SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv"
+SIMULATED_DATA_DIR="${DT_DIR}/SIMULATION_OUTPUTS/SIMULATED_DATA"
 SIMULATED_DATA_FILES_DIR="${SIMULATED_DATA_DIR}/FILES"
 STATIONS_STEP1_DIR="${ROOT_DIR}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1"
 
@@ -620,12 +615,12 @@ cleanup_consumed_intermediates() {
   local output
   local rc
 
-  if [[ ! -f "${CASCADE_CLEANUP_HELPER}" ]]; then
-    log_warn "cascade_cleanup status=skipped reason=missing_helper helper=${CASCADE_CLEANUP_HELPER}"
+  if [[ ! -f "${MAINTENANCE_CLI}" ]]; then
+    log_warn "cascade_cleanup status=skipped reason=missing_maintenance_cli cli=${MAINTENANCE_CLI}"
     return 1
   fi
 
-  if output="$(/usr/bin/env python3 "${CASCADE_CLEANUP_HELPER}" --intersteps "${DT_DIR}/INTERSTEPS" --mesh "${PARAM_MESH_PATH}" 2>&1)"; then
+  if output="$(/usr/bin/env python3 "${MAINTENANCE_CLI}" cascade-cleanup --intersteps "${DT_DIR}/SIMULATION_OUTPUTS/INTERSTEPS" --mesh "${PARAM_MESH_PATH}" 2>&1)"; then
     log_info "cascade_cleanup status=done ${output}"
     return 0
   fi
@@ -658,8 +653,8 @@ run_enqueue_phase() {
     backpressure_purge_enabled="1"
   fi
   if [[ "${backpressure_purge_enabled}" == "1" ]]; then
-    if [[ -f "${PURGE_BACKPRESSURE_QUEUE_SCRIPT}" ]]; then
-      if ! run_stage "purge_backpressure_queue" /usr/bin/env python3 "${PURGE_BACKPRESSURE_QUEUE_SCRIPT}" --fraction-of-limit "${backpressure_purge_fraction}"; then
+    if [[ -f "${MAINTENANCE_CLI}" ]]; then
+      if ! run_stage "purge_backpressure_queue" /usr/bin/env python3 "${MAINTENANCE_CLI}" purge-backpressure-queue --fraction-of-limit "${backpressure_purge_fraction}"; then
         log_warn "stage=purge_backpressure_queue status=non_fatal_failure"
       fi
     else
@@ -748,7 +743,7 @@ run_processing_phase() {
   fi
 
   if [[ "${SIM_ENABLE_REPAIR_MESH_IDS:-0}" == "1" ]]; then
-    if ! run_stage "repair_mesh_step_ids" /usr/bin/env python3 "${REPAIR_MESH_IDS_SCRIPT}" --apply; then
+    if ! run_stage "repair_mesh_step_ids" /usr/bin/env python3 "${MAINTENANCE_CLI}" repair-mesh-step-ids --apply; then
       log_warn "stage=repair_mesh_step_ids status=non_fatal_failure"
     fi
   else
@@ -795,12 +790,12 @@ run_processing_phase() {
     log_info "stage=step_final status=skipped reason=disabled_by_config"
   fi
 
-  if ! run_stage "prune_mesh_done_rows" /usr/bin/env python3 "${PRUNE_MESH_SCRIPT}"; then
+  if ! run_stage "prune_mesh_done_rows" /usr/bin/env python3 "${MAINTENANCE_CLI}" prune-mesh; then
     log_warn "stage=prune_mesh_done_rows status=non_fatal_failure"
   fi
 
-  if [[ -f "${PRUNE_FINAL_SCRIPT}" ]]; then
-    if ! run_stage "prune_final_params" /usr/bin/env python3 "${PRUNE_FINAL_SCRIPT}"; then
+  if [[ -f "${MAINTENANCE_CLI}" ]]; then
+    if ! run_stage "prune_final_params" /usr/bin/env python3 "${MAINTENANCE_CLI}" prune-final-params; then
       log_warn "stage=prune_final_params status=non_fatal_failure"
     fi
   fi
@@ -808,8 +803,8 @@ run_processing_phase() {
   cleanup_consumed_intermediates || log_warn "stage=cascade_cleanup status=non_fatal_failure"
 
   if [[ "${post_sanitize_enabled}" == "1" ]]; then
-    if [[ -f "${SANITIZE_SCRIPT}" ]]; then
-      if ! run_stage "sanitize" /usr/bin/env python3 "${SANITIZE_SCRIPT}" --apply --min-age-seconds "${post_sanitize_min_age_s}"; then
+    if [[ -f "${MAINTENANCE_CLI}" ]]; then
+      if ! run_stage "sanitize" /usr/bin/env python3 "${MAINTENANCE_CLI}" sanitize-runs --apply --min-age-seconds "${post_sanitize_min_age_s}"; then
         log_warn "stage=sanitize status=non_fatal_failure"
       fi
     else

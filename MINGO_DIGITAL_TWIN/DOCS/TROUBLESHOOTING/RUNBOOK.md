@@ -27,27 +27,27 @@ supersedes:
 
 ```bash
 # Pending rows for a target prefix
-rg -n "^0,087,006" MINGO_DIGITAL_TWIN/INTERSTEPS/STEP_0_TO_1/param_mesh.csv
+rg -n "^0,087,006" MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv
 
 # Upstream presence checks
-ls -1 MINGO_DIGITAL_TWIN/INTERSTEPS/STEP_2_TO_3/
+ls -1 MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS/STEP_2_TO_3/
 
 # Work cache and scheduler state
 cat /tmp/mingo_digital_twin_run_step_work_cache.csv
 cat /tmp/mingo_digital_twin_run_step_state.csv
 
 # Consistency checker
-PYTHONPATH=. python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/helpers/check_param_mesh_consistency.py \
-  --mesh MINGO_DIGITAL_TWIN/INTERSTEPS/STEP_0_TO_1/param_mesh.csv \
-  --intersteps MINGO_DIGITAL_TWIN/INTERSTEPS --step 3
+PYTHONPATH=. python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/diagnostics/check_param_mesh_consistency.py \
+  --mesh MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv \
+  --intersteps MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS --step 3
 ```
 
 One-liner to detect pending rows missing STEP_2 upstreams:
 
 ```bash
-awk -F, '$1==0 {printf "%03d %03d\n", $2, $3}' MINGO_DIGITAL_TWIN/INTERSTEPS/STEP_0_TO_1/param_mesh.csv \
+awk -F, '$1==0 {printf "%03d %03d\n", $2, $3}' MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv \
   | while read s1 s2; do
-      d="MINGO_DIGITAL_TWIN/INTERSTEPS/STEP_2_TO_3/SIM_RUN_${s1}_${s2}"
+      d="MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS/STEP_2_TO_3/SIM_RUN_${s1}_${s2}"
       [[ -d "$d" ]] || echo "MISSING_UPSTREAM: ${s1},${s2}"
     done
 ```
@@ -69,7 +69,7 @@ Root cause:
 - strict closure blocks opening useful lines.
 
 Relevant helper:
-- `ORCHESTRATOR/helpers/obliterate_open_lines_for_fixed_z.py`
+- `ORCHESTRATOR/maintenance/close_unproductive_fixed_z_lines.py`
 
 Control flag:
 - `RUN_STEP_OBLITERATE_UNINTERESTING_STEP1_LINES=1`
@@ -88,9 +88,9 @@ Fix:
 
 ### 1) Recover missing STEP_3 outputs for a prefix
 1. Identify pending `(step_1_id, step_2_id)` pairs in mesh.
-2. Verify absence in `INTERSTEPS/STEP_2_TO_3/`.
+2. Verify absence in `SIMULATION_OUTPUTS/INTERSTEPS/STEP_2_TO_3/`.
 3. Generate missing STEP_2 upstreams.
-4. Run STEP_3 and confirm `INTERSTEPS/STEP_3_TO_4/` outputs appear.
+4. Run STEP_3 and confirm `SIMULATION_OUTPUTS/INTERSTEPS/STEP_3_TO_4/` outputs appear.
 5. Re-run consistency checker until zero mismatches.
 
 ### 2) Fixed-z blocked pipeline
@@ -99,7 +99,7 @@ Fix:
 3. If policy allows, run:
 
 ```bash
-python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/helpers/obliterate_open_lines_for_fixed_z.py --apply
+python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/maintenance/close_unproductive_fixed_z_lines.py --apply
 ```
 
 4. Re-run cycle and verify progress beyond STEP_2.
@@ -108,7 +108,7 @@ python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/helpers/obliterate_open_lines_for_fixed_
 1. Detect malformed runs:
 
 ```bash
-for d in /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/INTERSTEPS/STEP_1_TO_2/SIM_RUN_*; do
+for d in /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS/STEP_1_TO_2/SIM_RUN_*; do
   for base in "$d"/muon_sample_*; do
     [ -d "$base/chunks" ] || continue
     [ -f "${base}.chunks.json" ] || echo "INCOMPLETE: $base"

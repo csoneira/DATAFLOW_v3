@@ -6,11 +6,11 @@ Purpose:
 Inputs:
 - Physics config: `config_step_3_physics.yaml`
 - Runtime config: `config_step_3_runtime.yaml`
-- Data: `INTERSTEPS/STEP_2_TO_3/SIM_RUN_<N>/step_2.(pkl|csv|chunks.json)`
+- Data: `SIMULATION_OUTPUTS/INTERSTEPS/STEP_2_TO_3/SIM_RUN_<N>/step_2.(pkl|csv|chunks.json)`
 
 Outputs:
-- `INTERSTEPS/STEP_3_TO_4/SIM_RUN_<N>/step_3.(pkl|csv|chunks.json)`
-- `INTERSTEPS/STEP_3_TO_4/SIM_RUN_<N>/PLOTS/step_3_plots.pdf`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_3_TO_4/SIM_RUN_<N>/step_3.(pkl|csv|chunks.json)`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_3_TO_4/SIM_RUN_<N>/PLOTS/step_3_plots.pdf`
 
 Algorithm highlights:
 - Ionization count: `ions ~ Poisson(lambda)`, with `lambda = -ln(1 - eff)`.

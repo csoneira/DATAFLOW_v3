@@ -2,7 +2,7 @@
 ## Angular distribution
 cos_n: [2]
 ## Flux
-flux_cm2_min: [0.75, 2]
+flux_cm2_min: [0.5, 2.5]
 
 # Append strategy:
 # - uniform_random: existing behavior
@@ -27,7 +27,13 @@ efficiencies_identical: false
 # Example tunings:
 # - 0.8  -> allows up to 0.8 spread
 # - null -> disable spread cap; each plane is sampled in full [min,max]
-efficiencies_max_spread: 0.25
+efficiencies_max_spread: 0.05
+
+# STEP 1 event generation is selected from this empirical lookup using the
+# minimum of eff_p1..eff_p4. Regenerate it with:
+# python3 MINGO_DIGITAL_TWIN/CONFIG_FILES/GENERATORS/generate_event_limits_by_min_efficiency.py
+event_limits_by_min_efficiency: ../../CONFIG_FILES/GENERATORS/event_limits_by_min_efficiency.csv
+event_limits_fallback_n_tracks: 11250000
 
 # Optional: generate multiple rows per run, sharing selected columns.
 # repeat_samples = 0 means every row is unique. repeat_samples = 1 means two identical rows per sample, etc.

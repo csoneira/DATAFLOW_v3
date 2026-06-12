@@ -1,36 +1,76 @@
-# Orchestrator Layout
+# Simulation Orchestrator
 
-This directory contains orchestration logic for the simulation pipeline.
+This directory owns scheduling and operational control of the MINGO digital
+twin. Physics transformations remain under `MASTER_STEPS/`.
 
-## `core/`
+## Supported Entrypoints
 
-Primary entrypoints:
+- Cron cycle: `core/run_main_simulation_cycle.sh`
+- Manual/single-step execution: `core/run_step.sh`
+- State-changing maintenance: `maintenance/sim_maintenance.py`
+- Read-only inspection: scripts under `diagnostics/`
 
-- `run_main_simulation_cycle.sh` (minute-cycle controller for enqueue + processing)
-- `run_step.sh` (step scheduler for STEP_1..STEP_10 + optional STEP_FINAL)
+`run_main_simulation_cycle.sh` is the only supported cron entrypoint for the
+simulation cycle. It owns enqueue policy, processing locking, and STEP_FINAL
+policy. `run_step.sh` executes or schedules STEP_1 through STEP_10; STEP_FINAL
+is disabled when called by the cron cycle and remains available for explicit
+manual execution.
 
-## `maintenance/`
+## Directory Ownership
 
-Operational maintenance and repair scripts used by cron and/or core orchestrators:
+```text
+core/           cron cycle and step scheduling
+maintenance/    state-changing operations and their stable CLI
+diagnostics/    read-only consistency and size reports
+notifications/  operational alerts
+helpers/        scheduler-internal implementation helpers only
+lib/            shared Python path and orchestration utilities
+tests/          orchestrator tests
+```
 
-- `ensure_sim_hashes.py`
-- `purge_simulation_queue_backpressure.py`
-- `prune_completed_param_mesh_rows.py`
-- `prune_step_final_params.py`
-- `repair_param_mesh_step_ids.py`
-- `sanitize_sim_runs.py`
-- `stop_execution.sh`
+Destructive helpers do not belong under `helpers/`. Maintenance operations
+default to their implementation's dry-run behavior where supported. Use
+`--apply` only after reviewing the dry-run output.
 
-## `helpers/`
+## Maintenance CLI
 
-Non-critical helper tools used by scheduler preflight and troubleshooting:
+```bash
+python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/maintenance/sim_maintenance.py \
+  sanitize-runs
 
-- `check_param_mesh_consistency.py`
-- `cascade_cleanup_intersteps.py`
-- `refresh_step_work_cache.py`
-- `obliterate_open_lines_for_fixed_z.py`
-- `size_and_expected_report.py`
+python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/maintenance/sim_maintenance.py \
+  sanitize-runs --apply --min-age-seconds 300
 
-## `tests/`
+python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/maintenance/sim_maintenance.py \
+  cascade-cleanup --intersteps MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS \
+  --mesh MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv --dry-run
+```
 
-Ancillary/orchestrator tests moved from the previous `ANCILLARY/tests` location.
+The individual Python files under `maintenance/` are implementation modules and
+temporary compatibility entrypoints. New callers must use `sim_maintenance.py`.
+
+The symlinks currently under `helpers/` for moved diagnostics, notifications,
+and maintenance tools are temporary compatibility shims for simulation
+processes started before this reorganization. New callers must not use them;
+they can be removed after all long-running scheduler processes have restarted.
+
+## Runtime State
+
+Runtime logs, locks, state snapshots, and diagnostics belong under:
+
+```text
+OPERATIONS/OPERATIONS_RUNTIME/
+```
+
+The scheduler writes work-state snapshots beneath
+`OPERATIONS/OPERATIONS_RUNTIME/STATE/run_step/`. Persistent diagnostics must
+not be written to `/tmp`.
+
+## Recovery
+
+1. Inspect the simulation cron and structured logs.
+2. Run diagnostics without modifying state.
+3. Run the relevant maintenance command without `--apply`.
+4. Review its output, then repeat with `--apply` only when required.
+5. Do not remove active locks or INTERSTEPS data while the processing lock is
+   held.

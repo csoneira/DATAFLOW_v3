@@ -117,7 +117,7 @@ def _assign_step_ids(mesh: pd.DataFrame, *, intersteps_dir: Path | None = None) 
     seed_step1_id = 0
     if intersteps_dir is not None:
         seed_step1_id = _max_existing_step1_id(intersteps_dir)
-    assign_ids(["cos_n", "flux_cm2_min"], "step_1_id", seed_min_id=seed_step1_id)
+    assign_ids(["cos_n", "flux_cm2_min", "n_tracks"], "step_1_id", seed_min_id=seed_step1_id)
     assign_ids(["z_p1", "z_p2", "z_p3", "z_p4"], "step_2_id")
     assign_ids(["eff_p1", "eff_p2", "eff_p3", "eff_p4"], "step_3_id")
     for idx in range(4, 9):
@@ -178,6 +178,58 @@ def _as_bool(value: object, *, default: bool = False) -> bool:
         if normalized in {"0", "false", "no", "n", "off"}:
             return False
     raise ValueError(f"Cannot parse boolean value from {value!r}.")
+
+
+def _load_event_limit_lookup(physics_cfg: dict) -> tuple[pd.DataFrame, int]:
+    fallback = int(physics_cfg.get("event_limits_fallback_n_tracks", 11_250_000))
+    configured_path = physics_cfg.get("event_limits_by_min_efficiency")
+    if not configured_path:
+        return pd.DataFrame(), fallback
+    lookup_path = Path(str(configured_path))
+    if not lookup_path.is_absolute():
+        lookup_path = Path(__file__).resolve().parent / lookup_path
+    if not lookup_path.is_file():
+        print(
+            f"Warning: event-limit lookup not found: {lookup_path}; "
+            f"using fallback n_tracks={fallback}."
+        )
+        return pd.DataFrame(), fallback
+    lookup = pd.read_csv(lookup_path)
+    required = {
+        "min_efficiency_lower",
+        "min_efficiency_upper",
+        "recommended_n_tracks",
+    }
+    missing = required - set(lookup.columns)
+    if missing:
+        raise ValueError(
+            f"Event-limit lookup {lookup_path} is missing columns: {sorted(missing)}"
+        )
+    for column in required:
+        lookup[column] = pd.to_numeric(lookup[column], errors="coerce")
+    lookup = lookup.dropna(subset=list(required)).sort_values("min_efficiency_lower")
+    return lookup, fallback
+
+
+def _n_tracks_for_efficiencies(
+    efficiencies: list[float],
+    lookup: pd.DataFrame,
+    fallback: int,
+) -> int:
+    minimum = float(min(efficiencies))
+    if lookup.empty:
+        return fallback
+    matching = lookup.loc[
+        (lookup["min_efficiency_lower"] <= minimum)
+        & (minimum < lookup["min_efficiency_upper"])
+    ]
+    if matching.empty:
+        distance = (
+            ((lookup["min_efficiency_lower"] + lookup["min_efficiency_upper"]) / 2.0)
+            - minimum
+        ).abs()
+        matching = lookup.loc[[distance.idxmin()]]
+    return int(matching.iloc[0]["recommended_n_tracks"])
 
 
 def _range_bounds(value: object, name: str) -> tuple[float, float]:
@@ -521,6 +573,7 @@ def _append_param_row(
     eff_range = physics_cfg.get("efficiencies")
     if eff_range is None:
         raise ValueError("efficiencies must be set in config_step_0_physics.yaml.")
+    event_limit_lookup, fallback_n_tracks = _load_event_limit_lookup(physics_cfg)
     repeat_samples = int(physics_cfg.get("repeat_samples", 0))
     if repeat_samples < 0:
         raise ValueError("repeat_samples must be >= 0 (0 = one sample per geometry, no repeats).")
@@ -550,6 +603,14 @@ def _append_param_row(
     else:
         mesh = pd.DataFrame()
         mesh["done"] = []
+    if "n_tracks" not in mesh.columns:
+        mesh["n_tracks"] = fallback_n_tracks
+    else:
+        mesh["n_tracks"] = (
+            pd.to_numeric(mesh["n_tracks"], errors="coerce")
+            .fillna(fallback_n_tracks)
+            .astype(int)
+        )
     if "param_set_id" not in mesh.columns:
         mesh["param_set_id"] = pd.NA
     if "param_date" not in mesh.columns:
@@ -715,6 +776,11 @@ def _append_param_row(
                     "eff_p2": float(effs[1]),
                     "eff_p3": float(effs[2]),
                     "eff_p4": float(effs[3]),
+                    "n_tracks": _n_tracks_for_efficiencies(
+                        [float(value) for value in effs],
+                        event_limit_lookup,
+                        fallback_n_tracks,
+                    ),
                 }
             )
     new_rows_df = pd.DataFrame(new_rows)
@@ -736,7 +802,7 @@ def _append_param_row(
     head_cols = ["done", "param_set_id", "param_date", "execution_time"]
     step_id_cols = [f"step_{idx}_id" for idx in range(1, 11)]
     trigger_cols = ["trigger_c1", "trigger_c2", "trigger_c3", "trigger_c4"]
-    front_cols = ["cos_n", "flux_cm2_min"] + z_cols + trigger_cols
+    front_cols = ["cos_n", "flux_cm2_min", "n_tracks"] + z_cols + trigger_cols
     ordered_cols = (
         [c for c in head_cols if c in mesh.columns]
         + [c for c in step_id_cols if c in mesh.columns]
@@ -821,7 +887,7 @@ def main() -> None:
     if not station_root.exists():
         raise FileNotFoundError(f"station_config_root not found: {station_root}")
 
-    output_dir = Path(cfg.get("output_dir", "../../INTERSTEPS/STEP_0_TO_1"))
+    output_dir = Path(cfg.get("output_dir", "../../SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1"))
     if not output_dir.is_absolute():
         output_dir = Path(__file__).resolve().parent / output_dir
     ensure_dir(output_dir)

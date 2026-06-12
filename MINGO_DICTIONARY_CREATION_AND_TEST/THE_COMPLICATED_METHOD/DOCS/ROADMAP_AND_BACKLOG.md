@@ -24,7 +24,7 @@ supersedes:
 ### STEP_1: dataset and dictionary construction
 1. Collect simulation-aligned metadata from STEP_1 task outputs.
 - Source metadata: `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/TASK_*/METADATA/task_*_metadata_specific.csv`
-- Join with: `MINGO_DIGITAL_TWIN/SIMULATED_DATA/step_final_simulation_params.csv`
+- Join with: `MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/step_final_simulation_params.csv`
 
 2. Apply controlled geometry selection.
 - filter on chosen `z_plane` configuration,

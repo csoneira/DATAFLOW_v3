@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 DATAFLOW_v3 Script Header v1
-Script: MINGO_DIGITAL_TWIN/ORCHESTRATOR/helpers/check_param_mesh_consistency.py
+Script: MINGO_DIGITAL_TWIN/ORCHESTRATOR/diagnostics/check_param_mesh_consistency.py
 Purpose: Check param_mesh rows for missing upstream INTERSTEPS SIM_RUNs.
 Owner: DATAFLOW_v3 contributors
 Sign-off: csoneira <csoneira@ucm.es>
 Last Updated: 2026-03-02
 Runtime: python3
-Usage: python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/helpers/check_param_mesh_consistency.py [options]
+Usage: python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/diagnostics/check_param_mesh_consistency.py [options]
 Inputs: CLI args, config files, environment variables, and/or upstream files.
 Outputs: Files, logs, plots, or stdout/stderr side effects.
 Notes: Keep behavior configuration-driven and reproducible.
@@ -49,8 +49,8 @@ def main(mesh: Path, intersteps: Path, step: int) -> int:
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--mesh", required=False, default="INTERSTEPS/STEP_0_TO_1/param_mesh.csv", help="param_mesh.csv file or directory")
-    p.add_argument("--intersteps", required=False, default="INTERSTEPS", help="INTERSTEPS root directory")
+    p.add_argument("--mesh", required=False, default="SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv", help="param_mesh.csv file or directory")
+    p.add_argument("--intersteps", required=False, default="SIMULATION_OUTPUTS/INTERSTEPS", help="INTERSTEPS root directory")
     p.add_argument("--step", required=False, type=int, default=3, help="target step to check (default: 3)")
     args = p.parse_args()
     mesh_path = Path(args.mesh)

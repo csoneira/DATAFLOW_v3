@@ -20,8 +20,8 @@ DATAFLOW_v3 combines two upstream sources that converge into analysis workflows:
 
 | Product | Typical location |
 | --- | --- |
-| Simulation intersteps | `MINGO_DIGITAL_TWIN/INTERSTEPS/STEP_N_TO_N+1/` |
-| Simulated `.dat` files | `MINGO_DIGITAL_TWIN/SIMULATED_DATA/FILES/` |
+| Simulation intersteps | `MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS/STEP_N_TO_N+1/` |
+| Simulated `.dat` files | `MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/FILES/` |
 | Runtime cron logs | `OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/` |
 | Runtime locks | `OPERATIONS/OPERATIONS_RUNTIME/LOCKS/` |
 | Operational station trees | `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0X/` |

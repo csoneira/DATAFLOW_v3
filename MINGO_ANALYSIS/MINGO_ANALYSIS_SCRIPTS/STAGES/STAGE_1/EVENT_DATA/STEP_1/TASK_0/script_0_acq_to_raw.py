@@ -130,7 +130,7 @@ def build_task0_gate_test_metadata(
         "gate_test_source_tt_task0_acq": 1234,
         "gate_test_charge_column_count": len(TASK0_GATE_TEST_CHARGE_COLUMNS),
         "gate_test_quantile_count": len(TASK0_GATE_TEST_QUANTILES),
-        "gate_test_comparison": "finite_and_greater_than_or_equal_to_quantile",
+        "gate_test_comparison": "zero_ignored_else_finite_and_greater_than_or_equal_to_nonzero_quantile",
     }
     missing_columns = [
         column for column in TASK0_GATE_TEST_CHARGE_COLUMNS if column not in frame.columns
@@ -161,8 +161,14 @@ def build_task0_gate_test_metadata(
         if source_view.empty:
             count = 0
         else:
-            thresholds = source_view.quantile(quantile_fraction)
-            gate_mask = source_view.notna().all(axis=1) & source_view.ge(thresholds, axis="columns").all(axis=1)
+            nonzero_source_view = source_view.mask(source_view.eq(0))
+            thresholds = nonzero_source_view.quantile(quantile_fraction)
+            charge_passes = source_view.eq(0) | (
+                source_view.notna() & source_view.ge(thresholds, axis="columns")
+            )
+            # A column containing no nonzero charge has no meaningful threshold,
+            # so every zero entry in that column remains ignored.
+            gate_mask = charge_passes.all(axis=1)
             count = int(gate_mask.sum())
         metadata[f"gate_test_{gate_label}_quantile"] = quantile_fraction
         metadata[f"gate_test_{gate_label}_count"] = count

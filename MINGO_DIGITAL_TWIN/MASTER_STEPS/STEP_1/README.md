@@ -9,8 +9,8 @@ Inputs:
 - Parameter mesh (optional when `cos_n` or `flux_cm2_min` is `random`).
 
 Outputs:
-- `INTERSTEPS/STEP_1_TO_2/SIM_RUN_<N>/muon_sample_<N>.(pkl|csv)`
-- `INTERSTEPS/STEP_1_TO_2/SIM_RUN_<N>/PLOTS/muon_sample_<N>_plots.pdf`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_1_TO_2/SIM_RUN_<N>/muon_sample_<N>.(pkl|csv)`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_1_TO_2/SIM_RUN_<N>/PLOTS/muon_sample_<N>_plots.pdf`
 
 Algorithm highlights:
 - `X_gen ~ U(-xlim_mm, +xlim_mm)`, `Y_gen ~ U(-ylim_mm, +ylim_mm)`.

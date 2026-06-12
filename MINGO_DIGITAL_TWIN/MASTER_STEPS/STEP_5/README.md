@@ -6,11 +6,11 @@ Purpose:
 Inputs:
 - Physics config: `config_step_5_physics.yaml`
 - Runtime config: `config_step_5_runtime.yaml`
-- Data: `INTERSTEPS/STEP_4_TO_5/SIM_RUN_<N>/step_4.(pkl|csv|chunks.json)`
+- Data: `SIMULATION_OUTPUTS/INTERSTEPS/STEP_4_TO_5/SIM_RUN_<N>/step_4.(pkl|csv|chunks.json)`
 
 Outputs:
-- `INTERSTEPS/STEP_5_TO_6/SIM_RUN_<N>/step_5.(pkl|csv|chunks.json)`
-- `INTERSTEPS/STEP_5_TO_6/SIM_RUN_<N>/PLOTS/step_5_plots.pdf`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_5_TO_6/SIM_RUN_<N>/step_5.(pkl|csv|chunks.json)`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_5_TO_6/SIM_RUN_<N>/PLOTS/step_5_plots.pdf`
 
 Algorithm highlights:
 - `T_diff = X_mea * (3 / (2 * c_mm_per_ns))`.

@@ -2,7 +2,7 @@
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
 # Script: MINGO_DIGITAL_TWIN/ORCHESTRATOR/core/run_step.sh
-# Purpose: Run step.
+# Purpose: Schedule or execute STEP_1 through STEP_10 and explicit STEP_FINAL requests.
 # Owner: DATAFLOW_v3 contributors
 # Sign-off: csoneira <csoneira@ucm.es>
 # Last Updated: 2026-03-02
@@ -33,7 +33,7 @@ Options:
   -h, --help           Show this help and exit
 
 Notes:
-  -c/--continuous implies "all", "--loop", and "--no-plots" and uses a lock in /tmp.
+  -c/--continuous implies "all", "--loop", and "--no-plots" and uses a runtime lock.
   --force-continuous is only valid with -c/--continuous.
   Set RUN_STEP_OBLITERATE_UNINTERESTING_STEP1_LINES=1 to auto-close active
   step_1 lines that have no pending rows compatible with fixed STEP_2 z_positions.
@@ -184,7 +184,7 @@ else
   STEP="${ARGS[0]}"
 fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-if [[ -d "${SCRIPT_DIR}/MASTER_STEPS" && -d "${SCRIPT_DIR}/INTERSTEPS" ]]; then
+if [[ -d "${SCRIPT_DIR}/MASTER_STEPS" && -d "${SCRIPT_DIR}/SIMULATION_OUTPUTS/INTERSTEPS" ]]; then
   DT="${SCRIPT_DIR}"
 else
   DT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -200,6 +200,8 @@ RUN_STEP_STRUCTURED_LOG_PATH="${ROOT_RUNTIME_DIR}/CRON_LOGS/SIMULATION/STRUCTURE
 # lock used to serialize standalone final-step executions (cron or manual).
 FINAL_LOCK="$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/LOCKS/cron/sim_final.lock"
 RUN_STEP_STATE_DIR="${RUN_STEP_STATE_DIR:-${ROOT_RUNTIME_DIR}/STATE/run_step}"
+RUN_STEP_LOG_DIR="${RUN_STEP_LOG_DIR:-${ROOT_RUNTIME_DIR}/CRON_LOGS/SIMULATION/RUN_STEP}"
+RUN_STEP_LOCK_DIR="${RUN_STEP_LOCK_DIR:-${ROOT_RUNTIME_DIR}/LOCKS/simulation/run_step_continuous.lock}"
 WORK_CACHE_PATH="${RUN_STEP_STATE_DIR}/work_cache.csv"
 WORK_STATE_PATH="${RUN_STEP_STATE_DIR}/work_state.csv"
 WORK_STUCK_LINES_PATH="${RUN_STEP_STATE_DIR}/work_stuck_lines.csv"
@@ -212,7 +214,7 @@ OBLITERATE_UNINTERESTING_STEP1_LINES="${RUN_STEP_OBLITERATE_UNINTERESTING_STEP1_
 # upstream STEP_2 SIM_RUNs from the param_mesh. Default: enabled (1).
 RUN_STEP_AUTO_BOOTSTRAP_UPSTREAM="${RUN_STEP_AUTO_BOOTSTRAP_UPSTREAM:-1}"
 # By default, do not enforce/emit param_mesh upstream consistency warnings.
-# Set to 1 to enable the checker output in /tmp/param_mesh_consistency.log.
+# Set to 1 to enable the checker output in the run-step runtime state directory.
 RUN_STEP_CHECK_PARAM_MESH_CONSISTENCY="${RUN_STEP_CHECK_PARAM_MESH_CONSISTENCY:-0}"
 # Auto-clean stale/broken conflicting SIM_RUN directories before scheduling work.
 RUN_STEP_AUTOCLEAN_CONFLICTS="${RUN_STEP_AUTOCLEAN_CONFLICTS:-1}"
@@ -267,7 +269,7 @@ fi
 if ! [[ "$RUN_STEP_STUCK_ALERT_MIN_OBSERVATION_INTERVAL_S" =~ ^[0-9]+$ ]]; then
   RUN_STEP_STUCK_ALERT_MIN_OBSERVATION_INTERVAL_S="45"
 fi
-mkdir -p "$RUN_STEP_STATE_DIR"
+mkdir -p "$RUN_STEP_STATE_DIR" "$RUN_STEP_LOG_DIR" "$(dirname "$RUN_STEP_LOCK_DIR")"
 if [[ -n "$CONTINUOUS" && -z "$DEBUG" ]]; then
   QUIET_CONTINUOUS="1"
 fi
@@ -278,7 +280,7 @@ if [[ -n "$NO_PLOTS" && -n "$PLOT_ONLY" ]]; then
 fi
 
 if [[ -n "$CONTINUOUS" ]]; then
-  LOCK_DIR="/tmp/mingo_digital_twin_run_step_continuous.lock"
+  LOCK_DIR="$RUN_STEP_LOCK_DIR"
   PID_FILE="$LOCK_DIR/pid"
   if ! mkdir "$LOCK_DIR" 2>/dev/null; then
     if [[ -n "$FORCE_CONTINUOUS" ]]; then
@@ -375,14 +377,14 @@ run_step() {
     return $?
   fi
 
-  tmp_log="$(mktemp "/tmp/mingo_digital_twin_step_${step}.XXXXXX.log")"
+  tmp_log="$(mktemp "${RUN_STEP_LOG_DIR}/step_${step}.XXXXXX.log")"
   if "${cmd[@]}" >"$tmp_log" 2>&1; then
     rm -f "$tmp_log"
     return 0
   else
     rc=$?
   fi
-  failure_log="/tmp/mingo_digital_twin_last_step_${step}.log"
+  failure_log="${RUN_STEP_LOG_DIR}/last_step_${step}.log"
   cp "$tmp_log" "$failure_log" 2>/dev/null || true
   last_error="$(awk 'NF {line=$0} END {print line}' "$tmp_log" 2>/dev/null || true)"
   if [[ -z "$last_error" ]]; then
@@ -395,16 +397,16 @@ run_step() {
 
 step_output_dir_for_step() {
   case "$1" in
-    1) printf '%s/INTERSTEPS/STEP_1_TO_2' "$DT" ;;
-    2) printf '%s/INTERSTEPS/STEP_2_TO_3' "$DT" ;;
-    3) printf '%s/INTERSTEPS/STEP_3_TO_4' "$DT" ;;
-    4) printf '%s/INTERSTEPS/STEP_4_TO_5' "$DT" ;;
-    5) printf '%s/INTERSTEPS/STEP_5_TO_6' "$DT" ;;
-    6) printf '%s/INTERSTEPS/STEP_6_TO_7' "$DT" ;;
-    7) printf '%s/INTERSTEPS/STEP_7_TO_8' "$DT" ;;
-    8) printf '%s/INTERSTEPS/STEP_8_TO_9' "$DT" ;;
-    9) printf '%s/INTERSTEPS/STEP_9_TO_10' "$DT" ;;
-    10) printf '%s/INTERSTEPS/STEP_10_TO_FINAL' "$DT" ;;
+    1) printf '%s/SIMULATION_OUTPUTS/INTERSTEPS/STEP_1_TO_2' "$DT" ;;
+    2) printf '%s/SIMULATION_OUTPUTS/INTERSTEPS/STEP_2_TO_3' "$DT" ;;
+    3) printf '%s/SIMULATION_OUTPUTS/INTERSTEPS/STEP_3_TO_4' "$DT" ;;
+    4) printf '%s/SIMULATION_OUTPUTS/INTERSTEPS/STEP_4_TO_5' "$DT" ;;
+    5) printf '%s/SIMULATION_OUTPUTS/INTERSTEPS/STEP_5_TO_6' "$DT" ;;
+    6) printf '%s/SIMULATION_OUTPUTS/INTERSTEPS/STEP_6_TO_7' "$DT" ;;
+    7) printf '%s/SIMULATION_OUTPUTS/INTERSTEPS/STEP_7_TO_8' "$DT" ;;
+    8) printf '%s/SIMULATION_OUTPUTS/INTERSTEPS/STEP_8_TO_9' "$DT" ;;
+    9) printf '%s/SIMULATION_OUTPUTS/INTERSTEPS/STEP_9_TO_10' "$DT" ;;
+    10) printf '%s/SIMULATION_OUTPUTS/INTERSTEPS/STEP_10_TO_FINAL' "$DT" ;;
     *) return 1 ;;
   esac
 }
@@ -424,7 +426,7 @@ step_has_fallback_work() {
   local upstream_dir
 
   if [[ "$step" -eq 1 ]]; then
-    local mesh_path="$DT/INTERSTEPS/STEP_0_TO_1/param_mesh.csv"
+    local mesh_path="$DT/SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv"
     if [[ ! -f "$mesh_path" ]]; then
       return 1
     fi
@@ -530,15 +532,15 @@ obliterate_uninteresting_step1_lines_if_needed() {
   if [[ "$OBLITERATE_UNINTERESTING_STEP1_LINES" == "0" ]]; then
     return 3
   fi
-  helper="$DT/ORCHESTRATOR/helpers/obliterate_open_lines_for_fixed_z.py"
+  helper="$DT/ORCHESTRATOR/maintenance/sim_maintenance.py"
   if [[ ! -f "$helper" ]]; then
     log_warn "step=1 line-obliterate helper missing: $helper"
     return 2
   fi
   if [[ "$OBLITERATE_UNINTERESTING_STEP1_LINES" == "apply" ]]; then
-    cmd=(python3 "$helper" --apply)
+    cmd=(python3 "$helper" close-unproductive-lines --apply)
   else
-    cmd=(python3 "$helper")
+    cmd=(python3 "$helper" close-unproductive-lines)
   fi
   if output="$("${cmd[@]}" 2>&1)"; then
     rc=0
@@ -564,8 +566,8 @@ obliterate_uninteresting_step1_lines_if_needed() {
 }
 
 refresh_step_work_cache() {
-  local mesh_path="$DT/INTERSTEPS/STEP_0_TO_1/param_mesh.csv"
-  local intersteps_dir="$DT/INTERSTEPS"
+  local mesh_path="$DT/SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv"
+  local intersteps_dir="$DT/SIMULATION_OUTPUTS/INTERSTEPS"
   local helper="$DT/ORCHESTRATOR/helpers/refresh_step_work_cache.py"
   if [[ ! -f "$helper" ]]; then
     log_warn "work cache refresh skipped (missing helper: $helper)"
@@ -591,12 +593,12 @@ refresh_work_cache_or_disable() {
     # Optional checker (disabled by default): detects missing upstream SIM_RUNs
     # for pending param_mesh rows. It is diagnostic-only and does not modify data.
     if [[ "$RUN_STEP_CHECK_PARAM_MESH_CONSISTENCY" == "1" ]]; then
-      if python3 "$DT/ORCHESTRATOR/helpers/check_param_mesh_consistency.py" --mesh "$DT/INTERSTEPS/STEP_0_TO_1/param_mesh.csv" --intersteps "$DT/INTERSTEPS" --step 3 >/tmp/param_mesh_consistency.log 2>&1; then
+      if python3 "$DT/ORCHESTRATOR/diagnostics/check_param_mesh_consistency.py" --mesh "$DT/SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv" --intersteps "$DT/SIMULATION_OUTPUTS/INTERSTEPS" --step 3 >"${RUN_STEP_STATE_DIR}/param_mesh_consistency.log" 2>&1; then
         if [[ -n "$DEBUG" ]]; then
           log_info "param_mesh consistency: OK"
         fi
       else
-        log_warn "param_mesh consistency check found missing upstream SIM_RUNs; see /tmp/param_mesh_consistency.log"
+        log_warn "param_mesh consistency check found missing upstream SIM_RUNs; see ${RUN_STEP_STATE_DIR}/param_mesh_consistency.log"
       fi
     elif [[ -n "$DEBUG" ]]; then
       log_info "param_mesh consistency check skipped (RUN_STEP_CHECK_PARAM_MESH_CONSISTENCY=0)"
@@ -621,7 +623,7 @@ notify_stuck_line_alert_if_needed() {
     return 0
   fi
 
-  helper="$DT/ORCHESTRATOR/helpers/notify_stuck_lines.py"
+  helper="$DT/ORCHESTRATOR/notifications/notify_stuck_lines.py"
   if [[ ! -f "$helper" ]]; then
     log_warn "stuck alert skipped (missing helper: $helper)"
     return 0
@@ -659,7 +661,7 @@ notify_stuck_line_alert_if_needed() {
 }
 
 autoclean_conflicting_runs() {
-  local sanitize_script
+  local maintenance_cli
   local -a cmd
   local output
   local rc
@@ -672,13 +674,13 @@ autoclean_conflicting_runs() {
     return 0
   fi
 
-  sanitize_script="$DT/ORCHESTRATOR/maintenance/sanitize_sim_runs.py"
-  if [[ ! -f "$sanitize_script" ]]; then
-    log_warn "autoclean skipped (missing script: $sanitize_script)"
+  maintenance_cli="$DT/ORCHESTRATOR/maintenance/sim_maintenance.py"
+  if [[ ! -f "$maintenance_cli" ]]; then
+    log_warn "autoclean skipped (missing maintenance CLI: $maintenance_cli)"
     return 0
   fi
 
-  cmd=(python3 "$sanitize_script" --apply --min-age-seconds "$RUN_STEP_AUTOCLEAN_MIN_AGE_S")
+  cmd=(python3 "$maintenance_cli" sanitize-runs --apply --min-age-seconds "$RUN_STEP_AUTOCLEAN_MIN_AGE_S")
   if [[ "$RUN_STEP_AUTOCLEAN_DELETE_NO_MESH_MATCH" == "1" ]]; then
     cmd+=(--delete-no-mesh-match)
   fi

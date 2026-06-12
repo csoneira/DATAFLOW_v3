@@ -166,7 +166,7 @@ exact YAML that produced them.
 
 #### Parameter mesh schema & lifecycle
 
-The parameter mesh (`INTERSTEPS/STEP_0_TO_1/param_mesh.csv`) is a central
+The parameter mesh (`SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv`) is a central
 database that coordinates the fan‑out of STEPs 1–3.  Its core columns are:
 
 ```
@@ -195,11 +195,11 @@ The lifecycle is:
 Several helper scripts check mesh consistency and produced-output counts:
 
 ```bash
-PYTHONPATH=. python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/helpers/check_param_mesh_consistency.py \
-    --mesh INTERSTEPS/STEP_0_TO_1/param_mesh.csv \
+PYTHONPATH=. python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/diagnostics/check_param_mesh_consistency.py \
+    --mesh SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv \
     --intersteps INTERSTEPS --step 3
 
-python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/helpers/size_and_expected_report.py
+python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/diagnostics/size_and_expected_report.py
 ```
 
 These are useful to run before and after large mesh changes to ensure no
@@ -227,7 +227,7 @@ Backpressure is overseen by Python scripts and cron jobs located in
 `python3 plot_backpressure_monitor.py --help` to see the available plots
 (showing pending files per step, processing lag, etc.).  The backpressure
 thresholds themselves are configured in
-`CONFIG_FILES/sim_main_pipeline_frequency.conf` (set any threshold to `0` to
+`CONFIG_FILES/ORCHESTRATOR/sim_main_pipeline_frequency.conf` (set any threshold to `0` to
 disable that check).
 
 The main orchestration cycle (`ORCHESTRATOR/core/run_main_simulation_cycle.sh`)

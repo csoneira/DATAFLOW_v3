@@ -6,7 +6,7 @@ This validation suite checks the simulation pipeline in three layers:
 - Numerical/statistical sanity: distributions, closure checks, and tolerance-based checks.
 - Physics/electronics plausibility: geometry consistency, efficiency closure, trigger logic, and digitization behavior.
 
-All validators are **read-only** against `MINGO_DIGITAL_TWIN/INTERSTEPS` and `MINGO_DIGITAL_TWIN/SIMULATED_DATA`.
+All validators are **read-only** against `MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS` and `MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA`.
 
 ## Entrypoint and Usage
 Main CLI:

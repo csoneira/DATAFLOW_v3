@@ -8,7 +8,7 @@ z_plane_1,z_plane_2,z_plane_3,z_plane_4, trigger_combinations --> the match must
 
 efficiencies, --> filter on range
 
-in the /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATED_DATA/step_final_simulation_params.csv.
+in the /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/step_final_simulation_params.csv.
 
 Then you are going to go to the /home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/TASK_4/METADATA/task_4_metadata_robust_efficiency.csv and take eff[1-4]_robust_xyphi columns, in MINGO00 and take those columns.
 

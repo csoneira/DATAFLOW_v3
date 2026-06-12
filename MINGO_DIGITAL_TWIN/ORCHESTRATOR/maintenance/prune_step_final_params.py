@@ -22,11 +22,21 @@ import sys
 from collections import OrderedDict
 
 ROOT = pathlib.Path.home() / "DATAFLOW_v3"
-STEP_FINAL_CSV = ROOT / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA" / "step_final_simulation_params.csv"
-REJECTED_CSV = (
-    ROOT / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA" / "rejected_step_final_simulation_params.csv"
+STEP_FINAL_CSV = (
+    ROOT
+    / "MINGO_DIGITAL_TWIN"
+    / "SIMULATION_OUTPUTS"
+    / "SIMULATED_DATA"
+    / "step_final_simulation_params.csv"
 )
-SIM_DATA_DIR = ROOT / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA"
+REJECTED_CSV = (
+    ROOT
+    / "MINGO_DIGITAL_TWIN"
+    / "SIMULATION_OUTPUTS"
+    / "SIMULATED_DATA"
+    / "rejected_step_final_simulation_params.csv"
+)
+SIM_DATA_DIR = ROOT / "MINGO_DIGITAL_TWIN" / "SIMULATION_OUTPUTS" / "SIMULATED_DATA"
 SIM_DATA_FILES_DIR = SIM_DATA_DIR / "FILES"
 STAGE0_SIM_DIR = ROOT / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / "MINGO00" / "STAGE_0" / "SIMULATION"
 STAGE0_LIVE_CSV = STAGE0_SIM_DIR / "imported_basenames.csv"

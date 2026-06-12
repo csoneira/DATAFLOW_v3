@@ -21,14 +21,14 @@ Restart simulation pipeline from a clean state while archiving previous outputs.
 
 What gets archived/moved out:
   - MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00
-  - MINGO_DIGITAL_TWIN/SIMULATED_DATA
-  - MINGO_DIGITAL_TWIN/INTERSTEPS
+  - MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA
+  - MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS
   - MINGO_DIGITAL_TWIN/PLOTTERS/EXECUTION runtime history/plot artifacts
 
 What gets recreated empty:
   - MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00
-  - MINGO_DIGITAL_TWIN/SIMULATED_DATA/FILES
-  - MINGO_DIGITAL_TWIN/INTERSTEPS/STEP_0_TO_1
+  - MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/FILES
+  - MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1
 
 Usage:
   restart_simulation_pipeline_totally.sh [--yes] [--archive-root DIR] [--root DIR]
@@ -73,8 +73,8 @@ done
 
 DT_DIR="${ROOT_DIR}/MINGO_DIGITAL_TWIN"
 MINGO00_DIR="${ROOT_DIR}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00"
-SIMULATED_DATA_DIR="${DT_DIR}/SIMULATED_DATA"
-INTERSTEPS_DIR="${DT_DIR}/INTERSTEPS"
+SIMULATED_DATA_DIR="${DT_DIR}/SIMULATION_OUTPUTS/SIMULATED_DATA"
+INTERSTEPS_DIR="${DT_DIR}/SIMULATION_OUTPUTS/INTERSTEPS"
 
 PLOTTER_FILES_TO_RESET=(
   "PLOTTERS/EXECUTION/BACKPRESSURE/backpressure_monitor_history.csv"
@@ -171,12 +171,12 @@ mkdir -p "${INTERSTEPS_DIR}/STEP_0_TO_1"
   echo "status=completed"
   echo "moved_items_total=${moved_items}"
   echo "moved_station_dir=MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00"
-  echo "moved_simulated_data_dir=MINGO_DIGITAL_TWIN/SIMULATED_DATA"
-  echo "moved_intersteps_dir=MINGO_DIGITAL_TWIN/INTERSTEPS"
+  echo "moved_simulated_data_dir=MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA"
+  echo "moved_intersteps_dir=MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS"
   echo "moved_plotter_runtime_files=${reset_plotter_items}"
   echo "recreated_station_dir=MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00"
-  echo "recreated_simulated_data_dir=MINGO_DIGITAL_TWIN/SIMULATED_DATA/FILES"
-  echo "recreated_intersteps_dir=MINGO_DIGITAL_TWIN/INTERSTEPS/STEP_0_TO_1"
+  echo "recreated_simulated_data_dir=MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/FILES"
+  echo "recreated_intersteps_dir=MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1"
   for rel_path in "${PLOTTER_FILES_TO_RESET[@]}"; do
     echo "reset_plotter_file=${rel_path}"
   done

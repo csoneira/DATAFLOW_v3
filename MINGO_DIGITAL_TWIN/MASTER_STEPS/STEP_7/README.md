@@ -6,11 +6,11 @@ Purpose:
 Inputs:
 - Physics config: `config_step_7_physics.yaml`
 - Runtime config: `config_step_7_runtime.yaml`
-- Data: `INTERSTEPS/STEP_6_TO_7/SIM_RUN_<N>/step_6.(pkl|csv|chunks.json)`
+- Data: `SIMULATION_OUTPUTS/INTERSTEPS/STEP_6_TO_7/SIM_RUN_<N>/step_6.(pkl|csv|chunks.json)`
 
 Outputs:
-- `INTERSTEPS/STEP_7_TO_8/SIM_RUN_<N>/step_7.(pkl|csv|chunks.json)`
-- `INTERSTEPS/STEP_7_TO_8/SIM_RUN_<N>/PLOTS/step_7_plots.pdf`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_7_TO_8/SIM_RUN_<N>/step_7.(pkl|csv|chunks.json)`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_7_TO_8/SIM_RUN_<N>/PLOTS/step_7_plots.pdf`
 
 Algorithm highlights:
 - `T_front` and `T_back` receive per-channel offsets from `tfront_offsets` and `tback_offsets`.

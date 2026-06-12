@@ -389,7 +389,6 @@ def main() -> None:
     output_format = str(cfg.get("output_format", "pkl")).lower()
     chunk_rows = cfg.get("chunk_rows")
     plot_sample_rows = cfg.get("plot_sample_rows")
-    output_name = f"{cfg.get('output_basename', 'muon_sample')}_{int(cfg['n_tracks'])}.{output_format}"
     output_base = cfg.get("output_basename", "muon_sample")
     rng = np.random.default_rng(cfg.get("seed"))
     param_row = None
@@ -398,7 +397,7 @@ def main() -> None:
     param_row_id = None
     param_mesh_path = None
     if is_random_value(cfg.get("flux_cm2_min")) or is_random_value(cfg.get("cos_n")):
-        mesh_dir = Path(cfg.get("param_mesh_dir", "../../INTERSTEPS/STEP_0_TO_1"))
+        mesh_dir = Path(cfg.get("param_mesh_dir", "../../SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1"))
         if not mesh_dir.is_absolute():
             mesh_dir = Path(__file__).resolve().parent / mesh_dir
         mesh, mesh_path = resolve_param_mesh(mesh_dir, cfg.get("param_mesh_sim_run", "latest"), cfg.get("seed"))
@@ -452,6 +451,14 @@ def main() -> None:
         cos_candidates = normalize_cos_values(cos_cfg)
         cos_idx = int(rng.integers(0, len(cos_candidates)))
         cos_n = float(cos_candidates[cos_idx])
+
+    n_tracks = int(cfg["n_tracks"])
+    if param_row is not None and "n_tracks" in param_row.index and pd.notna(param_row["n_tracks"]):
+        n_tracks = int(param_row["n_tracks"])
+    if n_tracks <= 0:
+        raise ValueError(f"n_tracks must be positive, got {n_tracks}.")
+    cfg["n_tracks"] = n_tracks
+    output_name = f"{cfg.get('output_basename', 'muon_sample')}_{n_tracks}.{output_format}"
 
     physics_cfg_run = dict(physics_cfg)
     physics_cfg_run["flux_cm2_min"] = flux_cm2_min

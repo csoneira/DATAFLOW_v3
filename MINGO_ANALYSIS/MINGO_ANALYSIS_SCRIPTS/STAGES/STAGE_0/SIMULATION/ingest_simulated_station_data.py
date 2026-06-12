@@ -24,7 +24,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-DEFAULT_SIM_SOURCE_DIR = "~/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATED_DATA/FILES"
+DEFAULT_SIM_SOURCE_DIR = "~/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/FILES"
 REGISTRY_FIELDS = ["basename", "execution_timestamp"]
 LIVE_REGISTRY_FILENAME = "imported_basenames.csv"
 HISTORY_REGISTRY_FILENAME = "imported_basenames_history.csv"
@@ -313,7 +313,13 @@ def main() -> None:
 
         live_registry_path = stage0_sim_dir / LIVE_REGISTRY_FILENAME
         history_registry_path = stage0_sim_dir / HISTORY_REGISTRY_FILENAME
-        sim_params_path = repo_root / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA" / "step_final_simulation_params.csv"
+        sim_params_path = (
+            repo_root
+            / "MINGO_DIGITAL_TWIN"
+            / "SIMULATION_OUTPUTS"
+            / "SIMULATED_DATA"
+            / "step_final_simulation_params.csv"
+        )
 
         normalized_live_rows = normalize_registry_schema(live_registry_path)
         normalized_history_rows = normalize_registry_schema(history_registry_path)

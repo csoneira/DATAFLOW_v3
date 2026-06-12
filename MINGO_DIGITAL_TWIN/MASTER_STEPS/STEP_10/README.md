@@ -6,11 +6,11 @@ Purpose:
 Inputs:
 - Physics config: `config_step_10_physics.yaml`
 - Runtime config: `config_step_10_runtime.yaml`
-- Data: `INTERSTEPS/STEP_9_TO_10/SIM_RUN_<N>/step_9.(pkl|csv|chunks.json)`
+- Data: `SIMULATION_OUTPUTS/INTERSTEPS/STEP_9_TO_10/SIM_RUN_<N>/step_9.(pkl|csv|chunks.json)`
 
 Outputs:
-- `INTERSTEPS/STEP_10_TO_FINAL/SIM_RUN_<N>/step_10.(pkl|csv|chunks.json)`
-- `INTERSTEPS/STEP_10_TO_FINAL/SIM_RUN_<N>/PLOTS/step_10_plots.pdf`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_10_TO_FINAL/SIM_RUN_<N>/step_10.(pkl|csv|chunks.json)`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_10_TO_FINAL/SIM_RUN_<N>/PLOTS/step_10_plots.pdf`
 
 Algorithm highlights:
 - `tdc_sigma_ns`: Gaussian smear on active channels.

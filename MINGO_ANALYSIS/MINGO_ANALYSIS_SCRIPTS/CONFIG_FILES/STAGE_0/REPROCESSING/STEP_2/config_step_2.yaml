@@ -1,4 +1,5 @@
-unpack_anyway_station_1: true
-unpack_anyway_station_2: true
-unpack_anyway_station_3: true
-unpack_anyway_station_4: true
+# Stations this step may process.
+stations: [0, 1, 2, 3, 4]
+
+# Stations whose files may be unpacked and processed again when already completed.
+reprocess_completed_stations: []

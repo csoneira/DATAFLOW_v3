@@ -32,7 +32,7 @@ jobs:
       - name: Run timing closure and event microscope
         run: |
           set -e
-          BASE_DIR="MINGO_DIGITAL_TWIN/INTERSTEPS/STEP_10_TO_FINAL"
+          BASE_DIR="MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS/STEP_10_TO_FINAL"
           if [ ! -d "$BASE_DIR" ]; then
             echo "No simulation outputs in $BASE_DIR; skipping checks."
             exit 0

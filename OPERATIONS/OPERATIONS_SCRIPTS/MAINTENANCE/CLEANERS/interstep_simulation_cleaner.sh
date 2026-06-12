@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE="/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/INTERSTEPS"
+BASE="/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS"
 JOBS="${JOBS:-$(nproc)}"
 
 echo "Target base directory:"

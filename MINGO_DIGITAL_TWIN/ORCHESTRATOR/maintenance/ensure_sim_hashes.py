@@ -2,7 +2,7 @@
 """
 DATAFLOW_v3 Script Header v1
 Script: MINGO_DIGITAL_TWIN/ORCHESTRATOR/maintenance/ensure_sim_hashes.py
-Purpose: !/usr/bin/env python3.
+Purpose: Ensure simulation metadata and outputs contain consistent parameter hashes.
 Owner: DATAFLOW_v3 contributors
 Sign-off: csoneira <csoneira@ucm.es>
 Last Updated: 2026-03-02
@@ -375,6 +375,7 @@ def main() -> int:
     default_params = (
         repo_root
         / "MINGO_DIGITAL_TWIN"
+        / "SIMULATION_OUTPUTS"
         / "SIMULATED_DATA"
         / "step_final_simulation_params.csv"
     )
@@ -387,7 +388,10 @@ def main() -> int:
     valid_hashes = load_param_hash_set(params_path)
 
     roots = [
-        repo_root / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA",
+        repo_root
+        / "MINGO_DIGITAL_TWIN"
+        / "SIMULATION_OUTPUTS"
+        / "SIMULATED_DATA",
         repo_root / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / "MINGO00",
     ]
     roots.extend(args.root)

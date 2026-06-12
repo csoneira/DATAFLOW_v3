@@ -22,7 +22,7 @@ from matplotlib.lines import Line2D
 THIS_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = THIS_DIR / "trigger_rate_similarity_config.json"
 BASE = Path("/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS")
-DEFAULT_SIMULATED_DATA_ROOT = Path("/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATED_DATA")
+DEFAULT_SIMULATED_DATA_ROOT = Path("/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA")
 
 EFF_COLS = [
     "eff1_robust_xyphi",

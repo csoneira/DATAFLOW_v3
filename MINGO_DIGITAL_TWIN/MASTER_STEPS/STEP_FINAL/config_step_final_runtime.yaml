@@ -1,15 +1,17 @@
-input_dir: ../../INTERSTEPS/STEP_10_TO_FINAL
+input_dir: ../../SIMULATION_OUTPUTS/INTERSTEPS/STEP_10_TO_FINAL
 input_glob: "**/step_10_chunks.chunks.json"
 input_sim_run: all
 input_collect: matching
-param_mesh_dir: ../../INTERSTEPS/STEP_0_TO_1
+param_mesh_dir: ../../SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1
 param_mesh_sim_run: none
 # Never let stale STEP_10_TO_FINAL inputs rewrite or consume current mesh rows.
 param_mesh_mismatch_strategy: skip
-output_dir: ../../SIMULATED_DATA
+output_dir: ../../SIMULATION_OUTPUTS/SIMULATED_DATA
+write_sidecars: true
+sidecar_output_dir: /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/SIMULATED_DATA/FILES_SIDECARS
 registry_enabled: false
 chunk_rows: 50000
-target_rows: 100000
+target_rows: 50000
 files_per_station_conf: 1
 payload_sampling: sequential_random_start
 allow_reuse_when_short: false

@@ -20,9 +20,9 @@ supersedes:
 - [Known risk points](#known-risk-points)
 
 ## Pipeline flow
-1. STEP_0 (`STEP_0/setup_to_blank`) appends new rows into `INTERSTEPS/STEP_0_TO_1/param_mesh.csv`.
-2. STEP_1 to STEP_10 process `SIM_RUN_*` chains under `INTERSTEPS/STEP_N_TO_N+1`.
-3. STEP_FINAL formats station-style `.dat` files under `SIMULATED_DATA/FILES/` and updates `step_final_simulation_params.csv`.
+1. STEP_0 (`STEP_0/setup_to_blank`) appends new rows into `SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv`.
+2. STEP_1 to STEP_10 process `SIM_RUN_*` chains under `SIMULATION_OUTPUTS/INTERSTEPS/STEP_N_TO_N+1`.
+3. STEP_FINAL formats station-style `.dat` files under `SIMULATION_OUTPUTS/SIMULATED_DATA/FILES/` and updates `step_final_simulation_params.csv`.
 4. MASTER ingestion pulls `.dat` into station processing queues.
 5. Housekeeping prunes finished mesh rows, sanitizes broken/stale runs, and keeps registries aligned.
 
@@ -40,15 +40,15 @@ Cron-facing scheduling details are maintained centrally in:
 
 ## Backpressure and frequency gates
 Configuration file:
-- `MINGO_DIGITAL_TWIN/CONFIG_FILES/sim_main_pipeline_frequency.conf`
+- `MINGO_DIGITAL_TWIN/CONFIG_FILES/ORCHESTRATOR/sim_main_pipeline_frequency.conf`
 
 Key parameters:
 - `SIM_MAIN_CYCLE_MIN_INTERVAL_SECONDS`: throttle interval for STEP_0 enqueue phase.
 - `SIM_MAX_UNPROCESSED_FILES`: backpressure cap for pending downstream files.
 
 Backpressure counts include pending files in:
-- `SIMULATED_DATA/*.dat`
-- `SIMULATED_DATA/FILES/*.dat`
+- `SIMULATION_OUTPUTS/SIMULATED_DATA/*.dat`
+- `SIMULATION_OUTPUTS/SIMULATED_DATA/FILES/*.dat`
 - station `INPUT_FILES/UNPROCESSED_DIRECTORY`
 - station `INPUT_FILES/PROCESSING_DIRECTORY`
 
@@ -79,8 +79,8 @@ Daily/periodic maintenance outside cycle:
 - `ORCHESTRATOR/core/run_step.sh`: step dispatcher for STEP_1..STEP_10/FINAL.
 - `MASTER_STEPS/STEP_0/step_0_setup_to_blank.py`: param mesh extension.
 - `MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py`: final `.dat` emission + parameter registry updates.
-- `ORCHESTRATOR/helpers/check_param_mesh_consistency.py`: validates upstream availability for pending mesh rows.
-- `ORCHESTRATOR/helpers/size_and_expected_report.py`: expected-run and storage diagnostics.
+- `ORCHESTRATOR/diagnostics/check_param_mesh_consistency.py`: validates upstream availability for pending mesh rows.
+- `ORCHESTRATOR/diagnostics/size_and_expected_report.py`: expected-run and storage diagnostics.
 
 ## Operational checks
 
@@ -93,9 +93,9 @@ tail -n 80 /home/mingo/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/SIMUL
 rg -n "backpressure_gate|cycle status" /home/mingo/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/SIMULATION/RUN/sim_main_pipeline_cycle.log
 
 # Param-mesh consistency for STEP_3 upstreams
-PYTHONPATH=. python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/helpers/check_param_mesh_consistency.py \
-  --mesh MINGO_DIGITAL_TWIN/INTERSTEPS/STEP_0_TO_1/param_mesh.csv \
-  --intersteps MINGO_DIGITAL_TWIN/INTERSTEPS --step 3
+PYTHONPATH=. python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/diagnostics/check_param_mesh_consistency.py \
+  --mesh MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv \
+  --intersteps MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS --step 3
 ```
 
 ## Known risk points

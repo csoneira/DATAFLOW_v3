@@ -31,7 +31,7 @@ DEFAULT_RATE_INPUT = Path(
 )
 
 DEFAULT_SIMULATION_INPUT = Path(
-    "/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATED_DATA/"
+    "/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/"
     "step_final_simulation_params.csv"
 )
 

@@ -6,11 +6,11 @@ Purpose:
 Inputs:
 - Physics config: `config_step_8_physics.yaml`
 - Runtime config: `config_step_8_runtime.yaml`
-- Data: `INTERSTEPS/STEP_7_TO_8/SIM_RUN_<N>/step_7.(pkl|csv|chunks.json)`
+- Data: `SIMULATION_OUTPUTS/INTERSTEPS/STEP_7_TO_8/SIM_RUN_<N>/step_7.(pkl|csv|chunks.json)`
 
 Outputs:
-- `INTERSTEPS/STEP_8_TO_9/SIM_RUN_<N>/step_8.(pkl|csv|chunks.json)`
-- `INTERSTEPS/STEP_8_TO_9/SIM_RUN_<N>/PLOTS/step_8_plots.pdf`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_8_TO_9/SIM_RUN_<N>/step_8.(pkl|csv|chunks.json)`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_8_TO_9/SIM_RUN_<N>/PLOTS/step_8_plots.pdf`
 
 Algorithm highlights:
 - `T_front` and `T_back` receive Gaussian jitter (`t_fee_sigma_ns`).

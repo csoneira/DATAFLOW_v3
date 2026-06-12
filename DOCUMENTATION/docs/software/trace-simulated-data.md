@@ -17,7 +17,7 @@ flowchart LR
 
 The key contract boundary is:
 
-- `MINGO_DIGITAL_TWIN/SIMULATED_DATA/FILES/*.dat` -> `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_0/SIMULATION/ingest_simulated_station_data.py`
+- `MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/FILES/*.dat` -> `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_0/SIMULATION/ingest_simulated_station_data.py`
 
 If this boundary drifts, downstream comparability between real and simulated analyses is degraded.
 

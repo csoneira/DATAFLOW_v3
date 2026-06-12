@@ -21,7 +21,7 @@ shopt -s dotglob nullglob
 COMPACT=false
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-DATAFLOW_ROOT_DEFAULT="$(cd -- "$SCRIPT_DIR/../../.." && pwd -P)"
+DATAFLOW_ROOT_DEFAULT="$(cd -- "$SCRIPT_DIR/../../../.." && pwd -P)"
 DATAFLOW_ROOT="${DATAFLOW_CLEAN_ROOT:-$DATAFLOW_ROOT_DEFAULT}"
 DATAFLOW_PARENT="$(dirname -- "$DATAFLOW_ROOT")"
 LOCK_FILE="${DATAFLOW_CLEAN_LOCK_FILE:-/tmp/dataflow_clean_dataflow.lock}"
@@ -82,7 +82,7 @@ DEFAULT_SELECTION=(temps plots completed cronlogs)
 FORCE_DEFAULT_SELECTION=(temps plots completed)
 declare -A VALID_TYPES=([temps]=1 [plots]=1 [completed]=1 [cronlogs]=1)
 
-STATIONS_BASE="${DATAFLOW_CLEAN_STATIONS_BASE:-$DATAFLOW_ROOT/STATIONS}"
+STATIONS_BASE="${DATAFLOW_CLEAN_STATIONS_BASE:-$DATAFLOW_ROOT/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS}"
 TEMP_ROOTS=(
   "$DATAFLOW_ROOT"
   "${DATAFLOW_CLEAN_SAFE_ROOT:-$DATAFLOW_PARENT/SAFE_DATAFLOW_v3}"
@@ -393,10 +393,10 @@ clean_cronlogs() {
   count=0
   failed=0
 
-  log_detail "--> Truncating cron log files under $dir (keeping paths/inodes)"
+  log_detail "--> Removing cron log files under $dir; active jobs recreate them only when output exists"
   chmod -R u+w "$dir" >/dev/null 2>&1 || true
   while IFS= read -r -d '' file; do
-    if : >"$file" 2>/dev/null; then
+    if rm -f -- "$file" 2>/dev/null; then
       count=$((count + 1))
     else
       failed=$((failed + 1))
@@ -411,9 +411,9 @@ clean_cronlogs() {
   TYPE_FREED["$type"]=$freed
   TYPE_COUNTS["$type"]=${count:-0}
 
-  log_info "Cron logs truncated: ${count:-0} file(s)"
+  log_info "Cron logs removed: ${count:-0} file(s)"
   if (( failed > 0 )); then
-    log_info "   Failed to truncate: ${failed} file(s)"
+    log_info "   Failed to remove: ${failed} file(s)"
   fi
   log_info "   Size before: $(format_bytes "$before")"
   log_info "   Size after:  $(format_bytes "$after")"
@@ -972,10 +972,9 @@ done
 log_info "  Total reclaimed: $(format_bytes "$overall_freed")"
 
 
-# Clean SIMULATION_DATA_JUNK MINGO_DIGITAL_TWIN/INTERSTEPS directories
-SIM_JUNK_BASE="$HOME/SIMULATION_DATA_JUNK"
+# Clean SIMULATION_DATA_JUNK MINGO_DIGITAL_TWIN runtime directories.
 if [[ -d "$SIM_JUNK_BASE" ]]; then
-  log_info "Cleaning SIMULATION_DATA_JUNK/*/MINGO_DIGITAL_TWIN/INTERSTEPS directories..."
+  log_info "Cleaning SIMULATION_DATA_JUNK/*/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS directories..."
   count=0
   freed=0
   while IFS= read -r -d '' dir; do
@@ -986,15 +985,10 @@ if [[ -d "$SIM_JUNK_BASE" ]]; then
       freed=$((freed + size_before))
       log_detail "  Removed $dir ($(format_bytes "$size_before"))"
     fi
-  done < <(find "$SIM_JUNK_BASE" -mindepth 3 -maxdepth 3 -type d -path '*/MINGO_DIGITAL_TWIN/INTERSTEPS' -print0 2>/dev/null)
+  done < <(find "$SIM_JUNK_BASE" -mindepth 4 -maxdepth 4 -type d -path '*/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS' -print0 2>/dev/null)
   log_info "  - SIMULATION_DATA_JUNK INTERSTEPS: $(format_bytes "$freed") freed across $count item(s)"
-else
-  log_info "SIMULATION_DATA_JUNK base directory not found: $SIM_JUNK_BASE"
-fi
 
-# Clean SIMULATION_DATA_JUNK MINGO_DIGITAL_TWIN/SIMULATED_DATA/FILES directories
-if [[ -d "$SIM_JUNK_BASE" ]]; then
-  log_info "Cleaning SIMULATION_DATA_JUNK/*/MINGO_DIGITAL_TWIN/SIMULATED_DATA/FILES directories..."
+  log_info "Cleaning SIMULATION_DATA_JUNK/*/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/FILES directories..."
   count=0
   freed=0
   while IFS= read -r -d '' dir; do
@@ -1005,8 +999,8 @@ if [[ -d "$SIM_JUNK_BASE" ]]; then
       freed=$((freed + size_before))
       log_detail "  Removed $dir ($(format_bytes "$size_before"))"
     fi
-  done < <(find "$SIM_JUNK_BASE" -mindepth 4 -maxdepth 4 -type d -path '*/MINGO_DIGITAL_TWIN/SIMULATED_DATA/FILES' -print0 2>/dev/null)
-  log_info "  - SIMULATION_DATA_JUNK SIMULATED_DATA/FILES: $(format_bytes "$freed") freed across $count item(s)"
+  done < <(find "$SIM_JUNK_BASE" -mindepth 5 -maxdepth 5 -type d -path '*/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/FILES' -print0 2>/dev/null)
+  log_info "  - SIMULATION_DATA_JUNK SIMULATION_OUTPUTS/SIMULATED_DATA/FILES: $(format_bytes "$freed") freed across $count item(s)"
 else
   log_info "SIMULATION_DATA_JUNK base directory not found: $SIM_JUNK_BASE"
 fi

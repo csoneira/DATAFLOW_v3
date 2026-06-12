@@ -4,14 +4,14 @@ Purpose:
 - Format STEP 10 data into station-style .dat files and register outputs.
 
 Inputs:
-- Data: `INTERSTEPS/STEP_10_TO_FINAL/SIM_RUN_<N>/step_10.(pkl|csv|chunks.json)`
+- Data: `SIMULATION_OUTPUTS/INTERSTEPS/STEP_10_TO_FINAL/SIM_RUN_<N>/step_10.(pkl|csv|chunks.json)`
 - Physics config: `config_step_final_physics.yaml` (currently empty)
 - Runtime config: `config_step_final_runtime.yaml`
 
 Outputs:
-- `SIMULATED_DATA/FILES/mi00YYDDDHHMMSS.dat`
-- `SIMULATED_DATA/step_final_output_registry.json`
-- `SIMULATED_DATA/step_final_simulation_params.csv`
+- `SIMULATION_OUTPUTS/SIMULATED_DATA/FILES/mi00YYDDDHHMMSS.dat`
+- `SIMULATION_OUTPUTS/SIMULATED_DATA/step_final_output_registry.json`
+- `SIMULATION_OUTPUTS/SIMULATED_DATA/step_final_simulation_params.csv`
 
 Algorithm highlights:
 - Samples `target_rows` events using reservoir or sequential sampling.

@@ -20,11 +20,11 @@ supersedes:
 - [Validation and maintenance tools](#validation-and-maintenance-tools)
 
 ## Primary outputs
-- Interstep artifacts under `INTERSTEPS/STEP_N_TO_N+1/SIM_RUN_*`.
-- Final station files under `SIMULATED_DATA/FILES/mi00YYDDDHHMMSS.dat`.
+- Interstep artifacts under `SIMULATION_OUTPUTS/INTERSTEPS/STEP_N_TO_N+1/SIM_RUN_*`.
+- Final station files under `SIMULATION_OUTPUTS/SIMULATED_DATA/FILES/mi00YYDDDHHMMSS.dat`.
 - Output registries:
-  - `SIMULATED_DATA/step_final_output_registry.json`
-  - `SIMULATED_DATA/step_final_simulation_params.csv`
+  - `SIMULATION_OUTPUTS/SIMULATED_DATA/step_final_output_registry.json`
+  - `SIMULATION_OUTPUTS/SIMULATED_DATA/step_final_simulation_params.csv`
 
 ## Station `.dat` format
 Per-event line structure:
@@ -83,8 +83,8 @@ Manifest includes:
 ## Validation and maintenance tools
 
 ### Operational checks
-- `MINGO_DIGITAL_TWIN/ORCHESTRATOR/helpers/check_param_mesh_consistency.py`
-- `MINGO_DIGITAL_TWIN/ORCHESTRATOR/helpers/size_and_expected_report.py`
+- `MINGO_DIGITAL_TWIN/ORCHESTRATOR/diagnostics/check_param_mesh_consistency.py`
+- `MINGO_DIGITAL_TWIN/ORCHESTRATOR/diagnostics/size_and_expected_report.py`
 - `MINGO_DIGITAL_TWIN/ORCHESTRATOR/maintenance/sanitize_sim_runs.py`
 - `MINGO_DIGITAL_TWIN/ORCHESTRATOR/maintenance/ensure_sim_hashes.py`
 

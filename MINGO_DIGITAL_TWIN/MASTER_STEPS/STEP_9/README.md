@@ -6,11 +6,11 @@ Purpose:
 Inputs:
 - Physics config: `config_step_9_physics.yaml`
 - Runtime config: `config_step_9_runtime.yaml`
-- Data: `INTERSTEPS/STEP_8_TO_9/SIM_RUN_<N>/step_8.(pkl|csv|chunks.json)`
+- Data: `SIMULATION_OUTPUTS/INTERSTEPS/STEP_8_TO_9/SIM_RUN_<N>/step_8.(pkl|csv|chunks.json)`
 
 Outputs:
-- `INTERSTEPS/STEP_9_TO_10/SIM_RUN_<N>/step_9.(pkl|csv|chunks.json)`
-- `INTERSTEPS/STEP_9_TO_10/SIM_RUN_<N>/PLOTS/step_9_plots.pdf`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_9_TO_10/SIM_RUN_<N>/step_9.(pkl|csv|chunks.json)`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_9_TO_10/SIM_RUN_<N>/PLOTS/step_9_plots.pdf`
 
 Algorithm highlights:
 - A plane is active if any strip has `Q_front > 0` or `Q_back > 0`.

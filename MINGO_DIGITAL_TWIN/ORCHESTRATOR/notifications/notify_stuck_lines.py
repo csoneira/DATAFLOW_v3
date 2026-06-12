@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 DATAFLOW_v3 Script Header v1
-Script: MINGO_DIGITAL_TWIN/ORCHESTRATOR/helpers/notify_stuck_lines.py
+Script: MINGO_DIGITAL_TWIN/ORCHESTRATOR/notifications/notify_stuck_lines.py
 Purpose: Rate-limited alerting for persistent STEP_1 stuck-line and broken-run conditions.
 Owner: DATAFLOW_v3 contributors
 Sign-off: csoneira <csoneira@ucm.es>
 Last Updated: 2026-03-02
 Runtime: python3
-Usage: python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/helpers/notify_stuck_lines.py [options]
+Usage: python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/notifications/notify_stuck_lines.py [options]
 Inputs: CLI args, config files, environment variables, and/or upstream files.
 Outputs: Files, logs, plots, or stdout/stderr side effects.
 Notes: Keep behavior configuration-driven and reproducible.

@@ -108,6 +108,10 @@ Out-of-bounds crossings are NaN; times are normalized so earliest valid plane pe
 ### STEP_FINAL: station formatting
 - writes ASCII lines with timestamp header + 64 channels.
 - channel order: plane `[4,3,2,1]`, field `[T_front,T_back,Q_front,Q_back]`, strip `[1..4]`.
+- writes an atomic parquet sidecar from the exact sampled STEP_10 rows that produced
+  each `.dat`; the sidecar is truncated whenever midnight truncation shortens the `.dat`.
+- sidecar `event_id` matches the physical `.dat` line number expected by Task 0, while
+  `sim_event_id` preserves the upstream simulation event identifier.
 
 ## Step output schema summary
 

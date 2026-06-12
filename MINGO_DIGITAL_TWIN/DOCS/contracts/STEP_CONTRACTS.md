@@ -36,7 +36,7 @@ supersedes:
 
 ## STEP_0
 Purpose:
-- Generate or extend `INTERSTEPS/STEP_0_TO_1/param_mesh.csv`.
+- Generate or extend `SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv`.
 
 Required inputs:
 - `config_step_0_physics.yaml`
@@ -60,7 +60,7 @@ Required inputs:
 - `param_mesh.csv` when `cos_n` or `flux_cm2_min` uses `random`
 
 Outputs:
-- `INTERSTEPS/STEP_1_TO_2/SIM_RUN_*/muon_sample_*.(pkl|csv)`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_1_TO_2/SIM_RUN_*/muon_sample_*.(pkl|csv)`
 - optional chunk manifest
 
 Core columns:
@@ -80,7 +80,7 @@ Required inputs:
 - bounds and speed constants
 
 Outputs:
-- `INTERSTEPS/STEP_2_TO_3/SIM_RUN_*/step_2.(pkl|csv|chunks)`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_2_TO_3/SIM_RUN_*/step_2.(pkl|csv|chunks)`
 
 Core columns:
 - `X_gen_i`, `Y_gen_i`, `Z_gen_i`, `T_sum_i_ns`, `tt_crossing`
@@ -98,7 +98,7 @@ Required inputs:
 - efficiencies (explicit or random from mesh)
 
 Outputs:
-- `INTERSTEPS/STEP_3_TO_4/SIM_RUN_*/step_3.(pkl|csv|chunks)`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_3_TO_4/SIM_RUN_*/step_3.(pkl|csv|chunks)`
 
 Core columns:
 - `avalanche_ion_i`, `avalanche_exists_i`, `avalanche_x_i`, `avalanche_y_i`, `avalanche_size_electrons_i`, `tt_avalanche`
@@ -115,7 +115,7 @@ Required inputs:
 - STEP_3 avalanche columns and times
 
 Outputs:
-- `INTERSTEPS/STEP_4_TO_5/SIM_RUN_*/step_4.(pkl|csv|chunks)`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_4_TO_5/SIM_RUN_*/step_4.(pkl|csv|chunks)`
 
 Core columns:
 - `Y_mea_i_sj`, `X_mea_i_sj`, `T_sum_meas_i_sj`, `tt_hit`
@@ -131,7 +131,7 @@ Required inputs:
 - STEP_4 strip-level measurements
 
 Outputs:
-- `INTERSTEPS/STEP_5_TO_6/SIM_RUN_*/step_5.(pkl|csv|chunks)`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_5_TO_6/SIM_RUN_*/step_5.(pkl|csv|chunks)`
 
 Core columns:
 - `T_diff_i_sj`, `q_diff_i_sj`
@@ -147,7 +147,7 @@ Required inputs:
 - STEP_5 outputs
 
 Outputs:
-- `INTERSTEPS/STEP_6_TO_7/SIM_RUN_*/step_6.(pkl|csv|chunks)`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_6_TO_7/SIM_RUN_*/step_6.(pkl|csv|chunks)`
 
 Core columns:
 - `T_front_i_sj`, `T_back_i_sj`, `Q_front_i_sj`, `Q_back_i_sj`
@@ -164,7 +164,7 @@ Required inputs:
 - 4x4 offset arrays
 
 Outputs:
-- `INTERSTEPS/STEP_7_TO_8/SIM_RUN_*/step_7.(pkl|csv|chunks)`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_7_TO_8/SIM_RUN_*/step_7.(pkl|csv|chunks)`
 
 Failure modes:
 - invalid offset dimensions
@@ -178,7 +178,7 @@ Required inputs:
 - jitter/time-walk/threshold config
 
 Outputs:
-- `INTERSTEPS/STEP_8_TO_9/SIM_RUN_*/step_8.(pkl|csv|chunks)`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_8_TO_9/SIM_RUN_*/step_8.(pkl|csv|chunks)`
 
 Failure modes:
 - missing strip columns
@@ -193,7 +193,7 @@ Required inputs:
 - `trigger_combinations`
 
 Outputs:
-- `INTERSTEPS/STEP_9_TO_10/SIM_RUN_*/step_9.(pkl|csv|chunks)`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_9_TO_10/SIM_RUN_*/step_9.(pkl|csv|chunks)`
 
 Core columns:
 - preserved channels + `tt_trigger`
@@ -209,7 +209,7 @@ Required inputs:
 - STEP_9 channels and activity state
 
 Outputs:
-- `INTERSTEPS/STEP_10_TO_FINAL/SIM_RUN_*/step_10.(pkl|csv|chunks)`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_10_TO_FINAL/SIM_RUN_*/step_10.(pkl|csv|chunks)`
 
 Core columns:
 - preserved channels + `daq_jitter_ns`
@@ -227,14 +227,25 @@ Required inputs:
 - mesh linkage for `param_set_id` assignment
 
 Outputs:
-- `SIMULATED_DATA/FILES/mi00YYDDDHHMMSS.dat`
-- `SIMULATED_DATA/step_final_output_registry.json`
-- `SIMULATED_DATA/step_final_simulation_params.csv`
+- `SIMULATION_OUTPUTS/SIMULATED_DATA/FILES/mi00YYDDDHHMMSS.dat`
+- one parquet ground-truth sidecar per `.dat`, named
+  `sidecar_mi00YYDDDHHMMSS.parquet`, under the configured
+  `sidecar_output_dir` (default: `FILES_SIDECARS` beside the `.dat` directory)
+- `SIMULATION_OUTPUTS/SIMULATED_DATA/step_final_output_registry.json`
+- `SIMULATION_OUTPUTS/SIMULATED_DATA/step_final_simulation_params.csv`
+
+Sidecar contract:
+- rows correspond one-to-one, in order, to the data rows actually written to the `.dat`
+- `event_id` is the physical `.dat` line number used later by Task 0
+- `sim_event_id` preserves the upstream STEP_10 `event_id`
+- ground truth includes `T_thick_s`, `X_gen`, `Y_gen`, `Theta_gen`, `Phi_gen`,
+  and `Z_gen` when available
 
 Failure modes:
 - missing upstream lineage fields
 - ambiguous mesh match
 - inconsistent `T_thick_s` presence across selected chunks
+- sidecar write failure after `.dat` generation (fails loudly to prevent silent inconsistency)
 
 ## Metadata contract common to all steps
 Where supported, outputs include metadata sidecars/manifests with:

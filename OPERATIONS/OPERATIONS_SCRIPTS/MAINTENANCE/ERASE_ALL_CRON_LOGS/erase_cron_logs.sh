@@ -84,7 +84,8 @@ if [[ ! -f "$CRONTAB_FILE" ]]; then
   exit 1
 fi
 
-LOCK_FILE="$LOG_DIR/.truncate_cron_logs.lock"
+LOCK_FILE="$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/LOCKS/cron/truncate_cron_logs.lock"
+mkdir -p "$(dirname "$LOCK_FILE")"
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   echo "Another cron log truncation run is already in progress."
@@ -102,6 +103,9 @@ for fd in 1 2; do
   fi
 done
 skip_files["$LOCK_FILE"]=1
+if [[ -n "${CRON_LOG_PATH:-}" ]]; then
+  skip_files["$(readlink -f "$CRON_LOG_PATH" 2>/dev/null || printf '%s' "$CRON_LOG_PATH")"]=1
+fi
 
 while IFS= read -r target; do
   [[ -z "$target" ]] && continue
@@ -131,6 +135,9 @@ done < <(
           } else {
             print p
           }
+        }
+        if (tok ~ /\/cron_run_logged\.sh$/ && i + 1 <= NF) {
+          print $(i + 1)
         }
       }
     }
@@ -163,6 +170,18 @@ for path in "${targets[@]}"; do
   fi
   if [[ ! -f "$path" ]]; then
     skipped=$((skipped + 1))
+    continue
+  fi
+
+  if [[ ! -s "$path" ]]; then
+    if $DRY_RUN; then
+      echo "[DRY-RUN] Would remove empty cron log $path"
+      would_truncate=$((would_truncate + 1))
+    else
+      rm -f "$path"
+      echo "Removed empty cron log $path"
+      truncated=$((truncated + 1))
+    fi
     continue
   fi
 

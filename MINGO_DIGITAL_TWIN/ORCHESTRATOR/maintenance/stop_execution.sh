@@ -2,7 +2,7 @@
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
 # Script: MINGO_DIGITAL_TWIN/ORCHESTRATOR/maintenance/stop_execution.sh
-# Purpose: Emergency process guard for cron:.
+# Purpose: Stop runaway or duplicate digital-twin processes and clear stale scheduler locks.
 # Owner: DATAFLOW_v3 contributors
 # Sign-off: csoneira <csoneira@ucm.es>
 # Last Updated: 2026-03-02
@@ -19,11 +19,12 @@
 set -u
 
 BASE_DIR="$HOME/DATAFLOW_v3"
-LOCK_FILE="/tmp/dataflow_stop_execution.lock"
+LOCK_FILE="${BASE_DIR}/OPERATIONS/OPERATIONS_RUNTIME/LOCKS/cron/stop_execution.lock"
 LOG_DIR="${BASE_DIR}/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/CLEANERS"
 INTERNAL_LOG="${LOG_DIR}/stop_execution_internal.log"
 
 mkdir -p "${LOG_DIR}"
+mkdir -p "$(dirname "${LOCK_FILE}")"
 
 {
   flock -n 9 || exit 0
@@ -41,7 +42,7 @@ mkdir -p "${LOG_DIR}"
   load_trigger="$(awk -v c="${cpu_count}" -v f="${load_factor}" 'BEGIN { printf "%.2f", c * f }')"
 
   cleanup_dead_run_step_lock() {
-    local lock_dir="/tmp/mingo_digital_twin_run_step_continuous.lock"
+    local lock_dir="${BASE_DIR}/OPERATIONS/OPERATIONS_RUNTIME/LOCKS/simulation/run_step_continuous.lock"
     local pid_file="${lock_dir}/pid"
     local lock_pid=""
     local lock_mtime=""
@@ -128,7 +129,7 @@ mkdir -p "${LOG_DIR}"
     "$HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ORCHESTRATOR/core/run_step.sh"
     "$HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_0/step_0_setup_to_blank.py"
     "$HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py"
-    "$HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ORCHESTRATOR/maintenance/sanitize_sim_runs.py"
+    "$HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ORCHESTRATOR/maintenance/sim_maintenance.py"
   )
 
   declare -A pid_to_cmd=()

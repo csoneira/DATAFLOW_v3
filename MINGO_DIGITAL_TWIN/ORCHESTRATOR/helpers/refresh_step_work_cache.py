@@ -145,6 +145,25 @@ def main() -> int:
     broken_records: list[tuple[int, str, str, str]] = []
     max_broken_records = 2000
 
+    # Scan each step output directory once per refresh. The scheduler previously
+    # walked the same large INTERSTEPS directories repeatedly while calculating
+    # produced outputs, upstream availability, open STEP_1 lines, and latest
+    # activity. Reusing this snapshot preserves the same decisions while
+    # avoiding redundant filesystem traversal.
+    scanned_outputs: dict[int, list[tuple[Path, tuple[str, ...], float]]] = {}
+    for step_num in range(1, 11):
+        step_outputs: list[tuple[Path, tuple[str, ...], float]] = []
+        for sim_dir in output_dir_for_step(args.intersteps_dir, step_num).glob("SIM_RUN_*"):
+            ids = parse_sim_run_ids(sim_dir)
+            if ids is None or len(ids) < step_num:
+                continue
+            try:
+                mtime = sim_dir.stat().st_mtime
+            except OSError:
+                mtime = 0.0
+            step_outputs.append((sim_dir, ids, mtime))
+        scanned_outputs[step_num] = step_outputs
+
     for step_num in range(1, 11):
         prefix_cols = step_cols[: step_num - 1]
         current_col = step_cols[step_num - 1]
@@ -170,10 +189,7 @@ def main() -> int:
         produced_by_prefix: Counter[tuple[str, ...]] = Counter()
         produced_dirs = 0
         produced_step1_ids: set[str] = set()
-        for sim_dir in output_dir_for_step(args.intersteps_dir, step_num).glob("SIM_RUN_*"):
-            ids = parse_sim_run_ids(sim_dir)
-            if ids is None or len(ids) < step_num:
-                continue
+        for sim_dir, ids, _mtime in scanned_outputs[step_num]:
             produced_dirs += 1
             if step_num == 1:
                 produced_step1_ids.add(ids[0])
@@ -192,11 +208,7 @@ def main() -> int:
         if step_num == 1:
             available_prefixes.add(tuple())
         else:
-            upstream_dir = output_dir_for_step(args.intersteps_dir, step_num - 1)
-            for sim_dir in upstream_dir.glob("SIM_RUN_*"):
-                ids = parse_sim_run_ids(sim_dir)
-                if ids is None or len(ids) < step_num - 1:
-                    continue
+            for _sim_dir, ids, _mtime in scanned_outputs[step_num - 1]:
                 available_prefixes.add(tuple(ids[: step_num - 1]))
 
         pending_prefixes = 0
@@ -221,23 +233,12 @@ def main() -> int:
         )
 
     active_step1_ids = set(mesh.loc[mesh["step_1_id"] != "", "step_1_id"].unique().tolist())
-    open_step1_ids: set[str] = set()
-    for sim_dir in output_dir_for_step(args.intersteps_dir, 1).glob("SIM_RUN_*"):
-        ids = parse_sim_run_ids(sim_dir)
-        if ids and len(ids) >= 1:
-            open_step1_ids.add(ids[0])
+    open_step1_ids = {ids[0] for _sim_dir, ids, _mtime in scanned_outputs[1]}
 
     latest_activity_by_step1: dict[str, float] = {}
     for step_num in range(1, 11):
-        for sim_dir in output_dir_for_step(args.intersteps_dir, step_num).glob("SIM_RUN_*"):
-            ids = parse_sim_run_ids(sim_dir)
-            if ids is None or not ids:
-                continue
+        for _sim_dir, ids, mtime in scanned_outputs[step_num]:
             step1_id = ids[0]
-            try:
-                mtime = sim_dir.stat().st_mtime
-            except OSError:
-                continue
             previous = latest_activity_by_step1.get(step1_id)
             if previous is None or mtime > previous:
                 latest_activity_by_step1[step1_id] = mtime

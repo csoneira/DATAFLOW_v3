@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 DATAFLOW_v3 Script Header v1
-Script: MINGO_DIGITAL_TWIN/ORCHESTRATOR/helpers/size_and_expected_report.py
-Purpose: !/usr/bin/env python3.
+Script: MINGO_DIGITAL_TWIN/ORCHESTRATOR/diagnostics/size_and_expected_report.py
+Purpose: Report expected simulation combinations and current INTERSTEPS storage usage.
 Owner: DATAFLOW_v3 contributors
 Sign-off: csoneira <csoneira@ucm.es>
 Last Updated: 2026-03-02
 Runtime: python3
-Usage: python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/helpers/size_and_expected_report.py [options]
+Usage: python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/diagnostics/size_and_expected_report.py [options]
 Inputs: CLI args, config files, environment variables, and/or upstream files.
 Outputs: Files, logs, plots, or stdout/stderr side effects.
 Notes: Keep behavior configuration-driven and reproducible.
@@ -277,12 +277,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Combined size/expected SIM_RUN report.")
     parser.add_argument(
         "--intersteps-dir",
-        default="~/DATAFLOW_v3/MINGO_DIGITAL_TWIN/INTERSTEPS",
+        default="~/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS",
         help="INTERSTEPS base directory.",
     )
     parser.add_argument(
         "--param-mesh",
-        default="~/DATAFLOW_v3/MINGO_DIGITAL_TWIN/INTERSTEPS/STEP_0_TO_1/param_mesh.csv",
+        default="~/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv",
         help="Path to param_mesh.csv.",
     )
     parser.add_argument(

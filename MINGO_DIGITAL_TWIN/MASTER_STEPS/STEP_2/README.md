@@ -6,11 +6,11 @@ Purpose:
 Inputs:
 - Physics config: `config_step_2_physics.yaml`
 - Runtime config: `config_step_2_runtime.yaml`
-- Data: `INTERSTEPS/STEP_1_TO_2/SIM_RUN_<N>/muon_sample_<N>.(pkl|csv)`
+- Data: `SIMULATION_OUTPUTS/INTERSTEPS/STEP_1_TO_2/SIM_RUN_<N>/muon_sample_<N>.(pkl|csv)`
 
 Outputs:
-- `INTERSTEPS/STEP_2_TO_3/SIM_RUN_<N>/step_2.(pkl|csv|chunks.json)`
-- `INTERSTEPS/STEP_2_TO_3/SIM_RUN_<N>/PLOTS/step_2_plots.pdf`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_2_TO_3/SIM_RUN_<N>/step_2.(pkl|csv|chunks.json)`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_2_TO_3/SIM_RUN_<N>/PLOTS/step_2_plots.pdf`
 
 Algorithm highlights:
 - For each plane position z_i:

@@ -126,7 +126,7 @@ Runtime:
 
 ## Parameter mesh schema
 Path:
-- `INTERSTEPS/STEP_0_TO_1/param_mesh.csv`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv`
 
 Core columns:
 - `done` (0/1)
@@ -141,7 +141,7 @@ Optional lineage columns:
 - future scan variables
 
 Associated metadata file:
-- `INTERSTEPS/STEP_0_TO_1/param_mesh_metadata.json`
+- `SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh_metadata.json`
 
 ## Parameter mesh lifecycle
 1. STEP_0 appends rows and assigns step IDs from unique parameter combinations.
@@ -155,12 +155,12 @@ Recommended checks:
 
 ```bash
 # Ensure pending mesh rows have upstream runs
-PYTHONPATH=. python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/helpers/check_param_mesh_consistency.py \
-  --mesh MINGO_DIGITAL_TWIN/INTERSTEPS/STEP_0_TO_1/param_mesh.csv \
-  --intersteps MINGO_DIGITAL_TWIN/INTERSTEPS --step 3
+PYTHONPATH=. python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/diagnostics/check_param_mesh_consistency.py \
+  --mesh MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv \
+  --intersteps MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS --step 3
 
 # Inspect expected-vs-produced summary
-python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/helpers/size_and_expected_report.py
+python3 MINGO_DIGITAL_TWIN/ORCHESTRATOR/diagnostics/size_and_expected_report.py
 ```
 
 Open review points:

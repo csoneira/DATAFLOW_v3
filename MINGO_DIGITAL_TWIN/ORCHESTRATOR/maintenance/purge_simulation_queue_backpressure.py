@@ -36,12 +36,22 @@ from STEP_SHARED.sim_utils import param_mesh_lock, write_csv_atomic, write_text_
 
 
 ROOT_RUNTIME_DIR = REPO_ROOT / "OPERATIONS/OPERATIONS_RUNTIME"
-DEFAULT_FREQUENCY_CONFIG = ROOT_DIR / "CONFIG_FILES" / "sim_main_pipeline_frequency.conf"
-DEFAULT_SIMULATED_DATA_DIR = ROOT_DIR / "SIMULATED_DATA"
+DEFAULT_FREQUENCY_CONFIG = (
+    ROOT_DIR / "CONFIG_FILES" / "ORCHESTRATOR" / "sim_main_pipeline_frequency.conf"
+)
+DEFAULT_SIMULATED_DATA_DIR = ROOT_DIR / "SIMULATION_OUTPUTS" / "SIMULATED_DATA"
 DEFAULT_SIMULATED_DATA_FILES_DIR = DEFAULT_SIMULATED_DATA_DIR / "FILES"
 DEFAULT_STATIONS_STEP1_DIR = REPO_ROOT / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / "MINGO00" / "STAGE_1" / "EVENT_DATA" / "STEP_1"
-DEFAULT_PARAM_MESH_PATH = ROOT_DIR / "INTERSTEPS" / "STEP_0_TO_1" / "param_mesh.csv"
-DEFAULT_PARAM_MESH_METADATA_PATH = ROOT_DIR / "INTERSTEPS" / "STEP_0_TO_1" / "param_mesh_metadata.json"
+DEFAULT_PARAM_MESH_PATH = (
+    ROOT_DIR / "SIMULATION_OUTPUTS" / "INTERSTEPS" / "STEP_0_TO_1" / "param_mesh.csv"
+)
+DEFAULT_PARAM_MESH_METADATA_PATH = (
+    ROOT_DIR
+    / "SIMULATION_OUTPUTS"
+    / "INTERSTEPS"
+    / "STEP_0_TO_1"
+    / "param_mesh_metadata.json"
+)
 IGNORED_QUEUE_PREFIXES = ("removed_channel_values_", "removed_rows_")
 
 
@@ -217,12 +227,12 @@ def main() -> None:
     parser.add_argument(
         "--simulated-data-dir",
         default=str(DEFAULT_SIMULATED_DATA_DIR),
-        help="Path to MINGO_DIGITAL_TWIN/SIMULATED_DATA",
+        help="Path to MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA",
     )
     parser.add_argument(
         "--simulated-data-files-dir",
         default=str(DEFAULT_SIMULATED_DATA_FILES_DIR),
-        help="Path to MINGO_DIGITAL_TWIN/SIMULATED_DATA/FILES",
+        help="Path to MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/FILES",
     )
     parser.add_argument(
         "--stations-step1-dir",
@@ -232,12 +242,12 @@ def main() -> None:
     parser.add_argument(
         "--param-mesh",
         default=str(DEFAULT_PARAM_MESH_PATH),
-        help="Path to INTERSTEPS/STEP_0_TO_1/param_mesh.csv",
+        help="Path to SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv",
     )
     parser.add_argument(
         "--param-mesh-metadata",
         default=str(DEFAULT_PARAM_MESH_METADATA_PATH),
-        help="Path to INTERSTEPS/STEP_0_TO_1/param_mesh_metadata.json",
+        help="Path to SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh_metadata.json",
     )
     parser.add_argument(
         "--fraction-of-limit",
