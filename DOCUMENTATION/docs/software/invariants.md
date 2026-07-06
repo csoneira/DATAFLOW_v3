@@ -4,8 +4,8 @@ This is the non-negotiable contract for the software stack.
 
 ## Architecture invariants
 
-1. `MASTER` is the mother analysis code for both real and simulated inputs.
-2. `STATIONS` is the station-scoped runtime/output materialization tree.
+1. `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS` is the mother analysis code for both real and simulated inputs.
+2. `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS` is the station-scoped runtime/output materialization tree.
 3. `MINGO_DIGITAL_TWIN` produces simulation artifacts; it does not replace `MASTER` analysis stages.
 4. Dictionary-based inference is the bridge layer and must remain traceable to simulation provenance.
 

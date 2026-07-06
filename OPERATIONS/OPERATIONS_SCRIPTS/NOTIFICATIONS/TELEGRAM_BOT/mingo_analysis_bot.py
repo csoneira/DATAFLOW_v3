@@ -378,7 +378,12 @@ def send_pdf(chat_id: int, pdf_path: Path, description: str) -> None:
         return
 
     creation = datetime.fromtimestamp(pdf_path.stat().st_mtime)
-    caption = f"{description}\nCreated: {creation:%Y-%m-%d %H:%M}"
+    age_seconds = max((datetime.now() - creation).total_seconds(), 0.0)
+    age_days = age_seconds / 86400.0
+    stale_note = ""
+    if age_days >= 1.0:
+        stale_note = f"\nWARNING: file is {age_days:.1f} days old; check cron plot logs."
+    caption = f"{description}\nCreated: {creation:%Y-%m-%d %H:%M}{stale_note}"
 
     try:
         with pdf_path.open("rb") as handle:
@@ -434,7 +439,8 @@ def normalize_task_selection(raw_value: str) -> int | None:
 def task_pdf_directory(station_label: str, task_id: int) -> Path:
     return (
         BASE_DIR
-        / "STATIONS"
+        / "MINGO_ANALYSIS"
+        / "MINGO_ANALYSIS_STATIONS"
         / station_label
         / "STAGE_1"
         / "EVENT_DATA"

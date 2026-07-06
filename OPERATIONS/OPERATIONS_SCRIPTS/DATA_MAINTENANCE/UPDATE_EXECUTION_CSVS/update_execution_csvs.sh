@@ -110,7 +110,7 @@ fi
 process_station() {
   local station_code="$1"
   local station="MINGO${station_code}"
-  local task_output="$REPO_ROOT/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/${station}/STAGE_1/EVENT_DATA/STEP_3/TASK_2/OUTPUT_FILES"
+  local task_output="$REPO_ROOT/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/${station}/STAGE_2/EVENT_DATA/STEP_2_DAILY_EVENT_DATA/TASK_2/OUTPUT_FILES"
   local processed_csv="$OUTPUT_ROOT/${station}_processed_basenames.csv"
   local hld_csv="$REPO_ROOT/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/${station}/STAGE_0/REPROCESSING/STEP_1/METADATA/hld_files_brought.csv"
   local dat_csv="$REPO_ROOT/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/${station}/STAGE_0/REPROCESSING/STEP_2/METADATA/dat_files_unpacked.csv"

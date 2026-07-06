@@ -38,8 +38,12 @@ unchanged_count=0
 scanned_count=0
 
 while IFS= read -r -d '' pdf_dir; do
-  station_name="$(basename "$(dirname "$(dirname "$(dirname "$(dirname "$(dirname "$(dirname "${pdf_dir}")")")")")")")"
-  task_name="$(basename "$(dirname "$(dirname "${pdf_dir}")")")"
+  rel_path="${pdf_dir#${SOURCE_ROOT}/}"
+  if [[ ! "${rel_path}" =~ ^(MINGO0[0-9])/STAGE_1/EVENT_DATA/STEP_1/(TASK_[0-9]+)/PLOTS/PDF_DIRECTORY$ ]]; then
+    continue
+  fi
+  station_name="${BASH_REMATCH[1]}"
+  task_name="${BASH_REMATCH[2]}"
 
   if [[ ! "${station_name}" =~ ^MINGO0[0-9]$ ]]; then
     continue

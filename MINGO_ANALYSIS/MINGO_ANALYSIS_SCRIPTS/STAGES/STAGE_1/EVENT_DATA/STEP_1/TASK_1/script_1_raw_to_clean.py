@@ -2697,7 +2697,14 @@ else:
     raw_working_directory = os.path.join(base_directory, raw_directory)
 
 if task_number == 5:
-    output_location = os.path.join(base_directory, "STEP_1_TO_2_OUTPUT")
+    output_location = os.path.join(
+        base_directory,
+        "..",
+        "..",
+        "STAGE_1_PRODUCTS",
+        "EVENT_DATA",
+        "PARQUET_LAKE",
+    )
 else:
     output_location = os.path.join(raw_to_list_working_directory, "OUTPUT_FILES")
 
@@ -4191,6 +4198,9 @@ print("-------------------------- Filter 1: by date -------------------------")
 print("----------------------------------------------------------------------")
 
 task1_datetime_in_range_mask = working_df["datetime"].between(left_limit_time, right_limit_time)
+if str(station) == "0" and "param_hash" in working_df.columns:
+    simulated_param_hash_mask = working_df["param_hash"].fillna("").astype(str).str.strip().ne("")
+    task1_datetime_in_range_mask = task1_datetime_in_range_mask | simulated_param_hash_mask
 working_df.loc[:, "filter_task1_datetime_in_range_pass"] = task1_datetime_in_range_mask.to_numpy(dtype=bool)
 if not pd.api.types.is_datetime64_any_dtype(working_df["datetime"]):
     raise ValueError("The index is not a DatetimeIndex. Check 'datetime' column formatting.")

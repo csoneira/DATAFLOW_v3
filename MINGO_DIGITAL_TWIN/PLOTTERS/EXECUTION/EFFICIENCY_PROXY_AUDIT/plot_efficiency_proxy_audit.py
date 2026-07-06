@@ -55,7 +55,7 @@ def _repo_root() -> Path:
 
 
 def _intersteps_root() -> Path:
-    return _repo_root() / "MINGO_DIGITAL_TWIN" / "INTERSTEPS"
+    return _repo_root() / "MINGO_DIGITAL_TWIN" / "SIMULATION_OUTPUTS" / "INTERSTEPS"
 
 
 def _normalize_tt_values(values: Iterable[object]) -> np.ndarray:

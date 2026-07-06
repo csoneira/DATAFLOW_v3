@@ -338,7 +338,7 @@ def main() -> int:
     step1_root = copernicus_root / "STEP_1"
     input_root = step1_root / "INPUT_FILES"
     netcdf_root = input_root / "NETCDF"
-    output_root = step1_root / "OUTPUT_FILES"
+    output_root = station_dir / "STAGE_1_PRODUCTS" / "COPERNICUS" / "OUTPUT_FILES"
 
     ensure_directories([input_root, netcdf_root, output_root])
 

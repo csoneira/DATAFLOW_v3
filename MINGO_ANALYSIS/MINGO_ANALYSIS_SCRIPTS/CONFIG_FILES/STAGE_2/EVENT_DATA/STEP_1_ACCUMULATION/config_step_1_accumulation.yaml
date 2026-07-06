@@ -37,7 +37,7 @@ blurring_sigma_xy: 0.05
 draw_angular_regions: true
 # Inclination convention: theta ~= 0 is the most vertical, so it is labelled
 # "high". Larger theta is more inclined, so the outer ring is labelled "low".
-theta_boundaries: [15, 25]
+theta_boundaries: [10, 40]
 region_layout: [1, 8, 4]
 region_ring_names: [high, mid, low]
 angular_region_max_deg: 90

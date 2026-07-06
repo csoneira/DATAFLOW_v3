@@ -17,8 +17,18 @@ from common import REPO_ROOT, derive_trigger_rate_features, get_trigger_type_sel
 CANONICAL_Z_COLUMNS = ["z_pos_1", "z_pos_2", "z_pos_3", "z_pos_4"]
 SIM_Z_COLUMNS = ["z_plane_1", "z_plane_2", "z_plane_3", "z_plane_4"]
 DEFAULT_SIM_EFF_COLUMNS = ["eff_p1", "eff_p2", "eff_p3", "eff_p4"]
-DEFAULT_SIM_PARAMS_CSV = REPO_ROOT / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA" / "step_final_simulation_params.csv"
-DEFAULT_MINGO00_METADATA_ROOT = REPO_ROOT / "STATIONS" / "MINGO00" / "STAGE_1" / "EVENT_DATA" / "STEP_1"
+DEFAULT_SIM_PARAMS_CSV = (
+    REPO_ROOT / "MINGO_DIGITAL_TWIN" / "SIMULATION_OUTPUTS" / "SIMULATED_DATA" / "step_final_simulation_params.csv"
+)
+DEFAULT_MINGO00_METADATA_ROOT = (
+    REPO_ROOT
+    / "MINGO_ANALYSIS"
+    / "MINGO_ANALYSIS_STATIONS"
+    / "MINGO00"
+    / "STAGE_1"
+    / "EVENT_DATA"
+    / "STEP_1"
+)
 ONLINE_RUN_DICTIONARY_ROOT = REPO_ROOT / "MASTER" / "CONFIG_FILES" / "STAGE_0" / "ONLINE_RUN_DICTIONARY"
 DEFAULT_STATION0_Z_VECTOR = (0.0, 100.0, 200.0, 400.0)
 

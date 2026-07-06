@@ -8,7 +8,8 @@ This is the concrete path for real station data through the software stack.
 flowchart LR
     A[Station DAQ and logs] --> B[MASTER STAGE_0 ingestion]
     B --> C[MASTER STAGE_1 cleaning/alignment]
-    C --> D[MASTER STAGE_2 corrections/integration]
+    C --> P[STAGE_1_PRODUCTS\ncomplete analysis bundle]
+    P --> D[MASTER STAGE_2 corrections/integration]
     D --> E[MASTER STAGE_3 enrichment]
     E --> F[STATIONS materialized outputs]
 ```
@@ -18,7 +19,8 @@ flowchart LR
 | Segment | Owner path |
 | --- | --- |
 | Ingestion and queueing | `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_0/` |
-| Event/lab-log transformations | `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/` |
+| Event/log/Copernicus transformations | `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/` |
+| Complete Stage 1 product bundle | `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0X/STAGE_1_PRODUCTS/` |
 | Corrections and merges | `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_2/` |
 | Final analytics/enrichment | `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_3/` |
 | Output/state materialization | `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0X/...` |
@@ -27,8 +29,9 @@ flowchart LR
 
 1. STAGE logs advance at expected cadence.
 2. Queue movement is visible between stage boundaries.
-3. No unexplained growth of error/reject directories.
-4. Output files and metadata appear in expected station locations.
+3. `STAGE_1_PRODUCTS/` contains the complete downstream analysis bundle: event parquet lake, task metadata, log products, and Copernicus products.
+4. No unexplained growth of error/reject directories.
+5. Output files and metadata appear in expected station locations.
 
 ## Common failure boundaries
 

@@ -13,8 +13,8 @@ DATAFLOW_v3 combines two upstream sources that converge into analysis workflows:
 
 ## Path summary
 
-- Real data: station DAQ/log sources -> `MASTER` STAGE_0 -> STAGE_1 -> STAGE_2 -> STAGE_3 -> outputs in `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/`
-- Simulated data: STEP_0 -> STEP_1..STEP_10 -> STEP_FINAL `.dat` -> `MASTER` STAGE_0 -> STAGE_1..STAGE_3 -> outputs in `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/`
+- Real data: station DAQ/log sources -> `MASTER` STAGE_0 -> STAGE_1 -> `STAGE_1_PRODUCTS` -> STAGE_2 -> STAGE_3 -> outputs in `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/`
+- Simulated data: STEP_0 -> STEP_1..STEP_10 -> STEP_FINAL `.dat` -> `MASTER` STAGE_0 -> STAGE_1 -> `STAGE_1_PRODUCTS` -> STAGE_2..STAGE_3 -> outputs in `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/`
 
 ## Data products and directories
 
@@ -25,7 +25,10 @@ DATAFLOW_v3 combines two upstream sources that converge into analysis workflows:
 | Runtime cron logs | `OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/` |
 | Runtime locks | `OPERATIONS/OPERATIONS_RUNTIME/LOCKS/` |
 | Operational station trees | `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0X/` |
+| Stage 1 complete analysis bundle | `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0X/STAGE_1_PRODUCTS/` |
 | Materialized analysis outputs | `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0X/STAGE_*/...` |
+
+`STAGE_1_PRODUCTS/` is an essential boundary in the real-data pipeline. It is the complete Stage 1 reference directory for downstream analysis: event parquets live in `EVENT_DATA/PARQUET_LAKE/`, task metadata in `EVENT_DATA/METADATA/TASK_*/`, cleaned log products in `LOG_DATA/OUTPUT_FILES/`, and Copernicus products in `COPERNICUS/OUTPUT_FILES/`. Stage 2 should be able to continue from this bundle without depending on transient Stage 1 working queues.
 
 ## Key formats
 

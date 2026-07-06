@@ -63,10 +63,10 @@ YAML_CONFIG_TARGETS: Sequence[Tuple[Path, Path, str, str]] = (
         "stage 1 copernicus config",
     ),
     (
-        CONFIG_ROOT / "STAGE_1" / "LAB_LOGS" / "config_lab_logs.yaml",
-        SNAPSHOT_ROOT / "STAGE_1_LAB_LOGS",
+        CONFIG_ROOT / "STAGE_1" / "LOG_DATA" / "config_lab_logs.yaml",
+        SNAPSHOT_ROOT / "STAGE_1_LOG_DATA",
         "config_lab_logs.json",
-        "stage 1 lab logs config",
+        "stage 1 log data config",
     ),
     (
         CONFIG_ROOT / "STAGE_1" / "EVENT_DATA" / "STEP_1" / "config_step_1.yaml",

@@ -3749,7 +3749,14 @@ else:
     raw_working_directory = os.path.join(base_directory, raw_directory)
 
 if task_number == 5:
-    output_location = os.path.join(base_directory, "STEP_1_TO_2_OUTPUT")
+    output_location = os.path.join(
+        base_directory,
+        "..",
+        "..",
+        "STAGE_1_PRODUCTS",
+        "EVENT_DATA",
+        "PARQUET_LAKE",
+    )
 else:
     output_location = os.path.join(raw_to_list_working_directory, "OUTPUT_FILES")
 

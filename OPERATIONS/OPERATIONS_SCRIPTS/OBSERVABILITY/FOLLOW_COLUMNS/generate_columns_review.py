@@ -112,14 +112,12 @@ SECTIONS = [
     Section(
         title="TASK_5 -> OUT",
         display_pattern=(
-            "~/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO04/STAGE_1/EVENT_DATA/"
-            "{STEP_2/INPUT_FILES,STEP_1_TO_2_OUTPUT}/**/postprocessed_*.parquet"
+            "~/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO04/STAGE_1_PRODUCTS/EVENT_DATA/"
+            "PARQUET_LAKE/postprocessed_*.parquet"
         ),
         glob_pattern=(
-            "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO04/STAGE_1/EVENT_DATA/STEP_2/"
-            "INPUT_FILES/**/postprocessed_*.parquet",
-            "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO04/STAGE_1/EVENT_DATA/"
-            "STEP_1_TO_2_OUTPUT/**/postprocessed_*.parquet",
+            "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO04/STAGE_1_PRODUCTS/EVENT_DATA/"
+            "PARQUET_LAKE/postprocessed_*.parquet",
         ),
     ),
 ]

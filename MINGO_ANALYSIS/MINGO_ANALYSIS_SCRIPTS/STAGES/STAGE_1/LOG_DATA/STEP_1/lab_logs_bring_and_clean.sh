@@ -1,13 +1,13 @@
 #!/bin/bash
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
-# Script: MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/LAB_LOGS/STEP_1/lab_logs_bring_and_clean.sh
+# Script: MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/LOG_DATA/STEP_1/lab_logs_bring_and_clean.sh
 # Purpose: Only this changes between mingos and computers.
 # Owner: DATAFLOW_v3 contributors
 # Sign-off: csoneira <csoneira@ucm.es>
 # Last Updated: 2026-03-02
 # Runtime: bash
-# Usage: bash MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/LAB_LOGS/STEP_1/lab_logs_bring_and_clean.sh [options]
+# Usage: bash MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/LOG_DATA/STEP_1/lab_logs_bring_and_clean.sh [options]
 # Inputs: CLI args, config files, environment variables, and/or upstream files.
 # Outputs: Files, logs, or process-level side effects.
 # Notes: Keep behavior configuration-driven and reproducible.
@@ -102,9 +102,9 @@ done
 # STATUS_TIMESTAMP=""
 # STATUS_CSV=""
 
-LAB_LOGS_CONFIG_SHARED="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/LAB_LOGS/config_lab_logs.yaml"
-LAB_LOGS_CONFIG_STEP1="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/LAB_LOGS/STEP_1/config_step_1.yaml"
-LAB_LOGS_COLUMN_COUNTS_CSV="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/LAB_LOGS/STEP_1/config_step_1.csv"
+LAB_LOGS_CONFIG_SHARED="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/LOG_DATA/config_lab_logs.yaml"
+LAB_LOGS_CONFIG_STEP1="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/LOG_DATA/STEP_1/config_step_1.yaml"
+LAB_LOGS_COLUMN_COUNTS_CSV="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/LOG_DATA/STEP_1/config_step_1.csv"
 
 is_lab_logs_station_enabled() {
   local station_id="$1"
@@ -306,7 +306,7 @@ mingo_direction="mingo0$station"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15)
 RSYNC_RSH_CMD="ssh -o BatchMode=yes -o ConnectTimeout=15"
 
-LAB_LOGS_ROOT="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0${station}/STAGE_1/LAB_LOGS"
+LAB_LOGS_ROOT="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0${station}/STAGE_1/LOG_DATA"
 STEP1_ROOT="${LAB_LOGS_ROOT}/STEP_1"
 STEP1_INPUT="${STEP1_ROOT}/INPUT_FILES"
 STEP1_INPUT_UNPROCESSED="${STEP1_INPUT}/UNPROCESSED"

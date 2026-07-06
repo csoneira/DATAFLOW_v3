@@ -620,11 +620,11 @@ def main() -> int:
         print(f"No output.output_columns configured in {CONFIG_PATH}")
         return 1
 
-    event_root = station_dir / str(event_config.get("input_subdir", "STAGE_1/EVENT_DATA/STEP_3/TASK_2/OUTPUT_FILES"))
-    lab_root = station_dir / str(lab_config.get("input_subdir", "STAGE_1/LAB_LOGS/STEP_2/OUTPUT_FILES"))
-    copernicus_root = station_dir / str(copernicus_config.get("input_subdir", "STAGE_1/COPERNICUS/STEP_1/OUTPUT_FILES"))
+    event_root = station_dir / str(event_config.get("input_subdir", "STAGE_2/EVENT_DATA/STEP_2_DAILY_EVENT_DATA/TASK_2/OUTPUT_FILES"))
+    lab_root = station_dir / str(lab_config.get("input_subdir", "STAGE_1_PRODUCTS/LOG_DATA/OUTPUT_FILES"))
+    copernicus_root = station_dir / str(copernicus_config.get("input_subdir", "STAGE_1_PRODUCTS/COPERNICUS/OUTPUT_FILES"))
 
-    stage2_root = station_dir / str(output_config.get("stage_subdir", "STAGE_2"))
+    stage2_root = station_dir / str(output_config.get("stage_subdir", "STAGE_2/JOINED_DATA"))
     output_root = stage2_root / str(output_config.get("output_subdir", "OUTPUT_FILES"))
     daily_prefix = str(output_config.get("daily_file_prefix", "stage_2")).strip() or "stage_2"
     big_output_path = stage2_root / str(output_config.get("big_output_filename", "joined_stage_2.csv"))

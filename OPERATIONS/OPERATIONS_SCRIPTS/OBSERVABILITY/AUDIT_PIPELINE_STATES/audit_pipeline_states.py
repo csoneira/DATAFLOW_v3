@@ -478,7 +478,7 @@ def station_inventory_entries(station: str) -> List[Dict[str, str]]:
     add_entry(
         "processed_list",
         processed,
-        "Basenames extracted from STEP_3/TASK_2 outputs (used as reject list).",
+        "Basenames extracted from STAGE_2 EVENT_DATA STEP_2_DAILY_EVENT_DATA/TASK_2 outputs (used as reject list).",
         "OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/UPDATE_EXECUTION_CSVS/update_execution_csvs.sh",
         count_csv_rows(processed),
     )
@@ -525,23 +525,23 @@ def station_inventory_entries(station: str) -> List[Dict[str, str]]:
                 count_csv_rows(path),
             )
 
-    step1_to_2 = base_event / "STEP_1_TO_2_OUTPUT"
+    step1_to_2 = station_dir / "STAGE_1_PRODUCTS" / "EVENT_DATA" / "PARQUET_LAKE"
     add_entry(
         "output_dir",
         step1_to_2,
-        "STEP_1 final corrected outputs (task 5).",
+        "Stage 1 event parquet lake (task 5 postprocessed products).",
         "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_post.py",
         count_dir_files(step1_to_2),
     )
 
-    step2_root = base_event / "STEP_2"
+    step2_root = station_dir / "STAGE_2" / "EVENT_DATA" / "STEP_1_ACCUMULATION"
     for label in ("UNPROCESSED", "PROCESSING", "COMPLETED", "ERROR_DIRECTORY", "REJECTED"):
         path = step2_root / "INPUT_FILES" / label
         add_entry(
             f"step2_queue_{label.lower()}",
             path,
-            f"STEP_2 {label} files.",
-            "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_2/corrected_to_accumulated.py",
+            f"STAGE_2 EVENT_DATA STEP_1_ACCUMULATION {label} files.",
+            "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_2/EVENT_DATA/STEP_1_ACCUMULATION/corrected_to_accumulated.py",
             count_dir_files(path),
         )
     for name in ("step_2_metadata_execution.csv", "step_2_metadata_specific.csv"):
@@ -549,43 +549,43 @@ def station_inventory_entries(station: str) -> List[Dict[str, str]]:
         add_entry(
             "metadata_execution" if "execution" in name else "metadata_specific",
             path,
-            "STEP_2 metadata CSV.",
-            "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_2/corrected_to_accumulated.py",
+            "STAGE_2 EVENT_DATA STEP_1_ACCUMULATION metadata CSV.",
+            "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_2/EVENT_DATA/STEP_1_ACCUMULATION/corrected_to_accumulated.py",
             count_csv_rows(path),
         )
 
-    step2_to_3 = base_event / "STEP_2_TO_3_OUTPUT"
+    step2_to_3 = station_dir / "STAGE_2" / "EVENT_DATA" / "ACCUMULATED_EVENTS"
     add_entry(
         "output_dir",
         step2_to_3,
-        "STEP_2 accumulated outputs.",
-        "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_2/corrected_to_accumulated.py",
+        "STAGE_2 EVENT_DATA STEP_1_ACCUMULATION accumulated outputs.",
+        "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_2/EVENT_DATA/STEP_1_ACCUMULATION/corrected_to_accumulated.py",
         count_dir_files(step2_to_3),
     )
 
-    step3_root = base_event / "STEP_3"
+    step3_root = station_dir / "STAGE_2" / "EVENT_DATA" / "STEP_2_DAILY_EVENT_DATA"
     task1_to_2 = step3_root / "TASK_1_TO_2"
     add_entry(
         "output_dir",
         task1_to_2,
-        "STEP_3/TASK_1_TO_2 daily accumulated outputs.",
-        "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_3/TASK_1/accumulated_distributor.py",
+        "STAGE_2 EVENT_DATA STEP_2_DAILY_EVENT_DATA/TASK_1_TO_2 daily accumulated outputs.",
+        "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_2/EVENT_DATA/STEP_2_DAILY_EVENT_DATA/TASK_1/accumulated_distributor.py",
         count_dir_files_recursive(task1_to_2),
     )
     task1_archive = step3_root / "TASK_1" / "INPUT_FILES"
     add_entry(
         "archive_dir",
         task1_archive,
-        "STEP_3/TASK_1 archive of accumulated files.",
-        "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_3/TASK_1/accumulated_distributor.py",
+        "STAGE_2 EVENT_DATA STEP_2_DAILY_EVENT_DATA/TASK_1 archive of accumulated files.",
+        "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_2/EVENT_DATA/STEP_2_DAILY_EVENT_DATA/TASK_1/accumulated_distributor.py",
         count_dir_files(task1_archive),
     )
     task2_output = step3_root / "TASK_2" / "OUTPUT_FILES"
     add_entry(
         "output_dir",
         task2_output,
-        "STEP_3/TASK_2 joined outputs (event_data_YYYY_MM_DD.csv).",
-        "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_3/TASK_2/distributed_joiner.py",
+        "STAGE_2 EVENT_DATA STEP_2_DAILY_EVENT_DATA/TASK_2 joined outputs (event_data_YYYY_MM_DD.csv).",
+        "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_2/EVENT_DATA/STEP_2_DAILY_EVENT_DATA/TASK_2/distributed_joiner.py",
         count_dir_files_recursive(task2_output),
     )
 
@@ -713,7 +713,7 @@ def collect_station_states(
         )
 
         if task == 5:
-            output_dir = base_event / "STEP_1_TO_2_OUTPUT"
+            output_dir = station_dir / "STAGE_1_PRODUCTS" / "EVENT_DATA" / "PARQUET_LAKE"
             mark_dir_events(
                 collect_dir_events(output_dir),
                 "step1_to_2_output",
@@ -741,7 +741,7 @@ def collect_station_states(
         mark_events(status_events, f"t{task}_status", str(status_path))
 
     # STEP 2 queues + outputs
-    step2_root = base_event / "STEP_2"
+    step2_root = station_dir / "STAGE_2" / "EVENT_DATA" / "STEP_1_ACCUMULATION"
     mark_dir_events(
         collect_dir_events(step2_root / "INPUT_FILES" / "UNPROCESSED"),
         "s2_unprocessed",
@@ -768,13 +768,13 @@ def collect_station_states(
         str(step2_root / "INPUT_FILES" / "REJECTED"),
     )
     mark_dir_events(
-        collect_dir_events(base_event / "STEP_2_TO_3_OUTPUT"),
+        collect_dir_events(station_dir / "STAGE_2" / "EVENT_DATA" / "ACCUMULATED_EVENTS"),
         "s2_output",
-        str(base_event / "STEP_2_TO_3_OUTPUT"),
+        str(station_dir / "STAGE_2" / "EVENT_DATA" / "ACCUMULATED_EVENTS"),
     )
 
     # STEP 3 directories
-    step3_root = base_event / "STEP_3"
+    step3_root = station_dir / "STAGE_2" / "EVENT_DATA" / "STEP_2_DAILY_EVENT_DATA"
     mark_dir_events(
         collect_dir_events(step3_root / "TASK_1_TO_2", recursive=True),
         "s3_task1_to_2",
@@ -812,9 +812,9 @@ def build_reason(flags: Dict[str, bool]) -> str:
     if flags.get("t1_error") or flags.get("t2_error") or flags.get("t3_error") or flags.get("t4_error") or flags.get("t5_error"):
         reasons.append("file in ERROR_DIRECTORY")
     if flags.get("s2_error"):
-        reasons.append("STEP_2 error directory")
+        reasons.append("STAGE_2 EVENT_DATA STEP_1_ACCUMULATION error directory")
     if flags.get("s2_rejected"):
-        reasons.append("STEP_2 rejected")
+        reasons.append("STAGE_2 EVENT_DATA STEP_1_ACCUMULATION rejected")
     if flags.get("raw_brought") and not any(flags.get(k) for k, _ in STAGE_RANK):
         reasons.append("only in raw_brought list")
     if flags.get("reproc_hld_brought") and not flags.get("reproc_dat_unpacked"):

@@ -1,6 +1,6 @@
 # DATAFLOW_v3 Documentation
 
-`MASTER` is the analysis mother code for real and simulated station-format data. `STATIONS` is where station outputs are materialized. `MINGO_DIGITAL_TWIN` provides traceable simulation used for validation and dictionary-based reconstruction.
+`MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS` is the analysis mother code for real and simulated station-format data. `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS` is where station outputs and runtime state are materialized. `MINGO_DIGITAL_TWIN` provides traceable simulation used for validation and dictionary-based reconstruction.
 
 ## Start here by task
 
@@ -17,7 +17,7 @@
 flowchart LR
     R[Real station data] --> M[MASTER STAGE_0..3]
     S[MINGO_DIGITAL_TWIN STEP_FINAL .dat] --> M
-    M --> O[STATIONS outputs]
+    M --> O[MINGO_ANALYSIS_STATIONS outputs]
     S --> D[Dictionary build and validation]
     O --> D
 ```

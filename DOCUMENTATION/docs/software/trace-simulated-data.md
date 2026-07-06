@@ -10,7 +10,7 @@ flowchart LR
     B --> C[STEP_FINAL station-style .dat]
     C --> D[MASTER STAGE_0 simulation ingest]
     D --> E[MASTER STAGE_1..3 analysis]
-    E --> F[STATIONS materialized outputs]
+    E --> F[MINGO_ANALYSIS_STATIONS materialized outputs]
 ```
 
 ## Interface boundary that matters most
@@ -33,7 +33,7 @@ These must remain consistent with generated `.dat` files.
 
 1. STEP_FINAL emits files and registries consistently.
 2. Ingestion into `MASTER` occurs without schema/provenance mismatch.
-3. Downstream station outputs are produced under expected `STATIONS` paths.
+3. Downstream station outputs are produced under expected `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS` paths.
 4. Hash/lineage checks pass in maintenance workflows.
 
 ## Operations references

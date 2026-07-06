@@ -335,7 +335,7 @@ def _task_metadata_dir(station_id: int, task_id: int) -> Path:
     """Return the task metadata directory."""
     station = f"MINGO{station_id:02d}"
     return (
-        REPO_ROOT / "STATIONS" / station / "STAGE_1" / "EVENT_DATA"
+        REPO_ROOT / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / station / "STAGE_1" / "EVENT_DATA"
         / "STEP_1" / f"TASK_{task_id}" / "METADATA"
     )
 
@@ -343,7 +343,7 @@ def _task_metadata_dir(station_id: int, task_id: int) -> Path:
 def _discover_all_task_ids(station_id: int) -> list[int]:
     """Discover all TASK_<id> folders available for the selected station."""
     station = f"MINGO{station_id:02d}"
-    base = REPO_ROOT / "STATIONS" / station / "STAGE_1" / "EVENT_DATA" / "STEP_1"
+    base = REPO_ROOT / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / station / "STAGE_1" / "EVENT_DATA" / "STEP_1"
     if not base.exists():
         return []
     out: list[int] = []
@@ -827,7 +827,11 @@ def main() -> int:
         )
         min_rows_for_dataset = 0
     default_sim_params_path = (
-        REPO_ROOT / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA" / "step_final_simulation_params.csv"
+        REPO_ROOT
+        / "MINGO_DIGITAL_TWIN"
+        / "SIMULATION_OUTPUTS"
+        / "SIMULATED_DATA"
+        / "step_final_simulation_params.csv"
     )
     sim_params_path = default_sim_params_path
     sim_params_cfg = config.get("simulation_params_csv", None)

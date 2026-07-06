@@ -92,6 +92,9 @@ SIM_JUNK_BASE="${DATAFLOW_CLEAN_SIM_JUNK_BASE:-$DATAFLOW_PARENT/SIMULATION_DATA_
 PLOTS_KEEP_FRESHEST="${DATAFLOW_CLEAN_PLOTS_KEEP_FRESHEST:-5}"
 KEEP_FINAL_TRIGGER_PCT="${DATAFLOW_CLEAN_KEEP_FINAL_TRIGGER_PCT:-90}"
 KEEP_FINAL_TARGET_PCT="${DATAFLOW_CLEAN_KEEP_FINAL_TARGET_PCT:-60}"
+STEP12_EMERGENCY_TRIGGER_PCT="${DATAFLOW_CLEAN_STEP12_EMERGENCY_TRIGGER_PCT:-90}"
+STEP12_EMERGENCY_TARGET_PCT="${DATAFLOW_CLEAN_STEP12_EMERGENCY_TARGET_PCT:-89}"
+STEP12_EMERGENCY_DIR="${DATAFLOW_CLEAN_STEP12_EMERGENCY_DIR:-$DATAFLOW_ROOT/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1_PRODUCTS/EVENT_DATA/PARQUET_LAKE}"
 
 declare -A TYPE_BEFORE=()
 declare -A TYPE_AFTER=()
@@ -101,6 +104,8 @@ QUEUE_SIDECAR_BEFORE=0
 QUEUE_SIDECAR_AFTER=0
 QUEUE_SIDECAR_FREED=0
 QUEUE_SIDECAR_COUNT=0
+STEP12_EMERGENCY_FREED=0
+STEP12_EMERGENCY_COUNT=0
 
 join_by() {
   local sep="$1"
@@ -239,6 +244,76 @@ prune_final_completed_if_needed() {
   fi
 }
 
+run_step12_emergency_cleanup() {
+  local current_usage
+  current_usage=$(disk_usage_percent)
+  if [[ -z "$current_usage" ]]; then
+    log_info ""
+    log_info "========== EMERGENCY EVENT_PARQUET_LAKE CLEANUP CHECK =========="
+    log_info "Could not determine /home disk usage. Skipping EVENT_PARQUET_LAKE emergency cleanup."
+    log_info "==============================================================="
+    return 0
+  fi
+
+  if (( current_usage < STEP12_EMERGENCY_TRIGGER_PCT )); then
+    log_info "EVENT_PARQUET_LAKE emergency cleanup check: disk usage ${current_usage}% is below ${STEP12_EMERGENCY_TRIGGER_PCT}%."
+    return 0
+  fi
+
+  log_info ""
+  log_info "========== EMERGENCY EVENT_PARQUET_LAKE CLEANUP =========="
+  log_info "Disk usage is ${current_usage}% which is >= ${STEP12_EMERGENCY_TRIGGER_PCT}%."
+  log_info "Deleting oldest files from:"
+  log_info "  $STEP12_EMERGENCY_DIR"
+  log_info "Target: reduce /home usage below ${STEP12_EMERGENCY_TARGET_PCT}% or stop when no files remain."
+  log_info "=========================================================="
+
+  if [[ ! -d "$STEP12_EMERGENCY_DIR" ]]; then
+    log_info "EVENT_PARQUET_LAKE emergency directory not found. Nothing to delete."
+    return 0
+  fi
+
+  local deleted_count=0
+  local deleted_bytes=0
+  local checked_since_df=0
+  local record rest file_size file_path
+
+  while IFS= read -r -d '' record; do
+    [[ -n "$record" ]] || continue
+    rest="${record#*$'\t'}"
+    file_size="${rest%%$'\t'*}"
+    file_path="${rest#*$'\t'}"
+    [[ -f "$file_path" ]] || continue
+
+    chmod u+w -- "$file_path" 2>/dev/null || true
+    if rm -f -- "$file_path" 2>/dev/null; then
+      deleted_count=$((deleted_count + 1))
+      deleted_bytes=$((deleted_bytes + file_size))
+      checked_since_df=$((checked_since_df + 1))
+      if (( deleted_count == 1 || deleted_count % 100 == 0 )); then
+        log_info "  Deleted ${deleted_count} oldest file(s), freed $(format_bytes "$deleted_bytes") so far."
+      fi
+      if (( checked_since_df >= 100 )); then
+        checked_since_df=0
+        current_usage=$(disk_usage_percent)
+        if [[ -n "$current_usage" ]] && (( current_usage < STEP12_EMERGENCY_TARGET_PCT )); then
+          break
+        fi
+      fi
+    fi
+  done < <(find "$STEP12_EMERGENCY_DIR" -type f -printf '%T@\t%s\t%p\0' 2>/dev/null | sort -z -n)
+
+  current_usage=$(disk_usage_percent)
+  STEP12_EMERGENCY_COUNT=$deleted_count
+  STEP12_EMERGENCY_FREED=$deleted_bytes
+
+  log_info "========== EMERGENCY EVENT_PARQUET_LAKE CLEANUP RESULT =========="
+  log_info "Deleted files: ${deleted_count}"
+  log_info "Freed:         $(format_bytes "$deleted_bytes")"
+  log_info "Disk usage:    ${current_usage:-unknown}%"
+  log_info "==============================================================="
+}
+
 clean_completed() {
   local type="completed"
   local -a dirs=()
@@ -277,11 +352,11 @@ clean_completed() {
       "$station_dir"/STAGE_1/EVENT_DATA/STEP_1/TASK_*/INPUT_FILES/COMPLETED_DIRECTORY \
       "$station_dir"/STAGE_1/EVENT_DATA/STEP_1/TASK_*/INPUT_FILES/ERROR_DIRECTORY \
       "$station_dir"/STAGE_1/EVENT_DATA/STEP_1/TASK_1/ANCILLARY/REJECTED_FILES \
-      "$station_dir"/STAGE_1/EVENT_DATA/STEP_2/INPUT_FILES/COMPLETED \
-      "$station_dir"/STAGE_1/EVENT_DATA/STEP_2/INPUT_FILES/ERROR_DIRECTORY \
-      "$station_dir"/STAGE_1/EVENT_DATA/STEP_3/TASK_2/INPUT_FILES/COMPLETED \
-      "$station_dir"/STAGE_1/LAB_LOGS/STEP_*/INPUT_FILES/COMPLETED \
-      "$station_dir"/STAGE_1/LAB_LOGS/STEP_*/INPUT_FILES/ERROR* \
+      "$station_dir"/STAGE_2/EVENT_DATA/STEP_1_ACCUMULATION/INPUT_FILES/COMPLETED \
+      "$station_dir"/STAGE_2/EVENT_DATA/STEP_1_ACCUMULATION/INPUT_FILES/ERROR_DIRECTORY \
+      "$station_dir"/STAGE_2/EVENT_DATA/STEP_2_DAILY_EVENT_DATA/TASK_1/INPUT_FILES \
+      "$station_dir"/STAGE_1/LOG_DATA/STEP_*/INPUT_FILES/COMPLETED \
+      "$station_dir"/STAGE_1/LOG_DATA/STEP_*/INPUT_FILES/ERROR* \
       "$station_dir"/STAGE_0/REPROCESSING/STEP_2/INPUT_FILES/COMPLETED \
       "$station_dir"/STAGE_0/REPROCESSING/STEP_2/INPUT_FILES/ERROR*; do
       add_completed_dir "$dir"
@@ -454,9 +529,9 @@ clean_plots() {
       "$station_dir"/STAGE_0/REPROCESSING/STEP_*/PLOTS \
       "$station_dir"/STAGE_1/EVENT_DATA/STEP_1/TASK_*/PLOTS \
       "$station_dir"/STAGE_1/EVENT_DATA/STEP_1/TASK_*/PLOTS/DEBUG_PLOTS \
-      "$station_dir"/STAGE_1/EVENT_DATA/STEP_2/PLOTS \
-      "$station_dir"/STAGE_1/EVENT_DATA/STEP_3/TASK_*/PLOTS \
-      "$station_dir"/STAGE_1/LAB_LOGS/STEP_*/PLOTS; do
+      "$station_dir"/STAGE_2/EVENT_DATA/STEP_1_ACCUMULATION/PLOTS \
+      "$station_dir"/STAGE_2/EVENT_DATA/STEP_2_DAILY_EVENT_DATA/TASK_*/PLOTS \
+      "$station_dir"/STAGE_1/LOG_DATA/STEP_*/PLOTS; do
       add_plot_dir "$dir"
     done
   done

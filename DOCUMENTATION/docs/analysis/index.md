@@ -1,6 +1,6 @@
 # Analysis software suite
 
-*Last updated: March 2026*
+*Last updated: July 2026*
 
 The miniTRASGO analysis codebase (hosted at
 [github.com/cayesoneira/miniTRASGO-analysis](https://github.com/cayesoneira/miniTRASGO-analysis))
@@ -19,10 +19,13 @@ composed of several conceptual layers:
   operate on per‑station directories (e.g. `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO01`):
   1. **STAGE 0** – ingest files from the station (raw archives, configuration,
      log snapshots) and prepare them for reprocessing.
-  2. **STAGE 1** – clean and correct event data, applying pressure/temperature
-     adjustments and merging laboratory log entries.
-  3. **STAGE 2** – perform environmental corrections, merge NMDB cosmic ray
-     reference data, and compute analytics tables such as flux rates.
+  2. **STAGE 1** - clean and correct event data, normalize log/Copernicus side
+     products, and collect the complete Stage 1 handoff under each station's
+     `STAGE_1_PRODUCTS/` directory. This directory is essential: it
+     contains all data needed for further analysis after Stage 1, including the
+     event parquet lake, task metadata, log products, and Copernicus products.
+  3. **STAGE 2** - consume `STAGE_1_PRODUCTS`, accumulate/correct event data,
+     join event/log/Copernicus sources, and build integrated Stage 2 tables.
   4. **STAGE 3** – final enrichment and export for external services (e.g.
      NMDB submission).
 
@@ -73,16 +76,12 @@ DATAFLOW_v3/
 | Analysis code | `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/` & `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/` within this repo | Core pipeline scripts, station-specific helpers, selection/config logic |
 | Documentation | `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/DOCS/` (see `README.md`) | Processing stage guides, troubleshooting, QA plots |
 | Docker environment | `CONFIG_FILES/docker_analysis.yaml` | Reproducible runtime for analysts and CI |
+| Stage 1 product bundle | `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0X/STAGE_1_PRODUCTS/` | Essential handoff directory. Contains all data needed for further analysis after Stage 1: event parquet lake, task metadata, LOG_DATA products, and Copernicus products. |
 
 This repository is the authoritative source for both the software and the
 operational procedure; changes to `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES` should be accompanied by
 updates to `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/DOCS` and appropriate regression tests.
 
-| Component | Location | Description |
-|-----------|----------|-------------|
-| Analysis code | `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/` & `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/` within this repo | Core pipeline scripts, station-specific helpers, selection/config logic |
-| Documentation | `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/DOCS/` (see `README.md`) | Processing stage guides, troubleshooting, QA plots |
-| Docker environment | `CONFIG_FILES/docker_analysis.yaml` | Reproducible runtime for analysts and CI |
 
 ## Getting started
 
@@ -95,7 +94,7 @@ few representative script names are:
 
 - `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_0/NEW_FILES/bring_data_and_config_files.sh`
 - `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/clean_event_data.py`
-- `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/LAB_LOGS/STEP_2/lab_logs_merge.py`
+- `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/LOG_DATA/STEP_2/lab_logs_merge.py`
 - `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_2/NMDB/merge_nmdb.py`
 - `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_3/export_nmdb.py`
 

@@ -1,7 +1,7 @@
 comment_prefix: "#"
 
 event_data:
-  input_subdir: STAGE_1/EVENT_DATA/STEP_3/TASK_2/OUTPUT_FILES
+  input_subdir: STAGE_2/EVENT_DATA/STEP_2_DAILY_EVENT_DATA/TASK_2/OUTPUT_FILES
   file_prefix: event_data
   time_column: Time
   q_event_mean_candidates:
@@ -74,7 +74,7 @@ event_data:
       - [four_plane_low_3_rate_hz, three_plane_low_3_rate_hz]
 
 lab_logs:
-  input_subdir: STAGE_1/LAB_LOGS/STEP_2/OUTPUT_FILES
+  input_subdir: STAGE_1_PRODUCTS/LOG_DATA/OUTPUT_FILES
   file_prefix: lab_logs
   time_column: Time
   alignment_method: interpolate
@@ -89,7 +89,7 @@ lab_logs:
       - sensors_int_Pressure_int
 
 copernicus:
-  input_subdir: STAGE_1/COPERNICUS/STEP_1/OUTPUT_FILES
+  input_subdir: STAGE_1_PRODUCTS/COPERNICUS/OUTPUT_FILES
   file_prefix: copernicus
   time_column: Time
   alignment_method: interpolate
@@ -102,7 +102,7 @@ copernicus:
       - height_100mbar
 
 output:
-  stage_subdir: STAGE_2
+  stage_subdir: STAGE_2/JOINED_DATA
   output_subdir: OUTPUT_FILES
   daily_file_prefix: stage_2
   big_output_filename: joined_stage_2.csv

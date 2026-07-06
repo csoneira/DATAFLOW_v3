@@ -2,13 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 DATAFLOW_v3 Script Header v1
-Script: MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_2/INDUCTION_SECTION/induction_section.py
+Script: MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_2/EVENT_DATA/STEP_1_ACCUMULATION/INDUCTION_SECTION/induction_section.py
 Purpose: !/usr/bin/env python3.
 Owner: DATAFLOW_v3 contributors
 Sign-off: csoneira <csoneira@ucm.es>
 Last Updated: 2026-03-02
 Runtime: python3
-Usage: python3 MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_2/INDUCTION_SECTION/induction_section.py [options]
+Usage: python3 MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_2/EVENT_DATA/STEP_1_ACCUMULATION/INDUCTION_SECTION/induction_section.py [options]
 Inputs: CLI args, config files, environment variables, and/or upstream files.
 Outputs: Files, logs, plots, or stdout/stderr side effects.
 Notes: Keep behavior configuration-driven and reproducible.

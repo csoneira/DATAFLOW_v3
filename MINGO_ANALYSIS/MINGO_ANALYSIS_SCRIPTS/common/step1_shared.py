@@ -1055,7 +1055,7 @@ MULTI_SPACE_PATTERN = re.compile(r" +")
 XYEAR_PATTERN = re.compile(r"X(20\d{2})")
 NEG_GAP_PATTERN = re.compile(r"(\w)-(\d)")
 MALFORMED_NUMBER_PATTERN = re.compile(r"-?\d+\.\d+\.\d+")
-VALID_YEARS = set(range(1999, 2100))
+VALID_YEARS = set(range(1999, 2201))
 
 
 def process_step1_raw_line(line: str) -> str:

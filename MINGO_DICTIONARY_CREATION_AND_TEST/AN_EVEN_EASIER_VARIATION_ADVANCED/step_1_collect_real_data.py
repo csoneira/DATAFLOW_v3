@@ -46,7 +46,7 @@ from common import (
 )
 
 ROOT_DIR = Path(__file__).resolve().parent
-STATIONS_ROOT = REPO_ROOT / "STATIONS"
+STATIONS_ROOT = REPO_ROOT / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS"
 
 log = logging.getLogger("even_easier_advanced.step1")
 

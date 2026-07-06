@@ -1,13 +1,13 @@
 #!/bin/bash
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
-# Script: MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_2/guide_corrected_to_accumulated.sh
+# Script: MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_2/EVENT_DATA/STEP_1_ACCUMULATION/guide_corrected_to_accumulated.sh
 # Purpose: Guide corrected to accumulated.
 # Owner: DATAFLOW_v3 contributors
 # Sign-off: csoneira <csoneira@ucm.es>
 # Last Updated: 2026-03-02
 # Runtime: bash
-# Usage: bash MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_2/guide_corrected_to_accumulated.sh [options]
+# Usage: bash MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_2/EVENT_DATA/STEP_1_ACCUMULATION/guide_corrected_to_accumulated.sh [options]
 # Inputs: CLI args, config files, environment variables, and/or upstream files.
 # Outputs: Files, logs, or process-level side effects.
 # Notes: Keep behavior configuration-driven and reproducible.
@@ -28,7 +28,7 @@ log_warn() {
 print_help() {
   cat <<'EOF'
 guide_corrected_to_accumulated.sh
-Launches STAGE_1 EVENT_DATA STEP_2 for one or more stations.
+Launches STAGE_2 EVENT_DATA STEP_1_ACCUMULATION for one or more stations.
 
 Usage:
   guide_corrected_to_accumulated.sh [--station <list>] [--run-anyway]
@@ -90,7 +90,7 @@ done
 
 ALL_STATIONS=(0 1 2 3 4)
 TRAFFIC_LIGHT_DIR="$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/TRAFFIC_LIGHT"
-TRAFFIC_QUEUE_FILE="$TRAFFIC_LIGHT_DIR/stage1_step2_station_queue.txt"
+TRAFFIC_QUEUE_FILE="$TRAFFIC_LIGHT_DIR/stage2_event_step1_accumulation_station_queue.txt"
 
 SELF_INVOCATION_PIDS=()
 
@@ -314,12 +314,11 @@ any_pipeline_running() {
 
 process_station() {
   local station="$1"
-  log_info "Processing station ${station} (STEP_2)."
+  log_info "Processing station ${station} (STAGE_2 EVENT_DATA STEP_1_ACCUMULATION)."
 
   local station_directory="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0$station"
-  local base_event_directory="$station_directory/STAGE_1/EVENT_DATA"
-  local input_directory="$base_event_directory/STEP_1_TO_2_OUTPUT"
-  local base_working_directory="$base_event_directory/STEP_2"
+  local input_directory="$station_directory/STAGE_1_PRODUCTS/EVENT_DATA/PARQUET_LAKE"
+  local base_working_directory="$station_directory/STAGE_2/EVENT_DATA/STEP_1_ACCUMULATION"
 
   mkdir -p "$base_working_directory" "$input_directory" "$station_directory"
   log_info "Paths: source=${input_directory} workdir=${base_working_directory}"

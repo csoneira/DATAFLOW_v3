@@ -100,9 +100,16 @@ if [[ "$PARALLEL" == true ]]; then
   echo "mesh:$STATUS_MESH time:$STATUS_TIME backpressure:$STATUS_BACKPRESSURE"
   exit $(( STATUS_MESH || STATUS_TIME || STATUS_BACKPRESSURE ))
 else
-  run_one "mesh" "$MESH_SCRIPT" "${EXTRA_ARGS[@]}"
-  run_one "time" "$TIME_SCRIPT" "${EXTRA_ARGS[@]}"
-  run_one "backpressure" "$BACKPRESSURE_SCRIPT"
+  set +e
+  run_one "mesh" "$MESH_SCRIPT" "${EXTRA_ARGS[@]}"; STATUS_MESH=$?
+  run_one "time" "$TIME_SCRIPT" "${EXTRA_ARGS[@]}"; STATUS_TIME=$?
+  run_one "backpressure" "$BACKPRESSURE_SCRIPT"; STATUS_BACKPRESSURE=$?
+  set -e
+  echo "mesh:$STATUS_MESH time:$STATUS_TIME backpressure:$STATUS_BACKPRESSURE"
+  if (( STATUS_MESH || STATUS_TIME || STATUS_BACKPRESSURE )); then
+    echo "Finished with errors: $(date)"
+    exit 1
+  fi
 fi
 
 echo "Finished: $(date)"

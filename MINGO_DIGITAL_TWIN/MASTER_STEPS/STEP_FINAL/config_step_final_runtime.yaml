@@ -8,7 +8,7 @@ param_mesh_sim_run: none
 param_mesh_mismatch_strategy: skip
 output_dir: ../../SIMULATION_OUTPUTS/SIMULATED_DATA
 write_sidecars: true
-sidecar_output_dir: /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/SIMULATED_DATA/FILES_SIDECARS
+sidecar_output_dir: /home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/FILES_SIDECARS
 registry_enabled: false
 chunk_rows: 50000
 target_rows: 50000

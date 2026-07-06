@@ -1,13 +1,13 @@
 #!/bin/bash
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
-# Script: MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_3/guide_accumulated_to_joined.sh
+# Script: MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_2/EVENT_DATA/STEP_2_DAILY_EVENT_DATA/guide_accumulated_to_joined.sh
 # Purpose: Guide accumulated to joined.
 # Owner: DATAFLOW_v3 contributors
 # Sign-off: csoneira <csoneira@ucm.es>
 # Last Updated: 2026-03-02
 # Runtime: bash
-# Usage: bash MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_3/guide_accumulated_to_joined.sh [options]
+# Usage: bash MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_2/EVENT_DATA/STEP_2_DAILY_EVENT_DATA/guide_accumulated_to_joined.sh [options]
 # Inputs: CLI args, config files, environment variables, and/or upstream files.
 # Outputs: Files, logs, or process-level side effects.
 # Notes: Keep behavior configuration-driven and reproducible.
@@ -28,7 +28,7 @@ log_warn() {
 print_help() {
   cat <<'EOF'
 guide_accumulated_to_joined.sh
-Launches STAGE_1 EVENT_DATA STEP_3 for one or more stations.
+Launches STAGE_2 EVENT_DATA STEP_2_DAILY_EVENT_DATA for one or more stations.
 
 Usage:
   guide_accumulated_to_joined.sh [--station <list>] [--run-anyway]
@@ -90,7 +90,7 @@ done
 
 ALL_STATIONS=(0 1 2 3 4)
 TRAFFIC_LIGHT_DIR="$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/TRAFFIC_LIGHT"
-TRAFFIC_QUEUE_FILE="$TRAFFIC_LIGHT_DIR/stage1_step3_station_queue.txt"
+TRAFFIC_QUEUE_FILE="$TRAFFIC_LIGHT_DIR/stage2_event_step2_daily_event_data_station_queue.txt"
 
 SELF_INVOCATION_PIDS=()
 
@@ -315,19 +315,19 @@ any_pipeline_running() {
 
 process_station() {
   local station="$1"
-  log_info "Processing station ${station} (STEP_3)."
+  log_info "Processing station ${station} (STAGE_2 EVENT_DATA STEP_2_DAILY_EVENT_DATA)."
 
   if ! python3 -u "$accumulated_distributor_py" "$station"; then
-    log_warn "Station $station STEP_3 distributor failed; continuing with next station."
+    log_warn "Station $station STAGE_2 EVENT_DATA STEP_2_DAILY_EVENT_DATA distributor failed; continuing with next station."
     return 1
   fi
 
   if ! python3 -u "$distributed_joiner_py" "$station"; then
-    log_warn "Station $station STEP_3 joiner failed; continuing with next station."
+    log_warn "Station $station STAGE_2 EVENT_DATA STEP_2_DAILY_EVENT_DATA joiner failed; continuing with next station."
     return 1
   fi
 
-  log_info "Station $station STEP_3 completed."
+  log_info "Station $station STAGE_2 EVENT_DATA STEP_2_DAILY_EVENT_DATA completed."
   return 0
 }
 

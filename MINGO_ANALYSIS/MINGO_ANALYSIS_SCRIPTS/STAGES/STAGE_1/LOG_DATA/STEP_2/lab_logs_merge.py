@@ -2,13 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 DATAFLOW_v3 Script Header v1
-Script: MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/LAB_LOGS/STEP_2/lab_logs_merge.py
+Script: MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/LOG_DATA/STEP_2/lab_logs_merge.py
 Purpose: !/usr/bin/env python3.
 Owner: DATAFLOW_v3 contributors
 Sign-off: csoneira <csoneira@ucm.es>
 Last Updated: 2026-03-02
 Runtime: python3
-Usage: python3 MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/LAB_LOGS/STEP_2/lab_logs_merge.py [options]
+Usage: python3 MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/LOG_DATA/STEP_2/lab_logs_merge.py [options]
 Inputs: CLI args, config files, environment variables, and/or upstream files.
 Outputs: Files, logs, plots, or stdout/stderr side effects.
 Notes: Keep behavior configuration-driven and reproducible.
@@ -164,9 +164,9 @@ LOG_SPECS: Sequence[LogSpec] = (
 )
 
 MASTER_CONFIG_ROOT = get_master_config_root()
-LAB_LOGS_CONFIG_SHARED = MASTER_CONFIG_ROOT / "STAGE_1" / "LAB_LOGS" / "config_lab_logs.yaml"
-LAB_LOGS_CONFIG_STEP2 = MASTER_CONFIG_ROOT / "STAGE_1" / "LAB_LOGS" / "STEP_2" / "config_step_2.yaml"
-LAB_LOGS_OUTLIER_CSV_STEP2 = MASTER_CONFIG_ROOT / "STAGE_1" / "LAB_LOGS" / "STEP_2" / "config_step_2.csv"
+LAB_LOGS_CONFIG_SHARED = MASTER_CONFIG_ROOT / "STAGE_1" / "LOG_DATA" / "config_lab_logs.yaml"
+LAB_LOGS_CONFIG_STEP2 = MASTER_CONFIG_ROOT / "STAGE_1" / "LOG_DATA" / "STEP_2" / "config_step_2.yaml"
+LAB_LOGS_OUTLIER_CSV_STEP2 = MASTER_CONFIG_ROOT / "STAGE_1" / "LOG_DATA" / "STEP_2" / "config_step_2.csv"
 FILENAME_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 
 
@@ -927,7 +927,7 @@ def main() -> int:
 
     base_path = resolve_home_path_from_config()
     station_dir = base_path / "DATAFLOW_v3" / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / f"MINGO0{station}"
-    lab_logs_root = station_dir / "STAGE_1" / "LAB_LOGS"
+    lab_logs_root = station_dir / "STAGE_1" / "LOG_DATA"
 
     step1_root = lab_logs_root / "STEP_1"
     step1_output_dir = step1_root / "OUTPUT_FILES"
@@ -936,7 +936,7 @@ def main() -> int:
     input_root = step2_root / "INPUT_FILES"
     unprocessed_root = input_root / "UNPROCESSED"
     completed_root = input_root / "COMPLETED"
-    output_root = step2_root / "OUTPUT_FILES"
+    output_root = station_dir / "STAGE_1_PRODUCTS" / "LOG_DATA" / "OUTPUT_FILES"
 
     # status_csv_path = step2_root / "log_aggregate_and_join_status.csv"
     # status_timestamp = append_status_row(status_csv_path)

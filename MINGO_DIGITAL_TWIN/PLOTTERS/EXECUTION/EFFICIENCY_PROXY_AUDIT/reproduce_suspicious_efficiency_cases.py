@@ -127,7 +127,7 @@ def _load_observed_case_table() -> pd.DataFrame:
 
 def _load_case_catalog() -> pd.DataFrame:
     catalog = pd.read_csv(
-        ROOT_DIR / "MINGO_DIGITAL_TWIN" / "SIMULATED_DATA" / "step_final_simulation_params.csv",
+        ROOT_DIR / "MINGO_DIGITAL_TWIN" / "SIMULATION_OUTPUTS" / "SIMULATED_DATA" / "step_final_simulation_params.csv",
         usecols=["param_set_id", "cos_n", "flux_cm2_min", "efficiencies"],
     ).drop_duplicates("param_set_id")
     effs = catalog["efficiencies"].apply(json.loads)

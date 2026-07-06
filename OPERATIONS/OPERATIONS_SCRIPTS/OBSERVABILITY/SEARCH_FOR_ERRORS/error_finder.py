@@ -72,6 +72,9 @@ ISSUE_TRIGGER_PATTERNS = [
 ISSUE_EXCLUDE_PATTERNS = [
     re.compile(r"\bno errors found\b", re.IGNORECASE),
     re.compile(r"\bno new errors\b", re.IGNORECASE),
+    re.compile(r"^-->\s+Cleaning\s+.*/(?:ERROR|ERROR_DIRECTORY)\b", re.IGNORECASE),
+    re.compile(r"^Completed/Error directories cleaned:", re.IGNORECASE),
+    re.compile(r"^\s*-\s+completed/error directories:", re.IGNORECASE),
 ]
 PATH_PATTERN = re.compile(r"/[^\s'\"]+")
 LEVEL_TOKEN_PATTERN = re.compile(

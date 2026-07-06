@@ -1439,7 +1439,14 @@ metadata_directory = os.path.join(raw_to_list_working_directory, "METADATA")
 
 raw_directory = f"STEP_1/TASK_{task_number - 1}/OUTPUT_FILES"
 raw_working_directory = os.path.join(base_directory, raw_directory)
-output_location = os.path.join(base_directory, "STEP_1_TO_2_OUTPUT")
+output_location = os.path.join(
+    base_directory,
+    "..",
+    "..",
+    "STAGE_1_PRODUCTS",
+    "EVENT_DATA",
+    "PARQUET_LAKE",
+)
 
 # Define directory paths relative to base_directory
 base_directories = {

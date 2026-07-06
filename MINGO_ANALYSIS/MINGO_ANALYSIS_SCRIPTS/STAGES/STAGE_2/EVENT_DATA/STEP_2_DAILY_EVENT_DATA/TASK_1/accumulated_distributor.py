@@ -2,13 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 DATAFLOW_v3 Script Header v1
-Script: MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_3/TASK_1/accumulated_distributor.py
+Script: MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_2/EVENT_DATA/STEP_2_DAILY_EVENT_DATA/TASK_1/accumulated_distributor.py
 Purpose: !/usr/bin/env python3.
 Owner: DATAFLOW_v3 contributors
 Sign-off: csoneira <csoneira@ucm.es>
 Last Updated: 2026-03-02
 Runtime: python3
-Usage: python3 MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_3/TASK_1/accumulated_distributor.py [options]
+Usage: python3 MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_2/EVENT_DATA/STEP_2_DAILY_EVENT_DATA/TASK_1/accumulated_distributor.py [options]
 Inputs: CLI args, config files, environment variables, and/or upstream files.
 Outputs: Files, logs, plots, or stdout/stderr side effects.
 Notes: Keep behavior configuration-driven and reproducible.
@@ -30,7 +30,7 @@ import pandas as pd
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Distribute accumulated_|*.csv files from STEP_2_TO_3_OUTPUT into "
+            "Distribute accumulated_|*.csv files from STAGE_2/EVENT_DATA/ACCUMULATED_EVENTS into "
             "STEP_3/TASK_1_TO_2/<YEAR>/<MONTH>/<DAY>. "
             "Files spanning multiple days are split accordingly."
         )
@@ -45,7 +45,7 @@ def parse_args() -> argparse.Namespace:
         "-a",
         "--all",
         action="store_true",
-        help="Process files from STEP_2_TO_3_OUTPUT and the archive directory.",
+        help="Process files from STAGE_2/EVENT_DATA/ACCUMULATED_EVENTS and the archive directory.",
     )
     parser.add_argument(
         "--archive",
@@ -162,8 +162,8 @@ def main() -> int:
     station = args.station
 
     station_dir = Path.home() / "DATAFLOW_v3" / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / f"MINGO0{station}"
-    step2_to_3_dir = station_dir / "STAGE_1" / "EVENT_DATA" / "STEP_2_TO_3_OUTPUT"
-    step3_root = station_dir / "STAGE_1" / "EVENT_DATA" / "STEP_3"
+    step2_to_3_dir = station_dir / "STAGE_2" / "EVENT_DATA" / "ACCUMULATED_EVENTS"
+    step3_root = station_dir / "STAGE_2" / "EVENT_DATA" / "STEP_2_DAILY_EVENT_DATA"
     task1_root = step3_root / "TASK_1"
     destination_root = step3_root / "TASK_1_TO_2"
     archive_dir = task1_root / args.archive

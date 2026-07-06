@@ -1,5 +1,5 @@
 input:
-  stage_subdir: STAGE_2
+  stage_subdir: STAGE_2/JOINED_DATA
   input_filename: joined_stage_2.csv
   time_column: time
 

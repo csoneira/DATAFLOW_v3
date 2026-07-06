@@ -44,12 +44,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mesh",
         dest="mesh",
-        default=str(DT_ROOT / "INTERSTEPS" / "STEP_0_TO_1" / "param_mesh.csv"),
+        default=str(DT_ROOT / "SIMULATION_OUTPUTS" / "INTERSTEPS" / "STEP_0_TO_1" / "param_mesh.csv"),
         help="Path to the in-process mesh CSV (e.g. STEP_0_TO_1/param_mesh.csv).",
     )
     parser.add_argument(
         "--completed",
-        default=str(DT_ROOT / "SIMULATED_DATA" / "step_final_simulation_params.csv"),
+        default=str(DT_ROOT / "SIMULATION_OUTPUTS" / "SIMULATED_DATA" / "step_final_simulation_params.csv"),
         help="Path to the full/completed simulation params CSV (step_final_simulation_params.csv).",
     )
     parser.add_argument(

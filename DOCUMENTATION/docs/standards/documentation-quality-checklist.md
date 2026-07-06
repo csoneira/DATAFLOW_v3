@@ -5,7 +5,7 @@ Use this checklist before merging significant code or operational changes.
 ## Content quality
 
 - The page states scope and audience.
-- Terminology matches repository conventions (`MASTER`, `STATIONS`, `STEP_N`, `SIM_RUN`).
+- Terminology matches repository conventions (`MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS`, `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS`, `STEP_N`, `SIM_RUN`).
 - Code paths are explicit and accurate.
 - Behavior-impacting assumptions are clearly stated.
 

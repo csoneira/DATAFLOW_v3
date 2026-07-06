@@ -33,7 +33,7 @@ flowchart LR
 
 | Domain | Main paths | Purpose |
 | --- | --- | --- |
-| Analysis and station outputs | `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/`, `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/` | `MASTER` runs analysis stages for real/simulated inputs; `STATIONS` stores station-scoped outputs and processing state |
+| Analysis and station outputs | `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/`, `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/` | `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS` runs analysis stages for real/simulated inputs; `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS` stores station-scoped outputs and processing state |
 | Simulation | `MINGO_DIGITAL_TWIN/` | Physics + electronics modeling from muon generation to DAQ-style output |
 | Inference/dictionary | `MINGO_DICTIONARY_CREATION_AND_TEST/`, `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/common` | Build and consume lookup tables for flux/efficiency inference |
 | Orchestration and observability | `OPERATIONS/OPERATIONS_SCRIPTS/`, `OPERATIONS/OPERATIONS_RUNTIME/` | Scheduling, locking, health audits, logs, runtime state |

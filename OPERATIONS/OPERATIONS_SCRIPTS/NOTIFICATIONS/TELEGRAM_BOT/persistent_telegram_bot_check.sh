@@ -32,7 +32,10 @@ timestamp() {
 }
 
 log() {
-  printf '%s %s\n' "$(timestamp)" "$*" >>"$LOG_FILE"
+  local line
+  line="$(printf '%s %s' "$(timestamp)" "$*")"
+  printf '%s\n' "$line" >>"$LOG_FILE"
+  printf '%s\n' "$line"
 }
 
 if [[ ! -x "$PYTHON_BIN" ]]; then

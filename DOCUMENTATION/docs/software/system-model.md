@@ -15,8 +15,8 @@ This page is the fastest accurate mental model of DATAFLOW_v3 software.
 ```mermaid
 flowchart LR
     subgraph Analysis[Analysis Software]
-        M[MASTER stages 0..3]
-        S[STATIONS outputs]
+        M[MINGO_ANALYSIS_SCRIPTS stages 0..3]
+        S[MINGO_ANALYSIS_STATIONS outputs]
         M --> S
     end
 
@@ -40,10 +40,10 @@ flowchart LR
 
 ## What must be true
 
-- Analysis behavior lives in `MASTER`, not scattered ad hoc in station folders.
+- Analysis behavior lives in `MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS`, not scattered ad hoc in station folders.
 - Real and simulated inputs are both processed through the same analysis mother code.
 - Inference is versioned and traceable to simulation assumptions.
-- Outputs are auditable at station scope under `STATIONS`.
+- Outputs are auditable at station scope under `MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS`.
 - Quality gates decide promotion ([Project QA Plan](../project/quality-assurance.md)).
 
 ## If you only read three pages next

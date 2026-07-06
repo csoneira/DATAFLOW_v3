@@ -82,6 +82,23 @@ PDF generation (see [Monitoring](../operation/monitoring.md)).
 This table is not exhaustive; additional diagnostic arrays may be produced
 by later versions of `ana.m`.
 
+## Central analysis product handoff
+
+After station data enters the central `DATAFLOW_v3` analysis tree, the key Stage 1 boundary is:
+
+`MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0X/STAGE_1_PRODUCTS/`
+
+This directory is essential. It is intended to contain all data needed to analyze further after Stage 1, without depending on transient working queues inside individual tasks. Its main subdirectories are:
+
+| Subdirectory | Contents |
+| --- | --- |
+| `EVENT_DATA/PARQUET_LAKE/` | Non-destructive processed event parquets, including raw/reference columns needed downstream. |
+| `EVENT_DATA/METADATA/TASK_*/` | Task metadata and provenance snapshots for the event pipeline. |
+| `LOG_DATA/OUTPUT_FILES/` | Cleaned and merged station log products. |
+| `COPERNICUS/OUTPUT_FILES/` | Copernicus environmental products prepared for later joining. |
+
+Downstream Stage 2 analysis consumes this product bundle to accumulate/correct event data and join event, log, and Copernicus sources.
+
 ## Software repository connection
 
 The unpacker and analysis scripts are part of the station software tree

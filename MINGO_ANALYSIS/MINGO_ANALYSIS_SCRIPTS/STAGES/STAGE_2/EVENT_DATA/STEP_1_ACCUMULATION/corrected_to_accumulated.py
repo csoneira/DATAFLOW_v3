@@ -2,13 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 DATAFLOW_v3 Script Header v1
-Script: MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_2/corrected_to_accumulated.py
+Script: MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_2/EVENT_DATA/STEP_1_ACCUMULATION/corrected_to_accumulated.py
 Purpose: !/usr/bin/env python3.
 Owner: DATAFLOW_v3 contributors
 Sign-off: csoneira <csoneira@ucm.es>
 Last Updated: 2026-03-02
 Runtime: python3
-Usage: python3 MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_2/corrected_to_accumulated.py [options]
+Usage: python3 MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_2/EVENT_DATA/STEP_1_ACCUMULATION/corrected_to_accumulated.py [options]
 Inputs: CLI args, config files, environment variables, and/or upstream files.
 Outputs: Files, logs, plots, or stdout/stderr side effects.
 Notes: Keep behavior configuration-driven and reproducible.
@@ -594,9 +594,10 @@ config_file_directory = str(
     / "ONLINE_RUN_DICTIONARY"
     / f"STATION_{station}"
 )
-base_event_directory = os.path.join(station_directory, "STAGE_1", "EVENT_DATA")
-step1_to_2_directory = os.path.join(base_event_directory, "STEP_1_TO_2_OUTPUT")
-working_directory = os.path.join(base_event_directory, "STEP_2")
+stage1_products_directory = os.path.join(station_directory, "STAGE_1_PRODUCTS")
+step1_to_2_directory = os.path.join(stage1_products_directory, "EVENT_DATA", "PARQUET_LAKE")
+base_event_directory = os.path.join(station_directory, "STAGE_2", "EVENT_DATA")
+working_directory = os.path.join(base_event_directory, "STEP_1_ACCUMULATION")
 acc_working_directory = working_directory
 metadata_directory = os.path.join(working_directory, "METADATA")
 
@@ -622,7 +623,7 @@ base_directories = {
     "error_directory": os.path.join(acc_working_directory, "INPUT_FILES/ERROR_DIRECTORY"),
     "completed_directory": os.path.join(acc_working_directory, "INPUT_FILES/COMPLETED"),
     
-    "acc_events_directory": os.path.join(base_event_directory, "STEP_2_TO_3_OUTPUT"),
+    "acc_events_directory": os.path.join(base_event_directory, "ACCUMULATED_EVENTS"),
     # "full_acc_events_directory": os.path.join(working_directory, "FULL_OUTPUT_FILES"),
     "acc_rejected_directory": os.path.join(acc_working_directory, "INPUT_FILES/REJECTED"),
 }
@@ -4321,7 +4322,7 @@ if side_calculations:
         
         # Load the LUT
         # Induction section calibration LUT.
-        induction_section_lut_file = f"{home_path}/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_2/INDUCTION_SECTION/induction_section_lut.csv"
+        induction_section_lut_file = f"{home_path}/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_2/EVENT_DATA/STEP_1_ACCUMULATION/INDUCTION_SECTION/induction_section_lut.csv"
         induction_section_lut_df = pd.read_csv(induction_section_lut_file)
 
         # Initialize a list to store the best induction section values for each plane
