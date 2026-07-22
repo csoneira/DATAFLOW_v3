@@ -27,7 +27,7 @@ Targets include:
 
 Options:
   --dry-run             Show what would be truncated without editing files.
-  --keep-lines N        Number of tail lines to keep per file (default: 5000).
+  --keep-lines N        Number of tail lines to keep per file (default: 1000).
   --log-dir PATH        Cron logs root directory.
   --crontab-file PATH   Crontab source to parse for declared log files.
   -h,--help             Show this help message.
@@ -35,7 +35,7 @@ EOF
 }
 
 DRY_RUN=false
-KEEP_LINES="${CRON_LOG_KEEP_LINES:-5000}"
+KEEP_LINES="${CRON_LOG_KEEP_LINES:-1000}"
 LOG_DIR="${CRON_LOG_DIR:-$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS}"
 CRONTAB_FILE="${CRONTAB_FILE:-$HOME/DATAFLOW_v3/CONFIG/add_to_crontab.info}"
 
@@ -90,6 +90,18 @@ exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   echo "Another cron log truncation run is already in progress."
   exit 0
+fi
+
+# The wrapper-owned destination must not be rewritten after output begins, but
+# it can be compacted safely here before this script emits its first line.
+if [[ -n "${CRON_LOG_PATH:-}" && -f "$CRON_LOG_PATH" ]]; then
+  self_line_count="$(wc -l < "$CRON_LOG_PATH" || echo 0)"
+  if [[ "$self_line_count" =~ ^[0-9]+$ ]] && (( self_line_count > KEEP_LINES )); then
+    self_tmp="$(mktemp "${CRON_LOG_PATH}.truncate.XXXXXX")"
+    tail -n "$KEEP_LINES" "$CRON_LOG_PATH" > "$self_tmp"
+    cat "$self_tmp" > "$CRON_LOG_PATH"
+    rm -f "$self_tmp"
+  fi
 fi
 
 declare -A files=()
@@ -162,6 +174,7 @@ would_truncate=0
 lines_removed=0
 skipped=0
 errors=0
+removed_empty_dirs=0
 
 for path in "${targets[@]}"; do
   if [[ -n "${skip_files[$path]:-}" ]]; then
@@ -226,8 +239,16 @@ for path in "${targets[@]}"; do
   lines_removed=$((lines_removed + removed))
 done
 
+if ! $DRY_RUN; then
+  while IFS= read -r -d '' empty_dir; do
+    if rmdir "$empty_dir" 2>/dev/null; then
+      removed_empty_dirs=$((removed_empty_dirs + 1))
+    fi
+  done < <(find "$LOG_DIR" -depth -mindepth 1 -type d -empty -print0)
+fi
+
 if $DRY_RUN; then
   echo "Summary (dry-run): checked=$checked would_truncate=$would_truncate already_small=$already_small skipped=$skipped lines_to_remove=$lines_removed errors=$errors"
 else
-  echo "Summary: checked=$checked truncated=$truncated already_small=$already_small skipped=$skipped lines_removed=$lines_removed errors=$errors"
+  echo "Summary: checked=$checked truncated=$truncated already_small=$already_small skipped=$skipped lines_removed=$lines_removed removed_empty_dirs=$removed_empty_dirs errors=$errors"
 fi

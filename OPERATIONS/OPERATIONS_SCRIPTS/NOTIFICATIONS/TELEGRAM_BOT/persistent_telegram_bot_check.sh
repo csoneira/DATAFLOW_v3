@@ -25,8 +25,6 @@ LOG_DIR="${LOG_DIR:-$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS}"
 LOG_FILE="${LOG_FILE:-${LOG_DIR}/bot_analysis.log}"
 PROCESS_PATTERN="${PYTHON_BIN} ${BOT_SCRIPT}"
 
-mkdir -p "$LOG_DIR"
-
 timestamp() {
   date --iso-8601=seconds
 }
@@ -34,7 +32,10 @@ timestamp() {
 log() {
   local line
   line="$(printf '%s %s' "$(timestamp)" "$*")"
-  printf '%s\n' "$line" >>"$LOG_FILE"
+  if [[ -z "${CRON_LOG_PATH:-}" ]]; then
+    mkdir -p "$LOG_DIR"
+    printf '%s\n' "$line" >>"$LOG_FILE"
+  fi
   printf '%s\n' "$line"
 }
 
@@ -49,11 +50,12 @@ if [[ ! -f "$BOT_SCRIPT" ]]; then
 fi
 
 if /usr/bin/pgrep -fx "$PROCESS_PATTERN" >/dev/null 2>&1; then
-  log "Bot already running."
+  # Healthy watchdog checks remain silent so cron creates no routine log.
   exit 0
 fi
 
 log "Bot not running; launching..."
+mkdir -p "$LOG_DIR"
 nohup "$PYTHON_BIN" "$BOT_SCRIPT" >>"$LOG_FILE" 2>&1 &
 pid=$!
 log "Bot started with PID $pid."

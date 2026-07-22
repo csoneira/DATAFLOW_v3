@@ -49,7 +49,8 @@ slewing_correction: true
 slewing_delta_t_qsum1_bins: 7
 slewing_delta_t_qsum2_bins: 8
 slewing_delta_t_fit_degree: 1
-# Use log(Q_sum) instead of linear Q_sum for the slewing stage and its plots.
+# Use signed_log1p(Q_sum) instead of linear Q_sum for the slewing stage and its
+# plots. This retains finite non-zero negative charge values.
 slewing_use_log_qsum: true
 # Reference convention for slewing_per_strip_from_pair_fit: mean_zero | max_charge
 slewing_per_strip_reference_mode: mean_zero

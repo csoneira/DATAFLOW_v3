@@ -23,7 +23,13 @@ LOCK_FILE="${BASE_DIR}/OPERATIONS/OPERATIONS_RUNTIME/LOCKS/cron/stop_execution.l
 LOG_DIR="${BASE_DIR}/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/CLEANERS"
 INTERNAL_LOG="${LOG_DIR}/stop_execution_internal.log"
 
-mkdir -p "${LOG_DIR}"
+# When launched through cron_run_logged.sh, stdout is already retained in the
+# declared cron log. Keep the internal file only for standalone invocations.
+if [[ -n "${CRON_LOG_PATH:-}" ]]; then
+  INTERNAL_LOG="/dev/stdout"
+else
+  mkdir -p "${LOG_DIR}"
+fi
 mkdir -p "$(dirname "${LOCK_FILE}")"
 
 {

@@ -305,19 +305,15 @@ script_name=$(basename "$0")
 script_args="$original_args"
 current_pid=$$
 
+script_path=$(readlink -f "$0")
 running_count=$(
-    ps -eo pid,args | awk -v me="$current_pid" -v st="$station" -v script="$script_name" '
-        {
-            for(i=2;i<=NF;i++){
-                if(index($(i),script)){
-                    if($(i+1)==st && $1!=me){c++}
-                    break
-                }
-            }
-        }
-        END{print c+0}
-    '
+    ps -eo pid=,args= \
+        | grep -Ec "^[[:space:]]*[0-9]+[[:space:]]+(/usr/bin/|/bin/)?bash[[:space:]]+${script_path}[[:space:]]+${station}([[:space:]]|$)" \
+        || true
 )
+if (( running_count > 0 )); then
+    ((running_count-=1))
+fi
 
 if (( running_count >= max_parallel )); then
     echo "------------------------------------------------------"
@@ -347,6 +343,7 @@ step_1_output_uncompressed="${step_1_output_directory}/UNCOMPRESSED_HLDS"
 qa_retry_manifest_csv="${step0_output_directory}/qa_retry_manifest_${station}"
 qa_retry_manifest_csv="${qa_retry_manifest_csv}.csv"
 qa_retry_state_csv="${step0_metadata_directory}/qa_retry_state_${station}.csv"
+active_reprocessing_csv="${REPO_ROOT}/OPERATIONS/OPERATIONS_RUNTIME/STATE/REPROCESS_BASENAMES/active_reprocessing.csv"
 input_directory="${reprocessing_directory}/INPUT_FILES"
 unprocessed_uncompressed="${input_directory}/UNPROCESSED"
 completed_uncompressed="${input_directory}/COMPLETED"
@@ -354,6 +351,11 @@ processing_directory="${input_directory}/PROCESSING"
 error_directory="${input_directory}/ERROR"
 metadata_directory="${reprocessing_directory}/METADATA"
 stage0_to_1_directory="${station_directory}/STAGE_0_TO_1"
+task0_directory="${station_directory}/STAGE_1/EVENT_DATA/STEP_1/TASK_0"
+task0_input_directory="${task0_directory}/INPUT_FILES"
+task0_output_directory="${task0_directory}/OUTPUT_FILES"
+task0_execution_csv="${task0_directory}/METADATA/task_0_metadata_execution.csv"
+stage1_product_metadata_directory="${station_directory}/STAGE_1_PRODUCTS/EVENT_DATA/METADATA"
 # csv_path="${station_directory}/database_status_${station_code}.csv"
 
 mkdir -p \
@@ -368,6 +370,7 @@ dat_unpacked_csv="${metadata_directory}/dat_files_unpacked.csv"
 dat_unpacked_header="dat_name,execution_timestamp,execution_duration_s,actually_unpacked"
 declare -A dat_unpacked_basenames=()
 declare -A qa_retry_basenames=()
+declare -A active_reprocessing_basenames=()
 
 # csv_path="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0${station}/database_status_${station}.csv"
 csv_header="basename,start_date,hld_remote_add_date,hld_local_add_date,dat_add_date,list_ev_name,list_ev_add_date,acc_name,acc_add_date,merge_add_date"
@@ -436,6 +439,16 @@ load_qa_retry_manifest_basenames() {
     done < "$qa_retry_manifest_csv"
 }
 
+load_active_reprocessing_basenames() {
+    active_reprocessing_basenames=()
+    [[ -s "$active_reprocessing_csv" ]] || return 0
+    while IFS="," read -r request_station request_base _task _requested_at stage0_fallback _rest; do
+        [[ "$request_station" == "MINGO${station_code}" ]] || continue
+        [[ "$stage0_fallback" == "1" ]] || continue
+        [[ -n "$request_base" ]] && active_reprocessing_basenames["$request_base"]=1
+    done < "$active_reprocessing_csv"
+}
+
 mark_qa_retry_admitted_state() {
     local base="$1"
     local admitted_at="$2"
@@ -484,6 +497,36 @@ strip_suffix() {
     name=${name%.hld}
     name=${name%.dat}
     printf '%s' "$name"
+}
+
+has_stage1_handoff_evidence() {
+    local base="$1"
+    [[ -n "$base" ]] || return 1
+
+    if [[ -f "$stage0_to_1_directory/${base}.dat" || -f "$task0_output_directory/raw_${base}.parquet" ]]; then
+        return 0
+    fi
+
+    shopt -s nullglob
+    local -a task0_inputs=("$task0_input_directory"/*/"${base}.dat")
+    shopt -u nullglob
+    if (( ${#task0_inputs[@]} > 0 )); then
+        return 0
+    fi
+
+    shopt -s nullglob
+    local metadata_csv
+    local -a execution_metadata_files=(
+        "$task0_execution_csv"
+        "$stage1_product_metadata_directory"/TASK_*/task_*_metadata_execution.csv
+    )
+    shopt -u nullglob
+    for metadata_csv in "${execution_metadata_files[@]}"; do
+        if [[ -s "$metadata_csv" ]] && grep -Fq "${base}," "$metadata_csv"; then
+            return 0
+        fi
+    done
+    return 1
 }
 
 basename_time_key() {
@@ -755,12 +798,14 @@ process_single_hld() {
 
     load_dat_unpacked_basenames
     load_qa_retry_manifest_basenames
+    load_active_reprocessing_basenames
     if $reprocess_completed; then
         echo "Loaded ${#dat_unpacked_basenames[@]} previously unpacked basenames (reprocess_completed=true, so they will be reprocessed if present)."
     else
         echo "Loaded ${#dat_unpacked_basenames[@]} previously unpacked basenames as exclusions."
     fi
     echo "Loaded ${#qa_retry_basenames[@]} active QA retry basenames from STEP_0 manifest."
+    echo "Loaded ${#active_reprocessing_basenames[@]} active operator reprocessing basenames requiring Stage 0."
 
     echo "Creating necessary directories..."
     mkdir -p \
@@ -835,12 +880,16 @@ process_single_hld() {
             candidate_base=$(strip_suffix "$(basename "$candidate")")
             [[ -z "$candidate_base" ]] && candidate_base="$(basename "$candidate")"
             if [[ -n ${dat_unpacked_basenames["$candidate_base"]+_} ]]; then
-                if [[ -n ${qa_retry_basenames["$candidate_base"]+_} ]]; then
+                if [[ -n ${active_reprocessing_basenames["$candidate_base"]+_} ]]; then
+                    echo "  -> Re-processing $(basename "$candidate") (active operator Stage 0 fallback)."
+                elif [[ -n ${qa_retry_basenames["$candidate_base"]+_} ]]; then
                     echo "  -> Re-processing $(basename "$candidate") (active QA retry manifest entry)."
                 elif $reprocess_completed; then
                     echo "  -> Re-processing $(basename "$candidate") (record exists in dat_files_unpacked.csv; reprocess_completed=true)."
+                elif ! has_stage1_handoff_evidence "$candidate_base"; then
+                    echo "  -> Re-processing $(basename "$candidate") (unpack record exists but no Stage 1 handoff remains)."
                 else
-                    echo "  -> Skipping $(basename "$candidate") (already recorded in dat_files_unpacked.csv)."
+                    echo "  -> Skipping $(basename "$candidate") (already unpacked with Stage 1 handoff evidence)."
                     mv -f "$candidate" "$completed_uncompressed/$(basename "$candidate")"
                     echo "     Moved to COMPLETED to avoid repeated checks."
                     local skip_timestamp

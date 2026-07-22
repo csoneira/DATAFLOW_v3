@@ -138,6 +138,7 @@ from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.step1_shared import (
     extract_chi2_four_plane_metadata,
     extract_rate_histogram_metadata,
     extract_trigger_type_metadata,
+    ensure_plane_xpos_columns,
     is_trigger_type_file_column,
     is_trigger_type_metadata_column,
     is_specific_metadata_excluded_column,
@@ -4885,6 +4886,7 @@ config = resolve_step1_effective_task_config(
     warn_if_missing_filter=True,
     log_fn=print,
 )
+file_selection_mode = str(config.get("file_selection_mode", "new")).strip().lower()
 process_only_qa_retry_files = bool(config.get("process_only_qa_retry_files", False))
 joined_analysis_files = coerce_positive_int_config(config.get("joined_analysis_files"), default=1)
 joined_analysis_time_tolerance_hours = coerce_nonnegative_float_config(
@@ -5336,7 +5338,31 @@ if date_ranges:
         )
 
 active_qa_retry_basenames: set[str] = set()
-if process_only_qa_retry_files:
+if file_selection_mode == "qa":
+    active_qa_retry_basenames = load_active_qa_retry_basenames(
+        station,
+        repo_root=repo_root,
+    )
+    qa_unprocessed_files = filter_filenames_by_qa_retry_basenames(
+        unprocessed_files, active_qa_retry_basenames
+    )
+    qa_processing_files = filter_filenames_by_qa_retry_basenames(
+        processing_files, active_qa_retry_basenames
+    )
+    qa_completed_files = filter_filenames_by_qa_retry_basenames(
+        completed_files, active_qa_retry_basenames
+    )
+    if qa_unprocessed_files or qa_processing_files or qa_completed_files:
+        unprocessed_files = qa_unprocessed_files
+        processing_files = qa_processing_files
+        completed_files = qa_completed_files
+    print(
+        "[FILE_SELECTION] mode=qa; QA candidates are preferred with fallback: "
+        f"UNPROCESSED={len(qa_unprocessed_files)} "
+        f"PROCESSING={len(qa_processing_files)} "
+        f"COMPLETED={len(qa_completed_files)}"
+    )
+elif process_only_qa_retry_files:
     active_qa_retry_basenames = load_active_qa_retry_basenames(
         station,
         repo_root=repo_root,
@@ -5784,6 +5810,13 @@ globals().update(
         announce_geometry=True,
     )
 )
+task4_xpos_summary = ensure_plane_xpos_columns(working_df, tdiff_to_x, overwrite=True)
+if task4_xpos_summary["source_columns_found"] != 4:
+    raise RuntimeError(
+        "Task 4 input is missing one or more p#_tdif columns required for plane X: "
+        f"{task4_xpos_summary}"
+    )
+print(f"Task 4 plane X persistence check: {task4_xpos_summary}")
 
 TRACK_COMBINATIONS: tuple[str, ...] = (
     "12", "13", "14", "23", "24", "34",
@@ -10995,6 +11028,13 @@ columns_to_keep = (
         'x', 'x_err', 'y', 'y_err', 'theta', 'theta_err', 'phi', 'phi_err', 's', 's_err',
         'tim_th_chi_sigmafit_1234', 'xp', 'yp',
 
+        # Final per-plane detector observables and hit positions
+        *[
+            f'p{p}_{suffix}'
+            for p in range(1, 5)
+            for suffix in ('tsum', 'tdif', 'qsum', 'qdif', 'xpos', 'ypos')
+        ],
+
         # Charge
 
         # # Chisqs
@@ -11068,6 +11108,35 @@ if VERBOSE:
     print("Columns before saving list->fit parquet:")
     for col in working_df.columns:
         print(f" - {col}")
+# Task 4 uses ``s`` internally and canonicalizes it to ``event_s`` when the
+# fitted parquet is written. Store scalar diagnostics under the canonical
+# name so the specific metadata schema matches the persisted event variable.
+event_s_source_column = next(
+    (column_name for column_name in ("event_s", "s") if column_name in working_df.columns),
+    None,
+)
+if event_s_source_column is None:
+    event_s_values = np.asarray([], dtype=float)
+else:
+    event_s_values = pd.to_numeric(
+        working_df[event_s_source_column],
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    event_s_values = event_s_values[
+        np.isfinite(event_s_values) & (event_s_values != 0.0)
+    ]
+
+event_s_median = float(np.median(event_s_values)) if event_s_values.size else np.nan
+event_s_std = float(np.std(event_s_values, ddof=0)) if event_s_values.size else np.nan
+global_variables["event_s_median"] = event_s_median
+global_variables["event_s_std"] = event_s_std
+print(
+    "Task 4 event_s metadata: "
+    f"median={event_s_median:.6g}, "
+    f"std={event_s_std:.6g}, "
+    f"finite_nonzero_events={event_s_values.size}"
+)
+
 print("Rounding the final dataframe values.")
 for col in working_df.select_dtypes(include=[np.floating]).columns:
     original_dtype = working_df[col].dtype

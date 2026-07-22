@@ -10,8 +10,10 @@
 # Merging daq data and log files
 # --------------------------------------------------------------------------------------
 
-# Replace current crontab with the contents of ~/DATAFLOW_v3/CONFIG/add_to_crontab.info
-* * * * * crontab ~/station_automation_scripts/add_to_crontab_mingo.info
+# Install this file explicitly during deployment with:
+#   crontab ~/station_automation_scripts/add_to_crontab_mingo.info
+# Do not reinstall the whole crontab from cron every minute; that can
+# unintentionally revert emergency manual disables and causes needless churn.
 
 # Define the base directory for scripts
 BASE_DIR=/home/rpcuser/station_automation_scripts
@@ -61,7 +63,7 @@ BASE_DIR=/home/rpcuser/station_automation_scripts
 */5 * * * * sleep 4; /home/rpcuser/gate/mingo01/daqScripts/octave/readOdroid.sh
 
 # SelfTrigger; 4 A.M.
-0 4 * * *; /home/rpcuser/trbsoft/userscripts/trb/trigger/activateST.sh
+0 4 * * * /home/rpcuser/trbsoft/userscripts/trb/trigger/activateST.sh
 
 # keep remoteTunnelOpen
 * * * * * /home/rpcuser/gate/bin/keepRemoteTunnelOpen.sh
@@ -79,7 +81,7 @@ BASE_DIR=/home/rpcuser/station_automation_scripts
 #0 * * * * sleep 1; python3 /home/rpcuser/pythonScripts/checkFlow.py
 
 # The special log: TRB3 sc rates
-*/5 * * * *; /home/rpcuser/gate/python/log_CTSrates_multiProcessing.py -t 50 -p /home/rpcuser/logs/
+*/5 * * * * /home/rpcuser/gate/python/log_CTSrates_multiProcessing.py -t 50 -p /home/rpcuser/logs/
 
 # Bot
 # Check if the bot is running and run it if it is not. Every minute

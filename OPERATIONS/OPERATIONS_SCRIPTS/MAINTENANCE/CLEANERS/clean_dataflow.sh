@@ -47,7 +47,7 @@ log_detail() {
 usage() {
   cat <<'EOF'
 clean_dataflow.sh
-Unified cleaner for DATAFLOW_v3 artefacts (COMPLETED_DIRECTORY exports, plot bundles, and Stage-0 buffers).
+Unified cleaner for DATAFLOW_v3 artefacts (COMPLETED_DIRECTORY exports, QA-verified intermediates, plot bundles, and Stage-0 buffers).
 
 Usage:
   clean_dataflow.sh [--force|-f] [--threshold|-t <percent>] [--select|-s <list>] [--compact|-c] [--keep-final] [--kill-lock-holder]
@@ -67,6 +67,10 @@ Options:
   --kill-lock-holder     If another clean_dataflow process holds the lock, terminate it,
                          remove the stale lock file, and continue. Use only after checking
                          that the previous cleaner should be stopped.
+
+Emergency fallback:
+  After the selected ordinary cleanups finish, if /home is still at least 90% full,
+  globally prune the oldest station PARQUET_LAKE .parquet files until below 89%.
 
 Examples:
   clean_dataflow.sh
@@ -94,7 +98,10 @@ KEEP_FINAL_TRIGGER_PCT="${DATAFLOW_CLEAN_KEEP_FINAL_TRIGGER_PCT:-90}"
 KEEP_FINAL_TARGET_PCT="${DATAFLOW_CLEAN_KEEP_FINAL_TARGET_PCT:-60}"
 STEP12_EMERGENCY_TRIGGER_PCT="${DATAFLOW_CLEAN_STEP12_EMERGENCY_TRIGGER_PCT:-90}"
 STEP12_EMERGENCY_TARGET_PCT="${DATAFLOW_CLEAN_STEP12_EMERGENCY_TARGET_PCT:-89}"
-STEP12_EMERGENCY_DIR="${DATAFLOW_CLEAN_STEP12_EMERGENCY_DIR:-$DATAFLOW_ROOT/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1_PRODUCTS/EVENT_DATA/PARQUET_LAKE}"
+# Optional compatibility override for testing or a deliberately restricted run.
+# When unset, emergency cleanup considers every station PARQUET_LAKE globally.
+STEP12_EMERGENCY_DIR="${DATAFLOW_CLEAN_STEP12_EMERGENCY_DIR:-}"
+QA_REPROCESSING_SUMMARY="${DATAFLOW_CLEAN_QA_SUMMARY:-$DATAFLOW_ROOT/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/QUALITY_ASSURANCE_NEW/TOTAL_SUMMARY/OUTPUTS/FILES/qa_all_stations_reprocessing_quality.csv}"
 
 declare -A TYPE_BEFORE=()
 declare -A TYPE_AFTER=()
@@ -165,7 +172,7 @@ label_for_type() {
   case "$1" in
     temps) echo "temps";;
     plots) echo "plots";;
-    completed) echo "completed/error directories";;
+    completed) echo "completed directories";;
     cronlogs) echo "cron logs";;
     *) echo "$1";;
   esac
@@ -260,16 +267,30 @@ run_step12_emergency_cleanup() {
     return 0
   fi
 
+  local -a emergency_dirs=()
+  local station_dir lake_dir
+  if [[ -n "$STEP12_EMERGENCY_DIR" ]]; then
+    [[ -d "$STEP12_EMERGENCY_DIR" ]] && emergency_dirs+=("$STEP12_EMERGENCY_DIR")
+  else
+    for station_dir in "$STATIONS_BASE"/MINGO0[0-9]; do
+      [[ -d "$station_dir" ]] || continue
+      lake_dir="$station_dir/STAGE_1_PRODUCTS/EVENT_DATA/PARQUET_LAKE"
+      [[ -d "$lake_dir" ]] && emergency_dirs+=("$lake_dir")
+    done
+  fi
+
   log_info ""
   log_info "========== EMERGENCY EVENT_PARQUET_LAKE CLEANUP =========="
   log_info "Disk usage is ${current_usage}% which is >= ${STEP12_EMERGENCY_TRIGGER_PCT}%."
-  log_info "Deleting oldest files from:"
-  log_info "  $STEP12_EMERGENCY_DIR"
+  log_info "Deleting globally oldest .parquet files from ${#emergency_dirs[@]} lake(s):"
+  for lake_dir in "${emergency_dirs[@]}"; do
+    log_info "  $lake_dir"
+  done
   log_info "Target: reduce /home usage below ${STEP12_EMERGENCY_TARGET_PCT}% or stop when no files remain."
   log_info "=========================================================="
 
-  if [[ ! -d "$STEP12_EMERGENCY_DIR" ]]; then
-    log_info "EVENT_PARQUET_LAKE emergency directory not found. Nothing to delete."
+  if (( ${#emergency_dirs[@]} == 0 )); then
+    log_warn "No station EVENT_DATA/PARQUET_LAKE directories found. Nothing to delete."
     return 0
   fi
 
@@ -301,7 +322,10 @@ run_step12_emergency_cleanup() {
         fi
       fi
     fi
-  done < <(find "$STEP12_EMERGENCY_DIR" -type f -printf '%T@\t%s\t%p\0' 2>/dev/null | sort -z -n)
+  done < <(
+    find "${emergency_dirs[@]}" -maxdepth 1 -type f -name "*.parquet" \
+      -printf "%T@\t%s\t%p\0" 2>/dev/null | sort -z -n
+  )
 
   current_usage=$(disk_usage_percent)
   STEP12_EMERGENCY_COUNT=$deleted_count
@@ -312,6 +336,77 @@ run_step12_emergency_cleanup() {
   log_info "Freed:         $(format_bytes "$deleted_bytes")"
   log_info "Disk usage:    ${current_usage:-unknown}%"
   log_info "==============================================================="
+}
+
+
+clean_verified_lake_qa_intermediates() {
+  if [[ ! -s "$QA_REPROCESSING_SUMMARY" ]]; then
+    log_warn "Verified Stage-1 cleanup skipped: QA summary is missing or empty: $QA_REPROCESSING_SUMMARY"
+    return 0
+  fi
+
+  local qa_cutoff
+  qa_cutoff=$(stat -c %Y "$QA_REPROCESSING_SUMMARY" 2>/dev/null || true)
+  if [[ -z "$qa_cutoff" ]]; then
+    log_warn "Verified Stage-1 cleanup skipped: cannot read QA summary timestamp."
+    return 0
+  fi
+
+  local total_eligible=0
+  local total_deleted=0
+  local total_bytes=0
+  local station_dir station_name lake_dir step1_dir task_root target_root file file_name file_mtime file_size
+  local -a target_roots=()
+  local qa_station qa_basename qa_timestamp qa_status qa_rest
+
+  for station_dir in "$STATIONS_BASE"/MINGO0[0-9]; do
+    [[ -d "$station_dir" ]] || continue
+    station_name=$(basename "$station_dir")
+    lake_dir="$station_dir/STAGE_1_PRODUCTS/EVENT_DATA/PARQUET_LAKE"
+    step1_dir="$station_dir/STAGE_1/EVENT_DATA/STEP_1"
+    [[ -d "$lake_dir" && -d "$step1_dir" ]] || continue
+
+    unset eligible_basenames
+    declare -A eligible_basenames=()
+    while IFS=, read -r qa_station qa_basename qa_timestamp qa_status qa_rest; do
+      [[ "$qa_station" == "$station_name" ]] || continue
+      [[ "$qa_status" == "pass" ]] || continue
+      [[ "$qa_basename" =~ ^mi0[0-9][0-9]{11}$ ]] || continue
+      [[ -f "$lake_dir/postprocessed_${qa_basename}.parquet" ]] || continue
+      eligible_basenames["$qa_basename"]=1
+    done < <(tail -n +2 "$QA_REPROCESSING_SUMMARY")
+
+    total_eligible=$((total_eligible + ${#eligible_basenames[@]}))
+    (( ${#eligible_basenames[@]} > 0 )) || continue
+
+    target_roots=()
+    for task_root in "$step1_dir"/TASK_*; do
+      [[ -d "$task_root" ]] || continue
+      for target_root in "$task_root/INPUT_FILES" "$task_root/OUTPUT_FILES" "$task_root/ANCILLARY"; do
+        [[ -d "$target_root" ]] && target_roots+=("$target_root")
+      done
+    done
+    (( ${#target_roots[@]} > 0 )) || continue
+
+    while IFS= read -r -d "" file; do
+      file_name=$(basename "$file")
+      [[ "$file_name" =~ (mi0[0-9][0-9]{11}) ]] || continue
+      qa_basename="${BASH_REMATCH[1]}"
+      [[ -n ${eligible_basenames["$qa_basename"]:-} ]] || continue
+      file_mtime=$(stat -c %Y "$file" 2>/dev/null || true)
+      [[ -n "$file_mtime" && "$file_mtime" -le "$qa_cutoff" ]] || continue
+      file_size=$(stat -c %s "$file" 2>/dev/null || printf 0)
+      chmod u+w -- "$file" 2>/dev/null || true
+      if rm -f -- "$file"; then
+        total_deleted=$((total_deleted + 1))
+        total_bytes=$((total_bytes + file_size))
+      else
+        log_warn "Failed to remove verified Stage-1 intermediate: $file"
+      fi
+    done < <(find "${target_roots[@]}" -type f -print0 2>/dev/null)
+  done
+
+  log_info "Lake+QA verified Stage-1 cleanup: eligible basenames=$total_eligible removed files=$total_deleted freed=$(format_bytes "$total_bytes")"
 }
 
 clean_completed() {
@@ -350,21 +445,16 @@ clean_completed() {
     [[ -d "$station_dir" ]] || continue
     for dir in \
       "$station_dir"/STAGE_1/EVENT_DATA/STEP_1/TASK_*/INPUT_FILES/COMPLETED_DIRECTORY \
-      "$station_dir"/STAGE_1/EVENT_DATA/STEP_1/TASK_*/INPUT_FILES/ERROR_DIRECTORY \
-      "$station_dir"/STAGE_1/EVENT_DATA/STEP_1/TASK_1/ANCILLARY/REJECTED_FILES \
       "$station_dir"/STAGE_2/EVENT_DATA/STEP_1_ACCUMULATION/INPUT_FILES/COMPLETED \
-      "$station_dir"/STAGE_2/EVENT_DATA/STEP_1_ACCUMULATION/INPUT_FILES/ERROR_DIRECTORY \
       "$station_dir"/STAGE_2/EVENT_DATA/STEP_2_DAILY_EVENT_DATA/TASK_1/INPUT_FILES \
       "$station_dir"/STAGE_1/LOG_DATA/STEP_*/INPUT_FILES/COMPLETED \
-      "$station_dir"/STAGE_1/LOG_DATA/STEP_*/INPUT_FILES/ERROR* \
-      "$station_dir"/STAGE_0/REPROCESSING/STEP_2/INPUT_FILES/COMPLETED \
-      "$station_dir"/STAGE_0/REPROCESSING/STEP_2/INPUT_FILES/ERROR*; do
+      "$station_dir"/STAGE_0/REPROCESSING/STEP_2/INPUT_FILES/COMPLETED; do
       add_completed_dir "$dir"
     done
   done
 
   if (( ${#dirs[@]} == 0 )); then
-    log_info "No completed or error directories found."
+    log_info "No completed directories found."
     TYPE_BEFORE["$type"]=0
     TYPE_AFTER["$type"]=0
     TYPE_FREED["$type"]=0
@@ -389,7 +479,7 @@ clean_completed() {
   TYPE_FREED["$type"]=$freed
   TYPE_COUNTS["$type"]=${#dirs[@]}
 
-  log_info "Completed/Error directories cleaned: ${#dirs[@]}"
+  log_info "Completed directories cleaned: ${#dirs[@]}"
   log_info "   Size accounting skipped for speed."
 
   prune_final_completed_if_needed "${final_dirs[@]}"
@@ -1011,6 +1101,8 @@ for type in "${SELECTED_TYPES[@]}"; do
       clean_plots
       ;;
     completed)
+      log_info "=== Cleaning lake-backed QA-passed Stage-1 intermediates ==="
+      clean_verified_lake_qa_intermediates
       log_info "=== Cleaning COMPLETED_DIRECTORY exports ==="
       clean_completed
       ;;
@@ -1079,6 +1171,10 @@ if [[ -d "$SIM_JUNK_BASE" ]]; then
 else
   log_info "SIMULATION_DATA_JUNK base directory not found: $SIM_JUNK_BASE"
 fi
+
+# Last-resort policy: only after every selected ordinary cleanup has run, prune
+# final parquet products if /home is still at or above the emergency trigger.
+run_step12_emergency_cleanup
 
 log_info ""
 log_info "Disk usage after cleaning: $(disk_usage_summary)"

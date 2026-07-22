@@ -1,0 +1,473 @@
+# Test 3: configurable event gates over a tight chronological product group.
+station: 2
+start_date: "2026-01-19"
+end_date: "2026-01-21"
+max_datafiles: 100
+
+# Calibration-history window shown before the gate plots. Use "full" for the
+# entire Task-2 metadata history, or e.g. "1week" for selected files ± one week.
+context: "1week"
+
+
+# Per-plane strip patterns and cluster sizes are derived from these calibrated
+# strip charges. A strip is active when its finite value is > threshold.
+# The derived columns usable below are p1..p4_cluster_size and
+# p1..p4_strip_topology; topology is a quoted four-character string such as
+# "1001" (strips 1 and 4 active).
+derived_strip_topology:
+  enabled: true
+  source_suffix: "qsum_cal"
+  active_when: "gt"
+  threshold: 0
+
+# Every code must be a distinct binary power of two: "1", "10", "100", ...
+# An event satisfying several gates receives their bitwise sum. For example,
+# satisfying codes 1000, 10, and 1 produces the exact combined code 1011.
+# Conditions support nested all/any/not trees. Leaf operators are:
+# lt, le, gt, ge, between, eq, ne, in, not_in, is_finite, is_zero,
+# nonzero, isna, notna, matches (full regular-expression match), and
+# abs_diff_lt/abs_diff_le with column, other_column, and value.
+gates:
+  # AND: every plane has final charge below 80.
+  - code: "1"
+    name: "all_plane_charge_below_80"
+    short_label: "Q80"
+    condition:
+      all:
+        - {column: "p1_qsum", op: "lt", value: 80}
+        - {column: "p2_qsum", op: "lt", value: 80}
+        - {column: "p3_qsum", op: "lt", value: 80}
+        - {column: "p4_qsum", op: "lt", value: 80}
+
+  # Every plane has zero or one active strip.
+  - code: "10"
+    name: "cluster_size_zero_or_one_all_planes"
+    short_label: "CS01"
+    condition:
+      all:
+        - {column: "p1_cluster_size", op: "in", values: [0, 1]}
+        - {column: "p2_cluster_size", op: "in", values: [0, 1]}
+        - {column: "p3_cluster_size", op: "in", values: [0, 1]}
+        - {column: "p4_cluster_size", op: "in", values: [0, 1]}
+
+  # At least one plane has topology 1001, with calibrated T_dif for both
+  # active strips inside inclusive [-1, 1]. Every other plane has cluster size
+  # 0 or 1. Multiple valid 1001 planes are accepted.
+  - code: "100"
+    name: "at_least_one_1001_tdif_pm1_others_zero_or_one_and_qsum_lt_50"
+    short_label: "1001"
+    condition:
+      all:
+        - any:
+            - all:
+                - {column: "p1_strip_topology", op: "eq", value: "1001"}
+                - {column: "p1_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p1_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - all:
+                - {column: "p2_strip_topology", op: "eq", value: "1001"}
+                - {column: "p2_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p2_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - all:
+                - {column: "p3_strip_topology", op: "eq", value: "1001"}
+                - {column: "p3_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p3_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - all:
+                - {column: "p4_strip_topology", op: "eq", value: "1001"}
+                - {column: "p4_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p4_s4_tdif_cal", op: "between", values: [-1, 1]}
+        - any:
+            - all:
+                - {column: "p1_strip_topology", op: "eq", value: "1001"}
+                - {column: "p1_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p1_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - {column: "p1_cluster_size", op: "in", values: [0, 1]}
+        - any:
+            - all:
+                - {column: "p2_strip_topology", op: "eq", value: "1001"}
+                - {column: "p2_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p2_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - {column: "p2_cluster_size", op: "in", values: [0, 1]}
+        - any:
+            - all:
+                - {column: "p3_strip_topology", op: "eq", value: "1001"}
+                - {column: "p3_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p3_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - {column: "p3_cluster_size", op: "in", values: [0, 1]}
+        - any:
+            - all:
+                - {column: "p4_strip_topology", op: "eq", value: "1001"}
+                - {column: "p4_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p4_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - {column: "p4_cluster_size", op: "in", values: [0, 1]}
+        - any:
+            - all:
+              - {column: "p1_qsum", op: "lt", value: 50}
+              - {column: "p2_qsum", op: "lt", value: 50}
+              - {column: "p3_qsum", op: "lt", value: 50}
+              - {column: "p4_qsum", op: "lt", value: 50}
+
+
+  # Gate 100 logic for a central adjacent-strip pair: topology 0110 (strips 2,3).
+  - code: "1000"
+    name: "at_least_one_0110_tdif_pm1_others_zero_or_one_and_qsum_lt_50"
+    short_label: "0110"
+    condition:
+      all:
+        - any:
+            - &g0110_p1
+              all:
+                - {column: "p1_strip_topology", op: "eq", value: "0110"}
+                - {column: "p1_s2_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p1_s3_tdif_cal", op: "between", values: [-1, 1]}
+            - &g0110_p2
+              all:
+                - {column: "p2_strip_topology", op: "eq", value: "0110"}
+                - {column: "p2_s2_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p2_s3_tdif_cal", op: "between", values: [-1, 1]}
+            - &g0110_p3
+              all:
+                - {column: "p3_strip_topology", op: "eq", value: "0110"}
+                - {column: "p3_s2_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p3_s3_tdif_cal", op: "between", values: [-1, 1]}
+            - &g0110_p4
+              all:
+                - {column: "p4_strip_topology", op: "eq", value: "0110"}
+                - {column: "p4_s2_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p4_s3_tdif_cal", op: "between", values: [-1, 1]}
+        - {any: [*g0110_p1, {column: "p1_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g0110_p2, {column: "p2_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g0110_p3, {column: "p3_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g0110_p4, {column: "p4_cluster_size", op: "in", values: [0, 1]}]}
+        - all:
+            - {column: "p1_qsum", op: "lt", value: 50}
+            - {column: "p2_qsum", op: "lt", value: 50}
+            - {column: "p3_qsum", op: "lt", value: 50}
+            - {column: "p4_qsum", op: "lt", value: 50}
+
+  # Gate 100 logic for topology 0101 (strips 2,4).
+  - code: "10000"
+    name: "at_least_one_0101_tdif_pm1_others_zero_or_one_and_qsum_lt_50"
+    short_label: "0101"
+    condition:
+      all:
+        - any:
+            - &g0101_p1
+              all:
+                - {column: "p1_strip_topology", op: "eq", value: "0101"}
+                - {column: "p1_s2_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p1_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - &g0101_p2
+              all:
+                - {column: "p2_strip_topology", op: "eq", value: "0101"}
+                - {column: "p2_s2_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p2_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - &g0101_p3
+              all:
+                - {column: "p3_strip_topology", op: "eq", value: "0101"}
+                - {column: "p3_s2_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p3_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - &g0101_p4
+              all:
+                - {column: "p4_strip_topology", op: "eq", value: "0101"}
+                - {column: "p4_s2_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p4_s4_tdif_cal", op: "between", values: [-1, 1]}
+        - {any: [*g0101_p1, {column: "p1_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g0101_p2, {column: "p2_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g0101_p3, {column: "p3_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g0101_p4, {column: "p4_cluster_size", op: "in", values: [0, 1]}]}
+        - all:
+            - {column: "p1_qsum", op: "lt", value: 50}
+            - {column: "p2_qsum", op: "lt", value: 50}
+            - {column: "p3_qsum", op: "lt", value: 50}
+            - {column: "p4_qsum", op: "lt", value: 50}
+
+  # Gate 100 logic for topology 1010 (strips 1,3).
+  - code: "100000"
+    name: "at_least_one_1010_tdif_pm1_others_zero_or_one_and_qsum_lt_50"
+    short_label: "1010"
+    condition:
+      all:
+        - any:
+            - &g1010_p1
+              all:
+                - {column: "p1_strip_topology", op: "eq", value: "1010"}
+                - {column: "p1_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p1_s3_tdif_cal", op: "between", values: [-1, 1]}
+            - &g1010_p2
+              all:
+                - {column: "p2_strip_topology", op: "eq", value: "1010"}
+                - {column: "p2_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p2_s3_tdif_cal", op: "between", values: [-1, 1]}
+            - &g1010_p3
+              all:
+                - {column: "p3_strip_topology", op: "eq", value: "1010"}
+                - {column: "p3_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p3_s3_tdif_cal", op: "between", values: [-1, 1]}
+            - &g1010_p4
+              all:
+                - {column: "p4_strip_topology", op: "eq", value: "1010"}
+                - {column: "p4_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p4_s3_tdif_cal", op: "between", values: [-1, 1]}
+        - {any: [*g1010_p1, {column: "p1_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g1010_p2, {column: "p2_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g1010_p3, {column: "p3_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g1010_p4, {column: "p4_cluster_size", op: "in", values: [0, 1]}]}
+        - all:
+            - {column: "p1_qsum", op: "lt", value: 50}
+            - {column: "p2_qsum", op: "lt", value: 50}
+            - {column: "p3_qsum", op: "lt", value: 50}
+            - {column: "p4_qsum", op: "lt", value: 50}
+
+
+  # Gate 100 logic for topology 1100 (strips 1,2).
+  - code: "1000000"
+    name: "at_least_one_1100_tdif_pm1_others_zero_or_one_and_qsum_lt_50"
+    short_label: "1100"
+    condition:
+      all:
+        - any:
+            - &g1100_p1
+              all:
+                - {column: "p1_strip_topology", op: "eq", value: "1100"}
+                - {column: "p1_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p1_s2_tdif_cal", op: "between", values: [-1, 1]}
+            - &g1100_p2
+              all:
+                - {column: "p2_strip_topology", op: "eq", value: "1100"}
+                - {column: "p2_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p2_s2_tdif_cal", op: "between", values: [-1, 1]}
+            - &g1100_p3
+              all:
+                - {column: "p3_strip_topology", op: "eq", value: "1100"}
+                - {column: "p3_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p3_s2_tdif_cal", op: "between", values: [-1, 1]}
+            - &g1100_p4
+              all:
+                - {column: "p4_strip_topology", op: "eq", value: "1100"}
+                - {column: "p4_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p4_s2_tdif_cal", op: "between", values: [-1, 1]}
+        - {any: [*g1100_p1, {column: "p1_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g1100_p2, {column: "p2_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g1100_p3, {column: "p3_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g1100_p4, {column: "p4_cluster_size", op: "in", values: [0, 1]}]}
+        - all:
+            - {column: "p1_qsum", op: "lt", value: 50}
+            - {column: "p2_qsum", op: "lt", value: 50}
+            - {column: "p3_qsum", op: "lt", value: 50}
+            - {column: "p4_qsum", op: "lt", value: 50}
+
+  # Gate 100 logic for topology 0011 (strips 3,4).
+  - code: "10000000"
+    name: "at_least_one_0011_tdif_pm1_others_zero_or_one_and_qsum_lt_50"
+    short_label: "0011"
+    condition:
+      all:
+        - any:
+            - &g0011_p1
+              all:
+                - {column: "p1_strip_topology", op: "eq", value: "0011"}
+                - {column: "p1_s3_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p1_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - &g0011_p2
+              all:
+                - {column: "p2_strip_topology", op: "eq", value: "0011"}
+                - {column: "p2_s3_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p2_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - &g0011_p3
+              all:
+                - {column: "p3_strip_topology", op: "eq", value: "0011"}
+                - {column: "p3_s3_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p3_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - &g0011_p4
+              all:
+                - {column: "p4_strip_topology", op: "eq", value: "0011"}
+                - {column: "p4_s3_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p4_s4_tdif_cal", op: "between", values: [-1, 1]}
+        - {any: [*g0011_p1, {column: "p1_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g0011_p2, {column: "p2_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g0011_p3, {column: "p3_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g0011_p4, {column: "p4_cluster_size", op: "in", values: [0, 1]}]}
+        - all:
+            - {column: "p1_qsum", op: "lt", value: 50}
+            - {column: "p2_qsum", op: "lt", value: 50}
+            - {column: "p3_qsum", op: "lt", value: 50}
+            - {column: "p4_qsum", op: "lt", value: 50}
+
+
+  # Accept every four-bit plane topology except the specified disjoint pairs.
+  # The condition is an AND across planes: one forbidden plane rejects the event.
+  - code: "100000000"
+    name: "no_disjoint_plane_topology"
+    short_label: "NG"
+    condition:
+      all:
+        - {column: "p1_strip_topology", op: "not_in", values: ["1010", "0101", "1001"]}
+        - {column: "p2_strip_topology", op: "not_in", values: ["1010", "0101", "1001"]}
+        - {column: "p3_strip_topology", op: "not_in", values: ["1010", "0101", "1001"]}
+        - {column: "p4_strip_topology", op: "not_in", values: ["1010", "0101", "1001"]}
+
+
+  # Gate 100000000 plus timing agreement for every contiguous two-strip plane.
+  # Other admitted topologies do not receive a pair-difference timing cut.
+  - code: "1000000000"
+    name: "no_disjoint_with_contiguous_pair_timing_consistency"
+    short_label: "NGT"
+    condition:
+      all:
+        - {column: "p1_strip_topology", op: "not_in", values: ["1010", "0101", "1001"]}
+        - {column: "p2_strip_topology", op: "not_in", values: ["1010", "0101", "1001"]}
+        - {column: "p3_strip_topology", op: "not_in", values: ["1010", "0101", "1001"]}
+        - {column: "p4_strip_topology", op: "not_in", values: ["1010", "0101", "1001"]}
+        - any:
+            - {column: "p1_strip_topology", op: "not_in", values: ["1100", "0110", "0011"]}
+            - all:
+                - {column: "p1_strip_topology", op: "eq", value: "1100"}
+                - {column: "p1_s1_tdif_cal", other_column: "p1_s2_tdif_cal", op: "abs_diff_lt", value: 0.25}
+                - {column: "p1_s1_tsum_cal", other_column: "p1_s2_tsum_cal", op: "abs_diff_lt", value: 2.5}
+            - all:
+                - {column: "p1_strip_topology", op: "eq", value: "0110"}
+                - {column: "p1_s2_tdif_cal", other_column: "p1_s3_tdif_cal", op: "abs_diff_lt", value: 0.25}
+                - {column: "p1_s2_tsum_cal", other_column: "p1_s3_tsum_cal", op: "abs_diff_lt", value: 2.5}
+            - all:
+                - {column: "p1_strip_topology", op: "eq", value: "0011"}
+                - {column: "p1_s3_tdif_cal", other_column: "p1_s4_tdif_cal", op: "abs_diff_lt", value: 0.25}
+                - {column: "p1_s3_tsum_cal", other_column: "p1_s4_tsum_cal", op: "abs_diff_lt", value: 2.5}
+        - any:
+            - {column: "p2_strip_topology", op: "not_in", values: ["1100", "0110", "0011"]}
+            - all:
+                - {column: "p2_strip_topology", op: "eq", value: "1100"}
+                - {column: "p2_s1_tdif_cal", other_column: "p2_s2_tdif_cal", op: "abs_diff_lt", value: 0.25}
+                - {column: "p2_s1_tsum_cal", other_column: "p2_s2_tsum_cal", op: "abs_diff_lt", value: 2.5}
+            - all:
+                - {column: "p2_strip_topology", op: "eq", value: "0110"}
+                - {column: "p2_s2_tdif_cal", other_column: "p2_s3_tdif_cal", op: "abs_diff_lt", value: 0.25}
+                - {column: "p2_s2_tsum_cal", other_column: "p2_s3_tsum_cal", op: "abs_diff_lt", value: 2.5}
+            - all:
+                - {column: "p2_strip_topology", op: "eq", value: "0011"}
+                - {column: "p2_s3_tdif_cal", other_column: "p2_s4_tdif_cal", op: "abs_diff_lt", value: 0.25}
+                - {column: "p2_s3_tsum_cal", other_column: "p2_s4_tsum_cal", op: "abs_diff_lt", value: 2.5}
+        - any:
+            - {column: "p3_strip_topology", op: "not_in", values: ["1100", "0110", "0011"]}
+            - all:
+                - {column: "p3_strip_topology", op: "eq", value: "1100"}
+                - {column: "p3_s1_tdif_cal", other_column: "p3_s2_tdif_cal", op: "abs_diff_lt", value: 0.25}
+                - {column: "p3_s1_tsum_cal", other_column: "p3_s2_tsum_cal", op: "abs_diff_lt", value: 2.5}
+            - all:
+                - {column: "p3_strip_topology", op: "eq", value: "0110"}
+                - {column: "p3_s2_tdif_cal", other_column: "p3_s3_tdif_cal", op: "abs_diff_lt", value: 0.25}
+                - {column: "p3_s2_tsum_cal", other_column: "p3_s3_tsum_cal", op: "abs_diff_lt", value: 2.5}
+            - all:
+                - {column: "p3_strip_topology", op: "eq", value: "0011"}
+                - {column: "p3_s3_tdif_cal", other_column: "p3_s4_tdif_cal", op: "abs_diff_lt", value: 0.25}
+                - {column: "p3_s3_tsum_cal", other_column: "p3_s4_tsum_cal", op: "abs_diff_lt", value: 2.5}
+        - any:
+            - {column: "p4_strip_topology", op: "not_in", values: ["1100", "0110", "0011"]}
+            - all:
+                - {column: "p4_strip_topology", op: "eq", value: "1100"}
+                - {column: "p4_s1_tdif_cal", other_column: "p4_s2_tdif_cal", op: "abs_diff_lt", value: 0.25}
+                - {column: "p4_s1_tsum_cal", other_column: "p4_s2_tsum_cal", op: "abs_diff_lt", value: 2.5}
+            - all:
+                - {column: "p4_strip_topology", op: "eq", value: "0110"}
+                - {column: "p4_s2_tdif_cal", other_column: "p4_s3_tdif_cal", op: "abs_diff_lt", value: 0.25}
+                - {column: "p4_s2_tsum_cal", other_column: "p4_s3_tsum_cal", op: "abs_diff_lt", value: 2.5}
+            - all:
+                - {column: "p4_strip_topology", op: "eq", value: "0011"}
+                - {column: "p4_s3_tdif_cal", other_column: "p4_s4_tdif_cal", op: "abs_diff_lt", value: 0.25}
+                - {column: "p4_s3_tsum_cal", other_column: "p4_s4_tsum_cal", op: "abs_diff_lt", value: 2.5}
+
+
+  # Reference gate: accept every event, including topology 0000.
+  - code: "10000000000"
+    name: "all_events"
+    short_label: "ALL"
+    condition:
+      {column: "p1_strip_topology", op: "matches", value: "[01]{4}"}
+
+# Events are first counted in each exact timestamp second and then accumulated.
+# Rates remain Hz and divide by the number of timestamp-seconds actually present
+# in each window, rather than blindly by the nominal window duration.
+time_series:
+  enabled: true
+  time_column: "datetime"
+  accumulation_timespan: "10min"
+
+# Plane efficiency by gate. For each time window and selection, the script counts
+# tt_task3_list = 123, 124, 134, 234, and 1234. Plane efficiencies use:
+# P1: 1234 / (1234 + 234), P2: 1234 / (1234 + 134),
+# P3: 1234 / (1234 + 124), P4: 1234 / (1234 + 123).
+# selections: all means every individual gate plus every observed exact combined
+# gate code. Alternatively provide entries such as:
+# selections:
+#   - {kind: individual, code: "100"}
+#   - {kind: combined_exact, code: "110"}
+efficiency_time_series:
+  enabled: true
+  time_column: "datetime"
+  topology_column: "tt_task3_list"
+  accumulation_timespan: "10min"
+  selections: all
+  include_combined_zero: false
+
+# Three-row diagnostic for one gate: 1234 rate, plane efficiencies plus their
+# product, and the efficiency-corrected 1234 rate. The rate denominator is the
+# number of timestamp-seconds actually observed in each accumulation window.
+plane_combinations:
+  enabled: true
+  selection_kind: "individual"
+  gate_code: "1000000000"
+  time_column: "datetime"
+  topology_column: "tt_task3_list"
+  accumulation_timespan: "10min"
+
+theta_histograms:
+  enabled: true
+  column: "event_theta"
+  # Individual gates share one density panel; exact combined codes share a
+  # second density panel using the same bins and x-axis.
+  convert_radians_to_degrees: true
+  bins: 90
+  range: [0, 90]
+  include_combined_zero: true
+
+
+# Reuse both topology diagnostics below for these additional two-strip gates.
+# The active strip pair must match the two 1 bits in the topology.
+additional_topology_diagnostic_targets:
+  - {gate_code: "1000", topology: "0110", first_strip: 2, second_strip: 3, diagonal_limits: {tdif_cal: 0.25, tsum_cal: 2.5}}
+  - {gate_code: "10000", topology: "0101", first_strip: 2, second_strip: 4}
+  - {gate_code: "100000", topology: "1010", first_strip: 1, second_strip: 3}
+  - {gate_code: "1000000", topology: "1100", first_strip: 1, second_strip: 2, diagonal_limits: {tdif_cal: 0.25, tsum_cal: 2.5}}
+  - {gate_code: "10000000", topology: "0011", first_strip: 3, second_strip: 4, diagonal_limits: {tdif_cal: 0.25, tsum_cal: 2.5}}
+
+# Gate-100 diagnostic: columns are planes 1..4; rows compare strip 1 with
+# strip 4 for Q_sum, T_dif, Q_dif, and T_sum. Axes are shared within rows.
+topology_charge_scatter:
+  enabled: true
+  gate_code: "100"
+  topology: "1001"
+  variables:
+    - {suffix: "qsum_cal", label: "Calibrated Q_sum"}
+    - {suffix: "tdif_cal", label: "Calibrated T_dif"}
+    - {suffix: "qdif_cal", label: "Calibrated Q_dif"}
+    - {suffix: "tsum_cal", label: "Calibrated T_sum"}
+  x_strip: 1
+  y_strip: 4
+  max_points_per_file: 50000
+  plot_quantiles: [0.001, 0.999]
+
+# For the same gate/topology selection, show the stored per-plane Y used by
+# Task 3 and compare it event-by-event with the two active-strip charges.
+# The Y overview contains time scatter and histogram; the charge figure contains
+# Q1 / (Q1 + Q4) versus Y and Q1 versus Q4 colored by Y.
+topology_y_position:
+  enabled: true
+  gate_code: "100"
+  topology: "1001"
+  time_column: "datetime"
+  charge_suffix: "qsum_cal"
+  first_strip: 1
+  second_strip: 4
+  bins: 80
+  range: [-150, 150]
+  max_scatter_points_per_plane: 100000
+  omit_zero: false

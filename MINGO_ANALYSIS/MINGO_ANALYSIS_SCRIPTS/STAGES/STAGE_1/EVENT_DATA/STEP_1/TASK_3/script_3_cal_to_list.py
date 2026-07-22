@@ -136,6 +136,7 @@ from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.step1_shared import (
     coerce_positive_int_config,
     extract_rate_histogram_metadata,
     extract_trigger_type_metadata,
+    ensure_plane_xpos_columns,
     is_trigger_type_file_column,
     is_trigger_type_metadata_column,
     is_specific_metadata_excluded_column,
@@ -2999,6 +3000,7 @@ config = resolve_step1_effective_task_config(
     filter_parameter_config_file_path=filter_parameter_config_file_path,
     log_fn=print,
 )
+file_selection_mode = str(config.get("file_selection_mode", "new")).strip().lower()
 process_only_qa_retry_files = bool(config.get("process_only_qa_retry_files", False))
 joined_analysis_files = coerce_positive_int_config(config.get("joined_analysis_files"), default=1)
 joined_analysis_time_tolerance_hours = coerce_nonnegative_float_config(
@@ -4870,7 +4872,31 @@ if date_ranges:
         )
 
 active_qa_retry_basenames: set[str] = set()
-if process_only_qa_retry_files:
+if file_selection_mode == "qa":
+    active_qa_retry_basenames = load_active_qa_retry_basenames(
+        station,
+        repo_root=repo_root,
+    )
+    qa_unprocessed_files = filter_filenames_by_qa_retry_basenames(
+        unprocessed_files, active_qa_retry_basenames
+    )
+    qa_processing_files = filter_filenames_by_qa_retry_basenames(
+        processing_files, active_qa_retry_basenames
+    )
+    qa_completed_files = filter_filenames_by_qa_retry_basenames(
+        completed_files, active_qa_retry_basenames
+    )
+    if qa_unprocessed_files or qa_processing_files or qa_completed_files:
+        unprocessed_files = qa_unprocessed_files
+        processing_files = qa_processing_files
+        completed_files = qa_completed_files
+    print(
+        "[FILE_SELECTION] mode=qa; QA candidates are preferred with fallback: "
+        f"UNPROCESSED={len(qa_unprocessed_files)} "
+        f"PROCESSING={len(qa_processing_files)} "
+        f"COMPLETED={len(qa_completed_files)}"
+    )
+elif process_only_qa_retry_files:
     active_qa_retry_basenames = load_active_qa_retry_basenames(
         station,
         repo_root=repo_root,
@@ -6981,6 +7007,21 @@ for i_plane in range(1, 5):
     final_columns[f'p{i_plane}_qdif'] = q_dif_final
 
 working_df = pd.concat([working_df, pd.DataFrame(final_columns, index=working_df.index)], axis=1)
+task3_xpos_summary = ensure_plane_xpos_columns(
+    working_df,
+    tdiff_to_x,
+    overwrite=True,
+)
+if task3_xpos_summary["source_columns_found"] != 4:
+    raise RuntimeError(
+        "Task 3 could not create all p1_xpos..p4_xpos columns: "
+        f"{task3_xpos_summary}"
+    )
+print(
+    "Task 3 stored final plane X positions: "
+    f"columns_created={task3_xpos_summary['columns_created']} "
+    f"scale_mm_per_ns={float(tdiff_to_x):.9g}"
+)
 
 tsum_cols = [f"p{plane}_tsum" for plane in range(1, 5)]
 qsum_cols = [f"p{plane}_qsum" for plane in range(1, 5)]

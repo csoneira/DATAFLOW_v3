@@ -2269,6 +2269,8 @@ def _preferred_non_qa_or_all(
     file_names: list[str],
     preferred_non_qa_file_names: list[str],
 ) -> list[str]:
+    if file_selection_mode == "qa" and preferred_non_qa_file_names:
+        return preferred_non_qa_file_names
     if prioritize_other_than_qa_files and preferred_non_qa_file_names:
         return preferred_non_qa_file_names
     return file_names
@@ -2592,6 +2594,7 @@ config = resolve_step1_effective_task_config(
     filter_parameter_config_file_path=filter_parameter_config_file_path,
     log_fn=print,
 )
+file_selection_mode = str(config.get("file_selection_mode", "new")).strip().lower()
 process_only_qa_retry_files = bool(config.get("process_only_qa_retry_files", False))
 prioritize_other_than_qa_files = bool(config.get("prioritize_other_than_qa_files", True))
 save_removed_channel_values = _coerce_config_bool(
@@ -3616,7 +3619,31 @@ active_qa_retry_basenames: set[str] = set()
 preferred_unprocessed_files: list[str] = []
 preferred_processing_files: list[str] = []
 preferred_completed_files: list[str] = []
-if process_only_qa_retry_files:
+if file_selection_mode == "qa":
+    active_qa_retry_basenames = load_active_qa_retry_basenames(
+        station,
+        repo_root=repo_root,
+    )
+    preferred_unprocessed_files = filter_filenames_by_qa_retry_basenames(
+        unprocessed_files, active_qa_retry_basenames
+    )
+    preferred_processing_files = filter_filenames_by_qa_retry_basenames(
+        processing_files, active_qa_retry_basenames
+    )
+    preferred_completed_files = filter_filenames_by_qa_retry_basenames(
+        completed_files, active_qa_retry_basenames
+    )
+    if preferred_unprocessed_files or preferred_processing_files or preferred_completed_files:
+        unprocessed_files = preferred_unprocessed_files
+        processing_files = preferred_processing_files
+        completed_files = preferred_completed_files
+    print(
+        "[FILE_SELECTION] mode=qa QA-preferred candidates: "
+        f"UNPROCESSED={len(preferred_unprocessed_files)} "
+        f"PROCESSING={len(preferred_processing_files)} "
+        f"COMPLETED={len(preferred_completed_files)}"
+    )
+elif process_only_qa_retry_files:
     active_qa_retry_basenames = load_active_qa_retry_basenames(
         station,
         repo_root=repo_root,

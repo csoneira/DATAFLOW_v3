@@ -1,7 +1,17 @@
+import ast
 from pathlib import Path
+from typing import Iterable
+
+import numpy as np
+import pandas as pd
+import yaml
 
 
 SCRIPT_PATH = Path(__file__).with_name("script_2_clean_to_cal.py")
+CALIBRATION_CONFIG_PATH = (
+    Path(__file__).parents[5]
+    / "CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/config_calibration_subsample_task_2.yaml"
+)
 
 
 def _source() -> str:
@@ -52,6 +62,17 @@ def test_qfb_and_qtdif_use_only_canonical_calibration_sample() -> None:
     assert "T_dif_fit = T_dif_adj" in source
 
 
+def test_tsum_pair_residual_builder_uses_canonical_lowercase_components() -> None:
+    source = _source()
+    helper_start = source.index("def _build_tsum_pair_residuals(")
+    helper_end = source.index("def _enrich_tsum_pair_residuals(", helper_start)
+    helper_source = source[helper_start:helper_end]
+    assert 'for family in ("qsum", "tsum", "tdif")' in helper_source
+    assert 'if "T_sum" in c' not in helper_source
+    assert 'if "Q_sum" in c' not in helper_source
+    assert 'if "T_dif" in c' not in helper_source
+
+
 def test_calibration_hard_filters_use_dedicated_config() -> None:
     source = _source()
     assert "config_calibration_subsample_task_2.yaml" in source
@@ -85,3 +106,75 @@ def test_stage_logging_and_filter_switch_are_present() -> None:
         "slewing",
     ):
         assert f'"{stage_name}"' in source
+
+
+def _selection_function_namespace() -> dict[str, object]:
+    selected_names = {
+        "_task2_active_strip_matrix_from_raw",
+        "_task2_plane_strip_qsum_from_raw",
+        "build_task2_topology_charge_mask_from_raw",
+    }
+    tree = ast.parse(_source())
+    selected_nodes = [
+        node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in selected_names
+    ]
+    namespace: dict[str, object] = {"np": np, "pd": pd, "Iterable": Iterable}
+    exec(compile(ast.Module(body=selected_nodes, type_ignores=[]), str(SCRIPT_PATH), "exec"), namespace)
+    return namespace
+
+
+def test_calibration_plane_requires_contiguous_nonzero_charge_strips() -> None:
+    rows = 3
+    data: dict[str, np.ndarray] = {}
+    plane_patterns = {
+        1: ([100.0, 100.0, 0.0, 0.0], [100.0, 0.0, 100.0, 0.0], [-1.0, 0.0, 0.0, 0.0]),
+        2: ([100.0, 100.0, 0.0, 0.0], [100.0, 0.0, 100.0, 0.0], [-1.0, 0.0, 0.0, 0.0]),
+        3: ([100.0, 100.0, 0.0, 0.0], [100.0, 0.0, 100.0, 0.0], [-1.0, 0.0, 0.0, 0.0]),
+        4: ([0.0, 0.0, 0.0, 0.0],) * rows,
+    }
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            q_values = np.asarray([plane_patterns[plane][row][strip - 1] for row in range(rows)])
+            data[f"p{plane}_s{strip}_ef_q"] = q_values
+            data[f"p{plane}_s{strip}_eb_q"] = q_values
+            data[f"p{plane}_s{strip}_ef_t"] = np.ones(rows)
+            data[f"p{plane}_s{strip}_eb_t"] = np.ones(rows)
+
+    config = yaml.safe_load(CALIBRATION_CONFIG_PATH.read_text(encoding="utf-8"))
+    namespace = _selection_function_namespace()
+    mask = namespace["build_task2_topology_charge_mask_from_raw"](
+        pd.DataFrame(data),
+        required_planes={1, 2, 3},
+        missing_planes={4},
+        detector_charge_threshold=-np.inf,
+        plane_charge_threshold=-np.inf,
+        strip_charge_threshold=-np.inf,
+        allowed_cluster_sizes_present_planes=(1, 2, 3, 4),
+        allowed_active_strip_topologies=tuple(config["allowed_active_strip_topologies"]),
+        require_zero_cluster_size_missing_planes=False,
+    )
+    assert mask.tolist() == [True, False, True]
+
+
+def test_removed_calibration_controls_and_qsum_guard() -> None:
+    source = _source()
+    config = yaml.safe_load(CALIBRATION_CONFIG_PATH.read_text(encoding="utf-8"))
+    assert config["allowed_active_strip_topologies"] == [
+        "1000", "0100", "0010", "0001", "1100",
+        "0110", "0011", "1110", "0111", "1111",
+    ]
+    for removed_key in (
+        "charge_share_filter_enabled",
+        "charge_share_minimum_fraction",
+        "minimum_calibration_rows_warning",
+        "minimum_calibration_strip_observations_warning",
+        "qfb_fit_require_positive_qsum",
+    ):
+        assert removed_key not in config
+        assert removed_key not in source
+    deferred_start = source.index("if defer_charge_calibration_until_post_time:")
+    qsum_filter = source.index('filter_strip_family_inplace(\n            calibration_df,\n            "Q_sum"', deferred_start)
+    guard = source.rfind("if task2_post_charge_side_qsum_filter_enabled:", deferred_start, qsum_filter)
+    assert guard != -1

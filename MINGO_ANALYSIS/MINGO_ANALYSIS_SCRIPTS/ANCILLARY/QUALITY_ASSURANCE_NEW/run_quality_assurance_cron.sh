@@ -11,7 +11,7 @@ QA_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="$QA_ROOT/LOGS"
 mkdir -p "$LOG_DIR"
 
-LOCK_FILE="$LOG_DIR/quality_assurance_${MODE}.lock"
+LOCK_FILE="$LOG_DIR/quality_assurance.lock"
 LOG_FILE="$LOG_DIR/quality_assurance_${MODE}.log"
 
 exec 9>"$LOCK_FILE"

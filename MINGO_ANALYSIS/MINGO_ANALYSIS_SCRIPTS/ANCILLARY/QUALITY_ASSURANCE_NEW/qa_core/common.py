@@ -221,11 +221,10 @@ def metadata_path(repo_root: Path, station_name: str, task_id: int, metadata_csv
         repo_root
         / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS"
         / station_name
-        / "STAGE_1"
+        / "STAGE_1_PRODUCTS"
         / "EVENT_DATA"
-        / "STEP_1"
-        / f"TASK_{task_id}"
         / "METADATA"
+        / f"TASK_{task_id}"
         / metadata_csv_filename
     )
 

@@ -16,8 +16,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import random
+import shutil
+import sys
+import tempfile
 from typing import Dict, Optional, Tuple
 
 import pandas as pd
@@ -44,16 +48,80 @@ def _upstream_fingerprint(upstream_meta: Optional[Dict]) -> Optional[str]:
     return _json_fingerprint({"upstream_meta": upstream_meta})
 
 
+def _recover_complete_registry_entries(text: str) -> list[Dict]:
+    """Recover complete objects from a truncated top-level runs array."""
+    runs_key = text.find('"runs"')
+    array_start = text.find("[", runs_key)
+    if runs_key < 0 or array_start < 0:
+        return []
+
+    decoder = json.JSONDecoder()
+    entries: list[Dict] = []
+    cursor = array_start + 1
+    while cursor < len(text):
+        while cursor < len(text) and (text[cursor].isspace() or text[cursor] == ","):
+            cursor += 1
+        if cursor >= len(text) or text[cursor] == "]":
+            break
+        try:
+            entry, cursor = decoder.raw_decode(text, cursor)
+        except json.JSONDecodeError:
+            break
+        if not isinstance(entry, dict):
+            break
+        entries.append(entry)
+    return entries
+
+
 def load_sim_run_registry(output_dir: Path) -> Dict:
     registry_path = output_dir / "sim_run_registry.json"
     if registry_path.exists():
-        return json.loads(registry_path.read_text())
+        text = registry_path.read_text(encoding="utf-8")
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as exc:
+            recovered_runs = _recover_complete_registry_entries(text)
+            if not recovered_runs:
+                raise
+            stamp = now_iso().replace(":", "").replace("+", "_")
+            quarantine_path = registry_path.with_name(
+                f"{registry_path.name}.corrupt.{stamp}"
+            )
+            shutil.copy2(registry_path, quarantine_path)
+            recovered = {"version": 1, "runs": recovered_runs}
+            save_sim_run_registry(output_dir, recovered)
+            print(
+                "Recovered truncated simulation registry "
+                f"{registry_path}: entries={len(recovered_runs)}, "
+                f"backup={quarantine_path}, error={exc}",
+                file=sys.stderr,
+            )
+            return recovered
     return {"version": 1, "runs": []}
 
 
 def save_sim_run_registry(output_dir: Path, registry: Dict) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
     registry_path = output_dir / "sim_run_registry.json"
-    registry_path.write_text(json.dumps(registry, indent=2))
+    temporary_path: Optional[Path] = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=output_dir,
+            prefix=f".{registry_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            json.dump(registry, handle, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, registry_path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def resolve_sim_run(

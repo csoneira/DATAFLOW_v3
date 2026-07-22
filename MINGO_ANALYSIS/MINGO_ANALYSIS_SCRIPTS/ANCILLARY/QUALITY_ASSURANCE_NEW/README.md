@@ -2,10 +2,34 @@
 
 This is the simplified QA workspace for Stage 1 metadata.
 
+
+## Canonical inputs and cleanup lifecycle
+
+QA reads metadata only from the published Stage 1 product tree:
+
+- `MINGO_ANALYSIS_STATIONS/MINGOYY/STAGE_1_PRODUCTS/EVENT_DATA/METADATA/TASK_N/`
+
+Before every non-aggregate QA run, the orchestrator takes a shared lock on each
+live Task metadata CSV, atomically refreshes its product copy, and then analyzes
+the product copy. Unchanged files are skipped.
+
+The hourly `clean_dataflow.sh --select ...completed...` job uses
+`qa_all_stations_reprocessing_quality.csv` as its cleanup authority. A Stage 1
+intermediate is removable only when the basename has `quality_status=pass`, the
+station lake contains `postprocessed_<basename>.parquet`, and the intermediate
+is not newer than the QA summary. Completed directories are still cleared
+unconditionally. Error and rejected files are retained unless they satisfy the
+same lake-plus-explicit-pass rule. The parquet lake and product metadata are
+never targets of this verified intermediate cleanup.
+
 Current policy:
 
 - `STEP_1_CALIBRATIONS` is the only step with quality-enabled columns.
 - The rest of the metadata families are currently configured as `plot_only` or `ignore`.
+
+Only columns resolved as `quality_and_plot` or `quality_only` can place a
+basename in the reprocessing manifest. `plot_only`, `ignore`, and QA warnings
+such as `insufficient_reference` never trigger deletion.
 
 The new package is built around three ideas:
 
@@ -115,3 +139,44 @@ For cron usage there is also:
 ```
 
 The wrapper keeps separate logs and non-blocking lock files per mode under `QUALITY_ASSURANCE_NEW/LOGS`.
+
+
+## Problematic basenames and reprocessing
+
+There are two user-facing scripts in this directory:
+
+1. `build_problematic_basename_lists.py` reads the QA total summary and writes
+   `PROBLEMATIC_BASENAMES/problematic_basenames.csv`, plus station/task text
+   lists. The earliest Task containing an explicit quality failure is selected
+   as the reprocessing boundary. The orchestrator runs this automatically after
+   every total-summary rebuild.
+2. `reprocess_problematic_basenames.py` removes matching artifacts and metadata
+   from that Task through Task 5, rebuilds metadata indexes, and returns the
+   input to the correct queue. It is always a dry run unless `--apply` is given.
+
+The simplest review command processes the generated manifest:
+
+```bash
+python3 reprocess_problematic_basenames.py
+```
+
+After reviewing the complete plan:
+
+```bash
+python3 reprocess_problematic_basenames.py --apply
+```
+
+Manual station/task/list mode remains available:
+
+```bash
+python3 reprocess_problematic_basenames.py \
+  --station 2 --task 2 \
+  --basename-file PROBLEMATIC_BASENAMES/MINGO02_task_2_problematic_basenames.txt
+```
+
+If the selected Task input still exists, it is moved back to that Task
+`UNPROCESSED` directory. If it has already been cleaned, the request is marked
+for Stage 0 fallback. Stage 0 prioritizes that basename and bypasses the normal
+already-brought and already-processed exclusions exactly for the active request.
+The hourly QA run retires the request after a newer execution appears at the
+selected starting Task.

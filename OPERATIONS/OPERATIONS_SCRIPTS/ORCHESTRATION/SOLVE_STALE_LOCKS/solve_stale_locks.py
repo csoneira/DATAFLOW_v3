@@ -91,6 +91,10 @@ def log_message(message: str, *, logfile: Path) -> None:
     timestamp = _now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
     formatted = f"[{timestamp}] {message}"
     print(formatted)
+    # cron_run_logged.sh already captures stdout in CRON_LOG_PATH. Avoid a
+    # second independently managed log at the legacy default location.
+    if os.environ.get("CRON_LOG_PATH"):
+        return
     logfile.parent.mkdir(parents=True, exist_ok=True)
     with logfile.open("a", encoding="utf-8") as handle:
         handle.write(formatted + "\n")

@@ -72,6 +72,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 PROCESSED_DIR="$REPO_ROOT/OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/UPDATE_EXECUTION_CSVS/OUTPUT_FILES"
 STATIONS_ROOT="$REPO_ROOT/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS"
+ACTIVE_REPROCESS_CSV="$REPO_ROOT/OPERATIONS/OPERATIONS_RUNTIME/STATE/REPROCESS_BASENAMES/active_reprocessing.csv"
 
 if ! $NO_FILTER && [[ ! -d "$PROCESSED_DIR" ]]; then
   log "Processed basenames directory not found: $PROCESSED_DIR"
@@ -84,6 +85,18 @@ if [[ ! -d "$STATIONS_ROOT" ]]; then
 fi
 
 declare -A PROCESSED=()
+declare -A ACTIVE_REPROCESS=()
+if [[ -s "$ACTIVE_REPROCESS_CSV" ]]; then
+  {
+    read -r _header || true
+    while IFS="," read -r _station active_base _rest; do
+      active_base=$(printf "%s" "$active_base" | tr -d "\r")
+      [[ -z "$active_base" || "$active_base" == "basename" ]] && continue
+      ACTIVE_REPROCESS["$active_base"]=1
+    done
+  } < "$ACTIVE_REPROCESS_CSV"
+  log "Loaded ${#ACTIVE_REPROCESS[@]} active reprocessing basename(s)"
+fi
 if ! $NO_FILTER; then
   while IFS= read -r -d '' csv_file; do
     while IFS=, read -r base _rest; do
@@ -117,7 +130,11 @@ while IFS= read -r -d '' unprocessed_dir; do
     if [[ "$stem" == *_* ]]; then
       candidate="${stem#*_}"
     fi
-    candidate=${candidate//$'\r'/}
+    candidate=$(printf "%s" "$candidate" | tr -d "[:cntrl:]")
+    if [[ -n ${ACTIVE_REPROCESS[$candidate]:-} ]]; then
+      log "Preserved active reprocessing input $file_path"
+      continue
+    fi
     if $NO_FILTER || [[ -n ${PROCESSED[$candidate]:-} ]]; then
       station="$(station_from_path "$file_path")"
       ((++MATCH_COUNTS["$station"]))

@@ -128,6 +128,7 @@ from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.step1_shared import (
     coerce_positive_int_config,
     extract_rate_histogram_metadata,
     extract_trigger_type_metadata,
+    ensure_plane_xpos_columns,
     is_trigger_type_file_column,
     is_trigger_type_metadata_column,
     is_specific_metadata_excluded_column,
@@ -1348,6 +1349,7 @@ config = resolve_step1_effective_task_config(
 task5_gate_config_path = Path(config_file_path).with_name(
     str(config.get("gate_config_yaml", TASK5_GATE_CONFIG_DEFAULT_NAME))
 )
+file_selection_mode = str(config.get("file_selection_mode", "new")).strip().lower()
 process_only_qa_retry_files = bool(config.get("process_only_qa_retry_files", False))
 joined_analysis_files = coerce_positive_int_config(config.get("joined_analysis_files"), default=1)
 joined_analysis_time_tolerance_hours = coerce_nonnegative_float_config(
@@ -1717,7 +1719,31 @@ if date_ranges:
             force=True,
         )
 active_qa_retry_basenames: set[str] = set()
-if process_only_qa_retry_files:
+if file_selection_mode == "qa":
+    active_qa_retry_basenames = load_active_qa_retry_basenames(
+        station,
+        repo_root=repo_root,
+    )
+    qa_unprocessed_files = filter_filenames_by_qa_retry_basenames(
+        unprocessed_files, active_qa_retry_basenames
+    )
+    qa_processing_files = filter_filenames_by_qa_retry_basenames(
+        processing_files, active_qa_retry_basenames
+    )
+    qa_completed_files = filter_filenames_by_qa_retry_basenames(
+        completed_files, active_qa_retry_basenames
+    )
+    if qa_unprocessed_files or qa_processing_files or qa_completed_files:
+        unprocessed_files = qa_unprocessed_files
+        processing_files = qa_processing_files
+        completed_files = qa_completed_files
+    print(
+        "[FILE_SELECTION] mode=qa; QA candidates are preferred with fallback: "
+        f"UNPROCESSED={len(qa_unprocessed_files)} "
+        f"PROCESSING={len(qa_processing_files)} "
+        f"COMPLETED={len(qa_completed_files)}"
+    )
+elif process_only_qa_retry_files:
     active_qa_retry_basenames = load_active_qa_retry_basenames(
         station,
         repo_root=repo_root,
@@ -3397,6 +3423,13 @@ _t_sec = time.perf_counter()
 
 # Path to save the cleaned dataframe
 # Create output directory if it does not exist.
+task5_xpos_summary = ensure_plane_xpos_columns(working_df, tdiff_to_x, overwrite=True)
+if task5_xpos_summary["source_columns_found"] != 4:
+    raise RuntimeError(
+        "Task 5 input is missing one or more p#_tdif columns required for plane X: "
+        f"{task5_xpos_summary}"
+    )
+print(f"Task 5 plane X persistence check: {task5_xpos_summary}")
 os.makedirs(f"{output_directory}", exist_ok=True)
 OUT_PATH = f"{output_directory}/postprocessed_{basename_no_ext}.parquet"
 KEY = "df"  # HDF5 key name

@@ -269,7 +269,7 @@ fi
 if ! [[ "$RUN_STEP_STUCK_ALERT_MIN_OBSERVATION_INTERVAL_S" =~ ^[0-9]+$ ]]; then
   RUN_STEP_STUCK_ALERT_MIN_OBSERVATION_INTERVAL_S="45"
 fi
-mkdir -p "$RUN_STEP_STATE_DIR" "$RUN_STEP_LOG_DIR" "$(dirname "$RUN_STEP_LOCK_DIR")"
+mkdir -p "$RUN_STEP_STATE_DIR" "$(dirname "$RUN_STEP_LOCK_DIR")"
 if [[ -n "$CONTINUOUS" && -z "$DEBUG" ]]; then
   QUIET_CONTINUOUS="1"
 fi
@@ -377,9 +377,13 @@ run_step() {
     return $?
   fi
 
+  # Successful continuous runs are intentionally silent. Create the capture
+  # directory only while it is needed, then remove it if no failure remains.
+  mkdir -p "$RUN_STEP_LOG_DIR"
   tmp_log="$(mktemp "${RUN_STEP_LOG_DIR}/step_${step}.XXXXXX.log")"
   if "${cmd[@]}" >"$tmp_log" 2>&1; then
     rm -f "$tmp_log"
+    rmdir "$RUN_STEP_LOG_DIR" 2>/dev/null || true
     return 0
   else
     rc=$?

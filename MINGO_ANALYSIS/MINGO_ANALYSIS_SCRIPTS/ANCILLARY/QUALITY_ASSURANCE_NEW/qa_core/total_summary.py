@@ -122,7 +122,7 @@ def _build_reprocessing_quality_table(wide_df: pd.DataFrame) -> pd.DataFrame:
     quality_frame = working[quality_columns]
 
     def _failed_columns(row: pd.Series) -> str:
-        failed = [column for column in quality_columns if str(row[column]).strip().lower() != "pass"]
+        failed = [column for column in quality_columns if str(row[column]).strip().lower() == "fail"]
         return ";".join(failed)
 
     out = working[[column for column in ("station_name", "filename_base") if column in working.columns]].copy()
@@ -166,7 +166,7 @@ def _apply_failed_quality_versions(reprocessing_df: pd.DataFrame, long_df: pd.Da
 
     working = long_df.copy()
     working["status"] = working["status"].astype("string").fillna("").str.strip().str.lower()
-    working = working[working["status"] != "pass"].copy()
+    working = working[working["status"] == "fail"].copy()
     if working.empty:
         out = reprocessing_df.copy()
         if "failed_quality_versions" not in out.columns:

@@ -7,14 +7,24 @@ import unittest
 
 import pandas as pd
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
+REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.ANCILLARY.QUALITY_ASSURANCE_NEW.qa_core.total_summary import build_total_summary  # noqa: E402
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.ANCILLARY.QUALITY_ASSURANCE_NEW.qa_core.total_summary import _build_reprocessing_quality_table, build_total_summary  # noqa: E402
 
 
 class TotalSummaryTests(unittest.TestCase):
+    def test_warning_only_status_does_not_trigger_reprocessing(self) -> None:
+        wide = pd.DataFrame({
+            "station_name": ["MINGO01"],
+            "filename_base": ["mi0124074013648"],
+            "STEP_1_CALIBRATIONS::TASK_2::P1_s1_T_sum": ["insufficient_reference"],
+        })
+        result = _build_reprocessing_quality_table(wide)
+        self.assertEqual(result.loc[0, "quality_status"], "pass")
+        self.assertEqual(result.loc[0, "failed_quality_columns"], "")
+
     def test_total_summary_respects_root_date_range(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             qa_root = Path(tmp_dir)

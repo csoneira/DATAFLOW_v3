@@ -198,6 +198,14 @@ step0_directory="${station_directory}/STAGE_0/REPROCESSING/STEP_0"
 step0_metadata_directory="${step0_directory}/METADATA"
 step0_output_directory="${step0_directory}/OUTPUT_FILES"
 qa_retry_manifest_csv="${step0_output_directory}/qa_retry_manifest_${station}.csv"
+active_reprocessing_csv="${REPO_ROOT}/OPERATIONS/OPERATIONS_RUNTIME/STATE/REPROCESS_BASENAMES/active_reprocessing.csv"
+dat_unpacked_csv="${station_directory}/STAGE_0/REPROCESSING/STEP_2/METADATA/dat_files_unpacked.csv"
+stage0_to_1_directory="${station_directory}/STAGE_0_TO_1"
+task0_directory="${station_directory}/STAGE_1/EVENT_DATA/STEP_1/TASK_0"
+task0_input_directory="${task0_directory}/INPUT_FILES"
+task0_output_directory="${task0_directory}/OUTPUT_FILES"
+task0_execution_csv="${task0_directory}/METADATA/task_0_metadata_execution.csv"
+stage1_product_metadata_directory="${station_directory}/STAGE_1_PRODUCTS/EVENT_DATA/METADATA"
 
 brought_csv="${metadata_directory}/hld_files_brought.csv"
 brought_csv_header="hld_name,bring_timesamp"
@@ -404,6 +412,16 @@ if $refresh_metadata || $plot_hist; then
   "$metadata_prep_script" "${step0_args[@]}"
 fi
 
+# Remove incomplete zero-byte targets before the initial snapshot. Otherwise
+# rsync --ignore-existing would preserve them forever and the basename would
+# never become a fresh, validated download.
+for download_dir in "$compressed_directory" "$uncompressed_directory"; do
+  while IFS= read -r -d '' empty_download; do
+    log_warn "Removing zero-byte download placeholder so it can be fetched again: $empty_download"
+    rm -f "$empty_download"
+  done < <(find "$download_dir" -maxdepth 1 -type f -size 0 -print0)
+done
+
 # Snapshot existing archives to detect fresh downloads after rsync completes
 tmp_before_compressed=$(mktemp)
 tmp_before_uncompressed=$(mktemp)
@@ -478,6 +496,17 @@ load_qa_retry_manifest_basenames() {
   } < "$qa_retry_manifest_csv"
 }
 
+declare -A active_reprocessing_basenames=()
+load_active_reprocessing_basenames() {
+  active_reprocessing_basenames=()
+  [[ -s "$active_reprocessing_csv" ]] || return 0
+  while IFS="," read -r request_station request_base _task _requested_at stage0_fallback _rest; do
+    [[ "$request_station" == "MINGO${station_code}" ]] || continue
+    [[ "$stage0_fallback" == "1" ]] || continue
+    [[ -n "$request_base" ]] && active_reprocessing_basenames["$request_base"]=1
+  done < "$active_reprocessing_csv"
+}
+
 declare -A brought_hld_records=()
 load_brought_hld_records() {
   if [[ ! -s "$brought_csv" ]]; then
@@ -500,6 +529,67 @@ strip_suffix() {
   printf '%s' "$name"
 }
 
+declare -A unpacked_basenames=()
+declare -A stage1_started_basenames=()
+
+load_unpacked_basenames() {
+  unpacked_basenames=()
+  [[ -s "$dat_unpacked_csv" ]] || return 0
+  while IFS="," read -r dat_name _execution_timestamp _execution_duration actually_unpacked _rest; do
+    dat_name=${dat_name//$'\r'/}
+    actually_unpacked=${actually_unpacked//$'\r'/}
+    [[ -z "$dat_name" || "$dat_name" == "dat_name" ]] && continue
+    # Legacy rows have no explicit flag and represent successful unpacking.
+    [[ "$actually_unpacked" == "0" ]] && continue
+    local base
+    base=$(strip_suffix "$dat_name")
+    [[ -n "$base" ]] && unpacked_basenames["$base"]=1
+  done < "$dat_unpacked_csv"
+}
+
+load_stage1_started_basenames() {
+  stage1_started_basenames=()
+
+  shopt -s nullglob
+  local metadata_csv
+  local -a execution_metadata_files=(
+    "$task0_execution_csv"
+    "$stage1_product_metadata_directory"/TASK_*/task_*_metadata_execution.csv
+  )
+  shopt -u nullglob
+  for metadata_csv in "${execution_metadata_files[@]}"; do
+    [[ -s "$metadata_csv" ]] || continue
+    while IFS="," read -r base _rest; do
+      base=${base//$'\r'/}
+      [[ -z "$base" || "$base" == "filename_base" ]] && continue
+      stage1_started_basenames["$base"]=1
+    done < "$metadata_csv"
+  done
+
+  shopt -s nullglob
+  local artifact name base
+  for artifact in \
+    "$stage0_to_1_directory"/*.dat \
+    "$task0_input_directory"/*/*.dat \
+    "$task0_output_directory"/raw_*.parquet; do
+    [[ -f "$artifact" ]] || continue
+    name=$(basename "$artifact")
+    if [[ "$name" == raw_*.parquet ]]; then
+      base=${name#raw_}
+      base=${base%.parquet}
+    else
+      base=$(strip_suffix "$name")
+    fi
+    [[ -n "$base" ]] && stage1_started_basenames["$base"]=1
+  done
+  shopt -u nullglob
+}
+
+has_safe_local_handoff() {
+  local base="$1"
+  [[ -n ${unpacked_basenames["$base"]+_} && -n ${stage1_started_basenames["$base"]+_} ]]
+}
+
 basename_has_local_file() {
   local base="$1"
   local alt="$base"
@@ -518,7 +608,7 @@ basename_has_local_file() {
     "${compressed_directory}/${alt}.hld-tar-gz" \
     "${compressed_directory}/${alt}.tar.gz" \
     "${uncompressed_directory}/${alt}.hld"; do
-    [[ -n "$candidate" && -f "$candidate" ]] && return 0
+    [[ -n "$candidate" && -s "$candidate" ]] && return 0
   done
   return 1
 }
@@ -664,6 +754,12 @@ log_info "Loaded ${#metadata_basenames[@]} basenames from metadata CSV."
 
 load_qa_retry_manifest_basenames
 log_info "Active QA retry basenames from STEP_0 manifest: ${#qa_retry_basenames[@]}"
+load_active_reprocessing_basenames
+log_info "Active operator reprocessing basenames requiring Stage 0: ${#active_reprocessing_basenames[@]}"
+load_unpacked_basenames
+load_stage1_started_basenames
+log_info "Previously unpacked basenames: ${#unpacked_basenames[@]}"
+log_info "Basenames with a local Stage 1 handoff or Task 0 execution: ${#stage1_started_basenames[@]}"
 
 if ! $perform_download; then
   if $plot_hist; then
@@ -728,10 +824,22 @@ log_info "Selecting basenames to download..."
 
 declare -a selected_bases=()
 
-if $random_mode; then
+mapfile -t active_candidates < <(
+  for base in "${metadata_basenames[@]}"; do
+    [[ -n ${active_reprocessing_basenames["$base"]+_} ]] && printf "%s\n" "$base"
+  done | sort
+)
+
+if (( ${#active_candidates[@]} > 0 )); then
+  selected_bases=("${active_candidates[@]:0:random_batch_size}")
+  log_info "Prioritizing ${#selected_bases[@]} active operator reprocessing request(s): ${selected_bases[*]}"
+elif $random_mode; then
   mapfile -t random_candidates < <(
     for base in "${metadata_basenames[@]}"; do
       [[ -n ${brought_basenames["$base"]+_} ]] && continue
+      if [[ -z ${qa_retry_basenames["$base"]+_} ]] && has_safe_local_handoff "$base"; then
+        continue
+      fi
       if ! $reprocess_completed && [[ -z ${qa_retry_basenames["$base"]+_} ]] && [[ -n ${processed_basenames["$base"]+_} ]]; then
         continue
       fi
@@ -739,10 +847,7 @@ if $random_mode; then
     done
   )
   if (( ${#random_candidates[@]} == 0 )); then
-    random_candidates=("${metadata_basenames[@]}")
-  fi
-  if (( ${#random_candidates[@]} == 0 )); then
-    log_info "No basenames available for random selection."
+    log_info "No basenames require downloading; all metadata entries are already local, downstream, or completed."
     exit 0
   fi
   mapfile -t selected_bases < <(
@@ -757,6 +862,9 @@ elif $newest_mode; then
   mapfile -t newest_candidates < <(
     for base in "${metadata_basenames[@]}"; do
       [[ -n ${brought_basenames["$base"]+_} ]] && continue
+      if [[ -z ${qa_retry_basenames["$base"]+_} ]] && has_safe_local_handoff "$base"; then
+        continue
+      fi
       if ! $reprocess_completed && [[ -z ${qa_retry_basenames["$base"]+_} ]] && [[ -n ${processed_basenames["$base"]+_} ]]; then
         continue
       fi
@@ -808,6 +916,9 @@ else
 
   for base in "${metadata_basenames[@]}"; do
     [[ -n ${brought_basenames["$base"]+_} ]] && continue
+    if [[ -z ${qa_retry_basenames["$base"]+_} ]] && has_safe_local_handoff "$base"; then
+      continue
+    fi
     if ! $reprocess_completed && [[ -z ${qa_retry_basenames["$base"]+_} ]] && [[ -n ${processed_basenames["$base"]+_} ]]; then
       continue
     fi
@@ -826,11 +937,16 @@ fi
 
 declare -A compressed_lookup=()
 declare -A uncompressed_lookup=()
+remote_lookup_failed=false
 
 for base in "${selected_bases[@]}"; do
   log_info "Inspecting remote files for basename ${base}"
   printf -v base_prefix '%q' "$base"
-  remote_listing=$(ssh -o BatchMode=yes "${remote_user}@backuplip" "cd ${remote_dir_escaped} && ls -1 ${base_prefix}*" 2>/dev/null || true)
+  if ! remote_listing=$(ssh -o BatchMode=yes -o ConnectTimeout=15 "${remote_user}@backuplip" "cd ${remote_dir_escaped} && ls -1 ${base_prefix}*" 2>/dev/null); then
+    log_warn "Unable to query backup database for ${base}; request remains pending for a later run."
+    remote_lookup_failed=true
+    continue
+  fi
   if [[ -z "$remote_listing" ]]; then
     log_info "  No remote files found for basename ${base}" >&2
     continue
@@ -839,7 +955,7 @@ for base in "${selected_bases[@]}"; do
     remote_entry=${remote_entry//$'\r'/}
     [[ -z "$remote_entry" ]] && continue
     base_entry=$(strip_suffix "$remote_entry")
-    if [[ -n ${brought_basenames["$base_entry"]+_} ]]; then
+    if [[ -n ${brought_basenames["$base_entry"]+_} && -z ${active_reprocessing_basenames["$base_entry"]+_} ]]; then
       continue
     fi
     case "$remote_entry" in
@@ -859,6 +975,9 @@ for base in "${selected_bases[@]}"; do
 done
 
 if (( ${#compressed_lookup[@]} == 0 && ${#uncompressed_lookup[@]} == 0 )); then
+  if $remote_lookup_failed; then
+    log_warn "Backup database lookup failed; no pending basename was marked as brought."
+  fi
   log_info "No remote files matched the selected basenames; nothing to transfer."
   exit 0
 fi
@@ -915,11 +1034,13 @@ find "$uncompressed_directory" -maxdepth 1 -type f \
 
 if [[ -s "$compressed_list_file" ]]; then
   echo "Starting compressed transfers..."
-  if ! rsync -av --info=progress2 \
+  if rsync -av --info=progress2 \
       --files-from="$compressed_list_file" \
       --ignore-missing-args \
-      --ignore-existing --no-compress \
+      --ignore-existing --partial --partial-dir=.rsync-partial --no-compress \
       "${remote_user}@backuplip:${remote_dir}" "$compressed_directory/"; then
+    :
+  else
     rsync_status=$?
     if (( rsync_status != 23 && rsync_status != 24 )); then
       exit "$rsync_status"
@@ -937,11 +1058,13 @@ fi
 
 if [[ -s "$uncompressed_list_file" ]]; then
   echo "Starting uncompressed transfers..."
-  if ! rsync -av --info=progress2 \
+  if rsync -av --info=progress2 \
       --files-from="$uncompressed_list_file" \
       --ignore-missing-args \
-      --ignore-existing --no-compress \
+      --ignore-existing --partial --partial-dir=.rsync-partial --no-compress \
       "${remote_user}@backuplip:${remote_dir}" "$uncompressed_directory/"; then
+    :
+  else
     rsync_status=$?
     if (( rsync_status != 23 && rsync_status != 24 )); then
       exit "$rsync_status"

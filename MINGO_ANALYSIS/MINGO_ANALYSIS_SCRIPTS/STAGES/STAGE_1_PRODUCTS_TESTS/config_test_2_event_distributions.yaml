@@ -1,0 +1,107 @@
+# Test 2: distributions from a tight chronological group of final Stage 1 files.
+# Station accepts 1, 01, or MINGO01.
+station: 2
+
+# Acquisition time encoded in each basename. A date-only end includes the full day.
+start_date: "2025-12-19"
+end_date: "2026-01-14"
+
+# Select at most this many chronologically consecutive files. The script chooses
+# the contiguous block whose first/last acquisition starts are closest in time.
+max_datafiles: 5
+
+# Calibration-history window shown before the event plots. Use "full" for the
+# entire Task-2 metadata history, or e.g. "1week" for selected files ± one week.
+context: full
+
+# Standalone histograms accept exact names and shell-style patterns.
+histogram_columns:
+  - "event_s"           # reconstructed event slowness
+
+# Each entry produces one 4x4 figure: rows are planes and columns are strips.
+histogram_grids:
+  - suffix: "qsum_cal"
+    label: "Calibrated Q_sum"
+  - suffix: "qdif_cal"
+    label: "Calibrated Q_dif"
+  - suffix: "tsum_cal"
+    label: "Calibrated T_sum"
+  - suffix: "tdif_cal"
+    label: "Calibrated T_dif"
+
+# Explicit x/y scatter plots.
+scatter_pairs:
+  - x: "event_charge"
+    y: "event_s"
+  - x: "event_theta"
+    y: "event_phi"
+
+# Each suffix pair creates one 4x4 scatter grid (rows=planes, columns=strips).
+per_strip_scatter_pairs:
+  - x_suffix: "tdif_cal"
+    y_suffix: "tsum_cal"
+    x_label: "Calibrated T_dif"
+    y_label: "Calibrated T_sum"
+  - x_suffix: "qsum_cal"
+    y_suffix: "tdif_cal"
+    x_label: "Calibrated Q_sum"
+    y_label: "Calibrated T_dif"
+
+  - x_suffix: "qdif_cal"
+    y_suffix: "qsum_cal"
+    x_label: "Calibrated Q_dif"
+    y_label: "Calibrated Q_sum"
+  - x_suffix: "qdif_cal"
+    y_suffix: "tdif_cal"
+    x_label: "Calibrated Q_dif"
+    y_label: "Calibrated T_dif"
+
+# Before/after-filter event-rate time series.
+# accumulation_timespan accepts durations such as 30s, 1min, 5min, or 1h.
+# Rates are always Hz: total events divided by timestamp-seconds actually
+# observed in each window. The after curve requires every listed pass flag.
+rate_timeseries:
+  enabled: true
+  time_column: "datetime"
+  accumulation_timespan: "10min"
+  after_filter_columns:
+    - "filter_task1_datetime_in_range_pass"
+    - "filter_task1_tt_task1_clean_pass"
+    - "filter_task2_tt_task2_cal_pass"
+    - "filter_task3_tt_task3_list_pass"
+    - "filter_task4_final_pass"
+    - "filter_task4_all_components_nonzero_pass"
+    - "filter_task5_all_components_nonzero_pass"
+    - "filter_task5_tt_task5_post_pass"
+
+# One 4x10 matrix using FINAL PER-PLANE values (never per-strip values).
+# Rows are planes 1..4. Columns are all 10 unique pairs among Q_sum, Q_dif,
+# T_sum, X, and Y. X and Y use the stored p#_xpos and p#_ypos columns.
+plane_pair_matrix: true
+
+# Inclusive physical plotting limits for calibrated per-strip values.
+# Finite values outside a family range are replaced by 0 before any plot.
+calibrated_value_limits:
+  tdif_cal: [-2, 2]
+  tsum_cal: [-200, -100]
+  qdif_cal: [-3, 3]
+  qsum_cal: [0, 200]
+
+# Inclusive limits for FINAL PER-PLANE values. As with the per-strip limits,
+# nonzero values outside the interval are replaced by 0 before plotting.
+# Add qdif and tsum here later when their physical limits are decided.
+per_plane_value_limits:
+  xpos: [-150, 150]
+  ypos: [-150, 150]
+  qsum: [-5, 300]
+
+# Exact zeros are always excluded from histogram inputs.
+histogram_bins: 100
+histogram_log_y: false
+
+# Plot only this central quantile interval, avoiding a few extreme values from
+# compressing the useful view. Data are not removed from the joined table.
+plot_quantiles: [0.001, 0.999]
+
+# Scatter sampling is deterministic and applies independently to each file.
+scatter_max_points_per_file: 50000

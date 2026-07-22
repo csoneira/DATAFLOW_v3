@@ -1,6 +1,7 @@
 # Sole source of truth for hard filters applied to Task 2 calibration_df.
 # A five-element list is resolved by station index: [MINGO00, ..., MINGO04].
-# A strip contributes to cluster size exactly when its raw strip Q_sum is > 0.
+# A strip contributes to cluster size exactly when its raw strip Q_sum is
+# finite and non-zero. Zero remains the missing/rejected-strip sentinel.
 # minimum_strip_charge_scope controls how the strip threshold is applied within
 # each required plane. highest_active_strip preserves the former one-strip
 # selection meaning when multi-strip clusters are admitted: at least one strip
@@ -11,6 +12,9 @@ trigger_type_column: tt_task1_clean
 allowed_trigger_types: [1234, 123, 234, 124, 134]
 allowed_plane_topologies: [1234, 123, 234, 124, 134]
 allowed_cluster_sizes_present_planes: [1, 2, 3, 4]
+# Active strips in every required plane must form one contiguous block.
+allowed_active_strip_topologies:
+  ["1000", "0100", "0010", "0001", "1100", "0110", "0011", "1110", "0111", "1111"]
 require_zero_cluster_size_missing_planes: false
 minimum_strip_charge_scope: highest_active_strip
 # false preserves the former effective behavior explicitly: fit stages use the
@@ -19,7 +23,6 @@ minimum_strip_charge_scope: highest_active_strip
 fit_requires_exactly_one_strip_per_plane: false
 
 # Fit-row validity gates inside the already-selected calibration_df.
-qfb_fit_require_positive_qsum: false
 qfb_fit_require_nonzero_qdif: true
 qtdif_fit_require_nonzero_tdif: true
 qtdif_fit_require_nonzero_qdif: true
@@ -31,14 +34,7 @@ minimum_strip_charge: [75, 85, 85, 85, 85]
 initial_raw_tsum_left: [-200, -130, -130, -200, -130]
 initial_raw_tsum_right: [-90, -100, -100, -100, -100]
 
-# Diagnostics only; these do not filter calibration_df.
-minimum_calibration_rows_warning: 500
-minimum_calibration_strip_observations_warning: 50
-
 real_stage_filtering_enabled: true
-
-charge_share_filter_enabled: false
-charge_share_minimum_fraction: 0.10
 
 post_tdif_filter_enabled: true
 post_tdif_abs_max: 0.79

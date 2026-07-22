@@ -14,6 +14,7 @@ import builtins
 from datetime import datetime
 import os
 from pathlib import Path
+import random
 import shutil
 import sys
 import time
@@ -43,6 +44,10 @@ from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.file_selection import (
 )
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.input_file_config import select_input_file_configuration
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.path_config import get_repo_root, resolve_home_path_from_config
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.reprocessing_utils import (
+    filter_filenames_by_qa_retry_basenames,
+    load_active_qa_retry_basenames,
+)
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.plot_utils import pdf_save_rasterized_page
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.selection_config import load_selection_for_paths, station_is_selected
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.simulated_data_utils import resolve_simulated_z_positions
@@ -102,6 +107,14 @@ def safe_move(source_path: str | Path, dest_path: str | Path) -> str:
 def _select_candidate(file_names: list[str], station: str) -> str | None:
     if not file_names:
         return None
+    mode = str(config.get("file_selection_mode", "new")).strip().lower()
+    if mode == "qa":
+        active_qa_basenames = load_active_qa_retry_basenames(station, repo_root=REPO_ROOT)
+        qa_file_names = filter_filenames_by_qa_retry_basenames(file_names, active_qa_basenames)
+        if qa_file_names:
+            file_names = qa_file_names
+    if mode == "random":
+        return random.choice(file_names)
     order = os.environ.get("DATAFLOW_STEP1_SELECTION_ORDER", "latest").strip().lower()
     if order == "oldest":
         return min(file_names, key=lambda name: newest_order_key(name, station))

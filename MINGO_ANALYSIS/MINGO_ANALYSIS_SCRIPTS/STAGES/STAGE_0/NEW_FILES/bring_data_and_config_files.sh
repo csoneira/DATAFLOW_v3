@@ -281,33 +281,21 @@ filename_matches_date_ranges() {
 load_new_files_date_ranges
 
 # --------------------------------------------------------------------------------------------
-# Prevent the script from running multiple instances -----------------------------------------
+# Prevent concurrent runs for the same station. File-descriptor locking avoids confusing the
+# cron wrapper (whose command line contains this script path) with another transfer process.
 # --------------------------------------------------------------------------------------------
+new_files_lock_dir="${DATAFLOW_RUNTIME_ROOT:-$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME}/LOCKS/cron"
+mkdir -p "$new_files_lock_dir"
+new_files_lock_file="$new_files_lock_dir/bring_data_and_config_files_mingo0${station}.lock"
+exec 8>"$new_files_lock_file"
+if ! flock -n 8; then
+  log_info "Another NEW_FILES transfer for MINGO0${station} is active; skipping this run."
+  exit 0
+fi
 
-# Variables
-script_name=$(basename "$0")
-script_args="$*"
-current_pid=$$
-
-# Get all running instances of the script *with the same argument*, but exclude the current process
-for pid in $(ps -eo pid,cmd | grep "[b]ash .*/$script_name" | grep -v "bin/bash -c" | awk '{print $1}'); do
-    if [[ "$pid" != "$current_pid" ]]; then
-        cmdline=$(ps -p "$pid" -o args=)
-        if [[ "$cmdline" == *"$script_name $script_args"* ]]; then
-            log_warn "The script $script_name with arguments '$script_args' is already running (pid=$pid). Exiting."
-            exit 1
-        fi
-    fi
-done
-
-# If no duplicate process is found, continue
-log_info "No running instance found. Proceeding."
-
-
-# If no duplicate process is found, continue
 echo "------------------------------------------------------"
 echo "bring_data_and_config_files.sh started on: $(date)"
-echo "Station: $script_args"
+echo "Station: $station"
 echo "Running the script..."
 echo "------------------------------------------------------"
 # --------------------------------------------------------------------------------------------

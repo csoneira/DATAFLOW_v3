@@ -22,6 +22,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import warnings
 from collections import defaultdict
 from datetime import datetime, timedelta, date, timezone
@@ -246,6 +247,26 @@ def load_import_history_high_watermark(path: Path) -> tuple[int, date] | None:
     return param_set_id, latest_date
 
 
+def load_import_history_output_names(path: Path) -> set[str]:
+    """Return every lifetime-imported MINGO00 output name, including .dat."""
+    if not path.exists():
+        return set()
+    try:
+        history = pd.read_csv(path, usecols=["basename"])
+    except (OSError, ValueError, pd.errors.EmptyDataError) as exc:
+        _log_warn(f"Could not read simulation import-history names from {path}: {exc}")
+        return set()
+
+    names: set[str] = set()
+    for raw_basename in history["basename"].dropna().astype(str):
+        name = Path(raw_basename.strip()).name
+        if name.endswith(".dat"):
+            name = name[:-4]
+        if re.fullmatch(r"mi00\d{11}", name):
+            names.add(f"{name}.dat")
+    return names
+
+
 def load_output_registry(path: Path) -> dict:
     if path.exists():
         return json.loads(path.read_text())
@@ -253,7 +274,18 @@ def load_output_registry(path: Path) -> dict:
 
 
 def save_output_registry(path: Path, registry: dict) -> None:
-    path.write_text(json.dumps(registry, indent=2))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(registry, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def collect_sim_run_configs(base_dir: Path) -> list[dict]:
@@ -1503,6 +1535,9 @@ def main() -> None:
     import_history_high_watermark = load_import_history_high_watermark(
         SIM_IMPORT_HISTORY_DEFAULT
     )
+    import_history_output_names = load_import_history_output_names(
+        SIM_IMPORT_HISTORY_DEFAULT
+    )
     if import_history_high_watermark is not None:
         history_param_set_id, history_param_date = import_history_high_watermark
         _log_info(
@@ -1514,6 +1549,10 @@ def main() -> None:
             "No lifetime import history high-water mark available; "
             "new output identity will use the current mesh and simulation params only."
         )
+    _log_info(
+        "Reserved lifetime-imported MINGO00 output names: "
+        f"count={len(import_history_output_names)}"
+    )
     relocated = relocate_root_dat_files(output_dir, dat_output_dir)
     if relocated > 0:
         _log_info(f"Relocated legacy root .dat files into FILES/: moved={relocated}")
@@ -1615,6 +1654,7 @@ def main() -> None:
     registry_path = output_dir / "step_final_output_registry.json"
     registry = load_output_registry(registry_path) if registry_enabled else {"version": 1, "files": []}
     used_output_names: dict[Path, set[str]] = defaultdict(set)
+    used_output_names[dat_output_dir].update(import_history_output_names)
     for existing_file in output_dir.rglob("mi0*.dat"):
         used_output_names[existing_file.parent].add(existing_file.name)
     rng = np.random.default_rng(cfg.get("seed"))
@@ -1871,7 +1911,15 @@ def main() -> None:
             write_csv_atomic(mesh, mesh_path, index=False)
             if param_date is None or pd.isna(param_date):
                 raise ValueError("param_date is missing; enable param_date column or ensure it is populated.")
-            base_time = parse_param_datetime(str(param_date))
+            logical_base_time = parse_param_datetime(str(param_date))
+            acquisition_year = 2000 + (logical_base_time.year % 100)
+            base_time = logical_base_time.replace(year=acquisition_year)
+            if base_time.year != logical_base_time.year:
+                _log_info(
+                    "Mapped logical simulation param_date into the station filename century: "
+                    f"param_date={logical_base_time.date().isoformat()}, "
+                    f"acquisition_date={base_time.date().isoformat()}."
+                )
             z_vals = [
                 float(param_row["z_p1"]),
                 float(param_row["z_p2"]),

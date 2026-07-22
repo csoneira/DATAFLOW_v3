@@ -52,6 +52,7 @@ DEFAULT_IMPORTANT_KEYWORDS: Tuple[str, ...] = (
 )
 STEP1_MASTER_CONFIG_RELATIVE_PATH = Path("STAGE_1") / "EVENT_DATA" / "STEP_1" / "config_step_1.yaml"
 STEP1_TASK_OVERRIDE_KEYS: Tuple[str, ...] = (
+    "file_selection_mode",
     "complete_reanalysis",
     "create_plots",
     "keep_all_columns_output",
@@ -1678,9 +1679,52 @@ def apply_step1_master_overrides(
         return config_obj
 
     config_obj.update(overrides)
+    selection_mode = normalize_step1_file_selection_mode(config_obj)
+    config_obj["file_selection_mode"] = selection_mode
+    if selection_mode == "qa":
+        config_obj["process_only_qa_retry_files"] = False
+        config_obj["prioritize_other_than_qa_files"] = False
+        config_obj["last_file_test"] = True
+    elif selection_mode == "new":
+        config_obj["process_only_qa_retry_files"] = False
+        config_obj["prioritize_other_than_qa_files"] = False
+        config_obj["last_file_test"] = True
+    else:
+        config_obj["process_only_qa_retry_files"] = False
+        config_obj["prioritize_other_than_qa_files"] = False
+        config_obj["last_file_test"] = False
     joined_overrides = ", ".join(f"{key}={value}" for key, value in overrides.items())
     log_fn(f"Info: Loaded Step 1 shared overrides from {config_path}: {joined_overrides}")
     return config_obj
+
+
+def normalize_step1_file_selection_mode(config_obj: Mapping[str, object]) -> str:
+    """Return qa, new, or random, with legacy-flag compatibility."""
+
+    raw_mode = config_obj.get("file_selection_mode")
+    if raw_mode is not None and str(raw_mode).strip():
+        normalized = str(raw_mode).strip().lower()
+        aliases = {
+            "qa": "qa",
+            "quality": "qa",
+            "quality_assurance": "qa",
+            "new": "new",
+            "newest": "new",
+            "latest": "new",
+            "random": "random",
+        }
+        if normalized not in aliases:
+            raise ValueError(
+                "file_selection_mode must be one of: qa, new, random "
+                f"(received {raw_mode!r})"
+            )
+        return aliases[normalized]
+
+    if bool(config_obj.get("process_only_qa_retry_files", False)):
+        return "qa"
+    if bool(config_obj.get("last_file_test", False)):
+        return "new"
+    return "random"
 
 
 def _normalize_bool_setting(value: object, default: bool = True) -> bool:
@@ -2840,6 +2884,60 @@ def write_itineraries_to_file(file_path: Path, itineraries: Iterable[Iterable[st
     with file_path.open("w", encoding="utf-8") as itinerary_file:
         for itinerary_tuple in unique_itineraries:
             itinerary_file.write(",".join(itinerary_tuple) + "\n")
+
+
+def ensure_plane_xpos_columns(
+    dataframe: pd.DataFrame,
+    tdif_to_x_mm_per_ns: float,
+    *,
+    overwrite: bool = False,
+) -> dict[str, int]:
+    """Create final per-plane X positions from T_dif, preserving zero sentinels.
+
+    The detector convention used throughout STEP_1 is
+    ``X [mm] = p#_tdif [ns] * strip propagation speed [mm/ns]``.
+    New producer stages should use ``overwrite=True``; downstream stages use
+    the default to backfill historical inputs without replacing stored data.
+    """
+    scale = float(tdif_to_x_mm_per_ns)
+    if not np.isfinite(scale) or scale == 0:
+        raise ValueError("tdif_to_x_mm_per_ns must be finite and nonzero")
+
+    summary = {
+        "source_columns_found": 0,
+        "columns_created": 0,
+        "values_backfilled": 0,
+        "finite_mismatches": 0,
+    }
+    for plane in range(1, 5):
+        source = f"p{plane}_tdif"
+        target = f"p{plane}_xpos"
+        if source not in dataframe.columns:
+            continue
+        summary["source_columns_found"] += 1
+        expected = pd.to_numeric(dataframe[source], errors="coerce").astype(float) * scale
+        if overwrite or target not in dataframe.columns:
+            if target not in dataframe.columns:
+                summary["columns_created"] += 1
+            dataframe.loc[:, target] = expected
+            continue
+
+        stored = pd.to_numeric(dataframe[target], errors="coerce").astype(float)
+        backfill_mask = stored.isna() & expected.notna()
+        if bool(backfill_mask.any()):
+            dataframe.loc[backfill_mask, target] = expected.loc[backfill_mask]
+            summary["values_backfilled"] += int(backfill_mask.sum())
+            stored = pd.to_numeric(dataframe[target], errors="coerce").astype(float)
+        comparable = stored.notna() & expected.notna()
+        mismatch = comparable & ~np.isclose(
+            stored.to_numpy(dtype=float),
+            expected.to_numpy(dtype=float),
+            rtol=1e-9,
+            atol=1e-9,
+            equal_nan=True,
+        )
+        summary["finite_mismatches"] += int(mismatch.sum())
+    return summary
 
 
 def y_pos(y_width):

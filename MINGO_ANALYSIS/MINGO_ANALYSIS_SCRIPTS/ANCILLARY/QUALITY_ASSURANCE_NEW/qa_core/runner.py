@@ -1043,7 +1043,7 @@ def _collect_step_outputs(
 
     pass_frames: list[pd.DataFrame] = []
     for path in pass_paths:
-        task_id = int(path.parents[4].name.removeprefix("TASK_"))
+        task_id = int(path.parents[5].name.removeprefix("TASK_"))
         frame = read_csv_if_exists(path)
         if frame.empty:
             continue
@@ -1054,8 +1054,8 @@ def _collect_step_outputs(
 
     eval_frames: list[pd.DataFrame] = []
     for path in eval_paths:
-        task_id = int(path.parents[4].name.removeprefix("TASK_"))
-        manifest_has_quality = _task_manifest_has_quality(path.parents[4], station_name)
+        task_id = int(path.parents[5].name.removeprefix("TASK_"))
+        manifest_has_quality = _task_manifest_has_quality(path.parents[5], station_name)
         if manifest_has_quality is False:
             continue
         frame = read_csv_if_exists(path)
@@ -1221,7 +1221,7 @@ def run_step(
     if not stations:
         raise ValueError(f"{step_dir} is missing non-empty 'stations'.")
 
-    repo_root = step_dir.parents[4]
+    repo_root = step_dir.parents[5]
 
     total_plots = 0
     total_references = 0
