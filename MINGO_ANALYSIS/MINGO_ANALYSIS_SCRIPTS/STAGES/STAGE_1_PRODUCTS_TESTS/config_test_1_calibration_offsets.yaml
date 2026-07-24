@@ -3,5 +3,7 @@ station: 4
 
 # The interval is applied to the acquisition timestamp encoded in filename_base.
 # A date-only end_date includes that entire day. ISO datetimes are also accepted.
+# Only basenames backed by valid Parquet Lake files are plotted. If a basename
+# was calibrated more than once, its newest execution_timestamp is used.
 start_date: "2025-12-19"
 end_date: "2026-02-02"

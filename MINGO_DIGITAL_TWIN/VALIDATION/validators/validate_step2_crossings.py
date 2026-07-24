@@ -144,7 +144,12 @@ def run(
     )
 
     cfg = art.metadata.get("config") or {}
-    bounds = cfg.get("bounds_mm") or {}
+    active_area_bounds = (
+        art.metadata.get("active_area_bounds_mm")
+        or cfg.get("active_area_bounds_mm")
+        or cfg.get("bounds_mm")
+        or {}
+    )
     z_positions = cfg.get("z_positions") or cfg.get("z_positions_mm") or cfg.get("z_positions_raw_mm")
     c_mm_per_ns = float((cfg.get("c_mm_per_ns") or 299.792458))
 
@@ -234,11 +239,11 @@ def run(
         notes=f"c={c_mm_per_ns:.6f} mm/ns",
     )
 
-    if bounds:
-        x_min = float(bounds.get("x_min", -np.inf))
-        x_max = float(bounds.get("x_max", np.inf))
-        y_min = float(bounds.get("y_min", -np.inf))
-        y_max = float(bounds.get("y_max", np.inf))
+    if active_area_bounds:
+        x_min = float(active_area_bounds.get("x_min", -np.inf))
+        x_max = float(active_area_bounds.get("x_max", np.inf))
+        y_min = float(active_area_bounds.get("y_min", -np.inf))
+        y_max = float(active_area_bounds.get("y_max", np.inf))
         x_bad = 0
         y_bad = 0
         for i in range(1, 5):
@@ -248,7 +253,7 @@ def run(
             y_bad += int(((yv < y_min) | (yv > y_max)).sum())
         rb.add(
             test_id="step2_bounds_x",
-            test_name="X crossings inside bounds",
+            test_name="X crossings inside active area",
             metric_name="out_of_bounds_values",
             metric_value=x_bad,
             expected_value=0,
@@ -259,7 +264,7 @@ def run(
         )
         rb.add(
             test_id="step2_bounds_y",
-            test_name="Y crossings inside bounds",
+            test_name="Y crossings inside active area",
             metric_name="out_of_bounds_values",
             metric_value=y_bad,
             expected_value=0,

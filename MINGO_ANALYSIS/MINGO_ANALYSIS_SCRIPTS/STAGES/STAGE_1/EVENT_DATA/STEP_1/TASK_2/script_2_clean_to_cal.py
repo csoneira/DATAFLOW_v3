@@ -368,10 +368,10 @@ def _coerce_figsize(value: object, default: tuple[float, float]) -> tuple[float,
 
 
 def _load_task2_calibration_subsample_config(config_path: Path, station_id: str) -> dict[str, object]:
-    """Load and resolve the sole hard-filter config for the canonical calibration sample."""
+    """Load the river config and resolve nested station-specific values."""
     if not config_path.exists():
         raise FileNotFoundError(
-            "Task 2 calibration-subsample hard-filter config is required but missing: "
+            "Task 2 calibration-subsample config is required but missing: "
             f"{config_path}"
         )
     with config_path.open("r", encoding="utf-8") as handle:
@@ -380,33 +380,29 @@ def _load_task2_calibration_subsample_config(config_path: Path, station_id: str)
         raise ValueError(f"Task 2 calibration-subsample config must be a YAML mapping: {config_path}")
 
     station_specific_keys = {
-        "minimum_detector_charge",
-        "minimum_plane_charge",
-        "minimum_strip_charge",
-        "initial_raw_tsum_left",
-        "initial_raw_tsum_right",
-        "post_tdif_abs_max",
-        "post_charge_side_qsum_left",
-        "post_charge_side_qsum_right",
-        "post_qfb_qtdif_qdif_abs_max",
-        "post_charge_qsum_left",
-        "post_charge_qsum_right",
-        "post_tsum_left",
-        "post_tsum_right",
-        "post_slewing_tsum_left",
-        "post_slewing_tsum_right",
+        "min",
+        "max",
+        "left",
+        "right",
+        "qsum_left",
+        "qsum_right",
+        "tsum_left",
+        "tsum_right",
     }
     station_index = int(station_id)
-    resolved = dict(raw_config)
-    for key in station_specific_keys:
-        value = raw_config.get(key)
-        if isinstance(value, list):
+
+    def _resolve(value: object, key: str | None = None) -> object:
+        if isinstance(value, dict):
+            return {nested_key: _resolve(nested_value, nested_key) for nested_key, nested_value in value.items()}
+        if key in station_specific_keys and isinstance(value, list):
             if station_index >= len(value):
                 raise ValueError(
-                    f"Calibration-subsample config key {key!r} has no value for station {station_id}."
+                    f"Calibration river config key {key!r} has no value for station {station_id}."
                 )
-            resolved[key] = value[station_index]
-    return resolved
+            return value[station_index]
+        return value
+
+    return _resolve(raw_config)
 
 
 def _require_task2_calibration_config_keys(
@@ -888,9 +884,6 @@ def _task2_active_strip_matrix_from_components(df: pd.DataFrame) -> dict[int, np
                 continue
             qsum_values = pd.to_numeric(df[cols["Q_sum"]], errors="coerce").fillna(0).to_numpy(dtype=float)
             active_mask = np.isfinite(qsum_values) & (qsum_values != 0)
-            for column_name in (cols["Q_dif"], cols["T_sum"], cols["T_dif"]):
-                values = pd.to_numeric(df[column_name], errors="coerce").fillna(0).to_numpy(dtype=float)
-                active_mask &= np.isfinite(values) & (values != 0)
             strip_masks.append(active_mask)
         active_by_plane[plane] = np.column_stack(strip_masks)
     return active_by_plane
@@ -908,57 +901,6 @@ def _task2_plane_topology_labels_from_active(active_by_plane: dict[int, np.ndarr
         )
     return topology_labels
 
-def _task2_one_strip_masks_from_active(active_by_plane: dict[int, np.ndarray]) -> dict[int, dict[int, np.ndarray]]:
-    """Build per-plane/per-strip masks for exact-one-strip topologies."""
-    one_strip_masks: dict[int, dict[int, np.ndarray]] = {}
-    for plane, active_matrix in active_by_plane.items():
-        if active_matrix.size == 0:
-            one_strip_masks[plane] = {
-                strip: np.zeros(active_matrix.shape[0], dtype=bool)
-                for strip in range(1, 5)
-            }
-            continue
-        topology_labels = _task2_plane_topology_labels_from_active({plane: active_matrix})[plane]
-        is_one_strip = np.isin(topology_labels, TASK2_ONE_STRIP_PATTERNS)
-        one_strip_masks[plane] = {
-            strip: is_one_strip & active_matrix[:, strip - 1]
-            for strip in range(1, 5)
-        }
-    return one_strip_masks
-
-def _task2_plane_one_strip_masks_from_raw(df: pd.DataFrame) -> dict[int, dict[int, np.ndarray]]:
-    return _task2_one_strip_masks_from_active(_task2_active_strip_matrix_from_raw(df))
-
-def _task2_plane_one_strip_masks_from_components(df: pd.DataFrame) -> dict[int, dict[int, np.ndarray]]:
-    return _task2_one_strip_masks_from_active(_task2_active_strip_matrix_from_components(df))
-
-def _task2_prefer_one_strip_mask(mask: np.ndarray, *, label: str) -> np.ndarray:
-    """Apply the configured fit-level cluster-size requirement."""
-    selected_mask = np.asarray(mask, dtype=bool)
-    if not globals().get("task2_calibration_fit_requires_exactly_one_strip", True):
-        return np.ones(selected_mask.shape, dtype=bool)
-    if int(np.count_nonzero(selected_mask)) == 0:
-        print(f"[task2-calibration-selection] {label}: no configured exact-one-strip rows matched.")
-    return selected_mask
-
-
-def _task2_qfb_fit_valid_mask(q_sum: np.ndarray, q_dif: np.ndarray) -> np.ndarray:
-    mask = np.isfinite(q_sum) & np.isfinite(q_dif)
-    mask &= q_sum != 0
-    if task2_qfb_fit_require_nonzero_qdif:
-        mask &= q_dif != 0
-    return mask
-
-
-def _task2_qtdif_fit_valid_mask(t_dif: np.ndarray, q_dif: np.ndarray) -> np.ndarray:
-    mask = np.isfinite(t_dif) & np.isfinite(q_dif)
-    if task2_qtdif_fit_require_nonzero_tdif:
-        mask &= t_dif != 0
-    if task2_qtdif_fit_require_nonzero_qdif:
-        mask &= q_dif != 0
-    return mask
-
-
 def _task2_plane_strip_qsum_from_raw(df: pd.DataFrame, plane: int) -> np.ndarray:
     """Return per-strip Q_sum matrix (N x 4) for one plane from raw front/back columns."""
     n_rows = len(df)
@@ -974,6 +916,321 @@ def _task2_plane_strip_qsum_from_raw(df: pd.DataFrame, plane: int) -> np.ndarray
         qsum_values = 0.5 * (qf_values + qb_values)
         strip_qsum.append(np.where(np.isfinite(qsum_values), qsum_values, 0.0))
     return np.column_stack(strip_qsum)
+
+def _task2_validate_strip_topologies(configured_topologies: Iterable[object]) -> tuple[str, ...]:
+    topologies = tuple(str(value).strip() for value in configured_topologies)
+    if not topologies or any(len(value) != 4 or set(value).difference({"0", "1"}) for value in topologies):
+        raise ValueError("strip_topology must contain four-bit strings such as 1000 or 0110.")
+    return topologies
+
+def build_task2_initial_charge_gate_mask_from_raw(
+    df: pd.DataFrame,
+    *,
+    detector_total_charge_min: float,
+    active_plane_total_charge_min: float,
+    highest_active_strip_charge_min: float,
+) -> np.ndarray:
+    """Apply the first river gate to every active plane, then to the detector."""
+    n_rows = len(df)
+    if n_rows == 0:
+        return np.zeros(0, dtype=bool)
+    active_by_plane = _task2_active_strip_matrix_from_raw(df)
+    keep_mask = np.ones(n_rows, dtype=bool)
+    any_active_plane = np.zeros(n_rows, dtype=bool)
+    detector_total_charge = np.zeros(n_rows, dtype=float)
+    for plane in range(1, 5):
+        qsum_matrix = _task2_plane_strip_qsum_from_raw(df, plane)
+        active_matrix = active_by_plane[plane]
+        active_plane = np.any(active_matrix, axis=1)
+        any_active_plane |= active_plane
+        plane_total = np.sum(qsum_matrix, axis=1)
+        detector_total_charge += plane_total
+        highest_active_strip = np.max(
+            np.where(active_matrix, qsum_matrix, -np.inf),
+            axis=1,
+        )
+        keep_mask &= (
+            ~active_plane
+            | (
+                (plane_total > float(active_plane_total_charge_min))
+                & (highest_active_strip > float(highest_active_strip_charge_min))
+            )
+        )
+    keep_mask &= any_active_plane
+    keep_mask &= detector_total_charge > float(detector_total_charge_min)
+    return keep_mask
+
+def apply_task2_sequential_charge_zeroing(
+    df: pd.DataFrame,
+    *,
+    charge_config: dict[str, object],
+) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """Zero raw charge blocks in channel -> strip -> plane -> detector order."""
+    n_rows = len(df)
+    bounds = {
+        level: (float(charge_config[level]["min"]), float(charge_config[level]["max"]))
+        for level in ("channel", "strip", "plane", "detector")
+    }
+
+    def _raw_strip_columns(plane: int, strip: int) -> list[str]:
+        return [
+            f"p{plane}_s{strip}_ef_q",
+            f"p{plane}_s{strip}_eb_q",
+            f"p{plane}_s{strip}_ef_t",
+            f"p{plane}_s{strip}_eb_t",
+        ]
+
+    def _channel_matrix() -> np.ndarray:
+        columns: list[np.ndarray] = []
+        for plane in range(1, 5):
+            for strip in range(1, 5):
+                for side in ("ef", "eb"):
+                    column = f"p{plane}_s{strip}_{side}_q"
+                    if column in df.columns:
+                        values = pd.to_numeric(df[column], errors="coerce").to_numpy(dtype=float)
+                    else:
+                        values = np.zeros(n_rows, dtype=float)
+                    columns.append(values)
+        return np.column_stack(columns) if columns else np.empty((n_rows, 0), dtype=float)
+
+    def _strip_matrix() -> np.ndarray:
+        return np.column_stack([
+            _task2_plane_strip_qsum_from_raw(df, plane)[:, strip - 1]
+            for plane in range(1, 5)
+            for strip in range(1, 5)
+        ])
+
+    def _plane_matrix() -> np.ndarray:
+        strip_matrix = _strip_matrix()
+        return np.column_stack([
+            np.sum(strip_matrix[:, plane_index * 4:(plane_index + 1) * 4], axis=1)
+            for plane_index in range(4)
+        ])
+
+    diagnostics: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    failure_counts: dict[str, int] = {}
+
+    channel_pre = _channel_matrix()
+    channel_failed_count = 0
+    channel_min, channel_max = bounds["channel"]
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            for side in ("ef", "eb"):
+                q_column = f"p{plane}_s{strip}_{side}_q"
+                t_column = f"p{plane}_s{strip}_{side}_t"
+                if q_column not in df.columns:
+                    continue
+                values = pd.to_numeric(df[q_column], errors="coerce").to_numpy(dtype=float)
+                active = np.isfinite(values) & (values != 0)
+                failed = (~np.isfinite(values)) | (active & ((values < channel_min) | (values > channel_max)))
+                if np.any(failed):
+                    columns = [column for column in (q_column, t_column) if column in df.columns]
+                    df.loc[failed, columns] = 0
+                    channel_failed_count += int(np.count_nonzero(failed))
+    diagnostics["channel"] = (channel_pre, _channel_matrix())
+    failure_counts["channel"] = channel_failed_count
+
+    strip_pre = _strip_matrix()
+    strip_failed_count = 0
+    strip_min, strip_max = bounds["strip"]
+    for plane in range(1, 5):
+        plane_strip_matrix = _task2_plane_strip_qsum_from_raw(df, plane)
+        for strip in range(1, 5):
+            values = plane_strip_matrix[:, strip - 1]
+            active = np.isfinite(values) & (values != 0)
+            failed = active & ((values < strip_min) | (values > strip_max))
+            if np.any(failed):
+                columns = [column for column in _raw_strip_columns(plane, strip) if column in df.columns]
+                df.loc[failed, columns] = 0
+                strip_failed_count += int(np.count_nonzero(failed))
+    diagnostics["strip"] = (strip_pre, _strip_matrix())
+    failure_counts["strip"] = strip_failed_count
+
+    plane_pre = _plane_matrix()
+    plane_failed_count = 0
+    plane_min, plane_max = bounds["plane"]
+    for plane_index, plane in enumerate(range(1, 5)):
+        values = plane_pre[:, plane_index]
+        active = np.isfinite(values) & (values != 0)
+        failed = active & ((values < plane_min) | (values > plane_max))
+        if np.any(failed):
+            columns = [
+                column
+                for strip in range(1, 5)
+                for column in _raw_strip_columns(plane, strip)
+                if column in df.columns
+            ]
+            df.loc[failed, columns] = 0
+            plane_failed_count += int(np.count_nonzero(failed))
+    diagnostics["plane"] = (plane_pre, _plane_matrix())
+    failure_counts["plane"] = plane_failed_count
+
+    detector_pre = np.sum(_plane_matrix(), axis=1)
+    detector_min, detector_max = bounds["detector"]
+    active_detector = np.isfinite(detector_pre) & (detector_pre != 0)
+    detector_failed = active_detector & ((detector_pre < detector_min) | (detector_pre > detector_max))
+    if np.any(detector_failed):
+        columns = [
+            column
+            for plane in range(1, 5)
+            for strip in range(1, 5)
+            for column in _raw_strip_columns(plane, strip)
+            if column in df.columns
+        ]
+        df.loc[detector_failed, columns] = 0
+    diagnostics["detector"] = (detector_pre, np.sum(_plane_matrix(), axis=1))
+    failure_counts["detector"] = int(np.count_nonzero(detector_failed))
+    print(f"[task2-charge-zeroing] failures={failure_counts}")
+    return diagnostics
+
+
+def apply_task2_final_calibrated_strip_gate(
+    df: pd.DataFrame,
+    gate_config: dict[str, object],
+) -> dict[str, int]:
+    """Zero only the four final calibrated values when one fails its strip limit."""
+    summary = {
+        "strip_blocks_tested": 0,
+        "strip_blocks_zeroed": 0,
+        "rows_affected": 0,
+        "values_zeroed": 0,
+    }
+    if not _coerce_config_bool(gate_config.get("enabled"), default=True):
+        return summary
+
+    variables = ("qsum", "qdif", "tsum", "tdif")
+    limits = gate_config.get("limits")
+    if not isinstance(limits, dict):
+        raise ValueError("final_calibrated_strip_gate.limits must be a mapping.")
+    for variable in variables:
+        variable_limits = limits.get(variable)
+        if not isinstance(variable_limits, dict) or "min" not in variable_limits or "max" not in variable_limits:
+            raise KeyError(
+                "final_calibrated_strip_gate requires min/max limits for "
+                f"{variable}."
+            )
+
+    affected_rows = np.zeros(len(df), dtype=bool)
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            columns = [f"p{plane}_s{strip}_{variable}_cal" for variable in variables]
+            missing_columns = [column for column in columns if column not in df.columns]
+            if missing_columns:
+                raise KeyError(
+                    "Final calibrated strip gate cannot run before all four "
+                    "calibrated columns exist; missing: "
+                    + ", ".join(missing_columns)
+                )
+
+            values = np.column_stack([
+                pd.to_numeric(df[column], errors="coerce").to_numpy(dtype=float)
+                for column in columns
+            ])
+            all_zero = np.all(np.isfinite(values) & (values == 0), axis=1)
+            failed = ~all_zero & ~np.all(np.isfinite(values), axis=1)
+            for variable_index, variable in enumerate(variables):
+                variable_limits = limits[variable]
+                lower = float(variable_limits["min"])
+                upper = float(variable_limits["max"])
+                if lower > upper:
+                    raise ValueError(
+                        f"final_calibrated_strip_gate {variable} min exceeds max."
+                    )
+                failed |= (
+                    ~all_zero
+                    & (
+                        (values[:, variable_index] < lower)
+                        | (values[:, variable_index] > upper)
+                    )
+                )
+
+            summary["strip_blocks_tested"] += int(np.count_nonzero(~all_zero))
+            failed_count = int(np.count_nonzero(failed))
+            if failed_count:
+                nonzero_before = np.count_nonzero(values[failed] != 0)
+                df.loc[failed, columns] = 0
+                summary["strip_blocks_zeroed"] += failed_count
+                summary["values_zeroed"] += int(nonzero_before)
+                affected_rows |= failed
+
+    summary["rows_affected"] = int(np.count_nonzero(affected_rows))
+    return summary
+
+def build_task2_exact_topology_mask(
+    df: pd.DataFrame,
+    *,
+    plane_combinations: tuple[tuple[int, ...], ...],
+    strip_topologies: tuple[str, ...],
+    component_source: str,
+    target_plane: int | None = None,
+    target_strip: int | None = None,
+) -> np.ndarray:
+    """Select exact active-plane and per-active-plane strip patterns."""
+    if component_source == "raw":
+        active_by_plane = _task2_active_strip_matrix_from_raw(df)
+    elif component_source == "components":
+        active_by_plane = _task2_active_strip_matrix_from_components(df)
+    else:
+        raise ValueError(f"Unknown Task 2 topology component_source={component_source!r}.")
+    n_rows = len(df)
+    allowed_plane_labels = {"".join(str(plane) for plane in combination) for combination in plane_combinations}
+    plane_active = {plane: np.any(active_by_plane[plane], axis=1) for plane in range(1, 5)}
+    active_plane_labels = np.asarray([
+        "".join(str(plane) for plane in range(1, 5) if plane_active[plane][row])
+        for row in range(n_rows)
+    ], dtype=object)
+    keep_mask = np.isin(active_plane_labels, tuple(allowed_plane_labels))
+    topology_labels = _task2_plane_topology_labels_from_active(active_by_plane)
+    for plane in range(1, 5):
+        keep_mask &= (~plane_active[plane]) | np.isin(topology_labels[plane], strip_topologies)
+    if target_plane is not None and target_strip is not None:
+        keep_mask &= active_by_plane[int(target_plane)][:, int(target_strip) - 1]
+    return keep_mask
+
+def build_task2_fit_mask(
+    df: pd.DataFrame,
+    fit_config: dict[str, object],
+    *,
+    component_source: str,
+    target_plane: int | None = None,
+    target_strip: int | None = None,
+) -> np.ndarray:
+    return build_task2_exact_topology_mask(
+        df,
+        plane_combinations=_parse_task2_calibration_plane_topologies(fit_config["plane_combination"]),
+        strip_topologies=_task2_validate_strip_topologies(fit_config["strip_topology"]),
+        component_source=component_source,
+        target_plane=target_plane,
+        target_strip=target_strip,
+    )
+
+def build_task2_active_strip_application_mask(
+    df: pd.DataFrame,
+    plane: int,
+    strip: int,
+    *,
+    qsum_column: str | None = None,
+) -> np.ndarray:
+    """Broad application mask shared by calibration_df and working_df."""
+    column_name = qsum_column or f"p{plane}_s{strip}_qsum"
+    if column_name not in df.columns:
+        return np.zeros(len(df), dtype=bool)
+    values = pd.to_numeric(df[column_name], errors="coerce").to_numpy(dtype=float)
+    return np.isfinite(values) & (values != 0)
+
+def build_task2_application_mask(
+    df: pd.DataFrame,
+    application_config: dict[str, object],
+    plane: int,
+    strip: int,
+    *,
+    qsum_column: str | None = None,
+) -> np.ndarray:
+    if _coerce_config_bool(application_config.get("active_strip"), default=True):
+        return build_task2_active_strip_application_mask(
+            df, plane, strip, qsum_column=qsum_column
+        )
+    return np.ones(len(df), dtype=bool)
 
 def build_task2_topology_charge_mask_from_raw(
     df: pd.DataFrame,
@@ -1204,6 +1461,7 @@ def apply_task2_charge_side_pedestals_to_components(
     df: pd.DataFrame,
     qf_pedestal: np.ndarray,
     qb_pedestal: np.ndarray,
+    application_config: dict[str, object],
 ) -> None:
     """Apply charge-side pedestal offsets to Task 2 strip Q_sum/Q_dif columns."""
     for plane in range(1, 5):
@@ -1213,15 +1471,20 @@ def apply_task2_charge_side_pedestals_to_components(
             if q_dif_col not in df.columns or q_sum_col not in df.columns:
                 continue
 
-            q_dif_mask = df[q_dif_col] != 0
-            df.loc[q_dif_mask, q_dif_col] -= (qf_pedestal[plane - 1][strip - 1] - qb_pedestal[plane - 1][strip - 1]) / 2
-
-            q_sum_mask = df[q_sum_col] != 0
-            df.loc[q_sum_mask, q_sum_col] -= (qf_pedestal[plane - 1][strip - 1] + qb_pedestal[plane - 1][strip - 1]) / 2
+            application_mask = build_task2_application_mask(
+                df, application_config, plane, strip, qsum_column=q_sum_col
+            )
+            df.loc[application_mask, q_dif_col] -= (
+                qf_pedestal[plane - 1][strip - 1] - qb_pedestal[plane - 1][strip - 1]
+            ) / 2
+            df.loc[application_mask, q_sum_col] -= (
+                qf_pedestal[plane - 1][strip - 1] + qb_pedestal[plane - 1][strip - 1]
+            ) / 2
 
 def apply_task2_tdiff_offsets_to_components(
     df: pd.DataFrame,
     tdiff_calibration: np.ndarray,
+    application_config: dict[str, object],
 ) -> None:
     """Apply T_dif calibration offsets to Task 2 strip component columns."""
     for plane in range(1, 5):
@@ -1229,12 +1492,15 @@ def apply_task2_tdiff_offsets_to_components(
             column_name = f'p{plane}_s{strip}_tdif'
             if column_name not in df.columns:
                 continue
-            mask = df[column_name] != 0
-            df.loc[mask, column_name] -= tdiff_calibration[plane - 1][strip - 1]
+            application_mask = build_task2_application_mask(
+                df, application_config, plane, strip
+            )
+            df.loc[application_mask, column_name] -= tdiff_calibration[plane - 1][strip - 1]
 
 def apply_task2_tsum_offsets_to_components(
     df: pd.DataFrame,
     tsum_calibration: np.ndarray,
+    application_config: dict[str, object],
 ) -> None:
     """Apply T_sum calibration offsets to Task 2 strip component columns."""
     for plane in range(1, 5):
@@ -1242,8 +1508,71 @@ def apply_task2_tsum_offsets_to_components(
             column_name = f'p{plane}_s{strip}_tsum'
             if column_name not in df.columns:
                 continue
-            mask = df[column_name] != 0
-            df.loc[mask, column_name] += tsum_calibration[plane - 1][strip - 1]
+            application_mask = build_task2_application_mask(
+                df, application_config, plane, strip
+            )
+            df.loc[application_mask, column_name] += tsum_calibration[plane - 1][strip - 1]
+
+def apply_task2_qfb_correction(
+    df: pd.DataFrame,
+    coefficients: dict[tuple[int, int], np.ndarray],
+    application_config: dict[str, object],
+    *,
+    calibrated_columns: bool,
+) -> None:
+    """Apply fitted Q_dif(Q_sum) coefficients to every active target strip."""
+    suffix = "_cal" if calibrated_columns else ""
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            coeffs = coefficients.get((plane, strip))
+            if coeffs is None:
+                continue
+            qsum_col = f"p{plane}_s{strip}_qsum{suffix}"
+            qdif_col = f"p{plane}_s{strip}_qdif{suffix}"
+            if qsum_col not in df.columns or qdif_col not in df.columns:
+                continue
+            application_mask = build_task2_application_mask(
+                df, application_config, plane, strip, qsum_column=qsum_col
+            )
+            qsum = pd.to_numeric(df[qsum_col], errors="coerce").to_numpy(dtype=float)
+            qdif = pd.to_numeric(df[qdif_col], errors="coerce").to_numpy(dtype=float)
+            corrected = qdif.copy()
+            corrected[application_mask] -= polynomial(qsum[application_mask], *np.asarray(coeffs, dtype=float))
+            target_dtype = df[qdif_col].dtype
+            if pd.api.types.is_float_dtype(target_dtype):
+                corrected = np.asarray(corrected, dtype=target_dtype)
+            df.loc[:, qdif_col] = corrected
+
+def apply_task2_qtdif_correction(
+    df: pd.DataFrame,
+    coefficients: dict[tuple[int, int], np.ndarray],
+    application_config: dict[str, object],
+    *,
+    calibrated_columns: bool,
+) -> None:
+    """Apply fitted Q_dif(T_dif) coefficients to every active target strip."""
+    suffix = "_cal" if calibrated_columns else ""
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            coeffs = coefficients.get((plane, strip))
+            if coeffs is None:
+                continue
+            qsum_col = f"p{plane}_s{strip}_qsum{suffix}"
+            qdif_col = f"p{plane}_s{strip}_qdif{suffix}"
+            tdif_col = f"p{plane}_s{strip}_tdif{suffix}"
+            if any(column not in df.columns for column in (qsum_col, qdif_col, tdif_col)):
+                continue
+            application_mask = build_task2_application_mask(
+                df, application_config, plane, strip, qsum_column=qsum_col
+            )
+            tdif = pd.to_numeric(df[tdif_col], errors="coerce").to_numpy(dtype=float)
+            qdif = pd.to_numeric(df[qdif_col], errors="coerce").to_numpy(dtype=float)
+            corrected = qdif.copy()
+            corrected[application_mask] -= polynomial(tdif[application_mask], *np.asarray(coeffs, dtype=float))
+            target_dtype = df[qdif_col].dtype
+            if pd.api.types.is_float_dtype(target_dtype):
+                corrected = np.asarray(corrected, dtype=target_dtype)
+            df.loc[:, qdif_col] = corrected
 
 def snapshot_nonzero_mask(df: pd.DataFrame, columns: Iterable[str]) -> tuple[list[str], np.ndarray]:
     """Capture a boolean mask of non-zero values before a zeroing operation."""
@@ -4361,10 +4690,12 @@ def calculate_task2_tsum_calibration_from_pair_residuals(
         & (residual_work_df["Q_sum_2"] != 0)
     )
     residual_work_df = residual_work_df.loc[valid_qcut_rows].copy()
-    q_cut_quantiles = np.asarray(config.get(
-        "slewing_delta_t_centroid_q_cut_quantiles",
-        [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
-    ), dtype=float)
+    use_high_common_charge_cut = _coerce_config_bool(
+        tsum_river_config["fit_mask"]["use_high_common_charge_cut"], default=False
+    )
+    q_cut_quantiles = np.asarray(
+        tsum_river_config["fit_mask"]["high_common_charge_quantiles"], dtype=float
+    )
     q_cut_quantiles = q_cut_quantiles[
         np.isfinite(q_cut_quantiles)
         & (q_cut_quantiles >= 0.0)
@@ -4372,7 +4703,7 @@ def calculate_task2_tsum_calibration_from_pair_residuals(
     ]
     if q_cut_quantiles.size == 0:
         q_cut_quantiles = np.asarray([0.0], dtype=float)
-    if residual_work_df.empty:
+    if residual_work_df.empty or not use_high_common_charge_cut:
         q_cuts = np.asarray([], dtype=float)
     else:
         q_min = np.minimum(
@@ -4380,8 +4711,8 @@ def calculate_task2_tsum_calibration_from_pair_residuals(
             residual_work_df["Q_sum_2"].to_numpy(dtype=float),
         )
         q_cuts = np.unique(np.quantile(q_min, q_cut_quantiles))
-    min_events_per_pair = int(config.get("slewing_delta_t_centroid_min_events_per_pair", 100))
-    min_events_per_q_cut = int(config.get("slewing_delta_t_centroid_min_events_per_q_cut", 100))
+    min_events_per_pair = int(tsum_river_config["fit_mask"]["minimum_events_per_pair"])
+    min_events_per_q_cut = int(tsum_river_config["fit_mask"]["minimum_events_per_charge_cut"])
 
     for plane_a, plane_b in plane_pair_order:
         for strip_a, strip_b in strip_pair_patterns:
@@ -4588,7 +4919,14 @@ def record_strip_entries(df: pd.DataFrame, suffix: str) -> None:
             global_variables[f"P{plane}_s{strip}_entries_{suffix}"] = count
 
 
-def _task2_charge_gate_payload_from_raw(df: pd.DataFrame) -> tuple[np.ndarray, list[np.ndarray], np.ndarray]:
+def _task2_charge_gate_payload_from_raw(
+    df: pd.DataFrame,
+    *,
+    required_planes: Iterable[int],
+    strip_charge_threshold_scope: str,
+) -> tuple[np.ndarray, list[np.ndarray], np.ndarray]:
+    """Return the exact detector/plane/strip quantities tested by the charge gate."""
+    required_set = {int(plane) for plane in required_planes}
     detector_total = np.zeros(len(df), dtype=float)
     plane_totals: list[np.ndarray] = []
     strip_values: list[np.ndarray] = []
@@ -4596,8 +4934,24 @@ def _task2_charge_gate_payload_from_raw(df: pd.DataFrame) -> tuple[np.ndarray, l
         plane_matrix = _task2_plane_strip_qsum_from_raw(df, plane)
         plane_total = np.sum(plane_matrix, axis=1)
         detector_total += plane_total
+        if plane not in required_set:
+            plane_totals.append(np.array([], dtype=float))
+            continue
         plane_totals.append(plane_total[np.isfinite(plane_total)])
-        strip_values.append(plane_matrix[plane_matrix > 0])
+        active_matrix = np.isfinite(plane_matrix) & (plane_matrix != 0)
+        if strip_charge_threshold_scope == "highest_active_strip":
+            gate_values = np.max(
+                np.where(active_matrix, plane_matrix, -np.inf),
+                axis=1,
+            )
+            strip_values.append(gate_values[np.isfinite(gate_values)])
+        elif strip_charge_threshold_scope == "all_active_strips":
+            strip_values.append(plane_matrix[active_matrix])
+        else:
+            raise ValueError(
+                "Invalid strip_charge_threshold_scope="
+                f"{strip_charge_threshold_scope!r}."
+            )
     detector_total = detector_total[np.isfinite(detector_total)]
     strip_flat = (
         np.concatenate([arr for arr in strip_values if arr.size > 0])
@@ -4690,18 +5044,11 @@ def _fit_qfb_coeffs(xdat, ydat):
 
 def _fit_qtdif_coeffs(tdif_values, qdif_values):
     """Pure-compute Q_dif vs T_dif polynomial fit."""
-    degree = int(config.get("q_dif_t_dif_degree", 1))
+    degree = q_dif_t_dif_degree
     tdif = np.asarray(tdif_values, dtype=float).ravel()
     qdif = np.asarray(qdif_values, dtype=float).ravel()
-    finite_mask = (
-        np.isfinite(tdif)
-        & np.isfinite(qdif)
-        & (tdif != 0)
-        & (qdif != 0)
-    )
     range_mask = (
-        finite_mask
-        & (tdif > q_dif_t_dif_fit_tdif_left)
+        (tdif > q_dif_t_dif_fit_tdif_left)
         & (tdif < q_dif_t_dif_fit_tdif_right)
         & (np.abs(qdif) < q_dif_t_dif_fit_qdif_abs)
     )
@@ -4925,13 +5272,8 @@ def _build_tsum_pair_residuals(
         for p2 in range(p1 + 1, 5)
         for s2 in range(1, 5)
     ]
-    one_strip_masks = _task2_plane_one_strip_masks_from_components(df)
     pair_topology_masks = {
-        pair: _task2_prefer_one_strip_mask(
-            one_strip_masks.get(pair[0], {}).get(pair[1], np.zeros(len(df), dtype=bool))
-            & one_strip_masks.get(pair[2], {}).get(pair[3], np.zeros(len(df), dtype=bool)),
-            label=f"P{pair[0]}s{pair[1]}_P{pair[2]}s{pair[3]} T_sum residual",
-        )
+        pair: np.ones(len(df), dtype=bool)
         for pair in pairs
     }
 
@@ -6088,10 +6430,23 @@ def _build_pair_fit_slewing_event_solutions(
 def _apply_slewing_solutions_to_dataframe(
     target_df: pd.DataFrame,
     event_solutions: dict[object, dict[str, float]],
+    application_config: dict[str, object],
     *,
     application_sign: float,
     snapshot_changes: bool = True,
 ) -> dict[str, object]:
+    application_masks: dict[tuple[int, int], pd.Series] = {}
+    for plane in range(1, 5):
+        for strip in range(1, 5):
+            qsum_column = f"p{plane}_s{strip}_qsum"
+            if f"{qsum_column}_cal" in target_df.columns:
+                qsum_column = f"{qsum_column}_cal"
+            application_masks[(plane, strip)] = pd.Series(
+                build_task2_application_mask(
+                    target_df, application_config, plane, strip, qsum_column=qsum_column
+                ),
+                index=target_df.index,
+            )
     updates_by_column: dict[str, list[tuple[object, float]]] = defaultdict(list)
     applied_values_by_strip: dict[str, list[float]] = defaultdict(list)
     for row_index, values_by_label in event_solutions.items():
@@ -6102,6 +6457,8 @@ def _apply_slewing_solutions_to_dataframe(
             if parsed is None or not np.isfinite(slewing_value):
                 continue
             plane, strip = parsed
+            if not bool(application_masks[(plane, strip)].get(row_index, False)):
+                continue
             column_name = f"p{plane}_s{strip}_tsum"
             cal_column_name = f"{column_name}_cal"
             if cal_column_name in target_df.columns:
@@ -6588,6 +6945,7 @@ def fit_per_channel_polynomial_slewing_model(
 def apply_per_channel_polynomial_slewing_to_dataframe(
     target_df: pd.DataFrame,
     model: dict[str, object],
+    application_config: dict[str, object],
     *,
     context_label: str,
 ) -> dict[str, object]:
@@ -6624,7 +6982,9 @@ def apply_per_channel_polynomial_slewing_to_dataframe(
                 continue
             q_values = pd.to_numeric(target_df[q_column], errors="coerce")
             t_values = pd.to_numeric(target_df[t_column], errors="coerce")
-            candidate_mask = np.isfinite(t_values) & (t_values != 0)
+            candidate_mask = build_task2_application_mask(
+                target_df, application_config, plane, strip, qsum_column=q_column
+            ) & np.isfinite(t_values)
             if not bool(candidate_mask.any()):
                 continue
 
@@ -6920,6 +7280,7 @@ def _choose_slewing_application_sign(
         _apply_slewing_solutions_to_dataframe(
             trial_df,
             event_solutions,
+            slewing_river_config["application_mask"],
             application_sign=application_sign,
             snapshot_changes=False,
         )
@@ -7949,43 +8310,28 @@ calibration_subsample_config = _load_task2_calibration_subsample_config(
 )
 _require_task2_calibration_config_keys(
     calibration_subsample_config,
-    (
-        "require_passes_task_1",
-        "trigger_type_column",
-        "allowed_trigger_types",
-        "allowed_plane_topologies",
-        "allowed_cluster_sizes_present_planes",
-        "allowed_active_strip_topologies",
-        "require_zero_cluster_size_missing_planes",
-        "minimum_strip_charge_scope",
-        "fit_requires_exactly_one_strip_per_plane",
-        "qfb_fit_require_nonzero_qdif",
-        "qtdif_fit_require_nonzero_tdif",
-        "qtdif_fit_require_nonzero_qdif",
-        "minimum_detector_charge",
-        "minimum_plane_charge",
-        "minimum_strip_charge",
-        "initial_raw_tsum_left",
-        "initial_raw_tsum_right",
-        "real_stage_filtering_enabled",
-        "post_tdif_filter_enabled",
-        "post_tdif_abs_max",
-        "post_charge_side_qsum_filter_enabled",
-        "post_charge_side_qsum_left",
-        "post_charge_side_qsum_right",
-        "post_qfb_qtdif_qdif_filter_enabled",
-        "post_qfb_qtdif_qdif_abs_max",
-        "post_charge_qsum_filter_enabled",
-        "post_charge_qsum_left",
-        "post_charge_qsum_right",
-        "post_tsum_filter_enabled",
-        "post_tsum_left",
-        "post_tsum_right",
-        "post_slewing_filter_enabled",
-        "post_slewing_tsum_left",
-        "post_slewing_tsum_right",
-    ),
+    ("version", "main_subsample", "calibration_flow", "working_sample"),
 )
+calibration_main_config = calibration_subsample_config["main_subsample"]
+calibration_flow_config = calibration_subsample_config["calibration_flow"]
+working_sample_config = calibration_subsample_config["working_sample"]
+_require_task2_calibration_config_keys(calibration_main_config, ("preprocessing", "row_filters"))
+calibration_main_preprocessing = calibration_main_config["preprocessing"]
+calibration_main_row_filters = calibration_main_config["row_filters"]
+_require_task2_calibration_config_keys(calibration_main_preprocessing, ("charge_zeroing",))
+_require_task2_calibration_config_keys(
+    calibration_main_row_filters,
+    ("topology", "raw_tsum"),
+)
+_require_task2_calibration_config_keys(
+    calibration_flow_config,
+    ("charge_pedestal", "t_dif", "qfb", "q_tdif", "t_sum", "slewing"),
+)
+_require_task2_calibration_config_keys(
+    working_sample_config,
+    ("final_calibrated_strip_gate",),
+)
+final_calibrated_strip_gate_config = working_sample_config["final_calibrated_strip_gate"]
 print(
     "[task2-calibration-config] "
     f"source={calibration_subsample_config_path} "
@@ -8009,6 +8355,9 @@ task2_qt_histograms_use_4x16_layout = _coerce_config_bool(
     config.get("task2_qt_histograms_use_4x16_layout"),
     default=False,
 )
+_task2_tsum_plot_filter_config = calibration_flow_config["t_sum"]["post_application_filter"]
+_task2_tsum_plot_default_left = float(_task2_tsum_plot_filter_config["tsum_left"])
+_task2_tsum_plot_default_right = float(_task2_tsum_plot_filter_config["tsum_right"])
 task2_qt_histogram_plot_limits = {
     "qsum": (
         _coerce_config_value(config.get("task2_qt_histogram_qsum_xlim_left", -5), float, -5.0),
@@ -8023,8 +8372,16 @@ task2_qt_histogram_plot_limits = {
         _coerce_config_value(config.get("task2_qt_histogram_qdif_xlim_right", 2), float, 2.0),
     ),
     "tsum": (
-        _coerce_config_value(config.get("task2_qt_histogram_tsum_xlim_left", -200), float, -200.0),
-        _coerce_config_value(config.get("task2_qt_histogram_tsum_xlim_right", -130), float, -130.0),
+        _coerce_config_value(
+            config.get("task2_qt_histogram_tsum_xlim_left", _task2_tsum_plot_default_left),
+            float,
+            _task2_tsum_plot_default_left,
+        ),
+        _coerce_config_value(
+            config.get("task2_qt_histogram_tsum_xlim_right", _task2_tsum_plot_default_right),
+            float,
+            _task2_tsum_plot_default_right,
+        ),
     ),
 }
 apply_slewing_correction_from_pair_fit = _coerce_config_bool(
@@ -8445,69 +8802,44 @@ Q_dif_pre_cal_threshold = config.get("Q_dif_pre_cal_threshold", 20)
 T_sum_left_pre_cal = config.get("T_sum_left_pre_cal", -200)
 T_sum_right_pre_cal = config.get("T_sum_right_pre_cal", -90)
 T_dif_pre_cal_threshold = config.get("T_dif_pre_cal_threshold", 20)
-calibration_detector_charge_threshold = float(calibration_subsample_config["minimum_detector_charge"])
-calibration_plane_charge_threshold = float(calibration_subsample_config["minimum_plane_charge"])
-calibration_strip_charge_threshold = float(calibration_subsample_config["minimum_strip_charge"])
+main_charge_zeroing_config = calibration_main_preprocessing["charge_zeroing"]
+main_topology_config = calibration_main_row_filters["topology"]
+main_raw_tsum_config = calibration_main_row_filters["raw_tsum"]
+charge_pedestal_river_config = calibration_flow_config["charge_pedestal"]
+tdif_river_config = calibration_flow_config["t_dif"]
+qfb_river_config = calibration_flow_config["qfb"]
+qtdif_river_config = calibration_flow_config["q_tdif"]
+tsum_river_config = calibration_flow_config["t_sum"]
+slewing_river_config = calibration_flow_config["slewing"]
+
+calibration_channel_charge_threshold = float(main_charge_zeroing_config["channel"]["min"])
+calibration_channel_charge_max = float(main_charge_zeroing_config["channel"]["max"])
+calibration_strip_charge_threshold = float(main_charge_zeroing_config["strip"]["min"])
+calibration_strip_charge_max = float(main_charge_zeroing_config["strip"]["max"])
+calibration_plane_charge_threshold = float(main_charge_zeroing_config["plane"]["min"])
+calibration_plane_charge_max = float(main_charge_zeroing_config["plane"]["max"])
+calibration_detector_charge_threshold = float(main_charge_zeroing_config["detector"]["min"])
+calibration_detector_charge_max = float(main_charge_zeroing_config["detector"]["max"])
 task2_calibration_plane_topologies = _parse_task2_calibration_plane_topologies(
-    calibration_subsample_config["allowed_plane_topologies"]
+    main_topology_config["plane_combination"]
 )
-task2_calibration_trigger_type_column = str(calibration_subsample_config["trigger_type_column"]).strip()
-task2_calibration_allowed_trigger_types = tuple(
-    int(value) for value in calibration_subsample_config["allowed_trigger_types"]
+task2_calibration_allowed_active_strip_topologies = _task2_validate_strip_topologies(
+    main_topology_config["strip_topology"]
 )
-task2_calibration_allowed_cluster_sizes = tuple(
-    int(value) for value in calibration_subsample_config["allowed_cluster_sizes_present_planes"]
-)
-task2_calibration_allowed_active_strip_topologies = tuple(
-    str(value).strip() for value in calibration_subsample_config["allowed_active_strip_topologies"]
-)
-if not task2_calibration_allowed_active_strip_topologies or any(
-    len(topology) != 4 or set(topology).difference({"0", "1"})
-    for topology in task2_calibration_allowed_active_strip_topologies
-):
-    raise ValueError(
-        "allowed_active_strip_topologies must contain four-bit strings such as "
-        f"'1100' in {calibration_subsample_config_path}."
-    )
-task2_calibration_require_zero_missing_cluster = _coerce_config_bool(
-    calibration_subsample_config["require_zero_cluster_size_missing_planes"],
-    default=True,
-)
-task2_calibration_minimum_strip_charge_scope = str(
-    calibration_subsample_config["minimum_strip_charge_scope"]
-).strip().lower()
-if task2_calibration_minimum_strip_charge_scope not in {
-    "all_active_strips",
-    "highest_active_strip",
-}:
-    raise ValueError(
-        "Invalid minimum_strip_charge_scope in "
-        f"{calibration_subsample_config_path}: "
-        f"{task2_calibration_minimum_strip_charge_scope!r}."
-    )
-task2_calibration_require_passes_task_1 = _coerce_config_bool(
-    calibration_subsample_config["require_passes_task_1"],
-    default=True,
-)
-task2_calibration_fit_requires_exactly_one_strip = _coerce_config_bool(
-    calibration_subsample_config["fit_requires_exactly_one_strip_per_plane"],
-    default=True,
-)
-task2_qfb_fit_require_nonzero_qdif = _coerce_config_bool(
-    calibration_subsample_config["qfb_fit_require_nonzero_qdif"],
-    default=True,
-)
-task2_qtdif_fit_require_nonzero_tdif = _coerce_config_bool(
-    calibration_subsample_config["qtdif_fit_require_nonzero_tdif"],
-    default=True,
-)
-task2_qtdif_fit_require_nonzero_qdif = _coerce_config_bool(
-    calibration_subsample_config["qtdif_fit_require_nonzero_qdif"],
-    default=True,
-)
+task2_calibration_allowed_cluster_sizes = tuple(sorted({
+    topology.count("1") for topology in task2_calibration_allowed_active_strip_topologies
+}))
+task2_calibration_require_zero_missing_cluster = True
 task2_calibration_plane_topology_label = _format_task2_plane_topologies(
     task2_calibration_plane_topologies
 )
+
+task2_charge_pedestal_enabled = _coerce_config_bool(charge_pedestal_river_config["enabled"], default=True)
+task2_tdif_enabled = _coerce_config_bool(tdif_river_config["enabled"], default=True)
+task2_qfb_enabled = _coerce_config_bool(qfb_river_config["enabled"], default=True)
+task2_qtdif_enabled = _coerce_config_bool(qtdif_river_config["enabled"], default=True)
+task2_tsum_enabled = _coerce_config_bool(tsum_river_config["enabled"], default=True)
+task2_slewing_enabled = _coerce_config_bool(slewing_river_config["enabled"], default=True)
 plot_only_calibration_detector_charge_hist_right_clip = _optional_config_float(
     config,
     "plot_only_calibration_detector_charge_hist_right_clip",
@@ -8569,28 +8901,30 @@ coincidence_window_cal_number_of_points = config["coincidence_window_cal_number_
 pedestal_left = config["pedestal_left"]
 pedestal_right = config["pedestal_right"]
 
-# Front-back charge
-distance_sum_charges_left_fit = config["distance_sum_charges_left_fit"]
-distance_sum_charges_right_fit = config["distance_sum_charges_right_fit"]
-distance_dif_charges_up_fit = config["distance_dif_charges_up_fit"]
-distance_dif_charges_low_fit = config["distance_dif_charges_low_fit"]
+# Front-back charge: coefficient-estimation filters live in the river YAML.
+qfb_fit_config = qfb_river_config["fit_mask"]
+distance_sum_charges_left_fit = float(qfb_fit_config["qsum_left"])
+distance_sum_charges_right_fit = float(qfb_fit_config["qsum_right"])
+distance_dif_charges_low_fit = float(qfb_fit_config["qdif_left"])
+distance_dif_charges_up_fit = float(qfb_fit_config["qdif_right"])
 distance_sum_charges_plot = config["distance_sum_charges_plot"]
-front_back_fit_threshold = config["front_back_fit_threshold"]
+front_back_fit_threshold = abs(float(qfb_fit_config["residual_abs_max"]))
 
 # Variables to modify
 beta = config["beta"]
 strip_speed_factor_of_c = config["strip_speed_factor_of_c"]
 validate_pos_cal = config["validate_pos_cal"]
 
-degree_of_polynomial = config["degree_of_polynomial"]
-q_dif_t_dif_degree = int(config.get("q_dif_t_dif_degree", 1))
-q_dif_t_dif_fit_tdif_left = float(config.get("q_dif_t_dif_fit_tdif_left", -10))
-q_dif_t_dif_fit_tdif_right = float(config.get("q_dif_t_dif_fit_tdif_right", 10))
-q_dif_t_dif_fit_qdif_abs = abs(float(config.get("q_dif_t_dif_fit_qdif_abs", 40)))
-q_dif_t_dif_fit_residual_abs = abs(float(config.get("q_dif_t_dif_fit_residual_abs", 4)))
-q_dif_t_dif_plot_tdif_left = float(config.get("q_dif_t_dif_plot_tdif_left", -10))
-q_dif_t_dif_plot_tdif_right = float(config.get("q_dif_t_dif_plot_tdif_right", 10))
-q_dif_t_dif_plot_qdif_abs = abs(float(config.get("q_dif_t_dif_plot_qdif_abs", 40)))
+degree_of_polynomial = int(qfb_river_config["polynomial_degree"])
+qtdif_fit_config = qtdif_river_config["fit_mask"]
+q_dif_t_dif_degree = int(qtdif_river_config["polynomial_degree"])
+q_dif_t_dif_fit_tdif_left = float(qtdif_fit_config["tdif_left"])
+q_dif_t_dif_fit_tdif_right = float(qtdif_fit_config["tdif_right"])
+q_dif_t_dif_fit_qdif_abs = abs(float(qtdif_fit_config["qdif_abs_max"]))
+q_dif_t_dif_fit_residual_abs = abs(float(qtdif_fit_config["residual_abs_max"]))
+q_dif_t_dif_plot_tdif_left = q_dif_t_dif_fit_tdif_left
+q_dif_t_dif_plot_tdif_right = q_dif_t_dif_fit_tdif_right
+q_dif_t_dif_plot_qdif_abs = q_dif_t_dif_fit_qdif_abs
 
 # X
 strip_length = config["strip_length"]
@@ -8663,28 +8997,19 @@ interpolate_fast_charge_Q_clip_max = config["interpolate_fast_charge_Q_clip_max"
 interpolate_fast_charge_num_bins = config["interpolate_fast_charge_num_bins"]
 interpolate_fast_charge_log_scale = config["interpolate_fast_charge_log_scale"]
 
-calibration_dataframe_filtering = _coerce_config_bool(
-    calibration_subsample_config["real_stage_filtering_enabled"],
-    default=True,
-)
-task2_post_tdif_filter_enabled = calibration_dataframe_filtering and _coerce_config_bool(
-    calibration_subsample_config["post_tdif_filter_enabled"], default=True
-)
-task2_post_charge_side_qsum_filter_enabled = calibration_dataframe_filtering and _coerce_config_bool(
-    calibration_subsample_config["post_charge_side_qsum_filter_enabled"], default=True
-)
-task2_post_qfb_qtdif_qdif_filter_enabled = calibration_dataframe_filtering and _coerce_config_bool(
-    calibration_subsample_config["post_qfb_qtdif_qdif_filter_enabled"], default=True
-)
-task2_post_charge_qsum_filter_enabled = calibration_dataframe_filtering and _coerce_config_bool(
-    calibration_subsample_config["post_charge_qsum_filter_enabled"], default=True
-)
-task2_post_tsum_filter_enabled = calibration_dataframe_filtering and _coerce_config_bool(
-    calibration_subsample_config["post_tsum_filter_enabled"], default=True
-)
-task2_post_slewing_filter_enabled = calibration_dataframe_filtering and _coerce_config_bool(
-    calibration_subsample_config["post_slewing_filter_enabled"], default=True
-)
+charge_pedestal_post_filter_config = charge_pedestal_river_config["post_application_filter"]
+tdif_post_filter_config = tdif_river_config["post_application_filter"]
+qfb_post_filter_config = qfb_river_config["post_application_filter"]
+qtdif_post_filter_config = qtdif_river_config["post_application_filter"]
+tsum_post_filter_config = tsum_river_config["post_application_filter"]
+slewing_post_filter_config = slewing_river_config["post_application_filter"]
+calibration_dataframe_filtering = True
+task2_post_tdif_filter_enabled = task2_tdif_enabled and _coerce_config_bool(tdif_post_filter_config["enabled"], default=True)
+task2_post_charge_side_qsum_filter_enabled = task2_charge_pedestal_enabled and _coerce_config_bool(charge_pedestal_post_filter_config["enabled"], default=True)
+task2_post_qfb_qtdif_qdif_filter_enabled = task2_qtdif_enabled and _coerce_config_bool(qtdif_post_filter_config["enabled"], default=True)
+task2_post_charge_qsum_filter_enabled = False
+task2_post_tsum_filter_enabled = task2_tsum_enabled and _coerce_config_bool(tsum_post_filter_config["enabled"], default=True)
+task2_post_slewing_filter_enabled = task2_slewing_enabled and _coerce_config_bool(slewing_post_filter_config["enabled"], default=True)
 delta_t_left = config["delta_t_left"]
 delta_t_right = config["delta_t_right"]
 q_sum_left = config["q_sum_left"]
@@ -8920,18 +9245,18 @@ Q_dif_pre_cal_threshold = float(
 T_dif_pre_cal_threshold = float(
     abs(task2_strip_combination_limits_by_relation["same_strip"]["t_dif_sum_threshold"])
 )
-task2_calibration_initial_t_sum_left = float(calibration_subsample_config["initial_raw_tsum_left"])
-task2_calibration_initial_t_sum_right = float(calibration_subsample_config["initial_raw_tsum_right"])
-task2_calibration_strip_q_sum_left = float(calibration_subsample_config["post_charge_side_qsum_left"])
-task2_calibration_strip_q_sum_right = float(calibration_subsample_config["post_charge_side_qsum_right"])
-task2_calibration_post_charge_q_sum_left = float(calibration_subsample_config["post_charge_qsum_left"])
-task2_calibration_post_charge_q_sum_right = float(calibration_subsample_config["post_charge_qsum_right"])
-task2_calibration_strip_q_dif_threshold = abs(float(calibration_subsample_config["post_qfb_qtdif_qdif_abs_max"]))
-task2_calibration_strip_t_sum_left = float(calibration_subsample_config["post_tsum_left"])
-task2_calibration_strip_t_sum_right = float(calibration_subsample_config["post_tsum_right"])
-task2_calibration_post_slewing_t_sum_left = float(calibration_subsample_config["post_slewing_tsum_left"])
-task2_calibration_post_slewing_t_sum_right = float(calibration_subsample_config["post_slewing_tsum_right"])
-task2_calibration_strip_t_dif_threshold = abs(float(calibration_subsample_config["post_tdif_abs_max"]))
+task2_calibration_initial_t_sum_left = float(main_raw_tsum_config["left"])
+task2_calibration_initial_t_sum_right = float(main_raw_tsum_config["right"])
+task2_calibration_strip_q_sum_left = float(charge_pedestal_post_filter_config["qsum_left"])
+task2_calibration_strip_q_sum_right = float(charge_pedestal_post_filter_config["qsum_right"])
+task2_calibration_post_charge_q_sum_left = task2_calibration_strip_q_sum_left
+task2_calibration_post_charge_q_sum_right = task2_calibration_strip_q_sum_right
+task2_calibration_strip_q_dif_threshold = abs(float(qtdif_post_filter_config["qdif_abs_max"]))
+task2_calibration_strip_t_sum_left = float(tsum_post_filter_config["tsum_left"])
+task2_calibration_strip_t_sum_right = float(tsum_post_filter_config["tsum_right"])
+task2_calibration_post_slewing_t_sum_left = float(slewing_post_filter_config["tsum_left"])
+task2_calibration_post_slewing_t_sum_right = float(slewing_post_filter_config["tsum_right"])
+task2_calibration_strip_t_dif_threshold = abs(float(tdif_post_filter_config["tdif_abs_max"]))
 print(
     "[task2-calibration-selection] "
     "pre-cal thresholds aligned to same-strip strip-combination limits: "
@@ -9865,97 +10190,73 @@ print("----------------------------------------------------------------------")
 calibration_df = working_df.copy()
 calibration_uncalibrated_plot_view: pd.DataFrame | None = None
 
-print(
-    "[task2-calibration-selection][task1-pass-bits] "
-    f"require_passes_task_1={task2_calibration_require_passes_task_1}; "
-    "when enabled, every active strip endpoint must pass."
-)
-print(
-    "[task2-calibration-selection][task1-pass-bits] "
-    f"mapping={TASK2_TASK1_CHANNEL_BIT_MAPPING_LABEL}"
-)
-global_variables["task2_calibration_requires_passes_task_1"] = int(task2_calibration_require_passes_task_1)
-global_variables["task2_calibration_task1_channel_bit_mapping"] = TASK2_TASK1_CHANNEL_BIT_MAPPING_LABEL
 global_variables["task2_calibration_filter_config"] = str(calibration_subsample_config_path)
-global_variables["task2_calibration_trigger_type_column"] = task2_calibration_trigger_type_column
-global_variables["task2_calibration_allowed_trigger_types"] = list(task2_calibration_allowed_trigger_types)
-global_variables["task2_calibration_allowed_cluster_sizes"] = list(task2_calibration_allowed_cluster_sizes)
+global_variables["task2_calibration_plane_combinations"] = list(main_topology_config["plane_combination"])
+global_variables["task2_calibration_strip_topologies"] = list(task2_calibration_allowed_active_strip_topologies)
 
-_strict_calibration_mask = build_task2_strict_calibration_mask_from_raw(
-    calibration_df,
-    detector_charge_threshold=calibration_detector_charge_threshold,
-    plane_charge_threshold=calibration_plane_charge_threshold,
-    strip_charge_threshold=calibration_strip_charge_threshold,
-    strip_charge_threshold_scope=task2_calibration_minimum_strip_charge_scope,
-    allowed_topologies=task2_calibration_plane_topologies,
-    allowed_cluster_sizes_present_planes=task2_calibration_allowed_cluster_sizes,
-    allowed_active_strip_topologies=task2_calibration_allowed_active_strip_topologies,
-    require_zero_cluster_size_missing_planes=task2_calibration_require_zero_missing_cluster,
-)
-if task2_calibration_trigger_type_column not in calibration_df.columns:
-    raise RuntimeError(
-        "Task 2 calibration sample requires configured trigger-type column "
-        f"{task2_calibration_trigger_type_column!r}, but it is absent from the input. "
-        f"Update trigger_type_column in {calibration_subsample_config_path}."
-    )
-_calibration_trigger_type_mask = pd.to_numeric(
-    calibration_df[task2_calibration_trigger_type_column],
-    errors="coerce",
-).isin(task2_calibration_allowed_trigger_types).to_numpy(dtype=bool)
-if task2_calibration_require_passes_task_1:
-    _task1_pass_calibration_mask = build_task2_task1_pass_eligibility_mask_from_raw(
+_rows_before_main_selection = len(calibration_df)
+if _coerce_config_bool(main_charge_zeroing_config["enabled"], default=True):
+    calibration_charge_zeroing_diagnostics = apply_task2_sequential_charge_zeroing(
         calibration_df,
-        context_label="main",
-    ).to_numpy(dtype=bool)
+        charge_config=main_charge_zeroing_config,
+    )
 else:
-    _task1_pass_calibration_mask = np.ones(len(calibration_df), dtype=bool)
-_strict_rows_before_task1_pass = int(np.count_nonzero(_strict_calibration_mask))
-_strict_rejected_by_tt = int(np.count_nonzero(_strict_calibration_mask & ~_calibration_trigger_type_mask))
-_strict_rejected_by_task1_pass = int(np.count_nonzero(_strict_calibration_mask & _calibration_trigger_type_mask & ~_task1_pass_calibration_mask))
-_strict_calibration_mask = _strict_calibration_mask & _calibration_trigger_type_mask & _task1_pass_calibration_mask
-_strict_rows = int(np.count_nonzero(_strict_calibration_mask))
+    calibration_charge_zeroing_diagnostics = {}
+calibration_charge_zeroed_plot_view = calibration_df.copy()
+
+if _coerce_config_bool(main_topology_config["enabled"], default=True):
+    _topology_mask = build_task2_exact_topology_mask(
+        calibration_df,
+        plane_combinations=task2_calibration_plane_topologies,
+        strip_topologies=task2_calibration_allowed_active_strip_topologies,
+        component_source="raw",
+    )
+else:
+    _topology_mask = np.ones(len(calibration_df), dtype=bool)
+_main_row_mask = _topology_mask
+_rows_after_topology = int(np.count_nonzero(_main_row_mask))
 print(
     "[task2-calibration-selection] "
-    f"rows_before={len(calibration_df)} rows_after_task2_cuts={_strict_rows_before_task1_pass} "
-    f"{task2_calibration_trigger_type_column}_rejected={_strict_rejected_by_tt} "
-    f"task1_pass_rejected={_strict_rejected_by_task1_pass} rows_after={_strict_rows} "
-    f"allowed_trigger_types={task2_calibration_allowed_trigger_types} "
-    f"allowed_cluster_sizes={task2_calibration_allowed_cluster_sizes} "
-    f"detector_q>{calibration_detector_charge_threshold:g} "
-    f"plane_q>{calibration_plane_charge_threshold:g} "
-    f"strip_q>{calibration_strip_charge_threshold:g} "
-    f"strip_q_scope={task2_calibration_minimum_strip_charge_scope} "
-    f"allowed_strip_topologies={task2_calibration_allowed_active_strip_topologies} "
-    f"allowed_topologies={task2_calibration_plane_topology_label}"
+    f"rows_before={_rows_before_main_selection} "
+    f"rows_after_charge_zeroing={len(calibration_df)} "
+    f"rows_after_exact_topology={_rows_after_topology} "
+    f"channel_q=[{calibration_channel_charge_threshold:g},{calibration_channel_charge_max:g}] "
+    f"strip_q=[{calibration_strip_charge_threshold:g},{calibration_strip_charge_max:g}] "
+    f"plane_q=[{calibration_plane_charge_threshold:g},{calibration_plane_charge_max:g}] "
+    f"detector_q=[{calibration_detector_charge_threshold:g},{calibration_detector_charge_max:g}] "
+    f"plane_combination={task2_calibration_plane_topology_label} "
+    f"strip_topology={task2_calibration_allowed_active_strip_topologies}"
 )
-global_variables["task2_calibration_main_rows_rejected_by_passes_task_1"] = _strict_rejected_by_task1_pass
-global_variables["task2_calibration_main_rows_retained_after_passes_task_1"] = _strict_rows
-if _strict_rows == 0:
+if _rows_after_topology == 0:
     raise RuntimeError(
-        "Task 2 strict calibration sample is empty. "
-        f"Review hard filters in {calibration_subsample_config_path}; "
-        f"effective allowed topologies are {task2_calibration_plane_topology_label}."
+        "Task 2 calibration sample is empty after charge zeroing and exact-topology row selection. "
+        f"Review {calibration_subsample_config_path}."
     )
-calibration_df = calibration_df.loc[_strict_calibration_mask].copy()
+calibration_df = calibration_df.loc[_main_row_mask].copy()
 calibration_df = build_task2_strip_component_columns(calibration_df)
+
 _pre_tsum_window_rows = len(calibration_df)
-calibration_df, _strict_t_sum_keep_mask = filter_task2_calibration_rows_by_strip_t_sum_window(
-    calibration_df,
-    left=task2_calibration_initial_t_sum_left,
-    right=task2_calibration_initial_t_sum_right,
-)
+if _coerce_config_bool(main_raw_tsum_config["enabled"], default=True):
+    calibration_df, _strict_t_sum_keep_mask = filter_task2_calibration_rows_by_strip_t_sum_window(
+        calibration_df,
+        left=task2_calibration_initial_t_sum_left,
+        right=task2_calibration_initial_t_sum_right,
+    )
+else:
+    _strict_t_sum_keep_mask = np.ones(len(calibration_df), dtype=bool)
 _post_tsum_window_rows = len(calibration_df)
 print(
     "[task2-calibration-selection] "
-    f"strip_t_sum_window=[{task2_calibration_initial_t_sum_left:g}, "
+    f"raw_active_strip_tsum=[{task2_calibration_initial_t_sum_left:g}, "
     f"{task2_calibration_initial_t_sum_right:g}] "
     f"rows_before={_pre_tsum_window_rows} rows_after={_post_tsum_window_rows}"
 )
 if _post_tsum_window_rows == 0:
     raise RuntimeError(
-        "Task 2 calibration sample is empty after the strip-level raw T_sum window. "
-        f"Adjust initial_raw_tsum_left/right in {calibration_subsample_config_path}."
+        "Task 2 calibration sample is empty after the raw T_sum row filter. "
+        f"Review main_subsample.row_filters.raw_tsum in {calibration_subsample_config_path}."
     )
+
 _calibration_active_by_plane = _task2_active_strip_matrix_from_raw(calibration_df)
 _calibration_strip_observations = {
     f"P{plane}s{strip}": int(
@@ -10146,37 +10447,31 @@ if any(m == "file" for m in [charge_side_mode, charge_front_back_mode,
     _cal_csv_data = pd.read_csv(_cal_csv_path)
     print(f"Calibration table loaded: {_cal_csv_path}")
 
-# --- Derive per-calibration control flags ---
-calculate_charge_side       = (charge_side_mode == "make")
-apply_charge_side           = (charge_side_mode in ["make", "file"])
-
-calculate_Q_FB_calibration  = (charge_front_back_mode == "make")
-apply_Q_FB_calibration      = (charge_front_back_mode in ["make", "file"])
-
-calculate_Q_TDIF_calibration = (q_dif_t_dif_correction_mode == "make")
-apply_Q_TDIF_calibration     = (q_dif_t_dif_correction_mode in ["make", "file"])
-
-calculate_T_sum_calibration = (time_calibration_mode == "make")
-apply_T_sum_calibration     = (time_calibration_mode in ["make", "file"])
-
-calculate_T_dif_calibration = (time_dif_calibration_mode == "make")
-apply_T_dif_calibration     = (time_dif_calibration_mode in ["make", "file"])
+# --- Derive per-calibration control flags. Disabled branches use identity values. ---
+calculate_charge_side = task2_charge_pedestal_enabled and charge_side_mode == "make"
+apply_charge_side = task2_charge_pedestal_enabled and charge_side_mode in ["make", "file"]
+calculate_Q_FB_calibration = task2_qfb_enabled and charge_front_back_mode == "make"
+apply_Q_FB_calibration = task2_qfb_enabled and charge_front_back_mode in ["make", "file"]
+calculate_Q_TDIF_calibration = task2_qtdif_enabled and q_dif_t_dif_correction_mode == "make"
+apply_Q_TDIF_calibration = task2_qtdif_enabled and q_dif_t_dif_correction_mode in ["make", "file"]
+calculate_T_sum_calibration = task2_tsum_enabled and time_calibration_mode == "make"
+apply_T_sum_calibration = task2_tsum_enabled and time_calibration_mode in ["make", "file"]
+calculate_T_dif_calibration = task2_tdif_enabled and time_dif_calibration_mode == "make"
+apply_T_dif_calibration = task2_tdif_enabled and time_dif_calibration_mode in ["make", "file"]
 
 defer_charge_calibration_until_post_time = True
-
-# Defer all working_df calibration writes until right before the unified
-# strip/offender filter to keep a clean separation between:
-#   1) calibration-parameter estimation (calibration_df), and
-#   2) calibration-parameter application (working_df).
-qfb_deferred_updates: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]] = {}
 qfb_coefficients: dict[tuple[int, int], np.ndarray] = {}
 qtdif_coefficients: dict[tuple[int, int], np.ndarray] = {}
 t_sum_calibration_filter_left = task2_calibration_strip_t_sum_left
 t_sum_calibration_filter_right = task2_calibration_strip_t_sum_right
 charge_side_applied_to_calibration_df = False
+QF_pedestal = np.zeros((4, 4), dtype=float)
+QB_pedestal = np.zeros((4, 4), dtype=float)
+Tdiff_cal = np.zeros((4, 4), dtype=float)
+Tsum_cal = [[0.0 for _strip in range(4)] for _plane in range(4)]
 
 # --- Pre-populate matrices for `file` mode calibrations ---
-if charge_side_mode == "file":
+if apply_charge_side and charge_side_mode == "file":
     QF_pedestal = np.full((4, 4), np.nan)
     QB_pedestal = np.full((4, 4), np.nan)
     for _M in range(1, 5):
@@ -10184,19 +10479,19 @@ if charge_side_mode == "file":
             QF_pedestal[_M-1][_s-1] = get_reprocessing_value(_cal_csv_data, f"P{_M}_s{_s}_Q_F")
             QB_pedestal[_M-1][_s-1] = get_reprocessing_value(_cal_csv_data, f"P{_M}_s{_s}_Q_B")
 
-if time_dif_calibration_mode == "file":
+if apply_T_dif_calibration and time_dif_calibration_mode == "file":
     Tdiff_cal = np.full((4, 4), np.nan)
     for _M in range(1, 5):
         for _s in range(1, 5):
             Tdiff_cal[_M-1][_s-1] = get_reprocessing_value(_cal_csv_data, f"P{_M}_s{_s}_T_dif")
 
-if time_calibration_mode == "file":
+if apply_T_sum_calibration and time_calibration_mode == "file":
     Tsum_cal = [
         [get_reprocessing_value(_cal_csv_data, f"P{_M}_s{_s}_T_sum") for _s in range(1, 5)]
         for _M in range(1, 5)
     ]
 
-if charge_front_back_mode == "file":
+if apply_Q_FB_calibration and charge_front_back_mode == "file":
     import json as _json
     for _M in range(1, 5):
         for _s in range(1, 5):
@@ -10205,7 +10500,7 @@ if charge_front_back_mode == "file":
             global_variables[f"P{_M}_s{_s}_Q_FB_coeffs"] = _coeffs
             qfb_coefficients[(_M, _s)] = np.asarray(_coeffs, dtype=float)
 
-if q_dif_t_dif_correction_mode == "file":
+if apply_Q_TDIF_calibration and q_dif_t_dif_correction_mode == "file":
     import json as _json
     for _M in range(1, 5):
         for _s in range(1, 5):
@@ -10268,7 +10563,6 @@ if apply_charge_side:
 
     if calculate_charge_side:
         # New pedestal calibration for charges ------------------------------------------------
-        raw_one_strip_masks = _task2_plane_one_strip_masks_from_raw(calibration_df)
         QF_pedestal = []
         for key in ['1', '2', '3', '4']:
             Q_F_cols = [f'p{key}_s{i+1}_ef_q' for i in range(4)]
@@ -10280,18 +10574,20 @@ if apply_charge_side:
             T_F_cols = [f'p{key}_s{i+1}_ef_t' for i in range(4)]
             T_F = calibration_df[T_F_cols].values
 
-            plane_masks = raw_one_strip_masks.get(int(key), {})
             QF_pedestal_component = []
             for i in range(4):
-                one_strip_mask = _task2_prefer_one_strip_mask(
-                    plane_masks.get(i + 1, np.zeros(len(calibration_df), dtype=bool)),
-                    label=f"P{key}s{i+1} charge pedestal front",
+                fit_mask = build_task2_fit_mask(
+                    calibration_df,
+                    charge_pedestal_river_config["fit_mask"],
+                    component_source="raw",
+                    target_plane=int(key),
+                    target_strip=i + 1,
                 )
                 QF_pedestal_component.append(
                     calibrate_strip_Q_pedestal(
-                        Q_F[one_strip_mask, i],
-                        T_F[one_strip_mask, i],
-                        Q_B[one_strip_mask, i],
+                        Q_F[fit_mask, i],
+                        T_F[fit_mask, i],
+                        Q_B[fit_mask, i],
                     )
                 )
             QF_pedestal.append(QF_pedestal_component)
@@ -10308,18 +10604,20 @@ if apply_charge_side:
             T_B_cols = [f'p{key}_s{i+1}_eb_t' for i in range(4)]
             T_B = calibration_df[T_B_cols].values
 
-            plane_masks = raw_one_strip_masks.get(int(key), {})
             QB_pedestal_component = []
             for i in range(4):
-                one_strip_mask = _task2_prefer_one_strip_mask(
-                    plane_masks.get(i + 1, np.zeros(len(calibration_df), dtype=bool)),
-                    label=f"P{key}s{i+1} charge pedestal back",
+                fit_mask = build_task2_fit_mask(
+                    calibration_df,
+                    charge_pedestal_river_config["fit_mask"],
+                    component_source="raw",
+                    target_plane=int(key),
+                    target_strip=i + 1,
                 )
                 QB_pedestal_component.append(
                     calibrate_strip_Q_pedestal(
-                        Q_B[one_strip_mask, i],
-                        T_B[one_strip_mask, i],
-                        Q_F[one_strip_mask, i],
+                        Q_B[fit_mask, i],
+                        T_B[fit_mask, i],
+                        Q_F[fit_mask, i],
                     )
                 )
             QB_pedestal.append(QB_pedestal_component)
@@ -10596,8 +10894,6 @@ if apply_T_dif_calibration:
                 pos_test[f'p{plane}_s{strip}_tdif'] = ( pos_test[f'p{plane}_s{strip}_eb_t'] - pos_test[f'p{plane}_s{strip}_ef_t'] ) / 2
 
     if calculate_T_dif_calibration:
-        raw_one_strip_masks = _task2_plane_one_strip_masks_from_raw(calibration_df)
-        raw_active_strip_masks = _task2_active_strip_matrix_from_raw(calibration_df)
         Tdiff_cal = []
         for key in ['1', '2', '3', '4']:
             T_F_cols = [f'p{key}_s{i+1}_ef_t' for i in range(4)]
@@ -10606,15 +10902,15 @@ if apply_T_dif_calibration:
             T_B_cols = [f'p{key}_s{i+1}_eb_t' for i in range(4)]
             T_B = calibration_df[T_B_cols].values
 
-            plane_masks = raw_one_strip_masks.get(int(key), {})
             Tdiff_cal_component = []
             for i in range(4):
-                one_strip_mask = _task2_prefer_one_strip_mask(
-                    plane_masks.get(i + 1, np.zeros(len(calibration_df), dtype=bool)),
-                    label=f"P{key}s{i+1} T_dif calibration",
+                fit_mask = build_task2_fit_mask(
+                    calibration_df,
+                    tdif_river_config["fit_mask"],
+                    component_source="raw",
+                    target_plane=int(key),
+                    target_strip=i + 1,
                 )
-                strip_has_charge = raw_active_strip_masks[int(key)][:, i]
-                fit_mask = one_strip_mask & strip_has_charge
                 Tdiff_cal_component.append(
                     calibrate_strip_T_diff(
                         T_F[fit_mask, i],
@@ -10736,14 +11032,32 @@ calibration_df = _append_or_replace_dataframe_columns(
     task2_calibration_total_charge_columns,
 )
 
-task2_charge_component_columns = [
-    *collect_strip_family_columns(calibration_df.columns, "Q_sum"),
-    *collect_strip_family_columns(calibration_df.columns, "Q_dif"),
-]
-task2_charge_component_backup_df = (
-    calibration_df.loc[:, task2_charge_component_columns].copy()
-    if task2_charge_component_columns
-    else None
+_charge_side_qsum_stage_before = _task2_calibration_stage_state(calibration_df)
+if apply_charge_side:
+    print("Applying charge-side pedestals to the complete active calibration river.")
+    apply_task2_charge_side_pedestals_to_components(
+        calibration_df,
+        QF_pedestal,
+        QB_pedestal,
+        charge_pedestal_river_config["application_mask"],
+    )
+    charge_side_applied_to_calibration_df = True
+else:
+    print("Charge-pedestal branch disabled or mode=null; using +0 identity offsets.")
+
+if task2_post_charge_side_qsum_filter_enabled:
+    filter_strip_family_inplace(
+        calibration_df,
+        "Q_sum",
+        left=task2_calibration_strip_q_sum_left,
+        right=task2_calibration_strip_q_sum_right,
+    )
+    run_strip_zeroing_stage("calibrated_q_sum", calibration_df, record_triggers=True)
+_log_task2_calibration_stage(
+    "charge_side_q_sum",
+    _charge_side_qsum_stage_before,
+    calibration_df,
+    filter_mode="real" if task2_post_charge_side_qsum_filter_enabled else "disabled",
 )
 
 # Augment the unzeroed snapshot with sum/dif columns computed from its own F/B data.
@@ -10863,9 +11177,16 @@ def _task2_qt_histogram_4x16_cells(df: pd.DataFrame) -> list[tuple[int, int, str
     return cells
 
 
-def _task2_qt_histogram_plot_values(series: pd.Series, column_name: str) -> tuple[pd.Series, tuple[float, float] | None]:
+def _task2_qt_histogram_plot_values(
+    series: pd.Series,
+    column_name: str,
+    *,
+    use_configured_xlimits: bool = True,
+) -> tuple[pd.Series, tuple[float, float] | None]:
     values = pd.to_numeric(series, errors="coerce")
     values = values[(values != 0) & np.isfinite(values)]
+    if not use_configured_xlimits:
+        return values, None
     kind = _task2_qt_histogram_column_kind(column_name)
     limits = task2_qt_histogram_plot_limits.get(kind)
     if limits is None:
@@ -10873,8 +11194,10 @@ def _task2_qt_histogram_plot_values(series: pd.Series, column_name: str) -> tupl
     left, right = float(limits[0]), float(limits[1])
     if not np.isfinite(left) or not np.isfinite(right) or left >= right:
         return values, None
-    # Plot-only clipping: the dataframe stays untouched; only drawn values are restricted.
-    return values.clip(lower=left, upper=right), (left, right)
+    # Never pile out-of-window entries onto the plot boundaries. When a plot
+    # requests configured limits, omit those entries from that diagnostic view.
+    visible_values = values[(values >= left) & (values <= right)]
+    return visible_values, (left, right)
 
 
 def _plot_task2_qt_sum_dif_histograms(
@@ -10883,6 +11206,8 @@ def _plot_task2_qt_sum_dif_histograms(
     title: str,
     filename_stem: str,
     alias: str,
+    log_y: bool = False,
+    auto_range_kinds: tuple[str, ...] = (),
 ) -> None:
     global fig_idx
     plot_columns = _select_task2_qt_sum_dif_columns(plot_source_df)
@@ -10903,12 +11228,18 @@ def _plot_task2_qt_sum_dif_histograms(
                 ax.set_xticks([])
                 ax.set_yticks([])
                 continue
-            y_nonzero, x_limits = _task2_qt_histogram_plot_values(plot_df[column_name], column_name)
+            y_nonzero, x_limits = _task2_qt_histogram_plot_values(
+                plot_df[column_name],
+                column_name,
+                use_configured_xlimits=(
+                    _task2_qt_histogram_column_kind(column_name) not in auto_range_kinds
+                ),
+            )
             ax.hist(y_nonzero, bins=100, alpha=0.5, label=column_name, color=_task2_qt_histogram_color(column_name))
             if x_limits is not None:
                 ax.set_xlim(*x_limits)
             ax.legend(fontsize=6)
-            if _task2_qt_histogram_column_kind(column_name) == "qsum":
+            if log_y or _task2_qt_histogram_column_kind(column_name) == "qsum":
                 ax.set_yscale("log")
     else:
         print(f"{alias}: using default Q/T histogram layout.")
@@ -10919,14 +11250,20 @@ def _plot_task2_qt_sum_dif_histograms(
         axes = np.atleast_1d(axes).flatten()
 
         for i, col in enumerate(plot_columns):
-            y_nonzero, x_limits = _task2_qt_histogram_plot_values(plot_df[col], col)
+            y_nonzero, x_limits = _task2_qt_histogram_plot_values(
+                plot_df[col],
+                col,
+                use_configured_xlimits=(
+                    _task2_qt_histogram_column_kind(col) not in auto_range_kinds
+                ),
+            )
             color = _task2_qt_histogram_color(col)
             axes[i].hist(y_nonzero, bins=100, alpha=0.5, label=col, color=color)
             if x_limits is not None:
                 axes[i].set_xlim(*x_limits)
             axes[i].set_title(col)
             axes[i].legend()
-            if _task2_qt_histogram_column_kind(col) == "qsum":
+            if log_y or _task2_qt_histogram_column_kind(col) == "qsum":
                 axes[i].set_yscale("log")
 
         for j in range(i + 1, len(axes)):
@@ -11031,42 +11368,19 @@ if task2_plot_requested("total_charge_per_plane_uncalibrated", essential=True) a
     plt.close(fig)
 
 task2_calibration_gate_topologies: dict[str, tuple[int, ...]] = {
-    "1234": (1, 2, 3, 4),
-    "123": (1, 2, 3),
-    "234": (2, 3, 4),
-    "124": (1, 2, 4),
-    "134": (1, 3, 4),
+    "".join(str(plane) for plane in combination): tuple(combination)
+    for combination in task2_calibration_plane_topologies
 }
 
 task2_calibration_gate_plot_needed = task2_plot_requested("calibration_charge_gates", essential=True)
 naive_efficiency_counts: dict[str, int] = {}
 
 for _topology_label, _required_planes in task2_calibration_gate_topologies.items():
-    _required_set = set(_required_planes)
-    _missing_set = {1, 2, 3, 4}.difference(_required_set)
-
-    _prefilter_mask = build_task2_topology_charge_mask_from_raw(
-        working_df,
-        required_planes=_required_set,
-        missing_planes=_missing_set,
-        detector_charge_threshold=None,
-        plane_charge_threshold=-np.inf,
-        strip_charge_threshold=-np.inf,
-        allowed_cluster_sizes_present_planes=task2_calibration_allowed_cluster_sizes,
-        allowed_active_strip_topologies=task2_calibration_allowed_active_strip_topologies,
-        require_zero_cluster_size_missing_planes=task2_calibration_require_zero_missing_cluster,
-    )
-    _filtered_mask = build_task2_topology_charge_mask_from_raw(
-        working_df,
-        required_planes=_required_set,
-        missing_planes=_missing_set,
-        detector_charge_threshold=calibration_detector_charge_threshold,
-        plane_charge_threshold=calibration_plane_charge_threshold,
-        strip_charge_threshold=calibration_strip_charge_threshold,
-        strip_charge_threshold_scope=task2_calibration_minimum_strip_charge_scope,
-        allowed_cluster_sizes_present_planes=task2_calibration_allowed_cluster_sizes,
-        allowed_active_strip_topologies=task2_calibration_allowed_active_strip_topologies,
-        require_zero_cluster_size_missing_planes=task2_calibration_require_zero_missing_cluster,
+    _filtered_mask = build_task2_exact_topology_mask(
+        calibration_charge_zeroed_plot_view,
+        plane_combinations=(_required_planes,),
+        strip_topologies=task2_calibration_allowed_active_strip_topologies,
+        component_source="raw",
     )
 
     naive_efficiency_counts[_topology_label] = int(np.count_nonzero(_filtered_mask))
@@ -11074,54 +11388,71 @@ print(
     "[task2-naive-efficiency-counts] "
     + " ".join(
         f"{topology_label}={naive_efficiency_counts.get(topology_label, 0)}"
-        for topology_label in ("1234", "123", "234", "124", "134")
+        for topology_label in task2_calibration_gate_topologies
     )
 )
 for _topology_label, _row_count in naive_efficiency_counts.items():
     global_variables[f"naive_efficiency_good_charge_rows_{_topology_label}"] = int(_row_count)
 if task2_plot_requested("calibration_charge_gates", essential=True):
     _task2_plane_colors = ["tab:blue", "tab:orange", "tab:green", "tab:red"]
-    for _topology_label in ("1234", "123", "234", "124", "134"):
+    _calibration_charge_gate_plot_max = 1e5
+    for _topology_label in task2_calibration_gate_topologies:
         _required_planes = task2_calibration_gate_topologies[_topology_label]
-        _required_set = set(_required_planes)
-        _missing_set = {1, 2, 3, 4}.difference(_required_set)
-        _prefilter_plot_mask = build_task2_topology_charge_mask_from_raw(
+        _topology_plot_mask = build_task2_exact_topology_mask(
             working_df,
-            required_planes=_required_set,
-            missing_planes=_missing_set,
-            detector_charge_threshold=None,
-            plane_charge_threshold=-np.inf,
-            strip_charge_threshold=-np.inf,
-            allowed_cluster_sizes_present_planes=task2_calibration_allowed_cluster_sizes,
-            allowed_active_strip_topologies=task2_calibration_allowed_active_strip_topologies,
-            require_zero_cluster_size_missing_planes=task2_calibration_require_zero_missing_cluster,
+            plane_combinations=(_required_planes,),
+            strip_topologies=task2_calibration_allowed_active_strip_topologies,
+            component_source="raw",
         )
-        _filtered_plot_mask = build_task2_topology_charge_mask_from_raw(
-            working_df,
-            required_planes=_required_set,
-            missing_planes=_missing_set,
-            detector_charge_threshold=calibration_detector_charge_threshold,
-            plane_charge_threshold=calibration_plane_charge_threshold,
-            strip_charge_threshold=calibration_strip_charge_threshold,
-            strip_charge_threshold_scope=task2_calibration_minimum_strip_charge_scope,
-            allowed_cluster_sizes_present_planes=task2_calibration_allowed_cluster_sizes,
-            allowed_active_strip_topologies=task2_calibration_allowed_active_strip_topologies,
-            require_zero_cluster_size_missing_planes=task2_calibration_require_zero_missing_cluster,
-        )
-        _prefilter_plot_view = working_df.loc[_prefilter_plot_mask]
-        _filtered_plot_view = working_df.loc[_filtered_plot_mask]
+        _prefilter_plot_view = calibration_charge_zeroed_plot_view.loc[_topology_plot_mask]
+        _filtered_plot_view = _prefilter_plot_view
+        _channel_pre_matrix, _channel_post_matrix = calibration_charge_zeroing_diagnostics["channel"]
+        _strip_pre_matrix, _strip_post_matrix = calibration_charge_zeroing_diagnostics["strip"]
+        _plane_pre_matrix, _plane_post_matrix = calibration_charge_zeroing_diagnostics["plane"]
+        _det_pre_all, _det_post_all = calibration_charge_zeroing_diagnostics["detector"]
+        _channel_pre = _channel_pre_matrix[_topology_plot_mask].ravel()
+        _channel_post = _channel_post_matrix[_topology_plot_mask].ravel()
+        _strip_pre = _strip_pre_matrix[_topology_plot_mask].ravel()
+        _strip_post = _strip_post_matrix[_topology_plot_mask].ravel()
+        _plane_pre = [_plane_pre_matrix[_topology_plot_mask, idx] for idx in range(4)]
+        _plane_post = [_plane_post_matrix[_topology_plot_mask, idx] for idx in range(4)]
+        _det_pre = _det_pre_all[_topology_plot_mask]
+        _det_post = _det_post_all[_topology_plot_mask]
 
-        _det_pre, _plane_pre, _strip_pre = _task2_charge_gate_payload_from_raw(_prefilter_plot_view)
-        _det_post, _plane_post, _strip_post = _task2_charge_gate_payload_from_raw(_filtered_plot_view)
+        def _charge_plot_values(values: np.ndarray) -> np.ndarray:
+            array = np.asarray(values, dtype=float).ravel()
+            return array[np.isfinite(array) & (array != 0) & (np.abs(array) <= _calibration_charge_gate_plot_max)]
 
+        _channel_pre = _charge_plot_values(_channel_pre)
+        _channel_post = _charge_plot_values(_channel_post)
+        _det_pre = _charge_plot_values(_det_pre)
+        _det_post = _charge_plot_values(_det_post)
+        _plane_pre = [
+            _charge_plot_values(values)
+            for values in _plane_pre
+        ]
+        _plane_post = [
+            _charge_plot_values(values)
+            for values in _plane_post
+        ]
+        _strip_pre = _charge_plot_values(_strip_pre)
+        _strip_post = _charge_plot_values(_strip_post)
+
+        _channel_all = _task2_flatten_finite([_channel_pre, _channel_post])
         _plane_all = _task2_flatten_finite([*_plane_pre, *_plane_post])
-        _strip_all = _task2_flatten_finite([_strip_pre, _strip_post], positive_only=True)
+        _strip_all = _task2_flatten_finite([_strip_pre, _strip_post])
         _det_all = _task2_flatten_finite([_det_pre, _det_post])
 
+        _channel_full_left, _channel_full_right = _task2_range_from_values(_channel_all)
         _det_full_left, _det_full_right = _task2_range_from_values(_det_all)
         _plane_full_left, _plane_full_right = _task2_range_from_values(_plane_all)
         _strip_full_left, _strip_full_right = _task2_range_from_values(_strip_all)
 
+        _channel_zoom_left, _channel_zoom_right = _task2_zoom_range(
+            _channel_all,
+            threshold=calibration_channel_charge_threshold,
+            right_clip=plot_only_calibration_strip_charge_hist_right_clip,
+        )
         _det_zoom_left, _det_zoom_right = _task2_zoom_range(
             _det_all,
             threshold=calibration_detector_charge_threshold,
@@ -11137,13 +11468,47 @@ if task2_plot_requested("calibration_charge_gates", essential=True):
             threshold=calibration_strip_charge_threshold,
             right_clip=plot_only_calibration_strip_charge_hist_right_clip,
         )
+        _channel_full_left = max(_channel_full_left, -_calibration_charge_gate_plot_max)
+        _channel_full_right = min(_channel_full_right, _calibration_charge_gate_plot_max)
+        _channel_zoom_left = max(_channel_zoom_left, -_calibration_charge_gate_plot_max)
+        _channel_zoom_right = min(_channel_zoom_right, _calibration_charge_gate_plot_max)
+        _det_full_left = max(_det_full_left, -_calibration_charge_gate_plot_max)
+        _det_full_right = min(_det_full_right, _calibration_charge_gate_plot_max)
+        _plane_full_left = max(_plane_full_left, -_calibration_charge_gate_plot_max)
+        _plane_full_right = min(_plane_full_right, _calibration_charge_gate_plot_max)
+        _strip_full_left = max(_strip_full_left, -_calibration_charge_gate_plot_max)
+        _strip_full_right = min(_strip_full_right, _calibration_charge_gate_plot_max)
+        _det_zoom_left = max(_det_zoom_left, -_calibration_charge_gate_plot_max)
+        _det_zoom_right = min(_det_zoom_right, _calibration_charge_gate_plot_max)
+        _plane_zoom_left = max(_plane_zoom_left, -_calibration_charge_gate_plot_max)
+        _plane_zoom_right = min(_plane_zoom_right, _calibration_charge_gate_plot_max)
+        _strip_zoom_left = max(_strip_zoom_left, -_calibration_charge_gate_plot_max)
+        _strip_zoom_right = min(_strip_zoom_right, _calibration_charge_gate_plot_max)
 
-        _fig, _axes = plt.subplots(3, 2, figsize=(16, 12), sharey=False)
+        _fig, _axes = plt.subplots(4, 2, figsize=(16, 16), sharey=False)
 
         for _col_idx, _ax in enumerate(_axes[0]):
-            _ax.hist(_det_pre, bins=100, histtype="step", linestyle="--", linewidth=1.0, alpha=0.45, color="0.35", label="Prefilter")
-            _ax.hist(_det_post, bins=100, histtype="step", linewidth=1.5, alpha=0.95, color="tab:blue", label="Post-filter")
+            _ax.hist(_channel_pre, bins=100, histtype="step", linestyle="--", linewidth=1.0, alpha=0.45, color="0.35", label="Before channel gate")
+            _ax.hist(_channel_post, bins=100, histtype="step", linewidth=1.5, alpha=0.95, color="tab:purple", label="After channel gate")
+            _ax.axvline(calibration_channel_charge_threshold, color="black", linestyle="--", alpha=0.7, linewidth=1.0)
+            _ax.axvline(calibration_channel_charge_max, color="black", linestyle="--", alpha=0.7, linewidth=1.0)
+            _ax.set_yscale("log", nonpositive="clip")
+            _ax.grid(True, alpha=0.25)
+            _ax.set_ylabel("Counts")
+            _ax.set_xlabel("Raw Q-side charge")
+            _ax.set_title("Channels")
+            if _col_idx == 0:
+                _ax.set_xlim(_channel_full_left, _channel_full_right)
+            else:
+                _ax.set_xlim(_channel_zoom_left, _channel_zoom_right)
+            if _col_idx == 0:
+                _ax.legend(loc="upper right", fontsize=8)
+
+        for _col_idx, _ax in enumerate(_axes[3]):
+            _ax.hist(_det_pre, bins=100, histtype="step", linestyle="--", linewidth=1.0, alpha=0.45, color="0.35", label="Before detector gate")
+            _ax.hist(_det_post, bins=100, histtype="step", linewidth=1.5, alpha=0.95, color="tab:blue", label="After detector gate")
             _ax.axvline(calibration_detector_charge_threshold, color="black", linestyle="--", alpha=0.7, linewidth=1.0)
+            _ax.axvline(calibration_detector_charge_max, color="black", linestyle="--", alpha=0.7, linewidth=1.0)
             _ax.set_yscale("log", nonpositive="clip")
             _ax.grid(True, alpha=0.25)
             _ax.set_ylabel("Counts")
@@ -11156,7 +11521,7 @@ if task2_plot_requested("calibration_charge_gates", essential=True):
             if _col_idx == 0:
                 _ax.legend(loc="upper right", fontsize=8)
 
-        for _col_idx, _ax in enumerate(_axes[1]):
+        for _col_idx, _ax in enumerate(_axes[2]):
             for _plane_idx in range(4):
                 _plane_number = _plane_idx + 1
                 _ax.hist(
@@ -11179,6 +11544,7 @@ if task2_plot_requested("calibration_charge_gates", essential=True):
                     label=f"P{_plane_number} post",
                 )
             _ax.axvline(calibration_plane_charge_threshold, color="black", linestyle="--", alpha=0.7, linewidth=1.0)
+            _ax.axvline(calibration_plane_charge_max, color="black", linestyle="--", alpha=0.7, linewidth=1.0)
             _ax.set_yscale("log", nonpositive="clip")
             _ax.grid(True, alpha=0.25)
             _ax.set_ylabel("Counts")
@@ -11191,14 +11557,15 @@ if task2_plot_requested("calibration_charge_gates", essential=True):
             if _col_idx == 0:
                 _ax.legend(loc="upper right", fontsize=7, ncol=2)
 
-        for _col_idx, _ax in enumerate(_axes[2]):
-            _ax.hist(_strip_pre, bins=100, histtype="step", linestyle="--", linewidth=1.0, alpha=0.45, color="0.35", label="Prefilter")
-            _ax.hist(_strip_post, bins=100, histtype="step", linewidth=1.5, alpha=0.95, color="tab:green", label="Post-filter")
+        for _col_idx, _ax in enumerate(_axes[1]):
+            _ax.hist(_strip_pre, bins=100, histtype="step", linestyle="--", linewidth=1.0, alpha=0.45, color="0.35", label="Before strip gate")
+            _ax.hist(_strip_post, bins=100, histtype="step", linewidth=1.5, alpha=0.95, color="tab:green", label="After strip gate")
             _ax.axvline(calibration_strip_charge_threshold, color="black", linestyle="--", alpha=0.7, linewidth=1.0)
+            _ax.axvline(calibration_strip_charge_max, color="black", linestyle="--", alpha=0.7, linewidth=1.0)
             _ax.set_yscale("log", nonpositive="clip")
             _ax.grid(True, alpha=0.25)
             _ax.set_ylabel("Counts")
-            _ax.set_xlabel("Active strip charge")
+            _ax.set_xlabel("Strip Q_sum charge")
             _ax.set_title("Strips")
             if _col_idx == 0:
                 _ax.set_xlim(_strip_full_left, _strip_full_right)
@@ -11209,11 +11576,13 @@ if task2_plot_requested("calibration_charge_gates", essential=True):
 
         _fig.suptitle(
             "Task 2 Calibration Charge Gates "
-            f"(topology {_topology_label})\n"
-            f"rows pre={len(_prefilter_plot_view)} post={len(_filtered_plot_view)} · "
-            f"det>{calibration_detector_charge_threshold:g} "
-            f"plane>{calibration_plane_charge_threshold:g} "
-            f"strip>{calibration_strip_charge_threshold:g}",
+            f"(input topology {_topology_label})\n"
+            f"rows={len(_filtered_plot_view)} · "
+            f"channel=[{calibration_channel_charge_threshold:g},{calibration_channel_charge_max:g}] "
+            f"strip=[{calibration_strip_charge_threshold:g},{calibration_strip_charge_max:g}] "
+            f"plane=[{calibration_plane_charge_threshold:g},{calibration_plane_charge_max:g}] "
+            f"detector=[{calibration_detector_charge_threshold:g},{calibration_detector_charge_max:g}] · "
+            f"plot |values|≤{_calibration_charge_gate_plot_max:g}",
             fontsize=12,
         )
         _fig.tight_layout(rect=[0, 0, 1, 0.95])
@@ -11232,18 +11601,6 @@ if task2_plot_requested("calibration_charge_gates", essential=True):
         if show_plots:
             plt.show()
         plt.close(_fig)
-
-if apply_charge_side and not calibration_dataframe_filtering:
-    print(
-        "Applying charge-side pedestals to the calibration sample before "
-        "time calibration (sequential simplified flow)."
-    )
-    apply_task2_charge_side_pedestals_to_components(
-        calibration_df,
-        QF_pedestal,
-        QB_pedestal,
-    )
-    charge_side_applied_to_calibration_df = True
 
 _prof["s_pos_offset_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
@@ -11268,6 +11625,7 @@ if apply_T_dif_calibration:
     apply_task2_tdiff_offsets_to_components(
         calibration_df,
         Tdiff_cal,
+        tdif_river_config["application_mask"],
     )
 
 _debug_plot_filter_group(
@@ -11326,110 +11684,7 @@ _t_sec = time.perf_counter()
 print("----------------------------------------------------------------------")
 print("------------------- Charge front-back correction ---------------------")
 print("----------------------------------------------------------------------")
-if charge_front_back_mode is not None and not defer_charge_calibration_until_post_time:
-
-    # ── Phase 1: pre-extract arrays and run 16 fits in parallel (make mode) ──
-    qfb_one_strip_masks = _task2_plane_one_strip_masks_from_components(calibration_df)
-    _qfb_tasks = []
-    for key in [1, 2, 3, 4]:
-        for i in range(4):
-            Q_sum = calibration_df[f'p{key}_s{i+1}_qsum'].values
-            Q_diff = calibration_df[f'p{key}_s{i+1}_qdif'].values
-            one_strip_mask = _task2_prefer_one_strip_mask(
-                qfb_one_strip_masks.get(key, {}).get(i + 1, np.zeros(len(calibration_df), dtype=bool)),
-                label=f"P{key}s{i+1} Q_FB calibration",
-            )
-            cond = one_strip_mask & _task2_qfb_fit_valid_mask(Q_sum, Q_diff)
-            _qfb_tasks.append((key, i, Q_sum[cond], Q_diff[cond], cond))
-
-    if calculate_Q_FB_calibration:
-        _qfb_coeffs_map = {}
-        with ThreadPoolExecutor(max_workers=4) as _qfb_pool:
-            _qfb_futures = {
-                _qfb_pool.submit(_fit_qfb_coeffs, Q_sum_adj, Q_dif_adj): (key, i)
-                for key, i, Q_sum_adj, Q_dif_adj, cond in _qfb_tasks
-                if np.sum(Q_sum_adj) != 0
-            }
-            for fut in as_completed(_qfb_futures):
-                _key, _i = _qfb_futures[fut]
-                _qfb_coeffs_map[(_key, _i)] = fut.result()
-            # Store computed coefficients in global_variables
-            for (_key, _i), _coeffs in _qfb_coeffs_map.items():
-                if _coeffs is None:
-                    continue
-                _coeff_array = np.asarray(_coeffs, dtype=float)
-                global_variables[f'P{_key}_s{_i+1}_Q_FB_coeffs'] = _coeff_array.tolist()
-                qfb_coefficients[(_key, _i + 1)] = _coeff_array
-    # else (file mode): global_variables already populated from calibration CSV
-
-    # ── Phase 2: apply corrections using coefficients from global_variables ───
-    for key, i, Q_sum_adj, Q_dif_adj, cond in _qfb_tasks:
-        if np.sum(Q_sum_adj) == 0:
-            continue
-        coeffs = qfb_coefficients.get((key, i + 1))
-        if coeffs is None:
-            coeffs = global_variables.get(f'P{key}_s{i+1}_Q_FB_coeffs')
-        if coeffs is None:
-            continue
-        coeffs = np.asarray(coeffs, dtype=float)
-        print([f"{coeff:.3g}" for coeff in coeffs])
-
-        column_name  = f'p{key}_s{i+1}_qdif'
-        corrected_diff = Q_dif_adj - polynomial(Q_sum_adj, *coeffs)
-        qfb_deferred_updates[(key, i + 1)] = (
-            np.flatnonzero(np.asarray(cond, dtype=bool)),
-            np.asarray(corrected_diff, dtype=float),
-        )
-        target_dtype = calibration_df[column_name].dtype
-        calibration_df.loc[cond, column_name] = corrected_diff.astype(target_dtype, copy=False)
-
-        if create_plots:
-            title        = f"Q{key}_{i+1}. Charge diff. vs. charge sum."
-            x_label      = "Charge sum"
-            y_label      = "Charge diff"
-            name_of_file = f"Q{key}_{i+1}_charge_analysis_scatter_dif_vs_sum"
-            scatter_2d_and_fit_new(Q_sum_adj, Q_dif_adj, title, x_label, y_label, name_of_file)
-
-    print(f'\nCharge front-back correction performed (mode={charge_front_back_mode}).')
-
-    # file mode: coefficients were loaded into global_variables for application only;
-    # remove them so they are not persisted to the calibration metadata CSV.
-    if charge_front_back_mode == "file":
-        for _M in range(1, 5):
-            for _s in range(1, 5):
-                global_variables.pop(f"P{_M}_s{_s}_Q_FB_coeffs", None)
-
-elif charge_front_back_mode is None:
-    print('Charge front-back correction skipped (mode=null).')
-    Q_dif_cal_threshold_FB = Q_dif_cal_threshold_FB_wide
-else:
-    print(
-        "Deferring charge front-back (Q_dif vs Q_sum) calibration until after "
-        "time-diff/time-sum calibration and filtering."
-    )
-
-if not defer_charge_calibration_until_post_time:
-    print("----------------------------------------------------------------------")
-    print("------------- Filter 5: charge difference FB filtering ---------------")
-    if task2_post_qfb_qtdif_qdif_filter_enabled:
-        _debug_plot_filter_group(
-            calibration_df,
-            collect_strip_family_columns(calibration_df.columns, "Q_dif"),
-            [-task2_calibration_strip_q_dif_threshold, task2_calibration_strip_q_dif_threshold],
-            "strip_combination_strip_q_dif_sum_threshold",
-        )
-        filter_strip_family_inplace(
-            calibration_df,
-            "Q_dif",
-            abs_threshold=task2_calibration_strip_q_dif_threshold,
-        )
-
-        run_strip_zeroing_stage(
-            "front_back_q_dif",
-            calibration_df,
-        )
-    else:
-        print("Skipping calibration-sample Q_dif FB filtering and strip zeroing (config disabled).")
+print("QFB and Q-TDIF fits run in their ordered late river slots.")
 
 _prof["s_charge_fb_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
@@ -11511,8 +11766,13 @@ y_lookup = {
 calibration_time_pair_residuals_df = pd.DataFrame()
 pair_offset_lookup: dict[tuple[str, str], float] = {}
 if _need_time_pair_residuals:
-    calibration_time_pair_residuals_df = _build_tsum_pair_residuals(
+    _tsum_fit_row_mask = build_task2_fit_mask(
         calibration_df,
+        tsum_river_config["fit_mask"],
+        component_source="components",
+    )
+    calibration_time_pair_residuals_df = _build_tsum_pair_residuals(
+        calibration_df.loc[_tsum_fit_row_mask],
         y_lookup=y_lookup,
         z_positions=z_positions,
         tdiff_to_x=tdiff_to_x,
@@ -12625,81 +12885,25 @@ _prof["s_time_sum_cal_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
 
 print("----------------------------------------------------------------------")
-print("------- Deferred charge calibrations on time-filtered sample ---------")
+print("----------- QFB and Q-TDIF calibration river stages -----------------")
 print("----------------------------------------------------------------------")
 _t_charge_deferred = time.perf_counter()
-_charge_side_qsum_stage_before = _task2_calibration_stage_state(calibration_df)
-
-if calibration_dataframe_filtering and task2_charge_component_backup_df is not None:
-    for column_name in task2_charge_component_columns:
-        if column_name in calibration_df.columns and column_name in task2_charge_component_backup_df.columns:
-            calibration_df.loc[:, column_name] = task2_charge_component_backup_df[column_name].to_numpy(copy=False)
-    print(
-        "Restored charge components from prefilter snapshot before applying "
-        "charge-side calibrations."
-    )
-    if task2_post_charge_side_qsum_filter_enabled:
-        # Keep only strips that survive the time-based filtering stages.
-        zero_strip_component_blocks(calibration_df)
-if not calibration_dataframe_filtering and task2_charge_component_backup_df is not None:
-    print(
-        "Keeping calibration sample in sequential calibrated state; "
-        "skipping raw-charge restore before deferred Q_FB calibration."
-    )
 
 if defer_charge_calibration_until_post_time:
-    if charge_side_applied_to_calibration_df:
-        print(
-            "Using already pedestal-calibrated Q_sum/Q_dif on the calibration "
-            "sample before deferred Q_dif-vs-Q_sum front-back calibration."
-        )
-    else:
-        print(
-            "Applying deferred Q_dif/Q_sum pedestal calibration followed by "
-            "Q_dif-vs-Q_sum front-back calibration."
-        )
-
-        apply_task2_charge_side_pedestals_to_components(
-            calibration_df,
-            QF_pedestal,
-            QB_pedestal,
-        )
-
-    if task2_post_charge_side_qsum_filter_enabled:
-        filter_strip_family_inplace(
-            calibration_df,
-            "Q_sum",
-            left=task2_calibration_strip_q_sum_left,
-            right=task2_calibration_strip_q_sum_right,
-        )
-        run_strip_zeroing_stage(
-            "calibrated_q_sum",
-            calibration_df,
-            record_triggers=True,
-        )
-    else:
-        print("Skipping calibration-sample Q_sum filtering and strip zeroing after pedestal application (config disabled).")
-
-    _log_task2_calibration_stage(
-        "charge_side_q_sum",
-        _charge_side_qsum_stage_before,
-        calibration_df,
-        filter_mode="real" if task2_post_charge_side_qsum_filter_enabled else "disabled",
-    )
     _qfb_qtdif_stage_before = _task2_calibration_stage_state(calibration_df)
-    qfb_deferred_updates.clear()
-    if charge_front_back_mode is not None:
-        qfb_one_strip_masks = _task2_plane_one_strip_masks_from_components(calibration_df)
+    if apply_Q_FB_calibration:
         _qfb_tasks = []
         for key in [1, 2, 3, 4]:
             for i in range(4):
                 Q_sum = calibration_df[f'p{key}_s{i+1}_qsum'].values
                 Q_diff = calibration_df[f'p{key}_s{i+1}_qdif'].values
-                one_strip_mask = _task2_prefer_one_strip_mask(
-                    qfb_one_strip_masks.get(key, {}).get(i + 1, np.zeros(len(calibration_df), dtype=bool)),
-                    label=f"P{key}s{i+1} Q_FB calibration (deferred)",
+                cond = build_task2_fit_mask(
+                    calibration_df,
+                    qfb_fit_config,
+                    component_source="components",
+                    target_plane=key,
+                    target_strip=i + 1,
                 )
-                cond = one_strip_mask & _task2_qfb_fit_valid_mask(Q_sum, Q_diff)
                 Q_sum_adj = Q_sum[cond]
                 Q_dif_adj = Q_diff[cond]
 
@@ -12734,22 +12938,19 @@ if defer_charge_calibration_until_post_time:
             if coeffs is None:
                 continue
             coeffs = np.asarray(coeffs, dtype=float)
-
-            column_name = f'p{key}_s{i+1}_qdif'
-            corrected_diff = Q_dif_adj - polynomial(Q_sum_adj, *coeffs)
-            qfb_deferred_updates[(key, i + 1)] = (
-                np.flatnonzero(np.asarray(cond, dtype=bool)),
-                np.asarray(corrected_diff, dtype=float),
-            )
-            target_dtype = calibration_df[column_name].dtype
-            calibration_df.loc[cond, column_name] = corrected_diff.astype(target_dtype, copy=False)
-
             if create_plots:
                 title = f"Q{key}_{i+1}. Charge diff. vs. charge sum."
                 x_label = "Charge sum"
                 y_label = "Charge diff"
                 name_of_file = f"Q{key}_{i+1}_charge_analysis_scatter_dif_vs_sum"
                 scatter_2d_and_fit_new(Q_sum_fit, Q_dif_fit, title, x_label, y_label, name_of_file)
+
+        apply_task2_qfb_correction(
+            calibration_df,
+            qfb_coefficients,
+            qfb_river_config["application_mask"],
+            calibrated_columns=False,
+        )
 
         if charge_front_back_mode == "file":
             for _M in range(1, 5):
@@ -12761,8 +12962,7 @@ if defer_charge_calibration_until_post_time:
         print('Charge front-back correction skipped (mode=null).')
         Q_dif_cal_threshold_FB = Q_dif_cal_threshold_FB_wide
 
-    if q_dif_t_dif_correction_mode is not None:
-        qtdif_one_strip_masks = _task2_plane_one_strip_masks_from_components(calibration_df)
+    if apply_Q_TDIF_calibration:
         _qtdif_tasks = []
         for key in [1, 2, 3, 4]:
             for i in range(4):
@@ -12773,11 +12973,13 @@ if defer_charge_calibration_until_post_time:
 
                 T_dif = pd.to_numeric(calibration_df[tdif_col], errors="coerce").to_numpy(dtype=float)
                 Q_diff = pd.to_numeric(calibration_df[qdif_col], errors="coerce").to_numpy(dtype=float)
-                one_strip_mask = _task2_prefer_one_strip_mask(
-                    qtdif_one_strip_masks.get(key, {}).get(i + 1, np.zeros(len(calibration_df), dtype=bool)),
-                    label=f"P{key}s{i+1} Q_TDIF calibration (deferred)",
+                cond = build_task2_fit_mask(
+                    calibration_df,
+                    qtdif_fit_config,
+                    component_source="components",
+                    target_plane=key,
+                    target_strip=i + 1,
                 )
-                cond = one_strip_mask & _task2_qtdif_fit_valid_mask(T_dif, Q_diff)
                 T_dif_adj = T_dif[cond]
                 Q_dif_adj = Q_diff[cond]
 
@@ -12815,15 +13017,6 @@ if defer_charge_calibration_until_post_time:
                 continue
             coeffs = np.asarray(coeffs, dtype=float)
 
-            qdif_col = f"p{key}_s{i+1}_qdif"
-            corrected_diff = Q_dif_adj - polynomial(T_dif_adj, *coeffs)
-            snapshot_column_if_changed(calibration_df, qdif_col, cond)
-            new_values = np.asarray(corrected_diff, dtype=float)
-            target_dtype = calibration_df[qdif_col].dtype
-            if pd.api.types.is_float_dtype(target_dtype):
-                new_values = np.asarray(new_values, dtype=target_dtype)
-            calibration_df.loc[cond, qdif_col] = new_values
-
             if task2_plot_requested("charge_dif_vs_time_dif_cal", essential=True):
                 title = (
                     f"P{key} strip {i+1}. Q_dif vs T_dif. "
@@ -12831,6 +13024,13 @@ if defer_charge_calibration_until_post_time:
                 )
                 name_of_file = f"P{key}_s{i+1}_charge_dif_vs_time_dif_cal"
                 scatter_2d_and_fit_qdif_vs_tdif(T_dif_fit, Q_dif_fit, coeffs, title, name_of_file)
+
+        apply_task2_qtdif_correction(
+            calibration_df,
+            qtdif_coefficients,
+            qtdif_river_config["application_mask"],
+            calibrated_columns=False,
+        )
 
         if q_dif_t_dif_correction_mode == "file":
             for _M in range(1, 5):
@@ -12869,33 +13069,9 @@ if defer_charge_calibration_until_post_time:
     )
 _prof["s_charge_fb_s"] = round(time.perf_counter() - _t_charge_deferred, 2)
 
-print("----------------------------------------------------------------------")
-print("--------------- Legacy charge cross-coupling fit disabled ------------")
-print("----------------------------------------------------------------------")
-print("Task 2 now leaves Q_sum after front/back charge calibration unchanged.")
+print("Charge river complete; no duplicate post-charge Q_sum filter is applied.")
 
-_post_charge_qsum_stage_before = _task2_calibration_stage_state(calibration_df)
-if task2_post_charge_qsum_filter_enabled:
-    filter_strip_family_inplace(
-        calibration_df,
-        "Q_sum",
-        left=task2_calibration_post_charge_q_sum_left,
-        right=task2_calibration_post_charge_q_sum_right,
-    )
-    run_strip_zeroing_stage(
-        "post_charge_q_sum",
-        calibration_df,
-    )
-else:
-    print("Skipping calibration-sample post-charge Q_sum filtering and strip zeroing (config disabled).")
-_log_task2_calibration_stage(
-    "post_charge_q_sum",
-    _post_charge_qsum_stage_before,
-    calibration_df,
-    filter_mode="real" if task2_post_charge_qsum_filter_enabled else "disabled",
-)
-
-_need_pre_tsum_offset_pair_residuals = (
+_need_pre_tsum_offset_pair_residuals = task2_tsum_enabled and (
     calculate_T_sum_calibration
     or _plot_slewing_delta_t_centroid_by_qsum_cuts
     or _plot_slewing_delta_t_centroid_vs_qsum_cut
@@ -12905,8 +13081,13 @@ if _need_pre_tsum_offset_pair_residuals:
         "Building charge-calibrated, pre-T_sum-offset residual table for "
         "T_sum calibration and Q-cut delta-T diagnostics."
     )
-    calibration_time_pair_residuals_df = _build_tsum_pair_residuals(
+    _tsum_fit_row_mask = build_task2_fit_mask(
         calibration_df,
+        tsum_river_config["fit_mask"],
+        component_source="components",
+    )
+    calibration_time_pair_residuals_df = _build_tsum_pair_residuals(
+        calibration_df.loc[_tsum_fit_row_mask],
         y_lookup=y_lookup,
         z_positions=z_positions,
         tdiff_to_x=tdiff_to_x,
@@ -12917,7 +13098,7 @@ if _need_pre_tsum_offset_pair_residuals:
         f"{len(calibration_time_pair_residuals_df)} rows."
     )
 
-if time_calibration_mode is not None:
+if task2_tsum_enabled and time_calibration_mode is not None:
     print("----------------------------------------------------------------------")
     print("----------------------- Time sum calibration -------------------------")
     print("----------------------------------------------------------------------")
@@ -12968,6 +13149,7 @@ if apply_T_sum_calibration:
     apply_task2_tsum_offsets_to_components(
         calibration_df,
         Tsum_cal,
+        tsum_river_config["application_mask"],
     )
     if task2_post_tsum_filter_enabled:
         _debug_plot_filter_group(
@@ -13003,7 +13185,7 @@ slewing_application_sign = -1.0
 slewing_applied_to_calibration_df = False
 _slewing_stage_before = _task2_calibration_stage_state(calibration_df)
 
-if (
+if task2_slewing_enabled and (
     slewing_correction
     or apply_slewing_correction_from_pair_fit
     or _plot_slewing_pair_delta_t_qsum1_qsum2_contour
@@ -13018,8 +13200,13 @@ if (
     assert calibration_df is not working_df
     assert calibration_df.index.is_unique
     slewing_source_index = calibration_df.index.copy()
-    calibration_time_pair_residuals_df = _build_tsum_pair_residuals(
+    _slewing_fit_row_mask = build_task2_fit_mask(
         calibration_df,
+        slewing_river_config["fit_mask"],
+        component_source="components",
+    )
+    calibration_time_pair_residuals_df = _build_tsum_pair_residuals(
+        calibration_df.loc[_slewing_fit_row_mask],
         y_lookup=y_lookup,
         z_positions=z_positions,
         tdiff_to_x=tdiff_to_x,
@@ -13073,6 +13260,7 @@ if (
             calibration_per_channel_slewing_diagnostics = apply_per_channel_polynomial_slewing_to_dataframe(
                 calibration_df,
                 per_channel_slewing_model,
+                slewing_river_config["application_mask"],
                 context_label="canonical calibration_df",
             )
             per_channel_slewing_diagnostics["calibration_application"] = calibration_per_channel_slewing_diagnostics
@@ -13104,6 +13292,7 @@ if (
                 calibration_apply_diagnostics = _apply_slewing_solutions_to_dataframe(
                     calibration_df,
                     calibration_slewing_event_solutions,
+                    slewing_river_config["application_mask"],
                     application_sign=slewing_application_sign,
                 )
                 calibration_slewing_diagnostics.update(calibration_apply_diagnostics)
@@ -13170,28 +13359,32 @@ print("----------------------------------------------------------------------")
 
 deferred_calibration_columns: dict[str, object] = {}
 
-if apply_T_dif_calibration:
+if apply_T_dif_calibration or not task2_tdif_enabled:
     for plane in range(1, 5):
         for strip in range(1, 5):
             column_name = f'p{plane}_s{strip}_tdif'
             cal_column_name = f"{column_name}_cal"
             source_values = pd.to_numeric(working_df[column_name], errors="coerce").fillna(0).to_numpy(dtype=float)
             corrected_values = source_values.copy()
-            mask = source_values != 0
+            mask = build_task2_application_mask(
+                working_df, tdif_river_config["application_mask"], plane, strip
+            )
             corrected_values[mask] = source_values[mask] - Tdiff_cal[plane - 1][strip - 1]
             target_dtype = working_df[column_name].dtype
             if pd.api.types.is_float_dtype(target_dtype):
                 corrected_values = np.asarray(corrected_values, dtype=target_dtype)
             deferred_calibration_columns[cal_column_name] = corrected_values
 
-if apply_T_sum_calibration:
+if apply_T_sum_calibration or not task2_tsum_enabled:
     for plane in range(1, 5):
         for strip in range(1, 5):
             column_name = f'p{plane}_s{strip}_tsum'
             cal_column_name = f"{column_name}_cal"
             source_values = pd.to_numeric(working_df[column_name], errors="coerce").fillna(0).to_numpy(dtype=float)
             corrected_values = source_values.copy()
-            mask = source_values != 0
+            mask = build_task2_application_mask(
+                working_df, tsum_river_config["application_mask"], plane, strip
+            )
             corrected_values[mask] = source_values[mask] + Tsum_cal[plane - 1][strip - 1]
             target_dtype = working_df[column_name].dtype
             if pd.api.types.is_float_dtype(target_dtype):
@@ -13212,7 +13405,13 @@ for plane in range(1, 5):
 
         q_dif_values = pd.to_numeric(working_df[q_dif_col], errors="coerce").fillna(0).to_numpy(dtype=float)
         q_dif_corrected = q_dif_values.copy()
-        q_dif_mask = q_dif_values != 0
+        q_dif_mask = build_task2_application_mask(
+            working_df,
+            charge_pedestal_river_config["application_mask"],
+            plane,
+            strip,
+            qsum_column=q_sum_col,
+        )
         q_dif_corrected[q_dif_mask] = q_dif_values[q_dif_mask] - (QF_pedestal[plane - 1][strip - 1] - QB_pedestal[plane - 1][strip - 1]) / 2
         q_dif_dtype = working_df[q_dif_col].dtype
         if pd.api.types.is_float_dtype(q_dif_dtype):
@@ -13221,7 +13420,13 @@ for plane in range(1, 5):
 
         q_sum_values = pd.to_numeric(working_df[q_sum_col], errors="coerce").fillna(0).to_numpy(dtype=float)
         q_sum_corrected = q_sum_values.copy()
-        q_sum_mask = q_sum_values != 0
+        q_sum_mask = build_task2_application_mask(
+            working_df,
+            charge_pedestal_river_config["application_mask"],
+            plane,
+            strip,
+            qsum_column=q_sum_col,
+        )
         q_sum_corrected[q_sum_mask] = q_sum_values[q_sum_mask] - (QF_pedestal[plane - 1][strip - 1] + QB_pedestal[plane - 1][strip - 1]) / 2
         q_sum_dtype = working_df[q_sum_col].dtype
         if pd.api.types.is_float_dtype(q_sum_dtype):
@@ -13230,67 +13435,23 @@ for plane in range(1, 5):
 
 working_df = _append_or_replace_dataframe_columns(working_df, deferred_calibration_columns)
 
-if charge_front_back_mode is not None:
-    for key in [1, 2, 3, 4]:
-        for strip in range(1, 5):
-            coeffs = qfb_coefficients.get((key, strip))
-            if coeffs is None:
-                coeffs = global_variables.get(f'P{key}_s{strip}_Q_FB_coeffs')
-            if coeffs is None:
-                continue
-            coeffs = np.asarray(coeffs, dtype=float)
-
-            column_name = f'p{key}_s{strip}_qdif_cal'
-            q_sum_column_name = f'p{key}_s{strip}_qsum_cal'
-            if column_name not in working_df.columns or q_sum_column_name not in working_df.columns:
-                continue
-
-            qsum_values = pd.to_numeric(working_df[q_sum_column_name], errors="coerce").fillna(0).to_numpy(dtype=float)
-            qdif_values = pd.to_numeric(working_df[column_name], errors="coerce").fillna(0).to_numpy(dtype=float)
-            live_mask = (qsum_values != 0) & (qdif_values != 0)
-            if not np.any(live_mask):
-                continue
-
-            corrected_values = qdif_values.copy()
-            corrected_values[live_mask] = qdif_values[live_mask] - polynomial(qsum_values[live_mask], *coeffs)
-
-            target_dtype = working_df[column_name].dtype
-            working_df.loc[:, column_name] = corrected_values.astype(target_dtype, copy=False)
+if apply_Q_FB_calibration:
+    apply_task2_qfb_correction(
+        working_df,
+        qfb_coefficients,
+        qfb_river_config["application_mask"],
+        calibrated_columns=True,
+    )
 
 if apply_Q_TDIF_calibration:
-    for plane in [1, 2, 3, 4]:
-        for strip in range(1, 5):
-            coeffs = qtdif_coefficients.get((plane, strip))
-            if coeffs is None:
-                coeffs = global_variables.get(f"P{plane}_s{strip}_Q_TDIF_coeffs")
-            if coeffs is None:
-                continue
-            coeffs = np.asarray(coeffs, dtype=float)
+    apply_task2_qtdif_correction(
+        working_df,
+        qtdif_coefficients,
+        qtdif_river_config["application_mask"],
+        calibrated_columns=True,
+    )
 
-            tdif_col = f"p{plane}_s{strip}_tdif_cal"
-            qdif_col = f"p{plane}_s{strip}_qdif_cal"
-            if tdif_col not in working_df.columns or qdif_col not in working_df.columns:
-                continue
-
-            tdif_values = pd.to_numeric(working_df[tdif_col], errors="coerce").to_numpy(dtype=float)
-            qdif_values = pd.to_numeric(working_df[qdif_col], errors="coerce").to_numpy(dtype=float)
-            mask = (
-                np.isfinite(tdif_values)
-                & np.isfinite(qdif_values)
-                & (tdif_values != 0)
-                & (qdif_values != 0)
-            )
-            if not np.any(mask):
-                continue
-
-            corrected_values = qdif_values.copy()
-            corrected_values[mask] = qdif_values[mask] - polynomial(tdif_values[mask], *coeffs)
-            target_dtype = working_df[qdif_col].dtype
-            if pd.api.types.is_float_dtype(target_dtype):
-                corrected_values = np.asarray(corrected_values, dtype=target_dtype)
-            working_df.loc[:, qdif_col] = corrected_values
-
-if apply_slewing_correction_from_pair_fit:
+if task2_slewing_enabled and apply_slewing_correction_from_pair_fit:
     print(
         f"Applying slewing correction to working_df after deferred charge "
         f"corrections; mode={slewing_application_mode}; "
@@ -13306,6 +13467,7 @@ if apply_slewing_correction_from_pair_fit:
             apply_per_channel_polynomial_slewing_to_dataframe(
                 working_df,
                 per_channel_slewing_model,
+                slewing_river_config["application_mask"],
                 context_label="working_df_after_deferred_charge_calibrations",
             )
     elif calibration_slewing_fit_df.empty:
@@ -13327,10 +13489,25 @@ if apply_slewing_correction_from_pair_fit:
             working_apply_diagnostics = _apply_slewing_solutions_to_dataframe(
                 working_df,
                 working_slewing_event_solutions,
+                slewing_river_config["application_mask"],
                 application_sign=slewing_application_sign,
             )
             working_slewing_diagnostics.update(working_apply_diagnostics)
         _print_slewing_application_diagnostics("working_df", working_slewing_diagnostics)
+
+final_calibrated_strip_gate_summary = apply_task2_final_calibrated_strip_gate(
+    working_df,
+    final_calibrated_strip_gate_config,
+)
+print(
+    "[task2-final-calibrated-strip-gate] "
+    f"enabled={_coerce_config_bool(final_calibrated_strip_gate_config.get('enabled'), default=True)} "
+    f"strip_blocks_tested={final_calibrated_strip_gate_summary['strip_blocks_tested']} "
+    f"strip_blocks_zeroed={final_calibrated_strip_gate_summary['strip_blocks_zeroed']} "
+    f"rows_affected={final_calibrated_strip_gate_summary['rows_affected']} "
+    f"values_zeroed={final_calibrated_strip_gate_summary['values_zeroed']} "
+    "modified_columns=qsum_cal,qdif_cal,tsum_cal,tdif_cal"
+)
 
 plot_slewing_relative_tsum_vs_qsum_after_correction(
     working_df,
@@ -14539,6 +14716,8 @@ def _plot_task2_calibrated_filtered_removed_zeroes(
         title=title,
         filename_stem=filename_stem,
         alias=alias,
+        log_y=True,
+        auto_range_kinds=("tsum",),
     )
 
 

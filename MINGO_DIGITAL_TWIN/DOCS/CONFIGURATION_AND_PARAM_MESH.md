@@ -59,9 +59,10 @@ Runtime:
 - `n_tracks`, `output_basename`
 - `param_mesh_dir`, `param_mesh_sim_run`
 
-### STEP_2 (crossings)
+### STEP_2 (crossings and active gas area)
 Physics:
-- `bounds_mm`
+- `active_area_bounds_mm`: required `x_min`, `x_max`, `y_min`, `y_max` coordinates controlling valid gas crossings and therefore Step 3 avalanche production.
+- `bounds_mm`: deprecated alias. A warning is emitted when used; `active_area_bounds_mm` takes precedence if both appear.
 - `z_positions` (4 values or `random` from mesh)
 
 Runtime:
@@ -78,11 +79,60 @@ Physics:
 Runtime:
 - `param_mesh_dir`, `param_mesh_sim_run`
 
-### STEP_4 (induction)
+Step 3 inherits valid crossing coordinates. It does not read or clip to Step 4 readout geometry.
+
+### STEP_4 (induction and readout geometry)
 Physics:
 - `x_noise_mm`, `time_sigma_ns`
 - `lorentzian_gamma_mm`
 - `induced_charge_fraction`
+- `readout_geometry_mm.planes`: all four planes are required. Each plane has `x_min`, `x_max`, and exactly four strips.
+
+Generated strip form:
+
+```yaml
+readout_geometry_mm:
+  planes:
+    "1":
+      x_min: -150.0
+      x_max: 150.0
+      y_min: -145.0
+      strip_widths_mm: [63.0, 63.0, 63.0, 98.0]
+      interstrip_gap_mm: 1.0
+      y_max: 145.0
+```
+
+`y_max` is optional and, when supplied, must match the derived last-strip boundary within `1e-9 mm`. `interstrip_gap_mm` is the inactive edge-to-edge gap, not strip pitch.
+
+Explicit strip form:
+
+```yaml
+"1":
+  x_min: -150.0
+  x_max: 150.0
+  strip_y_bounds_mm:
+    - [-145.0, -82.0]
+    - [-81.0, -18.0]
+    - [-17.0, 46.0]
+    - [47.0, 145.0]
+```
+
+A plane cannot mix forms. Coordinates must be finite, limits ordered, strips sorted and non-overlapping, gaps non-negative, and exactly four strips must be defined. Readout containment in the active area is deliberately not required.
+
+If `readout_geometry_mm` is absent, the warned legacy fallback reproduces the old active-X, centered contiguous-Y behavior with zero gaps. The fallback exists only for old configurations.
+
+The active gas area controls where avalanches may be produced. The readout geometry controls where induced charge is collected. The two geometries are independent and may overlap only partially.
+
+Schematic example (not measured dimensions):
+
+```text
+readout strip assembly:  +------------------------------------+
+active gas area:              +--------------------------+
+strip Y bands:           | S1 |gap| S2 |gap| S3 |gap| S4 |
+                         +------------------------------------+
+```
+
+This illustrates readout extending beyond the active rectangle in X and Y; neither rectangle is clipped to the other.
 
 ### STEP_5 (signal observables)
 Physics:

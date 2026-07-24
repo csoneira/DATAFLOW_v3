@@ -15,10 +15,10 @@ Pulls /home/rpcuser/logs from mingo01..mingo04 into:
 
 Rules:
   - current/ is an exact mirror of the latest successful remote state.
-  - history/<timestamp>/ stores files that were replaced or deleted from
-    current/ during a run, so old data is never lost.
+  - history/<timestamp>/ temporarily stores files replaced or deleted from
+    current/; selection-aware retention is applied after a successful run.
   - If a remote log tree becomes empty, the old logs are moved into history/
-    instead of being erased from the backup.
+    before selection-aware history retention is applied.
 
 Usage:
   bash run_log_backup.sh [options] [host ...]
@@ -30,6 +30,7 @@ Options:
   --source-base PATH    Local test source base; expects PATH/<host>/...
   --remote-user USER    Override remote SSH user. Default: rpcuser
   --remote-root PATH    Override remote log root. Default: /home/rpcuser/logs
+  --no-history-prune    Do not prune history after successful backups.
   -h, --help            Show this help text.
 
 Environment overrides:
@@ -40,6 +41,9 @@ Environment overrides:
   LOG_BACKUP_REMOTE_ROOT
   LOG_BACKUP_RUN_TIMESTAMP
   LOG_BACKUP_SSH_OPTIONS
+  LOG_BACKUP_HISTORY_RETENTION_ENABLED
+  LOG_BACKUP_SELECTION_CONFIG
+  LOG_BACKUP_HISTORY_CONTEXT_MONTHS
 EOF
 }
 
@@ -91,6 +95,30 @@ write_current_manifest() {
     fi
   } > "$tmp_manifest"
   mv "$tmp_manifest" "$manifest_path"
+}
+
+prune_history_for_host() {
+  local host="$1"
+  local -a prune_cmd=(
+    /usr/bin/env python3 "$HISTORY_PRUNER"
+    --root "$BACKUP_ROOT"
+    --config "$SELECTION_CONFIG"
+    --context-months "$HISTORY_CONTEXT_MONTHS"
+    --host "$host"
+    --apply
+  )
+
+  if [[ "$HISTORY_RETENTION_ENABLED" != "1" ]]; then
+    log "History retention disabled for $host"
+    return 0
+  fi
+  if [[ ! -f "$HISTORY_PRUNER" ]]; then
+    log "WARNING: history retention helper is missing; history left untouched: $HISTORY_PRUNER"
+    return 0
+  fi
+  if ! "${prune_cmd[@]}"; then
+    log "WARNING: history retention failed for $host; history left untouched where possible"
+  fi
 }
 
 backup_one_host() {
@@ -170,6 +198,7 @@ backup_one_host() {
   printf '%s\n' "$RUN_TIMESTAMP" > "$state_dir/last_successful_run.txt"
 
   current_file_count=$(find "$current_dir" -type f | wc -l | tr -d ' ')
+  prune_history_for_host "$host"
   if [[ -d "$history_run_dir" ]]; then
     history_file_count=$(find "$history_run_dir" -type f | wc -l | tr -d ' ')
     if [[ "$history_file_count" -gt 0 ]]; then
@@ -189,6 +218,9 @@ DEFAULT_BACKUP_ROOT="$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/REMOTE_LOG_
 DEFAULT_REMOTE_USER="rpcuser"
 DEFAULT_REMOTE_ROOT="/home/rpcuser/logs"
 DEFAULT_HOSTS=(mingo01 mingo02 mingo03 mingo04)
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+HISTORY_PRUNER="${LOG_BACKUP_HISTORY_PRUNER:-$SCRIPT_DIR/prune_log_backup_history.py}"
+DEFAULT_SELECTION_CONFIG="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/config_selection.yaml"
 
 BACKUP_ROOT="${LOG_BACKUP_ROOT:-$DEFAULT_BACKUP_ROOT}"
 REMOTE_USER="${LOG_BACKUP_REMOTE_USER:-$DEFAULT_REMOTE_USER}"
@@ -196,6 +228,9 @@ REMOTE_ROOT="${LOG_BACKUP_REMOTE_ROOT:-$DEFAULT_REMOTE_ROOT}"
 SOURCE_BASE="${LOG_BACKUP_SOURCE_BASE:-}"
 RUN_TIMESTAMP="${LOG_BACKUP_RUN_TIMESTAMP:-$(date -u '+%Y%m%dT%H%M%SZ')}"
 SSH_OPTIONS="${LOG_BACKUP_SSH_OPTIONS:--o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=30 -o ServerAliveCountMax=3}"
+HISTORY_RETENTION_ENABLED="${LOG_BACKUP_HISTORY_RETENTION_ENABLED:-1}"
+SELECTION_CONFIG="${LOG_BACKUP_SELECTION_CONFIG:-$DEFAULT_SELECTION_CONFIG}"
+HISTORY_CONTEXT_MONTHS="${LOG_BACKUP_HISTORY_CONTEXT_MONTHS:-1}"
 
 declare -a requested_hosts=()
 
@@ -225,6 +260,10 @@ while [[ $# -gt 0 ]]; do
       require_option_value "$1" "${2:-}"
       REMOTE_ROOT="$2"
       shift 2
+      ;;
+    --no-history-prune)
+      HISTORY_RETENTION_ENABLED=0
+      shift
       ;;
     -h|--help)
       show_help

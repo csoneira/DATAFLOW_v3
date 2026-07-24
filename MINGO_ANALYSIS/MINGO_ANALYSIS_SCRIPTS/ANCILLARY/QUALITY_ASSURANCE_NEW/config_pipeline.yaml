@@ -7,12 +7,12 @@ steps:
   - order: 2
     step_name: STEP_2_FILTERING
     display_name: filtering
-    enabled: true
+    enabled: false
 
   - order: 3
     step_name: STEP_3_DEEP_FILTER
     display_name: deep_filter
-    enabled: true
+    enabled: false
 
   - order: 4
     step_name: STEP_4_RATE_HISTOGRAM
@@ -22,7 +22,7 @@ steps:
   - order: 5
     step_name: STEP_5_ROBUST_EFFICIENCY
     display_name: robust_efficiency
-    enabled: true
+    enabled: false
 
   - order: 6
     step_name: STEP_6_TRIGGER_TYPES

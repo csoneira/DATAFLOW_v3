@@ -16,12 +16,18 @@ Mutable backup data is stored separately under:
 - `hosts/<host>/run_logs/`: per-run rsync logs.
 - `runtime/run_summaries/`: one TSV summary per full backup run.
 
-## Why this does not lose logs
+## Backup and retention behavior
 
 - The runner uses `rsync --backup --backup-dir=... --delete`.
 - `current/` stays faithful to the remote tree, including moves into `done/`.
 - Anything that would be overwritten or deleted from `current/` is moved into `history/<timestamp>/`.
 - If a remote machine becomes empty, its previous logs are moved into `history/` instead of disappearing from the backup.
+- After each successful host backup, history is pruned against
+  `MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/config_selection.yaml`: a file is retained
+  when its dated filename (or mtime for undated files) falls inside a selected
+  station date range, with one calendar month of context before and after.
+- Retention fails closed: an unreadable or invalid selection config leaves
+  history untouched.
 
 ## Usage
 

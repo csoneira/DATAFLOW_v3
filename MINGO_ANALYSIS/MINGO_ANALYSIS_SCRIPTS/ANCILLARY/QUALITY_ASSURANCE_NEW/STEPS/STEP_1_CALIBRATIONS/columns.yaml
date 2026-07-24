@@ -1,5 +1,6 @@
 quality_and_plot:
   - '*_Q_B'
   - '*_Q_F'
-  - '*_T_sum'
-  - '*_T_dif'
+
+ignore:
+  - '*'

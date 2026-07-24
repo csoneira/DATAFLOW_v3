@@ -28,7 +28,7 @@ step_1_overrides:
   keep_all_columns_output: true
   save_removed_channel_values: false
   save_time_slewing_pair_residuals: false
-  joined_analysis_files: 1
+  joined_analysis_files: 3
   joined_analysis_time_tolerance_hours: 24
   # File choice: qa (QA first, then newest fallback), new (newest available), random (any available).
   file_selection_mode: random

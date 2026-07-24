@@ -733,13 +733,15 @@ error_directory = base_directories["error_directory"]
 completed_directory = base_directories["completed_directory"]
 
 
-def list_regular_files(directory_path):
-    """Return the set of regular files inside `directory_path`."""
+def list_regular_files(directory_path, suffix=None):
+    """Return regular file names in `directory_path`, optionally filtered by suffix."""
     if not os.path.isdir(directory_path):
         return set()
     entries = set()
     try:
         for name in os.listdir(directory_path):
+            if suffix is not None and not name.endswith(suffix):
+                continue
             full_path = os.path.join(directory_path, name)
             if os.path.isfile(full_path):
                 entries.add(name)
@@ -748,47 +750,73 @@ def list_regular_files(directory_path):
     return entries
 
 
-list_event_files = list_regular_files(list_events_directory)
-unprocessed_files = list_regular_files(unprocessed_directory)
-processing_files = list_regular_files(processing_directory)
-completed_files = list_regular_files(completed_directory)
+def load_processed_archive_files(metadata_path):
+    """Return lake file names already recorded as successfully processed by Stage 2."""
+    processed = set()
+    try:
+        with open(metadata_path, newline="", encoding="utf-8") as metadata_file:
+            for row in csv.DictReader(metadata_file):
+                filename_base = (row.get("filename_base") or "").strip()
+                if re.fullmatch(r"mi0[0-9][0-9]{11}", filename_base):
+                    processed.add(f"postprocessed_{filename_base}.parquet")
+    except FileNotFoundError:
+        pass
+    except (OSError, csv.Error) as exc:
+        print(
+            "Warning: could not read persistent Stage-2 processing metadata "
+            f"{metadata_path}: {exc}. Queue state alone will be used."
+        )
+    return processed
+
+
+list_event_files = list_regular_files(list_events_directory, suffix=".parquet")
+unprocessed_files = list_regular_files(unprocessed_directory, suffix=".parquet")
+processing_files = list_regular_files(processing_directory, suffix=".parquet")
+completed_files = list_regular_files(completed_directory, suffix=".parquet")
+processed_archive_files = load_processed_archive_files(csv_specific_metadata_path)
 
 existing_files = unprocessed_files | processing_files | completed_files
 duplicates_in_list = list_event_files & existing_files
 
 if duplicates_in_list:
     print(f"Detected {len(duplicates_in_list)} duplicate files already queued or completed.")
+    print("Leaving duplicate source files untouched in the persistent PARQUET_LAKE archive.")
 
-    for file_name in duplicates_in_list:
-        src_path = os.path.join(list_events_directory, file_name)
-        try:
-            os.remove(src_path)
-            print(f"Removed duplicate file from LIST_EVENTS: {file_name}")
-        except FileNotFoundError:
-            continue
-        except Exception as e:
-            print(f"Failed to remove {file_name}: {e}")
+already_processed_in_lake = list_event_files & processed_archive_files
+if already_processed_in_lake:
+    print(
+        f"Skipping {len(already_processed_in_lake)} archived file(s) already recorded "
+        "as processed by Stage 2."
+    )
 
-# Files eligible to move: present only in LIST_EVENTS
-files_to_move = (list_event_files - duplicates_in_list) - existing_files
+# PARQUET_LAKE is the persistent Stage-1 archive. Stage 2 receives copies and
+# uses its persistent metadata ledger to avoid re-copying files after the
+# short-lived COMPLETED queue is cleaned.
+files_to_copy = list_event_files - existing_files - processed_archive_files
 
+print(f"Copying {len(files_to_copy)} archived files to UNPROCESSED directory...")
 
-# Move files to UNPROCESSED
-
-print(f"Moving {len(files_to_move)} files to UNPROCESSED directory...")
-
-for file_name in files_to_move:
+for file_name in files_to_copy:
     src_path = os.path.join(list_events_directory, file_name)
     dest_path = os.path.join(unprocessed_directory, file_name)
+    temp_dest_path = f"{dest_path}.copying.{os.getpid()}"
     try:
         # Skip if the file has been processed in the meantime
-        if os.path.basename(file_name) in existing_files:
+        if (
+            os.path.basename(file_name) in existing_files
+            or os.path.basename(file_name) in processed_archive_files
+        ):
             print(f"Skipping {file_name}: now present in another queue.")
             continue
-        shutil.move(src_path, dest_path)
-        print(f"Moved {file_name} to UNPROCESSED directory.")
+        shutil.copy2(src_path, temp_dest_path)
+        os.replace(temp_dest_path, dest_path)
+        print(f"Copied {file_name} to UNPROCESSED; archive source preserved.")
     except Exception as e:
-        print(f"Failed to move {file_name}: {e}")
+        try:
+            os.remove(temp_dest_path)
+        except FileNotFoundError:
+            pass
+        print(f"Failed to copy {file_name}: {e}")
 
 
 # -----------------------------------------------------------------------------

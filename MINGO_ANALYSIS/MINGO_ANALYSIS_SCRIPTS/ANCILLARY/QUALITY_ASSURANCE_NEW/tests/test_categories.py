@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import csv
 import sys
 import unittest
 
 import pandas as pd
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(REPO_ROOT) not in sys.path:
@@ -14,6 +16,31 @@ from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.ANCILLARY.QUALITY_ASSURANCE_NEW.qa_co
 
 
 class CategoryTests(unittest.TestCase):
+
+    def test_only_qb_and_qf_are_configured_for_quality(self) -> None:
+        qa_root = Path(__file__).resolve().parents[1]
+        configured_quality_patterns: list[str] = []
+        for columns_path in sorted((qa_root / "STEPS").glob("STEP_*/columns.yaml")):
+            config = yaml.safe_load(columns_path.read_text(encoding="utf-8")) or {}
+            configured_quality_patterns.extend(config.get("quality_and_plot", []) or [])
+            configured_quality_patterns.extend(config.get("quality_only", []) or [])
+        self.assertEqual(configured_quality_patterns, ["*_Q_B", "*_Q_F"])
+
+        quality_enabled_patterns: list[str] = []
+        for rules_path in sorted((qa_root / "STEPS").glob("STEP_*/*_column_rules.csv")):
+            with rules_path.open("r", encoding="utf-8", newline="") as handle:
+                for row in csv.DictReader(handle):
+                    if str(row.get("quality_enabled", "")).strip().lower() == "true":
+                        quality_enabled_patterns.append(str(row["pattern"]))
+        self.assertEqual(quality_enabled_patterns, ["*_Q_B", "*_Q_F"])
+
+    def test_metadata_plots_use_unconnected_points(self) -> None:
+        runner_source = (
+            Path(__file__).resolve().parents[1] / "qa_core" / "runner.py"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("ax.plot(", runner_source)
+        self.assertGreaterEqual(runner_source.count("ax.scatter("), 2)
+
     def test_default_is_plot_only_and_ignore_wins(self) -> None:
         df = pd.DataFrame(
             {

@@ -5,11 +5,15 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
+import csv
 import fcntl
+import filecmp
 import os
+import re
 import shutil
 import sys
 import tempfile
+from datetime import datetime, timezone
 from typing import Any
 
 QA_ROOT = Path(__file__).resolve().parent
@@ -21,6 +25,198 @@ from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.ANCILLARY.QUALITY_ASSURANCE_NEW.qa_co
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.ANCILLARY.QUALITY_ASSURANCE_NEW.qa_core.runner import rebuild_step_summaries, run_step
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.ANCILLARY.QUALITY_ASSURANCE_NEW.qa_core.total_summary import build_total_summary
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.ANCILLARY.QUALITY_ASSURANCE_NEW.build_problematic_basename_lists import build_from_file
+
+
+
+FILE_BASENAME_RE = re.compile(r"(mi0[0-4]\d{11})", re.IGNORECASE)
+
+
+def _metadata_basename(value: str) -> str | None:
+    match = FILE_BASENAME_RE.search(value)
+    return match.group(1).lower() if match else None
+
+
+def _metadata_timestamp(value: str) -> float:
+    """Return a comparable timestamp, with malformed or empty values first."""
+    text = (value or "").strip()
+    if not text:
+        return float("-inf")
+    for fmt in ("%Y-%m-%d_%H.%M.%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, fmt).replace(tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            pass
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return float("-inf")
+
+
+def _is_valid_parquet(path: Path) -> bool:
+    """Perform the inexpensive Parquet magic-byte completion check."""
+    try:
+        if not path.is_file() or path.stat().st_size < 8:
+            return False
+        with path.open("rb") as handle:
+            if handle.read(4) != b"PAR1":
+                return False
+            handle.seek(-4, os.SEEK_END)
+            return handle.read(4) == b"PAR1"
+    except OSError:
+        return False
+
+
+def _valid_lake_basenames(lake_dir: Path) -> set[str]:
+    valid: set[str] = set()
+    for path in lake_dir.glob("postprocessed_*.parquet"):
+        base = _metadata_basename(path.name)
+        if base is not None and _is_valid_parquet(path):
+            valid.add(base)
+    return valid
+
+
+def _write_lake_gated_metadata(
+    source_path: Path,
+    destination_path: Path,
+    valid_lake_bases: set[str],
+) -> bool:
+    """Publish the newest source row per basename only after final archival.
+
+    ``STAGE_1_PRODUCTS/EVENT_DATA/METADATA`` is a completed-file index. Working
+    task metadata remains in ``STAGE_1/EVENT_DATA/STEP_1`` while processing is
+    incomplete. A basename becomes eligible here only when its valid final
+    Parquet is already present in the station Parquet Lake.
+    """
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_name: str | None = None
+    with source_path.open("r", encoding="utf-8-sig", newline="") as source_handle:
+        reader = csv.reader(source_handle)
+        header = next(reader, None)
+        if not header:
+            return False
+
+        # Reprocessing may append multiple executions. Keep exactly the latest
+        # values so product metadata always describes the current lake product.
+        newest: dict[str, tuple[float, int, list[str]]] = {}
+        for row_number, row in enumerate(reader):
+            if not row:
+                continue
+            base = _metadata_basename(row[0])
+            if base is None or base not in valid_lake_bases:
+                continue
+            timestamp = _metadata_timestamp(row[1] if len(row) > 1 else "")
+            previous = newest.get(base)
+            candidate = (timestamp, row_number, row)
+            if previous is None or candidate[:2] >= previous[:2]:
+                newest[base] = candidate
+
+    rows = [
+        candidate[2]
+        for candidate in sorted(newest.values(), key=lambda item: item[1])
+    ]
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="",
+            dir=destination_path.parent,
+            prefix=f".{destination_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_handle:
+            temporary_name = temporary_handle.name
+            writer = csv.writer(temporary_handle)
+            writer.writerow(header)
+            writer.writerows(rows)
+            temporary_handle.flush()
+            os.fsync(temporary_handle.fileno())
+
+        temporary_path = Path(temporary_name)
+        if destination_path.exists() and filecmp.cmp(
+            temporary_path, destination_path, shallow=False
+        ):
+            temporary_path.unlink()
+            temporary_name = None
+            return False
+        os.replace(temporary_path, destination_path)
+        temporary_name = None
+        return True
+    finally:
+        if temporary_name is not None:
+            Path(temporary_name).unlink(missing_ok=True)
+
+
+def _rotate_output_directory(output_dir: Path) -> tuple[int, int]:
+    """Move the current output generation into OUTPUTS/LAST."""
+    if not output_dir.is_dir():
+        return 0, 0
+
+    current_children = [
+        child
+        for child in output_dir.iterdir()
+        if child.name not in {"LAST", ".LAST_BUILDING"}
+    ]
+    if not current_children:
+        return 0, 0
+
+    moved_files = 0
+    moved_bytes = 0
+    for child in current_children:
+        if child.is_file():
+            moved_files += 1
+            moved_bytes += child.stat().st_size
+        elif child.is_dir():
+            for path in child.rglob("*"):
+                if path.is_file():
+                    moved_files += 1
+                    moved_bytes += path.stat().st_size
+    if not moved_files:
+        return 0, 0
+
+    last_dir = output_dir / "LAST"
+    staging_dir = output_dir / ".LAST_BUILDING"
+    if staging_dir.exists():
+        shutil.rmtree(staging_dir)
+    staging_dir.mkdir()
+    for child in current_children:
+        shutil.move(str(child), str(staging_dir / child.name))
+
+    if last_dir.exists():
+        shutil.rmtree(last_dir)
+    staging_dir.rename(last_dir)
+    return moved_files, moved_bytes
+
+
+def rotate_previous_outputs(qa_root: Path, *, aggregate_only: bool = False) -> tuple[int, int, int]:
+    """Keep exactly one previous plot execution under each OUTPUTS/LAST."""
+    scan_roots = [qa_root / "TOTAL_SUMMARY"]
+    if not aggregate_only:
+        scan_roots.insert(0, qa_root / "STEPS")
+
+    output_dirs: list[Path] = []
+    for scan_root in scan_roots:
+        if not scan_root.is_dir():
+            continue
+        for root, dir_names, _ in os.walk(scan_root):
+            dir_names[:] = [
+                name
+                for name in dir_names
+                if name not in {".ATTIC", "LAST", ".LAST_BUILDING", "__pycache__"}
+            ]
+            root_path = Path(root)
+            if root_path.name == "OUTPUTS":
+                output_dirs.append(root_path)
+
+    rotated_dirs = 0
+    moved_files = 0
+    moved_bytes = 0
+    for output_dir in sorted(output_dirs, key=lambda path: len(path.parts), reverse=True):
+        directory_files, directory_bytes = _rotate_output_directory(output_dir)
+        if directory_files:
+            rotated_dirs += 1
+            moved_files += directory_files
+            moved_bytes += directory_bytes
+    return rotated_dirs, moved_files, moved_bytes
 
 
 def _load_pipeline_steps(qa_root: Path) -> list[dict[str, Any]]:
@@ -64,7 +260,7 @@ def _publish_stage1_product_metadata(
     root_config: dict[str, Any],
     stations_override: list[str] | None,
 ) -> tuple[int, int]:
-    """Atomically refresh the Stage 1 product metadata used by QA."""
+    """Atomically publish lake-authoritative Stage 1 product metadata."""
 
     raw_stations = stations_override or root_config.get("stations") or []
     station_names = [normalize_station_name(value) for value in raw_stations]
@@ -72,6 +268,8 @@ def _publish_stage1_product_metadata(
     copied_bytes = 0
     for station_name in station_names:
         station_root = repo_root / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / station_name
+        lake_dir = station_root / "STAGE_1_PRODUCTS" / "EVENT_DATA" / "PARQUET_LAKE"
+        valid_lake_bases = _valid_lake_basenames(lake_dir)
         for task_id in range(6):
             source_dir = station_root / "STAGE_1" / "EVENT_DATA" / "STEP_1" / f"TASK_{task_id}" / "METADATA"
             product_dir = station_root / "STAGE_1_PRODUCTS" / "EVENT_DATA" / "METADATA" / f"TASK_{task_id}"
@@ -84,38 +282,18 @@ def _publish_stage1_product_metadata(
                 lock_path = source_dir / "OPERATION" / f"{source_path.name}.lock"
                 lock_path.parent.mkdir(parents=True, exist_ok=True)
                 destination_path = product_dir / source_path.name
-                temporary_name: str | None = None
                 with lock_path.open("a", encoding="utf-8") as lock_handle:
                     fcntl.flock(lock_handle.fileno(), fcntl.LOCK_SH)
-                    source_stat = source_path.stat()
-                    if destination_path.exists():
-                        destination_stat = destination_path.stat()
-                        if (
-                            destination_stat.st_size == source_stat.st_size
-                            and destination_stat.st_mtime_ns == source_stat.st_mtime_ns
-                        ):
-                            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-                            continue
                     try:
-                        with source_path.open("rb") as source_handle:
-                            with tempfile.NamedTemporaryFile(
-                                mode="wb",
-                                dir=product_dir,
-                                prefix=f".{source_path.name}.",
-                                suffix=".tmp",
-                                delete=False,
-                            ) as temporary_handle:
-                                temporary_name = temporary_handle.name
-                                shutil.copyfileobj(source_handle, temporary_handle)
-                                temporary_handle.flush()
-                                os.fsync(temporary_handle.fileno())
-                        os.replace(temporary_name, destination_path)
-                        shutil.copystat(source_path, destination_path)
-                        temporary_name = None
+                        changed = _write_lake_gated_metadata(
+                            source_path,
+                            destination_path,
+                            valid_lake_bases,
+                        )
                     finally:
-                        if temporary_name is not None:
-                            Path(temporary_name).unlink(missing_ok=True)
                         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+                if not changed:
+                    continue
                 copied_files += 1
                 copied_bytes += destination_path.stat().st_size
     return copied_files, copied_bytes
@@ -141,6 +319,17 @@ def main(argv: list[str] | None = None) -> int:
     stations_override = _parse_station_list(args.stations)
     generate_plots = args.mode == "plot"
     print(f"QUALITY_ASSURANCE_NEW mode={args.mode} generate_plots={generate_plots}")
+
+
+    if generate_plots:
+        rotated_dirs, rotated_files, rotated_bytes = rotate_previous_outputs(
+            QA_ROOT,
+            aggregate_only=args.aggregate_only,
+        )
+        print(
+            "Rotated previous QA outputs into OUTPUTS/LAST: "
+            f"directories={rotated_dirs} files={rotated_files} bytes={rotated_bytes}"
+        )
 
     if not args.aggregate_only:
         copied_files, copied_bytes = _publish_stage1_product_metadata(

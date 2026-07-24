@@ -77,7 +77,7 @@ Purpose:
 Required inputs:
 - STEP_1 output columns
 - `z_positions` or mesh-derived positions
-- bounds and speed constants
+- `active_area_bounds_mm` (or deprecated `bounds_mm` alias) and speed constants
 
 Outputs:
 - `SIMULATION_OUTPUTS/INTERSTEPS/STEP_2_TO_3/SIM_RUN_*/step_2.(pkl|csv|chunks)`
@@ -113,15 +113,22 @@ Purpose:
 
 Required inputs:
 - STEP_3 avalanche columns and times
+- four-plane `readout_geometry_mm`, or warned legacy fallback
+
+Geometry contract:
+- active-area acceptance is inherited as provenance only and cannot define new strip rectangles
+- charge is integrated over each absolute strip rectangle; gaps/outside charge is unassigned
+- readout need not be centered or contained in the active area
 
 Outputs:
 - `SIMULATION_OUTPUTS/INTERSTEPS/STEP_4_TO_5/SIM_RUN_*/step_4.(pkl|csv|chunks)`
 
 Core columns:
-- `Y_mea_i_sj`, `X_mea_i_sj`, `T_sum_meas_i_sj`, `tt_hit`
+- `Y_mea_i_sj`, `X_mea_i_sj`, `T_sum_meas_i_sj`, readout fraction diagnostics, `tt_hit`
 
 Failure modes:
 - missing required avalanche fields (plane skipped)
+- invalid, incomplete, overlapping, or inconsistent readout geometry
 
 ## STEP_5
 Purpose:

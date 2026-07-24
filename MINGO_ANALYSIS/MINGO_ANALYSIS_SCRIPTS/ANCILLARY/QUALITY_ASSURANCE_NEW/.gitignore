@@ -1,0 +1,9 @@
+.ATTIC/
+LOGS/
+PROBLEMATIC_BASENAMES/
+TOTAL_SUMMARY/
+__pycache__/
+qa_core/__pycache__/
+tests/__pycache__/
+STEPS/*/OUTPUTS/
+STEPS/*/TASK_*/

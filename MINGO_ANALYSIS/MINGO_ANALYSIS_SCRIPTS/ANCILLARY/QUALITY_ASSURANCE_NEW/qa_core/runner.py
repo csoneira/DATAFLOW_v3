@@ -543,7 +543,6 @@ def _plot_columns_group(
     nrows_eff, ncols_eff = _plot_grid_shape(len(columns), ncols=ncols, nrows=nrows)
     dpi = int(plot_defaults.get("dpi", 150))
     marker_size = float(plot_defaults.get("marker_size", 2.0))
-    line_width = float(plot_defaults.get("line_width", 0.9))
     image_format = str(plot_defaults.get("format", "png")).strip().lower() or "png"
     fig_width = float(plot_defaults.get("figsize_per_col", 4.2)) * ncols_eff
     fig_height = float(plot_defaults.get("figsize_per_row", 2.8)) * max(nrows_eff, 1)
@@ -561,7 +560,7 @@ def _plot_columns_group(
         ax = axes_flat[idx]
         y = pd.to_numeric(df[col], errors="coerce")
         if y.notna().any():
-            ax.plot(x_values, y, linestyle="-", linewidth=line_width, marker="o", markersize=marker_size)
+            ax.scatter(x_values, y, s=marker_size**2)
         else:
             ax.text(0.5, 0.5, "no data", ha="center", va="center", color="gray", fontsize=9)
         ax.set_title(col, fontsize=8)
@@ -608,7 +607,6 @@ def _plot_overlay_group(
     nrows_eff, ncols_eff = _plot_grid_shape(len(panels), ncols=ncols, nrows=nrows)
     dpi = int(plot_defaults.get("dpi", 150))
     marker_size = float(plot_defaults.get("marker_size", 2.0))
-    line_width = float(plot_defaults.get("line_width", 0.9))
     image_format = str(plot_defaults.get("format", "png")).strip().lower() or "png"
     fig_width = float(plot_defaults.get("figsize_per_col", 4.2)) * ncols_eff
     fig_height = float(plot_defaults.get("figsize_per_row", 2.8)) * max(nrows_eff, 1)
@@ -634,13 +632,10 @@ def _plot_overlay_group(
                 continue
             y = pd.to_numeric(df[col], errors="coerce")
             if y.notna().any():
-                ax.plot(
+                ax.scatter(
                     x_values,
                     y,
-                    linestyle="-",
-                    linewidth=line_width,
-                    marker="o",
-                    markersize=marker_size,
+                    s=marker_size**2,
                     label=label,
                 )
                 has_data = True

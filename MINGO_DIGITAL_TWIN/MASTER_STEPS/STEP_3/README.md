@@ -27,3 +27,5 @@ python3 step_3_crossing_to_hit.py --config config_step_3_physics.yaml --plot-onl
 Notes:
 - `efficiencies` can be a 4-value list, list of lists, or `random` from `param_mesh.csv`.
 - The step skips if the target SIM_RUN exists unless `--force` is provided.
+- Avalanche positions are copied only from valid STEP 2 active-area crossings.
+- STEP 3 does not inspect readout geometry, expand avalanche acceptance, or clip coordinates to strips.

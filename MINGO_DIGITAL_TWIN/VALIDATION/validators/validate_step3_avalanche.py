@@ -37,19 +37,23 @@ def _eff_status(delta: float, sigma: float) -> tuple[str, float]:
     return "FAIL", float(zscore)
 
 
-def _as_plane_values(value: object, *, cast: type = float) -> np.ndarray | None:
-    """Normalize scalar or 4-vector config values to per-plane arrays."""
-    if isinstance(value, (int, float, np.integer, np.floating)):
-        try:
-            parsed = cast(value)
-        except (TypeError, ValueError):
-            return None
-        return np.full(4, parsed, dtype=float)
-    if isinstance(value, list) and len(value) == 4:
-        try:
-            return np.asarray([cast(v) for v in value], dtype=float)
-        except (TypeError, ValueError):
-            return None
+
+def _active_area_from_metadata(metadata: object) -> dict[str, object] | None:
+    """Find normalized or legacy active-area coordinates through metadata lineage."""
+    cursor = metadata
+    while isinstance(cursor, dict):
+        direct = cursor.get("active_area_bounds_mm")
+        if isinstance(direct, dict):
+            return direct
+        config = cursor.get("config")
+        if isinstance(config, dict):
+            explicit = config.get("active_area_bounds_mm")
+            if isinstance(explicit, dict):
+                return explicit
+            legacy = config.get("bounds_mm")
+            if isinstance(legacy, dict):
+                return legacy
+        cursor = cursor.get("upstream")
     return None
 
 
@@ -233,21 +237,24 @@ def run(
         status="PASS" if neg_size == 0 else "FAIL",
     )
 
-    # Avalanche XY bounds from strip geometry hints when available.
-    n_strips = _as_plane_values(cfg.get("n_strips"), cast=int)
-    strip_width_mm = _as_plane_values(cfg.get("strip_width_mm"), cast=float)
-    if n_strips is not None and strip_width_mm is not None and np.all(n_strips > 0) and np.all(strip_width_mm > 0):
+    # Avalanche positions are inherited from valid Step 2 active-area crossings.
+    active_area = _active_area_from_metadata(art.metadata)
+    if active_area is not None:
+        x_min = float(active_area.get("x_min", -np.inf))
+        x_max = float(active_area.get("x_max", np.inf))
+        y_min = float(active_area.get("y_min", -np.inf))
+        y_max = float(active_area.get("y_max", np.inf))
         out_of_bounds = 0
         for i in range(1, 5):
             x_col = f"avalanche_x_{i}"
             y_col = f"avalanche_y_{i}"
             if x_col not in df.columns or y_col not in df.columns:
                 continue
-            half_span = 0.5 * float(n_strips[i - 1] * strip_width_mm[i - 1])
             xv = pd.to_numeric(df[x_col], errors="coerce").to_numpy(dtype=float)
             yv = pd.to_numeric(df[y_col], errors="coerce").to_numpy(dtype=float)
-            out_of_bounds += int(np.count_nonzero(np.isfinite(xv) & (np.abs(xv) > half_span)))
-            out_of_bounds += int(np.count_nonzero(np.isfinite(yv) & (np.abs(yv) > half_span)))
+            finite = np.isfinite(xv) & np.isfinite(yv)
+            out_of_bounds += int(np.count_nonzero(finite & ((xv < x_min) | (xv > x_max))))
+            out_of_bounds += int(np.count_nonzero(finite & ((yv < y_min) | (yv > y_max))))
 
         rb.add(
             test_id="step3_avalanche_xy_bounds",
@@ -258,7 +265,7 @@ def run(
             threshold_low=0,
             threshold_high=0,
             status="PASS" if out_of_bounds == 0 else "FAIL",
-            notes="bounds=abs(coord) <= 0.5 * n_strips * strip_width_mm",
+            notes=f"x=[{x_min}, {x_max}], y=[{y_min}, {y_max}]",
         )
     else:
         rb.add(
@@ -267,7 +274,7 @@ def run(
             metric_name="status",
             metric_value=np.nan,
             status="SKIP",
-            notes="n_strips and strip_width_mm not available in STEP 3 config",
+            notes="active_area_bounds_mm/bounds_mm not found in metadata lineage",
         )
 
     # Efficiency closure per plane.

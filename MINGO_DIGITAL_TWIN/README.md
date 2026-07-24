@@ -9,6 +9,7 @@ records configuration, upstream lineage, and sim-run identities.
 
 Key design goals:
 - Deterministic step boundaries between physics, readout, and electronics domains.
+- Independent active-gas acceptance (STEP 2/3) and per-plane strip collection geometry (STEP 4), including inactive gaps.
 - Explicit parameter mesh for scanning geometry/efficiency/flux configurations.
 - Per-step artifacts (.pkl/.csv or chunked manifests) with metadata and sim-run registry tracking.
 
@@ -22,7 +23,7 @@ Physical vs electronics domains are split explicitly by step:
 
 Boundary markers (first appearance of each effect):
 - Detector response begins at STEP 3.
-- Readout coupling begins at STEP 4.
+- Readout coupling begins at STEP 4; it does not alter active-volume avalanche production.
 - Electronics effects begin at STEP 8.
 - Trigger-based event definition begins at STEP 9.
 - Digitization artifacts begin at STEP 10.

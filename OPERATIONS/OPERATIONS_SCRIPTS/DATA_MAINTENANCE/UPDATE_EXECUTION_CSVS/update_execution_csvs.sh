@@ -2,15 +2,11 @@
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
 # Script: OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/UPDATE_EXECUTION_CSVS/update_execution_csvs.sh
-# Purpose: Update execution csvs.
+# Purpose: Compatibility wrapper for lake-authoritative processed-basename lists.
 # Owner: DATAFLOW_v3 contributors
 # Sign-off: csoneira <csoneira@ucm.es>
-# Last Updated: 2026-03-02
 # Runtime: bash
-# Usage: bash OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/UPDATE_EXECUTION_CSVS/update_execution_csvs.sh [options]
-# Inputs: CLI args, config files, environment variables, and/or upstream files.
-# Outputs: Files, logs, or process-level side effects.
-# Notes: Keep behavior configuration-driven and reproducible.
+# Usage: update_execution_csvs.sh [--not-erase] [STATION ...]
 # =============================================================================
 
 set -euo pipefail
@@ -21,201 +17,52 @@ log() {
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-OUTPUT_ROOT="$SCRIPT_DIR/OUTPUT_FILES"
-mkdir -p "$OUTPUT_ROOT"
+declare -a STATIONS=()
 
-to_epoch() {
-  local value="$1"
-  if [[ -z "$value" ]]; then
-    echo 0
-    return
-  fi
-  if ! date -d "$value" '+%s' >/dev/null 2>&1; then
-    echo 0
-    return
-  fi
-  date -d "$value" '+%s'
-}
-
-NOT_ERASE=false
-declare -a POSITIONAL_ARGS=()
 while (( $# > 0 )); do
   case "$1" in
     --not-erase)
-      NOT_ERASE=true
+      # Retained for callers of the former interface. The wrapper never erases
+      # acquisition metadata, regardless of this flag.
       shift
       ;;
     -h|--help)
-      cat <<'EOF'
+      cat <<'HELP'
 Usage: update_execution_csvs.sh [--not-erase] [STATION ...]
 
-Without arguments processes stations 01–04. Provide numeric station IDs (1-4)
-to restrict execution. With --not-erase the script only recreates the processed
-basenames CSV under OUTPUT_FILES and leaves the pipeline CSVs untouched.
-EOF
+Deprecated compatibility wrapper. It refreshes MINGOxx_processed_basenames.csv
+from valid Parquet Lake archives through FILE_FLOW_TRACKER. It never derives
+completion from Stage 2 and never rewrites Stage 0 acquisition metadata.
+HELP
       exit 0
       ;;
     --)
       shift
-      break
+      while (( $# > 0 )); do STATIONS+=("$1"); shift; done
       ;;
-    -*)
+    -* )
       log "Unknown option: $1"
       exit 1
       ;;
     *)
-      POSITIONAL_ARGS+=("$1")
+      STATIONS+=("$1")
       shift
       ;;
   esac
 done
 
-if (( $# > 0 )); then
-  POSITIONAL_ARGS+=("$@")
+if (( ${#STATIONS[@]} == 0 )); then
+  STATIONS=(1 2 3 4)
 fi
 
-if (( ${#POSITIONAL_ARGS[@]} > 0 )); then
-  set -- "${POSITIONAL_ARGS[@]}"
-else
-  set --
-fi
-
-declare -a TARGET_STATIONS=()
-declare -A SEEN_STATIONS=()
-if (( $# == 0 )); then
-  TARGET_STATIONS=("01" "02" "03" "04")
-  for code in "${TARGET_STATIONS[@]}"; do
-    SEEN_STATIONS[$code]=1
-  done
-else
-  for arg in "$@"; do
-    if [[ ! "$arg" =~ ^[0-9]+$ ]]; then
-      log "Invalid station identifier: $arg"
-      exit 1
-    fi
-    arg=$((10#$arg))
-    if (( arg < 1 || arg > 4 )); then
-      log "Station identifier must be between 1 and 4 (got $arg)"
-      exit 1
-    fi
-    code="$(printf '%02d' "$arg")"
-    if [[ -n ${SEEN_STATIONS[$code]:-} ]]; then
-      continue
-    fi
-    SEEN_STATIONS[$code]=1
-    TARGET_STATIONS+=("$code")
-  done
-fi
-
-process_station() {
-  local station_code="$1"
-  local station="MINGO${station_code}"
-  local task_output="$REPO_ROOT/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/${station}/STAGE_2/EVENT_DATA/STEP_2_DAILY_EVENT_DATA/TASK_2/OUTPUT_FILES"
-  local processed_csv="$OUTPUT_ROOT/${station}_processed_basenames.csv"
-  local hld_csv="$REPO_ROOT/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/${station}/STAGE_0/REPROCESSING/STEP_1/METADATA/hld_files_brought.csv"
-  local dat_csv="$REPO_ROOT/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/${station}/STAGE_0/REPROCESSING/STEP_2/METADATA/dat_files_unpacked.csv"
-
-  if [[ ! -d "$task_output" ]]; then
-    log "[${station}] Task 2 output directory not found: $task_output (skipping)"
-    return
+for station in "${STATIONS[@]}"; do
+  if [[ ! "$station" =~ ^[0-9]+$ ]] || (( 10#$station < 0 || 10#$station > 4 )); then
+    log "Station identifier must be between 0 and 4 (got $station)"
+    exit 1
   fi
-
-  mkdir -p "$(dirname "$hld_csv")" "$(dirname "$dat_csv")"
-
-  local -A BASENAME_TS=()
-  local -A BASENAME_SRC=()
-
-  while IFS= read -r -d '' csv_file; do
-    local source_line exec_line basenames_raw exec_raw
-    local -a basenames=()
-    local -a exec_values=()
-    source_line=$(grep -m1 '^# *source_basenames=' "$csv_file" || true)
-    exec_line=$(grep -m1 '^# *execution_date=' "$csv_file" || true)
-    [[ -z "$source_line" ]] && continue
-
-    basenames_raw=${source_line#*=}
-    basenames_raw=${basenames_raw//[$'\r\n']/}
-    IFS=',' read -r -a basenames <<< "$basenames_raw"
-    if (( ${#basenames[@]} == 0 )); then
-      continue
-    fi
-
-    if [[ -n "$exec_line" ]]; then
-      exec_raw=${exec_line#*=}
-      exec_raw=${exec_raw//[$'\r\n']/}
-      IFS=',' read -r -a exec_values <<< "$exec_raw"
-    fi
-    local exec_count=${#exec_values[@]}
-    local file_timestamp
-    file_timestamp=$(date -d "@$(stat -c %Y "$csv_file")" '+%Y-%m-%d %H:%M:%S')
-
-    for idx in "${!basenames[@]}"; do
-      local base ts map_index candidate existing_ts existing_epoch new_epoch
-      base=$(echo "${basenames[$idx]}" | tr -d '[:space:]')
-      [[ -z "$base" ]] && continue
-      ts="$file_timestamp"
-      if (( exec_count > 0 )); then
-        map_index=$idx
-        if (( map_index >= exec_count )); then
-          map_index=$((exec_count - 1))
-        fi
-        candidate=$(echo "${exec_values[$map_index]}" | sed 's/^ *//;s/ *$//')
-        [[ -n "$candidate" ]] && ts="$candidate"
-      fi
-      existing_ts="${BASENAME_TS[$base]:-}"
-      if [[ -z "$existing_ts" ]]; then
-        BASENAME_TS[$base]="$ts"
-        BASENAME_SRC[$base]="$csv_file"
-        continue
-      fi
-      existing_epoch=$(to_epoch "$existing_ts")
-      new_epoch=$(to_epoch "$ts")
-      if (( new_epoch != 0 && (existing_epoch == 0 || new_epoch < existing_epoch) )); then
-        BASENAME_TS[$base]="$ts"
-        BASENAME_SRC[$base]="$csv_file"
-      fi
-    done
-done < <(find "$task_output" -type f -name '*.csv' -print0 | sort -z)
-
-  if (( ${#BASENAME_TS[@]} == 0 )); then
-    log "[${station}] No basenames discovered under $task_output"
-    return
-  fi
-
-  local sorted_basenames
-  sorted_basenames=$(printf '%s\n' "${!BASENAME_TS[@]}" | sort)
-
-  {
-    echo "basename,execution_timestamp,source_csv"
-    while IFS= read -r base; do
-      printf '%s,%s,%s\n' "$base" "${BASENAME_TS[$base]}" "${BASENAME_SRC[$base]}"
-    done <<< "$sorted_basenames"
-  } > "$processed_csv"
-  log "[${station}] Processed metadata saved to $processed_csv"
-
-  if $NOT_ERASE; then
-    log "[${station}] --not-erase enabled, skipping pipeline CSV rewrites"
-    return
-  fi
-
-  log "[${station}] Refreshing $hld_csv and $dat_csv with discovered basenames"
-  {
-    echo "hld_name,bring_timesamp"
-    while IFS= read -r base; do
-      printf '%s,%s\n' "$base" "${BASENAME_TS[$base]}"
-    done <<< "$sorted_basenames"
-  } > "$hld_csv"
-
-  {
-    echo "dat_name,execution_timestamp,execution_duration_s"
-    while IFS= read -r base; do
-      printf '%s,%s,0\n' "$base" "${BASENAME_TS[$base]}"
-    done <<< "$sorted_basenames"
-  } > "$dat_csv"
-
-  log "[${station}] Execution CSVs updated based on processed basenames"
-}
-
-for code in "${TARGET_STATIONS[@]}"; do
-  process_station "$code"
 done
+
+log "DEPRECATED: delegating to the Parquet-Lake-authoritative FILE_FLOW_TRACKER"
+exec /usr/bin/env python3 \
+  "$REPO_ROOT/OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/FILE_FLOW_TRACKER/file_flow_tracker.py" \
+  --processed-lists-only --stations "${STATIONS[@]}"

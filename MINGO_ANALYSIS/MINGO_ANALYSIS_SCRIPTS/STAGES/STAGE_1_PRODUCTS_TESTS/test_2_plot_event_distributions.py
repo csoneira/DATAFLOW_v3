@@ -20,6 +20,11 @@ import pyarrow.parquet as pq
 import yaml
 
 from calibration_context import generate_calibration_context
+from mingo00_product_selection import (
+    Mingo00Selection,
+    select_mingo00_products,
+    validate_close_parameters,
+)
 
 ANALYSIS_ROOT = Path(__file__).resolve().parents[3]
 STATIONS_ROOT = ANALYSIS_ROOT / "MINGO_ANALYSIS_STATIONS"
@@ -102,15 +107,36 @@ def configuration(path: Path) -> dict[str, Any]:
         config = yaml.safe_load(handle) or {}
     if not isinstance(config, dict):
         raise ValueError("Config root must be a YAML mapping")
-    missing = [key for key in ("station", "start_date", "end_date", "max_datafiles") if key not in config]
+    missing = [key for key in ("station", "max_datafiles") if key not in config]
     if missing:
         raise ValueError("Missing config fields: " + ", ".join(missing))
-    start = boundary(config["start_date"], is_end=False)
-    end = boundary(config["end_date"], is_end=True)
+    resolved_station = station_name(config["station"])
+    if resolved_station == "MINGO00":
+        close_parameters = validate_close_parameters(config.get("mingo00_close_parameters"))
+        # MINGO00 acquisition dates are synthetic and must not restrict candidates.
+        start = datetime(2000, 1, 1)
+        end = datetime(2100, 1, 1) - timedelta(microseconds=1)
+    else:
+        date_missing = [key for key in ("start_date", "end_date") if key not in config]
+        if date_missing:
+            raise ValueError("Missing config fields: " + ", ".join(date_missing))
+        start = boundary(config["start_date"], is_end=False)
+        end = boundary(config["end_date"], is_end=True)
+        close_parameters = (
+            validate_close_parameters(config["mingo00_close_parameters"])
+            if "mingo00_close_parameters" in config
+            else ()
+        )
     maximum = int(config["max_datafiles"])
     if start > end or maximum < 1:
         raise ValueError("Require start_date <= end_date and max_datafiles >= 1")
-    config.update(station_name=station_name(config["station"]), start=start, end=end, maximum=maximum)
+    config.update(
+        station_name=resolved_station,
+        start=start,
+        end=end,
+        maximum=maximum,
+        close_parameters=close_parameters,
+    )
     return config
 
 def discover(lake: Path, start: datetime, end: datetime) -> list[Product]:
@@ -791,14 +817,40 @@ def main() -> int:
     config = configuration(arguments().config)
     root = STATIONS_ROOT / config["station_name"]
     lake = root / "STAGE_1_PRODUCTS" / "EVENT_DATA" / "PARQUET_LAKE"
-    candidates = discover(lake, config["start"], config["end"])
-    files = tightest_block(candidates, config["maximum"])
+    simulation_selection: Mingo00Selection | None = None
+    if config["station_name"] == "MINGO00":
+        simulation_selection = select_mingo00_products(
+            lake,
+            config["maximum"],
+            config["close_parameters"],
+            product_factory=Product,
+            parquet_basename=parquet_basename,
+            acquisition_time=acquisition_time,
+        )
+        files = simulation_selection.products
+        print(
+            f"Found {simulation_selection.candidate_count} MINGO00 products with simulation "
+            f"metadata; selected tightest parameter cluster of {len(files)} using: "
+            + ", ".join(simulation_selection.close_parameters)
+        )
+        print(f"Parameter-cluster center: {simulation_selection.center_basename}")
+        for index, product in enumerate(files, 1):
+            param_id = simulation_selection.param_set_id_by_basename[product.basename]
+            distance = simulation_selection.distance_by_basename[product.basename]
+            values = simulation_selection.values_by_basename[product.basename]
+            print(
+                f"  {index}. param_set_id={param_id} distance={distance:.6g} "
+                f"{product.basename}  {values}"
+            )
+    else:
+        candidates = discover(lake, config["start"], config["end"])
+        files = tightest_block(candidates, config["maximum"])
+        print(f"Found {len(candidates)} files in range; selected tightest consecutive block of {len(files)}:")
+        for index, product in enumerate(files, 1):
+            print(f"  {index}. {product.acquired}  {product.basename}")
+        if len(files) > 1:
+            print(f"Acquisition-start span: {files[-1].acquired - files[0].acquired}")
     available, types = schemas(files)
-    print(f"Found {len(candidates)} files in range; selected tightest consecutive block of {len(files)}:")
-    for index, product in enumerate(files, 1):
-        print(f"  {index}. {product.acquired}  {product.basename}")
-    if len(files) > 1:
-        print(f"Acquisition-start span: {files[-1].acquired - files[0].acquired}")
     show_columns(available, types)
 
     hist_names = histogram_columns(config, available)
@@ -872,7 +924,14 @@ def main() -> int:
     if bins < 1 or point_limit < 1:
         raise ValueError("Histogram bins and scatter point limit must be positive")
     quantiles = quantile_setting(config)
-    interval = "{}_{}".format(config["start"].strftime("%Y%m%d_%H%M%S"), config["end"].strftime("%Y%m%d_%H%M%S"))
+    interval = (
+        "PARAMETER_CLOSE"
+        if simulation_selection is not None
+        else "{}_{}".format(
+            config["start"].strftime("%Y%m%d_%H%M%S"),
+            config["end"].strftime("%Y%m%d_%H%M%S"),
+        )
+    )
     group = f"{files[0].basename}_{files[-1].basename}"
     output = root / "STAGE_1_PRODUCTS_TESTS" / OUTPUT_NAME / f"{interval}_{group}"
     hist_dir, scatter_dir = output / "HISTOGRAMS", output / "SCATTERS"
@@ -887,16 +946,30 @@ def main() -> int:
     manifest = pd.DataFrame([
         {"selection_order": index, "station": config["station_name"],
          "filename_base": item.basename, "acquisition_datetime": item.acquired,
-         "rows": pq.ParquetFile(item.path).metadata.num_rows, "path": str(item.path)}
+         "rows": pq.ParquetFile(item.path).metadata.num_rows, "path": str(item.path),
+         **(
+             simulation_selection.manifest_fields(item.basename)
+             if simulation_selection is not None
+             else {"selection_mode": "chronological_minimum_span"}
+         )}
         for index, item in enumerate(files, 1)
     ])
     manifest_path = output / "selected_files.csv"; manifest.to_csv(manifest_path, index=False)
-    title = (f"{root.name} | {len(files)} consecutive files | "
-             f"{files[0].acquired:%Y-%m-%d %H:%M:%S} to {files[-1].acquired:%Y-%m-%d %H:%M:%S}")
+    if simulation_selection is not None:
+        title = (
+            f"{root.name} | {len(files)} simulation-parameter-close files | "
+            f"center={simulation_selection.center_basename} | "
+            f"parameters={','.join(simulation_selection.close_parameters)}"
+        )
+    else:
+        title = (f"{root.name} | {len(files)} consecutive files | "
+                 f"{files[0].acquired:%Y-%m-%d %H:%M:%S} to {files[-1].acquired:%Y-%m-%d %H:%M:%S}")
+    selected_start = min(product.acquired for product in files)
+    selected_end = max(product.acquired for product in files)
     calibration_paths = generate_calibration_context(
         root,
-        config["start"],
-        config["end"],
+        selected_start if simulation_selection is not None else config["start"],
+        selected_end if simulation_selection is not None else config["end"],
         output / "00_CALIBRATION_CONTEXT",
         title,
         {product.basename for product in files},

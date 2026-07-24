@@ -1,10 +1,40 @@
-# Semifixed
-# X_mea noise tuned from the real-data T_dif edge width.
-# sigma_X ~= 15 mm corresponds to sigma_T ~= 0.075 ns through
-# T_diff = X_mea * (3 / (2 * c_mm_per_ns)).
+# Semifixed electronics/induction physics.
 x_noise_mm: 10.0
 time_sigma_ns: 0.500
-# Width parameter gamma of the isotropic 2D Lorentzian induced-charge cloud.
-# Best current matched-topology tuning from fresh MINGO00 vs MINGO01 comparison.
 lorentzian_gamma_mm: 4.73
 induced_charge_fraction: 0.6
+
+# TEMPORARY readout geometry, not final measured detector dimensions.
+# The 63/98 mm width ordering preserves the former odd/even-plane convention.
+# interstrip_gap_mm is an inactive physical gap, not center-to-center pitch.
+# Replace these coordinates with final measured readout coordinates when supplied.
+readout_geometry_mm:
+  planes:
+    "1":
+      x_min: -150.0
+      x_max: 150.0
+      y_min: -145.0
+      strip_widths_mm: [63.0, 63.0, 63.0, 98.0]
+      interstrip_gap_mm: 1.0
+      y_max: 145.0
+    "2":
+      x_min: -150.0
+      x_max: 150.0
+      y_min: -145.0
+      strip_widths_mm: [98.0, 63.0, 63.0, 63.0]
+      interstrip_gap_mm: 1.0
+      y_max: 145.0
+    "3":
+      x_min: -150.0
+      x_max: 150.0
+      y_min: -145.0
+      strip_widths_mm: [63.0, 63.0, 63.0, 98.0]
+      interstrip_gap_mm: 1.0
+      y_max: 145.0
+    "4":
+      x_min: -150.0
+      x_max: 150.0
+      y_min: -145.0
+      strip_widths_mm: [98.0, 63.0, 63.0, 63.0]
+      interstrip_gap_mm: 1.0
+      y_max: 145.0

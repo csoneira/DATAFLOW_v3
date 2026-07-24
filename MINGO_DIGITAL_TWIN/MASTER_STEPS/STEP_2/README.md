@@ -31,3 +31,7 @@ Notes:
 - `z_positions` can be a 4-value list or `random` (from `param_mesh.csv`).
 - `normalize_to_first_plane` (runtime) shifts z positions so plane 1 is at z = 0.
 - The step skips if the target SIM_RUN exists unless `--force` is provided.
+- `active_area_bounds_mm` is the active gas rectangle and alone controls crossing acceptance.
+- `bounds_mm` remains accepted as a deprecated alias; `active_area_bounds_mm` wins if both exist.
+- The normalized active rectangle and its source are stored in metadata under `active_area_bounds_mm` and `active_area_geometry_source`.
+- Readout-strip dimensions belong only to STEP 4 and never expand or clip this avalanche-production region.

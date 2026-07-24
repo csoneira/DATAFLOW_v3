@@ -1,4 +1,4 @@
-"""Shared highlighted Task-2 calibration context for Stage-1 product tests."""
+"""Lake-backed, latest-execution Task-2 calibration context for product tests."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -17,6 +17,7 @@ from test_1_plot_calibration_offsets import (
     add_calibration_availability_columns,
     select_metadata,
     slewing_power_indices,
+    valid_parquet_lake_basenames,
 )
 
 
@@ -263,8 +264,12 @@ def generate_calibration_context(
     context_start, context_end, context_label = _context_bounds(
         context, selected_basenames, start, end,
     )
+    lake_basenames = valid_parquet_lake_basenames(station_root)
     frame = add_calibration_availability_columns(
-        select_metadata(metadata_path, context_start, context_end)
+        select_metadata(
+            metadata_path, context_start, context_end,
+            allowed_basenames=lake_basenames,
+        )
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     for pattern in ("*.png", "*.csv"):
@@ -293,6 +298,7 @@ def generate_calibration_context(
     written = paths if slewing_written else [*paths[:4], paths[5]]
     print(
         f"Calibration context: {len(frame)} metadata point(s), "
+        f"filtered to {len(lake_basenames)} valid Parquet Lake file(s); "
         f"{len(matched)}/{len(selected)} selected file(s) highlighted; "
         f"window={context_label} ({context_start:%Y-%m-%d %H:%M:%S} to "
         f"{context_end:%Y-%m-%d %H:%M:%S}) -> {output_dir}"

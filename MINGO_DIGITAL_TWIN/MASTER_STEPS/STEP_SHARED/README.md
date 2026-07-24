@@ -8,7 +8,9 @@ Key modules:
   - `save_with_metadata`, `iter_input_frames`, `write_chunked_output`.
   - SIM_RUN registry helpers: `register_sim_run`, `find_sim_run`, `resolve_sim_run`.
   - Parameter mesh helpers: `resolve_param_mesh`, `normalize_param_mesh_ids`.
-  - Geometry helpers: `get_strip_geometry`, `DEFAULT_BOUNDS`.
+  - Geometry model: `RectBounds`, `StripBounds`, `PlaneReadoutGeometry`.
+  - Normalizers: `resolve_active_area_bounds`, `build_readout_geometry`; `get_strip_geometry` is a legacy-compatible array view.
+  - `Y_WIDTHS` and `DEFAULT_BOUNDS` remain compatibility aliases only and are not used by the new Step 4 physics path.
 - `sim_run_summary.py`:
   - Summarizes SIM_RUN registries and row counts across INTERSTEPS.
 

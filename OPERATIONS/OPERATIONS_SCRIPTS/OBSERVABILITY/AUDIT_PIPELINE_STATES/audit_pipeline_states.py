@@ -478,8 +478,8 @@ def station_inventory_entries(station: str) -> List[Dict[str, str]]:
     add_entry(
         "processed_list",
         processed,
-        "Basenames extracted from STAGE_2 EVENT_DATA STEP_2_DAILY_EVENT_DATA/TASK_2 outputs (used as reject list).",
-        "OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/UPDATE_EXECUTION_CSVS/update_execution_csvs.sh",
+        "Basenames backed by valid station Parquet Lake archives (used as reject list).",
+        "OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/FILE_FLOW_TRACKER/file_flow_tracker.py",
         count_csv_rows(processed),
     )
 

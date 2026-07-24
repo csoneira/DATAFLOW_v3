@@ -18,6 +18,7 @@ from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.ANCILLARY.QUALITY_ASSURANCE_NEW.qa_co
     _generate_station_plots,
     _write_step_outputs,
 )
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.ANCILLARY.QUALITY_ASSURANCE_NEW.orchestrate_quality_assurance import rotate_previous_outputs  # noqa: E402
 
 
 class RunnerTests(unittest.TestCase):
@@ -268,8 +269,37 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(axes[1].get_title(), "other")
             self.assertTrue(axes[0].get_shared_y_axes().joined(axes[0], axes[1]))
             self.assertEqual(tuple(round(value, 5) for value in axes[0].get_ylim()), (0.0, 20.0))
-            self.assertEqual(len(axes[0].lines), 2)
-            self.assertEqual(len(axes[1].lines), 2)
+            self.assertEqual(len(axes[0].lines), 0)
+            self.assertEqual(len(axes[1].lines), 0)
+            self.assertEqual(len(axes[0].collections), 2)
+            self.assertEqual(len(axes[1].collections), 2)
+
+
+class OutputRotationTests(unittest.TestCase):
+    def test_plot_rotation_keeps_exactly_one_previous_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            qa_root = Path(temporary_directory)
+            step_outputs = qa_root / "STEPS" / "STEP_1_SAMPLE" / "OUTPUTS"
+            total_outputs = qa_root / "TOTAL_SUMMARY" / "OUTPUTS"
+            (step_outputs / "MINGO01" / "FILES").mkdir(parents=True)
+            (step_outputs / "LAST").mkdir()
+            (step_outputs / "LAST" / "older.csv").write_text("older", encoding="utf-8")
+            (step_outputs / "MINGO01" / "FILES" / "current.csv").write_text("current", encoding="utf-8")
+            (total_outputs / "PLOTS").mkdir(parents=True)
+            (total_outputs / "PLOTS" / "current.png").write_bytes(b"png")
+
+            rotated_dirs, moved_files, _ = rotate_previous_outputs(qa_root)
+
+            self.assertEqual(rotated_dirs, 2)
+            self.assertEqual(moved_files, 2)
+            self.assertFalse((step_outputs / "MINGO01").exists())
+            self.assertFalse((step_outputs / "LAST" / "older.csv").exists())
+            self.assertTrue((step_outputs / "LAST" / "MINGO01" / "FILES" / "current.csv").exists())
+            self.assertTrue((total_outputs / "LAST" / "PLOTS" / "current.png").exists())
+
+            self.assertEqual(rotate_previous_outputs(qa_root), (0, 0, 0))
+            self.assertTrue((step_outputs / "LAST" / "MINGO01" / "FILES" / "current.csv").exists())
+
 
 
 if __name__ == "__main__":

@@ -65,18 +65,23 @@ For each plane `i`:
 - `Y_gen_i = Y_gen + dz_i * tan(theta) * sin(phi)`
 - `T_sum_i_ns = dz_i / (c_mm_per_ns * cos(theta))`
 
-Out-of-bounds crossings are NaN; times are normalized so earliest valid plane per event is zero.
+Only projected points inside `active_area_bounds_mm` are valid. Out-of-active-area crossings are NaN; times are normalized so the earliest valid plane per event is zero.
 
 ### STEP_3: avalanche
 - ionization count: `ions_i ~ Poisson(-ln(1 - eff_i))`
 - avalanche size: `ions_i * exp(alpha * gap_mm) * LogNormal(0, sigma)`
-- avalanche centroid follows crossing coordinates.
+- avalanche centroid follows a valid Step 2 crossing exactly.
+
+A larger or translated readout cannot produce an avalanche outside the active gas area, and avalanche coordinates are not clipped to readout strips.
 
 ### STEP_4: induction and strip coupling
 - avalanche electrons are converted to gap charge in `fC`, then to induced charge with `induced_charge_fraction`.
-- charge sharing uses an isotropic 2D Lorentzian with total area equal to the induced charge.
-- strip charges are the exact Lorentzian rectangle integrals over detector x-bounds and strip y-bands.
-- outputs per-strip charge/time/position observables for hit strips.
+- charge sharing uses an isotropic 2D Lorentzian normalized over the full plane.
+- each strip charge is the exact Lorentzian integral over its configured absolute strip rectangle.
+- charge in inactive inter-strip gaps and outside the readout remains unassigned; strip charges are not renormalized.
+- `readout_assigned_fraction_i`, `readout_gap_fraction_i`, `readout_outside_fraction_i`, and `readout_bounding_fraction_i` expose this partition without redefining an old field.
+
+The active gas area controls where avalanches may be produced. The readout geometry controls where induced charge is collected. The two geometries are independent and may overlap only partially. Neither coordinate system is assumed centered, symmetric, or identical to the other.
 
 ### STEP_5: difference observables
 - `T_diff = X_mea * (3 / (2 * c_mm_per_ns))`
@@ -123,7 +128,7 @@ STEP-specific additions:
 - STEP_1: `X_gen`, `Y_gen`, `Z_gen`, `Theta_gen`, `Phi_gen`
 - STEP_2: `X_gen_i`, `Y_gen_i`, `Z_gen_i`, `T_sum_i_ns`, `tt_crossing`
 - STEP_3: `avalanche_ion_i`, `avalanche_exists_i`, `avalanche_x_i`, `avalanche_y_i`, `avalanche_size_electrons_i`, `tt_avalanche`
-- STEP_4: `Y_mea_i_sj`, `X_mea_i_sj`, `T_sum_meas_i_sj`, `tt_hit`
+- STEP_4: `Y_mea_i_sj`, `X_mea_i_sj`, `T_sum_meas_i_sj`, four readout-fraction diagnostics per plane, `tt_hit`
 - STEP_5: `T_diff_i_sj`, `q_diff_i_sj`
 - STEP_6/7/8/9/10: `T_front_i_sj`, `T_back_i_sj`, `Q_front_i_sj`, `Q_back_i_sj`
 - STEP_9: `tt_trigger`

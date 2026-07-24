@@ -28,6 +28,62 @@ def load_module(name: str, filename: str):
 
 purge = load_module("reprocess_problematic_basenames", "reprocess_problematic_basenames.py")
 problematic = load_module("build_problematic_basename_lists", "build_problematic_basename_lists.py")
+orchestrator = load_module("orchestrate_quality_assurance", "orchestrate_quality_assurance.py")
+
+
+class ProductMetadataPublicationTests(unittest.TestCase):
+    def test_only_latest_rows_with_valid_lake_parquets_are_published(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            station = (
+                root / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / "MINGO01"
+            )
+            source = (
+                station / "STAGE_1" / "EVENT_DATA" / "STEP_1" / "TASK_2"
+                / "METADATA" / "task_2_metadata_calibration.csv"
+            )
+            source.parent.mkdir(parents=True)
+            completed = "mi0126010101010"
+            incomplete = "mi0126010102020"
+            with source.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.writer(handle)
+                writer.writerow(["filename_base", "execution_timestamp", "calibration"])
+                writer.writerow([completed, "2026-01-01_10.00.00", "old"])
+                writer.writerow([incomplete, "2026-01-01_11.00.00", "not-final"])
+                writer.writerow([completed, "2026-01-01_12.00.00", "latest"])
+
+            lake = station / "STAGE_1_PRODUCTS" / "EVENT_DATA" / "PARQUET_LAKE"
+            lake.mkdir(parents=True)
+            (lake / f"postprocessed_{completed}.parquet").write_bytes(b"PAR1payloadPAR1")
+            (lake / f"postprocessed_{incomplete}.parquet").write_bytes(b"incomplete")
+
+            orchestrator._publish_stage1_product_metadata(
+                root, {"stations": [1]}, None
+            )
+            product = (
+                station / "STAGE_1_PRODUCTS" / "EVENT_DATA" / "METADATA"
+                / "TASK_2" / source.name
+            )
+            with product.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.reader(handle))
+            self.assertEqual(
+                rows,
+                [
+                    ["filename_base", "execution_timestamp", "calibration"],
+                    [completed, "2026-01-01_12.00.00", "latest"],
+                ],
+            )
+
+            # Removing the final archive removes the row on the next snapshot.
+            (lake / f"postprocessed_{completed}.parquet").unlink()
+            orchestrator._publish_stage1_product_metadata(
+                root, {"stations": [1]}, None
+            )
+            with product.open(newline="", encoding="utf-8") as handle:
+                self.assertEqual(
+                    list(csv.reader(handle)),
+                    [["filename_base", "execution_timestamp", "calibration"]],
+                )
 
 
 class PurgeTaskChainTests(unittest.TestCase):

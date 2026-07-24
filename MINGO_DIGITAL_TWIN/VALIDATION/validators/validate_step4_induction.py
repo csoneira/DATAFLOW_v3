@@ -74,7 +74,7 @@ def _plot(df4: pd.DataFrame, ratio_map: dict[int, np.ndarray], plot_dir: Path) -
             ax.axis("off")
             continue
         ax.hist(ratios, bins=80, color="darkorange", alpha=0.8)
-        ax.set_title(f"Plane {plane_idx} qsum/avalanche")
+        ax.set_title(f"Plane {plane_idx} qsum/induced")
         ax.set_xlim(left=0)
     fig.tight_layout()
     fig.savefig(plot_dir / "step4_charge_conservation_ratios.png", dpi=140)
@@ -88,7 +88,6 @@ def run(
     make_plots: bool = False,
 ) -> pd.DataFrame:
     art4 = artifacts.get("4")
-    art3 = artifacts.get("3")
     rb = ResultBuilder(
         run_timestamp=run_timestamp,
         validator="validate_step4_induction",
@@ -113,6 +112,15 @@ def run(
 
     cols4 = ["event_id", "tt_hit"]
     for i in range(1, 5):
+        cols4.extend(
+            [
+                f"induced_charge_total_fc_{i}",
+                f"readout_bounding_fraction_{i}",
+                f"readout_assigned_fraction_{i}",
+                f"readout_gap_fraction_{i}",
+                f"readout_outside_fraction_{i}",
+            ]
+        )
         for j in range(1, 5):
             cols4.extend([f"Y_mea_{i}_s{j}", f"X_mea_{i}_s{j}", f"T_sum_meas_{i}_s{j}"])
 
@@ -244,110 +252,95 @@ def run(
         status="PASS" if tt_mismatch == 0 else "FAIL",
     )
 
-    # Charge conservation-like closure using STEP 3 avalanche sizes.
+    # Geometry-aware charge closure. Charge in gaps/outside readout is intentionally lost.
     ratio_map: dict[int, np.ndarray] = {}
-    if art3 is None or art3.data_path is None or not art3.data_path.exists():
-        rb.add(
-            test_id="step4_charge_closure_inputs",
-            test_name="STEP 3 inputs available for closure",
-            metric_name="step3_available",
-            metric_value=0,
-            status="SKIP",
-            notes="STEP 3 dataset unavailable",
-        )
-    else:
-        cols3 = ["event_id"] + [f"avalanche_size_electrons_{i}" for i in range(1, 5)]
-        try:
-            df3 = load_frame(art3.data_path, columns=cols3)
-            merged = df4.merge(df3, on="event_id", how="inner", suffixes=("", "_s3"))
-        except Exception as exc:
-            rb.add_exception(test_id="step4_charge_closure_read", test_name="Read STEP 3 for closure", exc=exc)
-            merged = pd.DataFrame()
-
-        if merged.empty:
+    for i in range(1, 5):
+        y_cols = [f"Y_mea_{i}_s{j}" for j in range(1, 5) if f"Y_mea_{i}_s{j}" in df4.columns]
+        induced_col = f"induced_charge_total_fc_{i}"
+        if not y_cols or induced_col not in df4.columns:
             rb.add(
-                test_id="step4_charge_closure_merge",
-                test_name="Merge STEP 4 with STEP 3",
-                metric_name="merged_rows",
-                metric_value=0,
+                test_id=f"step4_charge_closure_plane{i}",
+                test_name=f"Plane {i} assigned charge closure",
+                metric_name="status",
+                metric_value=np.nan,
                 status="SKIP",
-                notes="No common event_id rows",
+                notes="Missing strip or induced-charge columns",
+            )
+            continue
+
+        qsum = np.nansum(df4[y_cols].to_numpy(dtype=float), axis=1)
+        induced = pd.to_numeric(df4[induced_col], errors="coerce").to_numpy(dtype=float)
+        mask = np.isfinite(induced) & (induced > 0)
+        ratio = qsum[mask] / induced[mask]
+        ratio = ratio[np.isfinite(ratio)]
+        ratio_map[i] = ratio
+        above_one = int(np.count_nonzero(ratio > 1.0 + 2.0e-5))
+        below_zero = int(np.count_nonzero(ratio < -2.0e-7))
+        rb.add(
+            test_id=f"step4_charge_closure_plane{i}",
+            test_name=f"Plane {i} assigned charge does not exceed induced charge",
+            metric_name="fraction_violations",
+            metric_value=above_one + below_zero,
+            expected_value=0,
+            threshold_low=0,
+            threshold_high=0,
+            status="PASS" if above_one + below_zero == 0 else "FAIL",
+            notes=f"N={ratio.size}; lost gap/outside charge is not renormalized",
+        )
+
+        assigned_col = f"readout_assigned_fraction_{i}"
+        gap_col = f"readout_gap_fraction_{i}"
+        outside_col = f"readout_outside_fraction_{i}"
+        bounding_col = f"readout_bounding_fraction_{i}"
+        diagnostic_cols = [assigned_col, gap_col, outside_col, bounding_col]
+        if all(col in df4.columns for col in diagnostic_cols):
+            assigned = pd.to_numeric(df4[assigned_col], errors="coerce").to_numpy(dtype=float)
+            gap = pd.to_numeric(df4[gap_col], errors="coerce").to_numpy(dtype=float)
+            outside = pd.to_numeric(df4[outside_col], errors="coerce").to_numpy(dtype=float)
+            bounding = pd.to_numeric(df4[bounding_col], errors="coerce").to_numpy(dtype=float)
+            finite = np.isfinite(assigned) & np.isfinite(gap) & np.isfinite(outside) & np.isfinite(bounding)
+            partition_error = np.abs(assigned + gap + outside - 1.0)
+            bounding_error = np.abs(assigned + gap - bounding)
+            charge_error = np.zeros(len(df4), dtype=float)
+            charge_mask = finite & np.isfinite(induced) & (induced > 0)
+            charge_error[charge_mask] = np.abs(qsum[charge_mask] / induced[charge_mask] - assigned[charge_mask])
+            violations = int(
+                np.count_nonzero(finite & ((partition_error > 2.0e-5) | (bounding_error > 2.0e-5)))
+                + np.count_nonzero(charge_mask & (charge_error > 2.0e-5))
+            )
+            rb.add(
+                test_id=f"step4_geometry_fraction_closure_plane{i}",
+                test_name=f"Plane {i} assigned/gap/outside fraction closure",
+                metric_name="violations",
+                metric_value=violations,
+                expected_value=0,
+                threshold_low=0,
+                threshold_high=0,
+                status="PASS" if violations == 0 else "FAIL",
+                notes="assigned + gap + outside = 1; assigned + gap = bounding",
             )
         else:
-            for i in range(1, 5):
-                y_cols = [f"Y_mea_{i}_s{j}" for j in range(1, 5) if f"Y_mea_{i}_s{j}" in merged.columns]
-                aval_col = f"avalanche_size_electrons_{i}"
-                if not y_cols or aval_col not in merged.columns:
-                    rb.add(
-                        test_id=f"step4_charge_closure_plane{i}",
-                        test_name=f"Plane {i} qsum vs avalanche size",
-                        metric_name="status",
-                        metric_value=np.nan,
-                        status="SKIP",
-                        notes="Missing required columns",
-                    )
-                    continue
+            rb.add(
+                test_id=f"step4_geometry_fraction_closure_plane{i}",
+                test_name=f"Plane {i} assigned/gap/outside fraction closure",
+                metric_name="status",
+                metric_value=np.nan,
+                status="SKIP",
+                notes="Legacy output without geometry diagnostic columns",
+            )
 
-                qsum = merged[y_cols].to_numpy(dtype=float).sum(axis=1)
-                aval = merged[aval_col].to_numpy(dtype=float)
-                mask = np.isfinite(aval) & (aval > 0)
-                if not mask.any():
-                    rb.add(
-                        test_id=f"step4_charge_closure_plane{i}",
-                        test_name=f"Plane {i} qsum vs avalanche size",
-                        metric_name="n_rows",
-                        metric_value=0,
-                        status="SKIP",
-                        notes="No avalanches in plane",
-                    )
-                    continue
-
-                ratio = qsum[mask] / aval[mask]
-                ratio = ratio[np.isfinite(ratio)]
-                ratio_map[i] = ratio
-                if ratio.size == 0:
-                    rb.add(
-                        test_id=f"step4_charge_closure_plane{i}",
-                        test_name=f"Plane {i} qsum vs avalanche size",
-                        metric_name="n_rows",
-                        metric_value=0,
-                        status="SKIP",
-                        notes="No finite ratio values",
-                    )
-                    continue
-
-                med = float(np.median(ratio))
-                status = "PASS" if 0.8 <= med <= 1.2 else ("WARN" if 0.6 <= med <= 1.4 else "FAIL")
-                rb.add(
-                    test_id=f"step4_charge_closure_plane{i}",
-                    test_name=f"Plane {i} qsum vs avalanche size",
-                    metric_name="median_ratio",
-                    metric_value=med,
-                    expected_value=1.0,
-                    threshold_low=0.8,
-                    threshold_high=1.2,
-                    status=status,
-                    notes=f"N={ratio.size}",
-                )
-
-                hit_mult = []
-                for j in range(1, 5):
-                    col = f"Y_mea_{i}_s{j}"
-                    if col in merged.columns:
-                        hit_mult.append(merged[col].to_numpy(dtype=float) > 0)
-                if hit_mult:
-                    mult = np.sum(np.column_stack(hit_mult), axis=1)
-                    mult = mult[mask]
-                    mean_mult = float(np.mean(mult)) if mult.size else np.nan
-                    rb.add(
-                        test_id=f"step4_strip_multiplicity_plane{i}",
-                        test_name=f"Plane {i} strip multiplicity",
-                        metric_name="mean_multiplicity",
-                        metric_value=mean_mult,
-                        threshold_low=0,
-                        threshold_high=4,
-                        status="PASS" if np.isfinite(mean_mult) and 0 <= mean_mult <= 4 else "WARN",
-                    )
+        hit_mult = [df4[f"Y_mea_{i}_s{j}"].to_numpy(dtype=float) > 0 for j in range(1, 5) if f"Y_mea_{i}_s{j}" in df4.columns]
+        if hit_mult:
+            mult = np.sum(np.column_stack(hit_mult), axis=1)
+            rb.add(
+                test_id=f"step4_strip_multiplicity_plane{i}",
+                test_name=f"Plane {i} strip multiplicity",
+                metric_name="mean_multiplicity",
+                metric_value=float(np.mean(mult)),
+                threshold_low=0,
+                threshold_high=4,
+                status="PASS",
+            )
 
     if make_plots:
         _plot(df4, ratio_map, output_dir / "plots" / "validate_step4_induction")

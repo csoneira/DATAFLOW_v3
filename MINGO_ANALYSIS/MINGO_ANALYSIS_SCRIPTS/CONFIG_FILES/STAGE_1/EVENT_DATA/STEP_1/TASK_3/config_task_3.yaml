@@ -13,7 +13,7 @@ complete_reanalysis: false
 stratos_save: false
 # create_plots options: null | debug | usual | essential | all
 # Task 3 plot statuses by alias live in config_plots_task_3.yaml
-create_plots: null
+create_plots: essential
 weighted_by_charge_for_plane_tsum_and_tdif: true
 keep_all_columns_output: false
 joined_analysis_files: 3

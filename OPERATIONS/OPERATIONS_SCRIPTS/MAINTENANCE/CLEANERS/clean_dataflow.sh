@@ -47,7 +47,7 @@ log_detail() {
 usage() {
   cat <<'EOF'
 clean_dataflow.sh
-Unified cleaner for DATAFLOW_v3 artefacts (COMPLETED_DIRECTORY exports, QA-verified intermediates, plot bundles, and Stage-0 buffers).
+Unified cleaner and archive-consistency checker for DATAFLOW_v3 artefacts (COMPLETED_DIRECTORY exports, QA-verified intermediates, plot bundles, and Stage-0 buffers).
 
 Usage:
   clean_dataflow.sh [--force|-f] [--threshold|-t <percent>] [--select|-s <list>] [--compact|-c] [--keep-final] [--kill-lock-holder]
@@ -69,8 +69,13 @@ Options:
                          that the previous cleaner should be stopped.
 
 Emergency fallback:
-  After the selected ordinary cleanups finish, if /home is still at least 90% full,
-  globally prune the oldest station PARQUET_LAKE .parquet files until below 89%.
+  PARQUET_LAKE is persistent under normal operation. Only when /home is above 95%
+  does the emergency policy prune globally oldest parquets, exhausting files outside
+  configured date ranges of interest before considering in-range files, until 95%.
+
+Consistency check:
+  Every invocation compares successful Task-5 metadata records with each station PARQUET_LAKE,
+  checks parquet magic bytes, and atomically updates a detailed CSV report.
 
 Examples:
   clean_dataflow.sh
@@ -96,11 +101,10 @@ SIM_JUNK_BASE="${DATAFLOW_CLEAN_SIM_JUNK_BASE:-$DATAFLOW_PARENT/SIMULATION_DATA_
 PLOTS_KEEP_FRESHEST="${DATAFLOW_CLEAN_PLOTS_KEEP_FRESHEST:-5}"
 KEEP_FINAL_TRIGGER_PCT="${DATAFLOW_CLEAN_KEEP_FINAL_TRIGGER_PCT:-90}"
 KEEP_FINAL_TARGET_PCT="${DATAFLOW_CLEAN_KEEP_FINAL_TARGET_PCT:-60}"
-STEP12_EMERGENCY_TRIGGER_PCT="${DATAFLOW_CLEAN_STEP12_EMERGENCY_TRIGGER_PCT:-90}"
-STEP12_EMERGENCY_TARGET_PCT="${DATAFLOW_CLEAN_STEP12_EMERGENCY_TARGET_PCT:-89}"
-# Optional compatibility override for testing or a deliberately restricted run.
-# When unset, emergency cleanup considers every station PARQUET_LAKE globally.
-STEP12_EMERGENCY_DIR="${DATAFLOW_CLEAN_STEP12_EMERGENCY_DIR:-}"
+ARCHIVE_PRESSURE_TRIGGER_PCT="${DATAFLOW_CLEAN_ARCHIVE_PRESSURE_TRIGGER_PCT:-95}"
+MASTER_CONFIG_ROOT="${DATAFLOW_CLEAN_MASTER_CONFIG_ROOT:-$DATAFLOW_ROOT/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES}"
+ARCHIVE_EMERGENCY_DIR="${DATAFLOW_CLEAN_ARCHIVE_EMERGENCY_DIR:-}"
+PARQUET_LAKE_CONSISTENCY_REPORT="${DATAFLOW_CLEAN_PARQUET_LAKE_REPORT:-$DATAFLOW_ROOT/OPERATIONS/OPERATIONS_RUNTIME/CONSISTENCY/PARQUET_LAKE/parquet_lake_consistency_latest.csv}"
 QA_REPROCESSING_SUMMARY="${DATAFLOW_CLEAN_QA_SUMMARY:-$DATAFLOW_ROOT/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/QUALITY_ASSURANCE_NEW/TOTAL_SUMMARY/OUTPUTS/FILES/qa_all_stations_reprocessing_quality.csv}"
 
 declare -A TYPE_BEFORE=()
@@ -111,8 +115,12 @@ QUEUE_SIDECAR_BEFORE=0
 QUEUE_SIDECAR_AFTER=0
 QUEUE_SIDECAR_FREED=0
 QUEUE_SIDECAR_COUNT=0
-STEP12_EMERGENCY_FREED=0
-STEP12_EMERGENCY_COUNT=0
+PARQUET_LAKE_EXPECTED_COUNT=0
+PARQUET_LAKE_ACTUAL_COUNT=0
+PARQUET_LAKE_MISSING_COUNT=0
+PARQUET_LAKE_ORPHAN_COUNT=0
+PARQUET_LAKE_INVALID_COUNT=0
+PARQUET_LAKE_STRUCTURE_COUNT=0
 
 join_by() {
   local sep="$1"
@@ -251,57 +259,169 @@ prune_final_completed_if_needed() {
   fi
 }
 
-run_step12_emergency_cleanup() {
+check_parquet_lake_consistency() {
+  local report_dir report_tmp checked_at
+  report_dir=$(dirname -- "$PARQUET_LAKE_CONSISTENCY_REPORT")
+  mkdir -p "$report_dir"
+  report_tmp=$(mktemp "$report_dir/.parquet_lake_consistency.XXXXXX")
+  checked_at=$(date -u "+%Y-%m-%dT%H:%M:%SZ")
+  printf 'checked_at_utc,station,filename_base,issue,path\n' >"$report_tmp"
+
+  PARQUET_LAKE_EXPECTED_COUNT=0
+  PARQUET_LAKE_ACTUAL_COUNT=0
+  PARQUET_LAKE_MISSING_COUNT=0
+  PARQUET_LAKE_ORPHAN_COUNT=0
+  PARQUET_LAKE_INVALID_COUNT=0
+  PARQUET_LAKE_STRUCTURE_COUNT=0
+
+  local station_dir station_name lake_dir success_csv file file_name basename magic
+  local csv_basename csv_rest
+  local station_expected station_actual station_missing station_orphan station_invalid
+  for station_dir in "$STATIONS_BASE"/MINGO0[0-9]; do
+    [[ -d "$station_dir" ]] || continue
+    station_name=$(basename -- "$station_dir")
+    lake_dir="$station_dir/STAGE_1_PRODUCTS/EVENT_DATA/PARQUET_LAKE"
+    success_csv="$station_dir/STAGE_1/EVENT_DATA/STEP_1/TASK_5/METADATA/task_5_metadata_specific.csv"
+
+    unset expected_basenames actual_basenames
+    declare -A expected_basenames=()
+    declare -A actual_basenames=()
+    station_expected=0
+    station_actual=0
+    station_missing=0
+    station_orphan=0
+    station_invalid=0
+
+    if [[ -s "$success_csv" ]]; then
+      while IFS=, read -r csv_basename csv_rest; do
+        [[ "$csv_basename" =~ ^mi0[0-9][0-9]{11}$ ]] || continue
+        if [[ -z ${expected_basenames["$csv_basename"]:-} ]]; then
+          expected_basenames["$csv_basename"]=1
+          station_expected=$((station_expected + 1))
+        fi
+      done <"$success_csv"
+    else
+      PARQUET_LAKE_STRUCTURE_COUNT=$((PARQUET_LAKE_STRUCTURE_COUNT + 1))
+      log_warn "Task-5 successful-output metadata missing or empty for $station_name: $success_csv"
+      printf '%s,%s,,task5_success_metadata_missing,%s\n' \
+        "$checked_at" "$station_name" "$success_csv" >>"$report_tmp"
+    fi
+
+    if [[ ! -d "$lake_dir" ]]; then
+      PARQUET_LAKE_STRUCTURE_COUNT=$((PARQUET_LAKE_STRUCTURE_COUNT + 1))
+      log_warn "PARQUET_LAKE missing for $station_name: $lake_dir"
+      printf '%s,%s,,parquet_lake_missing,%s\n' \
+        "$checked_at" "$station_name" "$lake_dir" >>"$report_tmp"
+    else
+      for file in "$lake_dir"/postprocessed_*.parquet; do
+        [[ -f "$file" ]] || continue
+        file_name=$(basename -- "$file")
+        if [[ "$file_name" =~ ^postprocessed_(mi0[0-9][0-9]{11})[.]parquet$ ]]; then
+          basename="${BASH_REMATCH[1]}"
+          if [[ -z ${actual_basenames["$basename"]:-} ]]; then
+            actual_basenames["$basename"]=1
+            station_actual=$((station_actual + 1))
+          fi
+          magic="$(head -c 4 -- "$file" 2>/dev/null || true)$(tail -c 4 -- "$file" 2>/dev/null || true)"
+          if [[ "$magic" != "PAR1PAR1" ]]; then
+            station_invalid=$((station_invalid + 1))
+            printf '%s,%s,%s,invalid_parquet_magic,%s\n' \
+              "$checked_at" "$station_name" "$basename" "$file" >>"$report_tmp"
+          fi
+        else
+          station_orphan=$((station_orphan + 1))
+          printf '%s,%s,,unexpected_parquet_filename,%s\n' \
+            "$checked_at" "$station_name" "$file" >>"$report_tmp"
+        fi
+      done
+    fi
+
+    for basename in "${!expected_basenames[@]}"; do
+      if [[ -z ${actual_basenames["$basename"]:-} ]]; then
+        station_missing=$((station_missing + 1))
+        printf '%s,%s,%s,successful_task5_missing_from_lake,%s\n' \
+          "$checked_at" "$station_name" "$basename" \
+          "$lake_dir/postprocessed_${basename}.parquet" >>"$report_tmp"
+      fi
+    done
+    for basename in "${!actual_basenames[@]}"; do
+      if [[ -z ${expected_basenames["$basename"]:-} ]]; then
+        station_orphan=$((station_orphan + 1))
+        printf '%s,%s,%s,archive_without_successful_task5_metadata,%s\n' \
+          "$checked_at" "$station_name" "$basename" \
+          "$lake_dir/postprocessed_${basename}.parquet" >>"$report_tmp"
+      fi
+    done
+
+    PARQUET_LAKE_EXPECTED_COUNT=$((PARQUET_LAKE_EXPECTED_COUNT + station_expected))
+    PARQUET_LAKE_ACTUAL_COUNT=$((PARQUET_LAKE_ACTUAL_COUNT + station_actual))
+    PARQUET_LAKE_MISSING_COUNT=$((PARQUET_LAKE_MISSING_COUNT + station_missing))
+    PARQUET_LAKE_ORPHAN_COUNT=$((PARQUET_LAKE_ORPHAN_COUNT + station_orphan))
+    PARQUET_LAKE_INVALID_COUNT=$((PARQUET_LAKE_INVALID_COUNT + station_invalid))
+    log_info "PARQUET_LAKE $station_name: expected=$station_expected actual=$station_actual missing=$station_missing untracked=$station_orphan invalid=$station_invalid"
+  done
+
+  mv -f -- "$report_tmp" "$PARQUET_LAKE_CONSISTENCY_REPORT"
+  log_info "PARQUET_LAKE consistency report: $PARQUET_LAKE_CONSISTENCY_REPORT"
+  if (( PARQUET_LAKE_MISSING_COUNT > 0 || PARQUET_LAKE_ORPHAN_COUNT > 0 || PARQUET_LAKE_INVALID_COUNT > 0 || PARQUET_LAKE_STRUCTURE_COUNT > 0 )); then
+    log_warn "PARQUET_LAKE consistency problems detected: expected=$PARQUET_LAKE_EXPECTED_COUNT actual=$PARQUET_LAKE_ACTUAL_COUNT missing=$PARQUET_LAKE_MISSING_COUNT untracked=$PARQUET_LAKE_ORPHAN_COUNT invalid=$PARQUET_LAKE_INVALID_COUNT structural=$PARQUET_LAKE_STRUCTURE_COUNT"
+  else
+    log_info "PARQUET_LAKE consistency check passed."
+  fi
+}
+
+run_archive_emergency_cleanup() {
   local current_usage
   current_usage=$(disk_usage_percent)
   if [[ -z "$current_usage" ]]; then
-    log_info ""
-    log_info "========== EMERGENCY EVENT_PARQUET_LAKE CLEANUP CHECK =========="
-    log_info "Could not determine /home disk usage. Skipping EVENT_PARQUET_LAKE emergency cleanup."
-    log_info "==============================================================="
+    log_warn "Unable to determine /home usage; skipping emergency PARQUET_LAKE pruning."
     return 0
   fi
 
-  if (( current_usage < STEP12_EMERGENCY_TRIGGER_PCT )); then
-    log_info "EVENT_PARQUET_LAKE emergency cleanup check: disk usage ${current_usage}% is below ${STEP12_EMERGENCY_TRIGGER_PCT}%."
+  # Strictly greater than the threshold: 95% itself is not enough to delete.
+  if (( current_usage <= ARCHIVE_PRESSURE_TRIGGER_PCT )); then
+    log_info "PARQUET_LAKE emergency check: disk usage ${current_usage}% is not above ${ARCHIVE_PRESSURE_TRIGGER_PCT}%."
     return 0
   fi
 
-  local -a emergency_dirs=()
+  local -a lake_dirs=()
   local station_dir lake_dir
-  if [[ -n "$STEP12_EMERGENCY_DIR" ]]; then
-    [[ -d "$STEP12_EMERGENCY_DIR" ]] && emergency_dirs+=("$STEP12_EMERGENCY_DIR")
+  if [[ -n "$ARCHIVE_EMERGENCY_DIR" ]]; then
+    [[ -d "$ARCHIVE_EMERGENCY_DIR" ]] && lake_dirs+=("$ARCHIVE_EMERGENCY_DIR")
   else
     for station_dir in "$STATIONS_BASE"/MINGO0[0-9]; do
       [[ -d "$station_dir" ]] || continue
       lake_dir="$station_dir/STAGE_1_PRODUCTS/EVENT_DATA/PARQUET_LAKE"
-      [[ -d "$lake_dir" ]] && emergency_dirs+=("$lake_dir")
+      [[ -d "$lake_dir" ]] && lake_dirs+=("$lake_dir")
     done
   fi
-
-  log_info ""
-  log_info "========== EMERGENCY EVENT_PARQUET_LAKE CLEANUP =========="
-  log_info "Disk usage is ${current_usage}% which is >= ${STEP12_EMERGENCY_TRIGGER_PCT}%."
-  log_info "Deleting globally oldest .parquet files from ${#emergency_dirs[@]} lake(s):"
-  for lake_dir in "${emergency_dirs[@]}"; do
-    log_info "  $lake_dir"
-  done
-  log_info "Target: reduce /home usage below ${STEP12_EMERGENCY_TARGET_PCT}% or stop when no files remain."
-  log_info "=========================================================="
-
-  if (( ${#emergency_dirs[@]} == 0 )); then
-    log_warn "No station EVENT_DATA/PARQUET_LAKE directories found. Nothing to delete."
+  if (( ${#lake_dirs[@]} == 0 )); then
+    log_warn "Disk usage is ${current_usage}%, but no PARQUET_LAKE directories were found."
     return 0
   fi
 
+  local ranker="$SCRIPT_DIR/rank_parquet_lake_candidates.py"
+  local candidate_manifest
+  candidate_manifest=$(mktemp /tmp/dataflow_archive_candidates.XXXXXX)
+  if ! python3 "$ranker" "$DATAFLOW_ROOT" "$MASTER_CONFIG_ROOT" "${lake_dirs[@]}" >"$candidate_manifest"; then
+    log_warn "Could not rank PARQUET_LAKE candidates against $MASTER_CONFIG_ROOT/config_selection.yaml; refusing emergency deletion."
+    rm -f -- "$candidate_manifest"
+    return 0
+  fi
+
+  log_warn "Disk usage ${current_usage}% is above ${ARCHIVE_PRESSURE_TRIGGER_PCT}%. Pruning oldest PARQUET_LAKE files to ${ARCHIVE_PRESSURE_TRIGGER_PCT}%."
+  log_info "Priority: files outside configured date ranges first, then in-range files; oldest first within each tier."
+
   local deleted_count=0
   local deleted_bytes=0
-  local checked_since_df=0
-  local record rest file_size file_path
-
+  local deleted_out_of_range=0
+  local deleted_in_range=0
+  local record priority rest mtime_ns file_size file_path
   while IFS= read -r -d '' record; do
-    [[ -n "$record" ]] || continue
+    priority="${record%%$'\t'*}"
     rest="${record#*$'\t'}"
+    mtime_ns="${rest%%$'\t'*}"
+    rest="${rest#*$'\t'}"
     file_size="${rest%%$'\t'*}"
     file_path="${rest#*$'\t'}"
     [[ -f "$file_path" ]] || continue
@@ -310,32 +430,33 @@ run_step12_emergency_cleanup() {
     if rm -f -- "$file_path" 2>/dev/null; then
       deleted_count=$((deleted_count + 1))
       deleted_bytes=$((deleted_bytes + file_size))
-      checked_since_df=$((checked_since_df + 1))
-      if (( deleted_count == 1 || deleted_count % 100 == 0 )); then
-        log_info "  Deleted ${deleted_count} oldest file(s), freed $(format_bytes "$deleted_bytes") so far."
+      if [[ "$priority" == 0 ]]; then
+        deleted_out_of_range=$((deleted_out_of_range + 1))
+      else
+        deleted_in_range=$((deleted_in_range + 1))
       fi
-      if (( checked_since_df >= 100 )); then
-        checked_since_df=0
-        current_usage=$(disk_usage_percent)
-        if [[ -n "$current_usage" ]] && (( current_usage < STEP12_EMERGENCY_TARGET_PCT )); then
-          break
-        fi
+      log_detail "  Deleted $file_path ($(format_bytes "$file_size"))"
+      current_usage=$(disk_usage_percent)
+      if [[ -n "$current_usage" ]] && (( current_usage <= ARCHIVE_PRESSURE_TRIGGER_PCT )); then
+        break
       fi
+    else
+      log_warn "Failed to remove emergency archive candidate: $file_path"
     fi
-  done < <(
-    find "${emergency_dirs[@]}" -maxdepth 1 -type f -name "*.parquet" \
-      -printf "%T@\t%s\t%p\0" 2>/dev/null | sort -z -n
-  )
+  done <"$candidate_manifest"
+  rm -f -- "$candidate_manifest"
 
   current_usage=$(disk_usage_percent)
-  STEP12_EMERGENCY_COUNT=$deleted_count
-  STEP12_EMERGENCY_FREED=$deleted_bytes
-
-  log_info "========== EMERGENCY EVENT_PARQUET_LAKE CLEANUP RESULT =========="
-  log_info "Deleted files: ${deleted_count}"
-  log_info "Freed:         $(format_bytes "$deleted_bytes")"
-  log_info "Disk usage:    ${current_usage:-unknown}%"
-  log_info "==============================================================="
+  log_info "Emergency PARQUET_LAKE pruning removed ${deleted_count} file(s): outside-range=${deleted_out_of_range}, in-range=${deleted_in_range}."
+  log_info "   Freed:      $(format_bytes "$deleted_bytes")"
+  log_info "   Disk usage: ${current_usage:-unknown}%"
+  if (( deleted_count > 0 )); then
+    log_info "Refreshing PARQUET_LAKE consistency report after emergency pruning."
+    check_parquet_lake_consistency
+  fi
+  if [[ -n "$current_usage" ]] && (( current_usage > ARCHIVE_PRESSURE_TRIGGER_PCT )); then
+    log_warn "Disk usage remains above ${ARCHIVE_PRESSURE_TRIGGER_PCT}% after all PARQUET_LAKE candidates were considered."
+  fi
 }
 
 
@@ -1064,6 +1185,9 @@ if [[ "$KEEP_FINAL" == true ]]; then
   log_info "Emergency keep-final policy: if /home usage rises above ${KEEP_FINAL_TRIGGER_PCT}%, prune oldest final completed files until ${KEEP_FINAL_TARGET_PCT}%."
 fi
 log_info "Disk usage before cleaning: $(disk_usage_summary)"
+log_info ""
+log_info "=== Checking persistent PARQUET_LAKE archives ==="
+check_parquet_lake_consistency
 
 if [[ "$FORCE" == true ]]; then
   if ((${#SELECTION_ARGS[@]} == 0)); then
@@ -1172,9 +1296,8 @@ else
   log_info "SIMULATION_DATA_JUNK base directory not found: $SIM_JUNK_BASE"
 fi
 
-# Last-resort policy: only after every selected ordinary cleanup has run, prune
-# final parquet products if /home is still at or above the emergency trigger.
-run_step12_emergency_cleanup
+# Emergency archive pruning is allowed only above 95%, with range-aware prioritization.
+run_archive_emergency_cleanup
 
 log_info ""
 log_info "Disk usage after cleaning: $(disk_usage_summary)"

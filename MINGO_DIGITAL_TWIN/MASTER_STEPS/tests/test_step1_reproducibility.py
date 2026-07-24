@@ -22,7 +22,7 @@ import numpy as np
 
 
 def _load_step1_module():
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[1]
     module_path = root / "STEP_1" / "step_1_blank_to_generated.py"
     spec = importlib.util.spec_from_file_location("step1_module", module_path)
     module = importlib.util.module_from_spec(spec)

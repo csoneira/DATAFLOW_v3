@@ -29,6 +29,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.patches import Rectangle
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 sys.path.append(str(ROOT_DIR))
@@ -38,7 +39,13 @@ from STEP_SHARED.sim_utils import (
     ensure_dir,
     find_latest_data_path,
     find_sim_run_dir,
-    get_strip_geometry,
+    GEOMETRY_SCHEMA_VERSION,
+    PlaneReadoutGeometry,
+    RectBounds,
+    build_readout_geometry,
+    readout_geometry_to_dict,
+    rect_bounds_to_dict,
+    resolve_active_area_bounds,
     iter_input_frames,
     latest_sim_run,
     load_step_configs,
@@ -57,58 +64,86 @@ from STEP_SHARED.sim_utils import (
     select_param_row,
     extract_param_set,
 )
-from STEP_SHARED.sim_utils_geometry import DEFAULT_BOUNDS, DetectorBounds
 
 ELEMENTARY_CHARGE_FC = 1.602176634e-4
 LORENTZIAN_MIN_GAMMA_MM = 1.0e-6
 
 
-def bounds_to_dict(bounds: DetectorBounds) -> dict[str, float]:
-    return {
-        "x_min": float(bounds.x_min),
-        "x_max": float(bounds.x_max),
-        "y_min": float(bounds.y_min),
-        "y_max": float(bounds.y_max),
-    }
-
-
-def _coerce_bounds(bounds_cfg: object) -> DetectorBounds | None:
-    if not isinstance(bounds_cfg, dict):
-        return None
-    try:
-        return DetectorBounds(
-            x_min=float(bounds_cfg.get("x_min", DEFAULT_BOUNDS.x_min)),
-            x_max=float(bounds_cfg.get("x_max", DEFAULT_BOUNDS.x_max)),
-            y_min=float(bounds_cfg.get("y_min", DEFAULT_BOUNDS.y_min)),
-            y_max=float(bounds_cfg.get("y_max", DEFAULT_BOUNDS.y_max)),
-        )
-    except (TypeError, ValueError):
-        return None
-
-
-def _bounds_from_metadata_lineage(meta: object) -> DetectorBounds | None:
+def _active_area_from_metadata_lineage(meta: object) -> tuple[RectBounds, str] | None:
     cursor = meta
     while isinstance(cursor, dict):
-        cfg = cursor.get("config")
-        if isinstance(cfg, dict):
-            candidate = _coerce_bounds(cfg.get("bounds_mm"))
-            if candidate is not None:
-                return candidate
+        direct = cursor.get("active_area_bounds_mm")
+        if isinstance(direct, dict):
+            active_area_bounds, _ = resolve_active_area_bounds(
+                {"active_area_bounds_mm": direct},
+                warn_deprecated=False,
+            )
+            return active_area_bounds, "upstream_normalized_active_area"
+        lineage_config = cursor.get("config")
+        if isinstance(lineage_config, dict) and (
+            "active_area_bounds_mm" in lineage_config or "bounds_mm" in lineage_config
+        ):
+            active_area_bounds, source = resolve_active_area_bounds(
+                lineage_config,
+                warn_deprecated=False,
+            )
+            return active_area_bounds, f"upstream_{source}"
         cursor = cursor.get("upstream")
     return None
 
 
-def resolve_active_bounds(cfg: dict, upstream_meta: dict | None) -> tuple[DetectorBounds, str]:
-    direct = _coerce_bounds(cfg.get("bounds_mm"))
-    if direct is not None:
-        return direct, "step4_config"
-
+def resolve_step4_active_area_bounds(
+    config: dict,
+    upstream_meta: dict | None,
+) -> tuple[RectBounds, str]:
+    # Direct Step-4 active bounds remain accepted only for old standalone workflows.
+    if "active_area_bounds_mm" in config or "bounds_mm" in config:
+        active_area_bounds, source = resolve_active_area_bounds(config)
+        return active_area_bounds, f"step4_{source}"
     if isinstance(upstream_meta, dict):
-        lineage_bounds = _bounds_from_metadata_lineage(upstream_meta)
-        if lineage_bounds is not None:
-            return lineage_bounds, "upstream_lineage_config"
+        lineage_result = _active_area_from_metadata_lineage(upstream_meta)
+        if lineage_result is not None:
+            return lineage_result
+    active_area_bounds, source = resolve_active_area_bounds({}, warn_deprecated=False)
+    return active_area_bounds, source
 
-    return DEFAULT_BOUNDS, "default_bounds"
+
+def _readout_geometry_from_metadata_lineage(
+    meta: object,
+    active_area_bounds: RectBounds,
+) -> tuple[dict[int, PlaneReadoutGeometry], str] | None:
+    cursor = meta
+    while isinstance(cursor, dict):
+        lineage_config = cursor.get("config")
+        if isinstance(lineage_config, dict) and "readout_geometry_mm" in lineage_config:
+            geometry, _ = build_readout_geometry(
+                lineage_config,
+                legacy_active_area_bounds=active_area_bounds,
+            )
+            source = str(cursor.get("readout_geometry_source") or "metadata_config")
+            return geometry, source
+        cursor = cursor.get("upstream")
+    return None
+
+
+def resolve_step4_readout_geometry(
+    config: dict,
+    active_area_bounds: RectBounds,
+    metadata: dict | None = None,
+) -> tuple[dict[int, PlaneReadoutGeometry], str]:
+    if "readout_geometry_mm" in config:
+        return build_readout_geometry(
+            config,
+            legacy_active_area_bounds=active_area_bounds,
+        )
+    if isinstance(metadata, dict):
+        lineage_result = _readout_geometry_from_metadata_lineage(metadata, active_area_bounds)
+        if lineage_result is not None:
+            return lineage_result
+    return build_readout_geometry(
+        config,
+        legacy_active_area_bounds=active_area_bounds,
+    )
 
 
 def _recover_metadata_from_chunk_manifest(data_path: Path, meta: dict | None) -> dict | None:
@@ -203,7 +238,7 @@ def induce_signal(
     time_sigma_ns: float,
     lorentzian_gamma_mm: float,
     induced_charge_fraction: float,
-    bounds: DetectorBounds,
+    readout_geometry: dict[int, PlaneReadoutGeometry],
     rng: np.random.Generator,
     debug_event_index: int | None,
     debug_points: dict | None,
@@ -223,9 +258,9 @@ def induce_signal(
         t_sum_vals = df[t_sum_col].to_numpy(dtype=float) if t_sum_col in df.columns else None
         gap_charge_fc = np.where(aval_electrons > 0, aval_electrons * ELEMENTARY_CHARGE_FC, 0.0)
         induced_charge_total_fc = gap_charge_fc * induced_charge_fraction
-        _, _, lower_edges, upper_edges = get_strip_geometry(plane_idx)
-        plane_y_lower = float(np.min(lower_edges))
-        plane_y_upper = float(np.max(upper_edges))
+        plane_geometry = readout_geometry[plane_idx]
+        plane_y_lower = plane_geometry.y_min
+        plane_y_upper = plane_geometry.y_max
         gamma_mm = np.where(induced_charge_total_fc > 0, float(lorentzian_gamma_mm), 0.0)
         valid = (
             np.isfinite(aval_x)
@@ -233,12 +268,12 @@ def induce_signal(
             & (induced_charge_total_fc > 0)
             & (gamma_mm > 0)
         )
-        detector_fraction = isotropic_lorentzian_rectangle_fraction(
+        readout_bounding_fraction = isotropic_lorentzian_rectangle_fraction(
             aval_x,
             aval_y,
             np.where(valid, gamma_mm, np.nan),
-            bounds.x_min,
-            bounds.x_max,
+            plane_geometry.x_min,
+            plane_geometry.x_max,
             plane_y_lower,
             plane_y_upper,
         )
@@ -260,19 +295,22 @@ def induce_signal(
                     "gamma_mm": float(gamma_mm[debug_event_index]),
                     "gap_charge_fc": float(gap_charge_fc[debug_event_index]),
                     "induced_charge_fc": float(induced_charge_total_fc[debug_event_index]),
-                    "detector_fraction": float(detector_fraction[debug_event_index]),
+                    "readout_bounding_fraction": float(readout_bounding_fraction[debug_event_index]),
                 }
 
-        for strip_idx in range(len(lower_edges)):
+        readout_assigned_fraction = np.zeros(n, dtype=np.float32)
+        for strip in plane_geometry.strips:
+            strip_idx = strip.strip_index - 1
             frac = isotropic_lorentzian_rectangle_fraction(
                 aval_x,
                 aval_y,
                 np.where(valid, gamma_mm, np.nan),
-                bounds.x_min,
-                bounds.x_max,
-                lower_edges[strip_idx],
-                upper_edges[strip_idx],
+                strip.x_min,
+                strip.x_max,
+                strip.y_min,
+                strip.y_max,
             ).astype(np.float32, copy=False)
+            readout_assigned_fraction += frac
             qsum = (frac * induced_charge_total_fc).astype(np.float32, copy=False)
             out[f"Y_mea_{plane_idx}_s{strip_idx + 1}"] = qsum
             hit_mask = qsum > 0
@@ -302,6 +340,42 @@ def induce_signal(
                         t_sum_vals[t_valid] + rng.normal(0.0, time_sigma_ns, t_valid.sum())
                     ).astype(np.float32, copy=False)
                 out[f"T_sum_meas_{plane_idx}_s{strip_idx + 1}"] = t_strip
+        readout_assigned_fraction = np.clip(readout_assigned_fraction, 0.0, 1.0)
+        readout_gap_fraction = np.clip(
+            readout_bounding_fraction - readout_assigned_fraction,
+            0.0,
+            1.0,
+        )
+        readout_outside_fraction = np.clip(1.0 - readout_bounding_fraction, 0.0, 1.0)
+        out[f"readout_bounding_fraction_{plane_idx}"] = readout_bounding_fraction.astype(
+            np.float32,
+            copy=False,
+        )
+        out[f"readout_assigned_fraction_{plane_idx}"] = readout_assigned_fraction
+        out[f"readout_gap_fraction_{plane_idx}"] = readout_gap_fraction.astype(
+            np.float32,
+            copy=False,
+        )
+        out[f"readout_outside_fraction_{plane_idx}"] = readout_outside_fraction.astype(
+            np.float32,
+            copy=False,
+        )
+        if (
+            debug_event_index is not None
+            and 0 <= debug_event_index < n
+            and valid[debug_event_index]
+            and debug_points is not None
+            and plane_idx in debug_points
+        ):
+            debug_points[plane_idx]["readout_assigned_fraction"] = float(
+                readout_assigned_fraction[debug_event_index]
+            )
+            debug_points[plane_idx]["readout_gap_fraction"] = float(
+                readout_gap_fraction[debug_event_index]
+            )
+            debug_points[plane_idx]["readout_outside_fraction"] = float(
+                readout_outside_fraction[debug_event_index]
+            )
         tt_array[plane_detected] = tt_array[plane_detected] + str(plane_idx)
 
     out["tt_hit"] = pd.Series(tt_array, dtype="string").replace("", pd.NA)
@@ -327,7 +401,8 @@ def plot_step4_summary(
     pdf: PdfPages,
     include_thrown_points: bool,
     thrown_points: dict | None,
-    bounds: DetectorBounds,
+    active_area_bounds: RectBounds,
+    readout_geometry: dict[int, PlaneReadoutGeometry],
     examples_df: pd.DataFrame | None = None,
 ) -> None:
     fig, axes = plt.subplots(2, 2, figsize=(10, 8))
@@ -463,6 +538,82 @@ def plot_step4_summary(
     pdf.savefig(fig, dpi=150)
     plt.close(fig)
 
+    # Geometry overview: active gas and readout rectangles are intentionally independent.
+    fig, axes = plt.subplots(2, 2, figsize=(10, 9))
+    for plane_idx, ax in enumerate(axes.flatten(), start=1):
+        plane_geometry = readout_geometry[plane_idx]
+        x_min = min(active_area_bounds.x_min, plane_geometry.x_min)
+        x_max = max(active_area_bounds.x_max, plane_geometry.x_max)
+        y_min = min(active_area_bounds.y_min, plane_geometry.y_min)
+        y_max = max(active_area_bounds.y_max, plane_geometry.y_max)
+        x_pad = max(0.03 * (x_max - x_min), 1.0)
+        y_pad = max(0.03 * (y_max - y_min), 1.0)
+        ax.add_patch(
+            Rectangle(
+                (active_area_bounds.x_min, active_area_bounds.y_min),
+                active_area_bounds.x_max - active_area_bounds.x_min,
+                active_area_bounds.y_max - active_area_bounds.y_min,
+                fill=False,
+                edgecolor="black",
+                linestyle="--",
+                linewidth=1.8,
+                label="active gas area",
+            )
+        )
+        for gap_index in range(len(plane_geometry.strips) - 1):
+            gap_y_min = plane_geometry.strips[gap_index].y_max
+            gap_y_max = plane_geometry.strips[gap_index + 1].y_min
+            if gap_y_max > gap_y_min:
+                ax.add_patch(
+                    Rectangle(
+                        (plane_geometry.x_min, gap_y_min),
+                        plane_geometry.x_max - plane_geometry.x_min,
+                        gap_y_max - gap_y_min,
+                        facecolor="gray",
+                        edgecolor="none",
+                        alpha=0.2,
+                        hatch="///",
+                        label="inactive gap" if gap_index == 0 else None,
+                    )
+                )
+        for strip in plane_geometry.strips:
+            ax.add_patch(
+                Rectangle(
+                    (strip.x_min, strip.y_min),
+                    strip.x_max - strip.x_min,
+                    strip.y_max - strip.y_min,
+                    fill=False,
+                    edgecolor=f"C{strip.strip_index - 1}",
+                    linewidth=1.5,
+                    label=f"strip {strip.strip_index}",
+                )
+            )
+        avalanche_x_col = f"avalanche_x_{plane_idx}"
+        avalanche_y_col = f"avalanche_y_{plane_idx}"
+        if avalanche_x_col in df.columns and avalanche_y_col in df.columns:
+            avalanche_x = df[avalanche_x_col].to_numpy(dtype=float)
+            avalanche_y = df[avalanche_y_col].to_numpy(dtype=float)
+            valid_avalanche = np.isfinite(avalanche_x) & np.isfinite(avalanche_y)
+            ax.scatter(
+                avalanche_x[valid_avalanche],
+                avalanche_y[valid_avalanche],
+                s=4,
+                color="magenta",
+                alpha=0.25,
+                rasterized=True,
+                label="avalanches",
+            )
+        ax.set_xlim(x_min - x_pad, x_max + x_pad)
+        ax.set_ylim(y_min - y_pad, y_max + y_pad)
+        ax.set_aspect("equal")
+        ax.set_title(f"Plane {plane_idx}: active area and readout")
+        ax.set_xlabel("X (mm)")
+        ax.set_ylabel("Y (mm)")
+        ax.legend(fontsize=7, loc="best")
+    fig.tight_layout()
+    pdf.savefig(fig, dpi=150)
+    plt.close(fig)
+
     if include_thrown_points and thrown_points:
         fig, axes = plt.subplots(2, 2, figsize=(10, 9))
         for plane_idx in range(1, 5):
@@ -471,14 +622,18 @@ def plot_step4_summary(
             if not points:
                 ax.axis("off")
                 continue
+            plane_geometry = readout_geometry[plane_idx]
             center_x = points["center_x"]
             center_y = points["center_y"]
             gamma_mm = points["gamma_mm"]
             gap_charge = points.get("gap_charge_fc")
             induced_charge = points.get("induced_charge_fc")
-            detector_fraction = points.get("detector_fraction")
-            x_axis = np.linspace(bounds.x_min, bounds.x_max, 240)
-            y_axis = np.linspace(bounds.y_min, bounds.y_max, 240)
+            x_min = min(active_area_bounds.x_min, plane_geometry.x_min)
+            x_max = max(active_area_bounds.x_max, plane_geometry.x_max)
+            y_min = min(active_area_bounds.y_min, plane_geometry.y_min)
+            y_max = max(active_area_bounds.y_max, plane_geometry.y_max)
+            x_axis = np.linspace(x_min, x_max, 240)
+            y_axis = np.linspace(y_min, y_max, 240)
             density = isotropic_lorentzian_density_grid(
                 x_axis,
                 y_axis,
@@ -494,29 +649,69 @@ def plot_step4_summary(
                 extent=(x_axis[0], x_axis[-1], y_axis[0], y_axis[-1]),
                 cmap="magma",
                 aspect="equal",
-                alpha=0.95,
+                alpha=0.9,
             )
-            ax.scatter([center_x], [center_y], s=35, color="cyan", marker="x")
-            _, _, lower_edges, upper_edges = get_strip_geometry(plane_idx)
-            for edge in np.concatenate([lower_edges, upper_edges]):
-                ax.axhline(edge, color="gray", linestyle="--", linewidth=0.8, alpha=0.5)
+            ax.add_patch(
+                Rectangle(
+                    (active_area_bounds.x_min, active_area_bounds.y_min),
+                    active_area_bounds.x_max - active_area_bounds.x_min,
+                    active_area_bounds.y_max - active_area_bounds.y_min,
+                    fill=False,
+                    edgecolor="white",
+                    linestyle="--",
+                    linewidth=1.5,
+                )
+            )
+            for gap_index in range(len(plane_geometry.strips) - 1):
+                gap_y_min = plane_geometry.strips[gap_index].y_max
+                gap_y_max = plane_geometry.strips[gap_index + 1].y_min
+                if gap_y_max > gap_y_min:
+                    ax.add_patch(
+                        Rectangle(
+                            (plane_geometry.x_min, gap_y_min),
+                            plane_geometry.x_max - plane_geometry.x_min,
+                            gap_y_max - gap_y_min,
+                            facecolor="gray",
+                            edgecolor="none",
+                            alpha=0.35,
+                            hatch="///",
+                        )
+                    )
+            for strip in plane_geometry.strips:
+                ax.add_patch(
+                    Rectangle(
+                        (strip.x_min, strip.y_min),
+                        strip.x_max - strip.x_min,
+                        strip.y_max - strip.y_min,
+                        fill=False,
+                        edgecolor="cyan",
+                        linewidth=1.0,
+                    )
+                )
+            ax.scatter([center_x], [center_y], s=35, color="lime", marker="x")
             strip_text = "\n".join(
                 f"S{i}={points.get(f'strip_{i}_charge_fc', 0.0):.2f} fC"
                 for i in range(1, 5)
             )
-            if detector_fraction is not None:
-                strip_text = f"Fdet={detector_fraction:.4f}\n" + strip_text
+            assigned = points.get("readout_assigned_fraction")
+            gap_fraction = points.get("readout_gap_fraction")
+            outside_fraction = points.get("readout_outside_fraction")
+            if assigned is not None:
+                strip_text = (
+                    f"Fassigned={assigned:.4f}\nFgap={gap_fraction:.4f}\n"
+                    f"Foutside={outside_fraction:.4f}\n" + strip_text
+                )
             if gap_charge is not None and induced_charge is not None:
                 ax.set_title(
-                    f"Plane {plane_idx} isotropic 2D Lorentzian "
+                    f"Plane {plane_idx} Lorentzian "
                     f"(Qgap={gap_charge:,.1f} fC, Qind={induced_charge:,.1f} fC, gamma={gamma_mm:,.1f} mm)"
                 )
             else:
                 ax.set_title(f"Plane {plane_idx} isotropic 2D Lorentzian")
             ax.set_xlabel("X (mm)")
             ax.set_ylabel("Y (mm)")
-            ax.set_xlim(bounds.x_min, bounds.x_max)
-            ax.set_ylim(bounds.y_min, bounds.y_max)
+            ax.set_xlim(x_min, x_max)
+            ax.set_ylim(y_min, y_max)
             ax.text(
                 0.03,
                 0.97,
@@ -765,6 +960,12 @@ def prune_step4(df: pd.DataFrame) -> pd.DataFrame:
     for plane_idx in range(1, 5):
         keep.add(f"avalanche_gap_charge_fc_{plane_idx}")
         keep.add(f"induced_charge_total_fc_{plane_idx}")
+        keep.add(f"avalanche_x_{plane_idx}")
+        keep.add(f"avalanche_y_{plane_idx}")
+        keep.add(f"readout_bounding_fraction_{plane_idx}")
+        keep.add(f"readout_assigned_fraction_{plane_idx}")
+        keep.add(f"readout_gap_fraction_{plane_idx}")
+        keep.add(f"readout_outside_fraction_{plane_idx}")
         for strip_idx in range(1, 5):
             keep.add(f"Y_mea_{plane_idx}_s{strip_idx}")
             keep.add(f"X_mea_{plane_idx}_s{strip_idx}")
@@ -837,11 +1038,14 @@ def main() -> None:
             raise FileNotFoundError(f"No existing outputs found in {output_dir} for plot-only.")
         df, plot_meta = load_with_metadata(latest_path)
         plot_meta = _recover_metadata_from_chunk_manifest(latest_path, plot_meta)
-        active_bounds, bounds_source = resolve_active_bounds(cfg, plot_meta)
+        active_area_bounds, active_area_geometry_source = resolve_step4_active_area_bounds(cfg, plot_meta)
+        readout_geometry, readout_geometry_source = resolve_step4_readout_geometry(
+            {}, active_area_bounds, plot_meta
+        )
         print(
-            "Using active bounds "
-            f"({bounds_source}): x=[{active_bounds.x_min:.3f}, {active_bounds.x_max:.3f}] mm, "
-            f"y=[{active_bounds.y_min:.3f}, {active_bounds.y_max:.3f}] mm"
+            "Using active area "
+            f"({active_area_geometry_source}): x=[{active_area_bounds.x_min:.3f}, {active_area_bounds.x_max:.3f}] mm, "
+            f"y=[{active_area_bounds.y_min:.3f}, {active_area_bounds.y_max:.3f}] mm"
         )
         sim_run_dir = find_sim_run_dir(latest_path)
         plot_dir = (sim_run_dir or latest_path.parent) / "PLOTS"
@@ -854,7 +1058,8 @@ def main() -> None:
                 pdf,
                 include_thrown_points=False,
                 thrown_points=None,
-                bounds=active_bounds,
+                active_area_bounds=active_area_bounds,
+                readout_geometry=readout_geometry,
                 examples_df=df,
             )
         print(f"Saved {plot_path}")
@@ -925,12 +1130,22 @@ def main() -> None:
         print("Skipping STEP_4: all step_4_id combinations already exist.")
         return
 
-    active_bounds, bounds_source = resolve_active_bounds(cfg, upstream_meta)
-    print(
-        "Using active bounds "
-        f"({bounds_source}): x=[{active_bounds.x_min:.3f}, {active_bounds.x_max:.3f}] mm, "
-        f"y=[{active_bounds.y_min:.3f}, {active_bounds.y_max:.3f}] mm"
+    active_area_bounds, active_area_geometry_source = resolve_step4_active_area_bounds(cfg, upstream_meta)
+    readout_geometry, readout_geometry_source = resolve_step4_readout_geometry(
+        cfg, active_area_bounds
     )
+    normalized_active_area = rect_bounds_to_dict(active_area_bounds)
+    normalized_readout_geometry = readout_geometry_to_dict(readout_geometry, detailed=True)
+    physics_cfg["geometry_schema_version"] = GEOMETRY_SCHEMA_VERSION
+    physics_cfg["readout_geometry_mm"] = readout_geometry_to_dict(
+        readout_geometry, detailed=False
+    )
+    print(
+        "Using active area "
+        f"({active_area_geometry_source}): x=[{active_area_bounds.x_min:.3f}, {active_area_bounds.x_max:.3f}] mm, "
+        f"y=[{active_area_bounds.y_min:.3f}, {active_area_bounds.y_max:.3f}] mm"
+    )
+    print(f"Using readout geometry ({readout_geometry_source}) with four strips per plane.")
 
     normalized_stem = normalize_stem(input_path)
     print(f"Processing: {input_path}")
@@ -941,7 +1156,6 @@ def main() -> None:
         return
     print("Inducing strip signals...")
 
-    physics_cfg["bounds_mm"] = bounds_to_dict(active_bounds)
     physics_cfg["step_4_id"] = step_4_id
     sim_run, sim_run_dir, config_hash, upstream_hash, _ = register_sim_run(
         output_dir, "STEP_4", config_path, physics_cfg, upstream_meta, sim_run
@@ -955,6 +1169,11 @@ def main() -> None:
     metadata = {
         "created_at": now_iso(),
         "step": "STEP_4",
+        "geometry_schema_version": GEOMETRY_SCHEMA_VERSION,
+        "active_area_bounds_mm": normalized_active_area,
+        "active_area_geometry_source": active_area_geometry_source,
+        "readout_geometry_mm": normalized_readout_geometry,
+        "readout_geometry_source": readout_geometry_source,
         "config": physics_cfg,
         "runtime_config": runtime_cfg,
         "sim_run": sim_run,
@@ -1002,7 +1221,7 @@ def main() -> None:
             time_sigma_ns,
             lorentzian_gamma_mm,
             induced_charge_fraction,
-            active_bounds,
+            readout_geometry,
             rng,
             debug_event_index,
             debug_state["points"] if debug_event_index is not None else None,
@@ -1018,6 +1237,10 @@ def main() -> None:
                     "avalanche_gap_charge_fc_",
                     "induced_charge_total_fc_",
                     "lorentzian_gamma_mm_",
+                    "readout_bounding_fraction_",
+                    "readout_assigned_fraction_",
+                    "readout_gap_fraction_",
+                    "readout_outside_fraction_",
                     "avalanche_x_",
                     "avalanche_y_",
                 )
@@ -1119,7 +1342,8 @@ def main() -> None:
                     pdf,
                     include_thrown_points=True,
                     thrown_points=debug_state["points"],
-                    bounds=active_bounds,
+                    active_area_bounds=active_area_bounds,
+                    readout_geometry=readout_geometry,
                     examples_df=plot_df_examples,
                 )
             print(f"Saved plots: {plot_path}")
@@ -1145,7 +1369,7 @@ def main() -> None:
             time_sigma_ns,
             lorentzian_gamma_mm,
             induced_charge_fraction,
-            active_bounds,
+            readout_geometry,
             rng,
             debug_event_index,
             debug_state["points"] if debug_event_index is not None else None,
@@ -1165,6 +1389,10 @@ def main() -> None:
                     "avalanche_gap_charge_fc_",
                     "induced_charge_total_fc_",
                     "lorentzian_gamma_mm_",
+                    "readout_bounding_fraction_",
+                    "readout_assigned_fraction_",
+                    "readout_gap_fraction_",
+                    "readout_outside_fraction_",
                     "avalanche_x_",
                     "avalanche_y_",
                 )
@@ -1197,7 +1425,8 @@ def main() -> None:
                     pdf,
                     include_thrown_points=True,
                     thrown_points=debug_state["points"],
-                    bounds=active_bounds,
+                    active_area_bounds=active_area_bounds,
+                    readout_geometry=readout_geometry,
                     examples_df=plot_df_examples,
                 )
             print(f"Saved plots: {plot_path}")

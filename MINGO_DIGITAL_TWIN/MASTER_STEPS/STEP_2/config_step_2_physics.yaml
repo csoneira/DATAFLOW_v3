@@ -1,14 +1,11 @@
-# Fixed
-bounds_mm:
-  # Full strip length is 300 mm, but the effective active X length is smaller.
-  # Manual measurement of the active area gave 276 mm. The current T_dif tuning
-  # report suggests a slightly larger effective active span of 284.888 mm.
-  x_min: -116
-  x_max: 116
+# Active gas area only: controls Step-2 crossing acceptance and Step-3 avalanches.
+# Replace these temporary/current values when final measured active dimensions are available.
+active_area_bounds_mm:
+  # Current configured active span; independent of Step-4 readout dimensions.
+  x_min: -116.0
+  x_max: 116.0
   y_min: -143.5
   y_max: 143.5
 
-# Variable (to loop on)
-# z_positions: [z1, z2, z3, z4]
-#z_positions: [30.0, 145.0, 290.0, 435.0]
+# Variable (selected from the parameter mesh).
 z_positions: random

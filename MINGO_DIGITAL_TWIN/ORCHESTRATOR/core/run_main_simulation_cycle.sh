@@ -38,7 +38,7 @@ INTERSTEPS_DIR="${DT_DIR}/SIMULATION_OUTPUTS/INTERSTEPS"
 RUN_STEP_STATE_DIR_DEFAULT="${ROOT_RUNTIME_DIR}/STATE/run_step"
 SIM_INTERSTEPS_RESET_MARKER="${ROOT_RUNTIME_DIR}/STATE/sim_intersteps_reset_needed.flag"
 SIM_INTERSTEPS_RESET_TRIGGER_PCT="${SIM_INTERSTEPS_RESET_TRIGGER_PCT:-95}"
-SIM_INTERSTEPS_RESET_RECOVER_PCT="${SIM_INTERSTEPS_RESET_RECOVER_PCT:-90}"
+SIM_INTERSTEPS_RESET_PENDING=0
 
 SIM_STRUCTURED_LOGS_ENABLED="${SIM_STRUCTURED_LOGS_ENABLED:-1}"
 if [[ "${SIM_STRUCTURED_LOGS_ENABLED}" != "0" && "${SIM_STRUCTURED_LOGS_ENABLED}" != "1" ]]; then
@@ -115,6 +115,7 @@ maybe_handle_intersteps_reset_after_disk_pressure() {
   local usage
   local enqueue_fd processing_fd final_fd
 
+  SIM_INTERSTEPS_RESET_PENDING=0
   usage="$(home_disk_usage_percent || true)"
   if [[ -z "${usage}" || ! "${usage}" =~ ^[0-9]+$ ]]; then
     log_warn "intersteps_reset status=skipped reason=unknown_disk_usage"
@@ -127,18 +128,16 @@ maybe_handle_intersteps_reset_after_disk_pressure() {
     else
       log_warn "intersteps_reset status=pending usage_pct=${usage} marker=${SIM_INTERSTEPS_RESET_MARKER}"
     fi
+  elif [[ ! -f "${SIM_INTERSTEPS_RESET_MARKER}" ]]; then
     return 0
+  else
+    log_warn "intersteps_reset status=pending usage_pct=${usage} marker=${SIM_INTERSTEPS_RESET_MARKER}"
   fi
 
-  if [[ ! -f "${SIM_INTERSTEPS_RESET_MARKER}" ]]; then
-    return 0
-  fi
-
-  if (( usage > SIM_INTERSTEPS_RESET_RECOVER_PCT )); then
-    log_info "intersteps_reset status=waiting usage_pct=${usage} recover_below_pct=${SIM_INTERSTEPS_RESET_RECOVER_PCT}"
-    return 0
-  fi
-
+  # A pending reset blocks new enqueue/processing work until all three owners
+  # release their locks. The next cron cycle then performs the reset immediately;
+  # it no longer waits for some other cleaner to reduce disk usage first.
+  SIM_INTERSTEPS_RESET_PENDING=1
   mkdir -p "$(dirname "${SIM_ENQUEUE_LOCK}")" "$(dirname "${SIM_PROCESSING_LOCK}")" "$(dirname "${SIM_FINAL_LOCK}")"
   exec {enqueue_fd}> "${SIM_ENQUEUE_LOCK}"
   if ! flock -n "${enqueue_fd}"; then
@@ -166,6 +165,7 @@ maybe_handle_intersteps_reset_after_disk_pressure() {
   rm -rf "${INTERSTEPS_DIR}" "${RUN_STEP_STATE_DIR_DEFAULT}"
   mkdir -p "${INTERSTEPS_DIR}"
   rm -f "${SIM_INTERSTEPS_RESET_MARKER}"
+  SIM_INTERSTEPS_RESET_PENDING=0
   log_warn "intersteps_reset status=done usage_pct=${usage}"
 
   exec {final_fd}>&-
@@ -827,6 +827,10 @@ main() {
   load_frequency_gate_settings
   log_info "cycle status=start"
   maybe_handle_intersteps_reset_after_disk_pressure
+  if (( SIM_INTERSTEPS_RESET_PENDING == 1 )); then
+    log_warn "cycle status=deferred reason=intersteps_reset_pending"
+    return 0
+  fi
 
   if ! run_enqueue_phase; then
     failed=1

@@ -2,7 +2,7 @@ plots:
   debug_suite: debug
   usual_suite: usual
   essential_suite: essential
-  acquisition_rate_vs_time_by_task_tt_with_histograms: essential
+  acquisition_rate_vs_time_by_task_tt_with_histograms: usual
   strip_activation_matrix_before_after: usual
   streamer_contagion_matrix_strip: usual
   cumulative_distribution_q_ch_before_calibration: usual
@@ -13,7 +13,7 @@ plots:
   charge_dif_vs_charge_sum_cal: usual
   charge_dif_vs_time_dif_cal: usual
   timing: usual
-  grand_figure_q_pedestal: essential
+  grand_figure_q_pedestal: usual
   grand_figure_q_pedestal_zoom: usual
   grand_figure_q_pedestal_less_zoom: usual
   grand_figure_q_fc: usual
@@ -25,7 +25,7 @@ plots:
   uncalibrated: usual
   uncalibrated_per_plane_combination: usual
   total_charge_per_plane_uncalibrated: usual
-  calibration_charge_gates: usual
+  calibration_charge_gates: essential
   tsum_spread_histograms_og: usual
   tsum_spread_histograms_filtered_og: usual
   uncalibrated_filtered: usual
@@ -46,7 +46,7 @@ plots:
   slewing_delta_t_vs_qsum2_by_qsum1_bins_fit: usual
   slewing_per_strip_from_pair_fit: usual
   slewing_per_channel_polynomial_curves: usual
-  slewing_relative_tsum_vs_qsum_after_correction: essential
+  slewing_relative_tsum_vs_qsum_after_correction: usual
   slewing_relative_tsum_vs_qsum_after_correction_logscale: usual
   slewing_3d: usual
   slewing_3d_fitproj: usual

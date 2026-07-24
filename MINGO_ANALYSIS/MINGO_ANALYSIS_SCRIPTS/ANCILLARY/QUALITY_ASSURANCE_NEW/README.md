@@ -10,8 +10,13 @@ QA reads metadata only from the published Stage 1 product tree:
 - `MINGO_ANALYSIS_STATIONS/MINGOYY/STAGE_1_PRODUCTS/EVENT_DATA/METADATA/TASK_N/`
 
 Before every non-aggregate QA run, the orchestrator takes a shared lock on each
-live Task metadata CSV, atomically refreshes its product copy, and then analyzes
-the product copy. Unchanged files are skipped.
+live Task metadata CSV and atomically rebuilds its product snapshot. A row is
+published only when `postprocessed_<basename>.parquet` already exists in that
+station Parquet Lake and has valid leading and trailing `PAR1` markers. If
+reprocessing produced multiple rows for one basename, only the row with the
+newest `execution_timestamp` is published. Thus this product metadata tree is
+a tracker of completely analyzed, archived files; incomplete working metadata
+remains only below `STAGE_1/EVENT_DATA/STEP_1`. Unchanged snapshots are skipped.
 
 The hourly `clean_dataflow.sh --select ...completed...` job uses
 `qa_all_stations_reprocessing_quality.csv` as its cleanup authority. A Stage 1
@@ -24,8 +29,10 @@ never targets of this verified intermediate cleanup.
 
 Current policy:
 
-- `STEP_1_CALIBRATIONS` is the only step with quality-enabled columns.
-- The rest of the metadata families are currently configured as `plot_only` or `ignore`.
+- Only the Task 2 calibration columns matching `*_Q_B` and `*_Q_F` are quality-enabled.
+- Every other metadata family is configured as `plot_only` or `ignore`.
+- Metadata time-series plots use unconnected points; lines are not drawn between consecutive observations.
+- Plot-mode runs keep exactly one prior generation of figures and data under the corresponding `OUTPUTS/LAST` directory. A new plot run replaces that previous `LAST`; table-only `often` runs do not rotate plot outputs.
 
 Only columns resolved as `quality_and_plot` or `quality_only` can place a
 basename in the reprocessing manifest. `plot_only`, `ignore`, and QA warnings

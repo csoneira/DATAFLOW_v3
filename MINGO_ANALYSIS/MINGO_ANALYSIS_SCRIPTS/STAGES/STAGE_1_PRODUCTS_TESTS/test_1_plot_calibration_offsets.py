@@ -135,7 +135,37 @@ def load_config(path: Path) -> tuple[str, datetime, datetime]:
     return station_name, start, end
 
 
-def select_metadata(path: Path, start: datetime, end: datetime) -> pd.DataFrame:
+def is_valid_parquet(path: Path) -> bool:
+    """Return whether a file has the leading and trailing Parquet magic."""
+    try:
+        if path.stat().st_size < 8:
+            return False
+        with path.open("rb") as handle:
+            if handle.read(4) != b"PAR1":
+                return False
+            handle.seek(-4, 2)
+            return handle.read(4) == b"PAR1"
+    except OSError:
+        return False
+
+
+def valid_parquet_lake_basenames(station_root: Path) -> set[str]:
+    """Return basenames backed by valid final Parquets in this station."""
+    lake = station_root / "STAGE_1_PRODUCTS" / "EVENT_DATA" / "PARQUET_LAKE"
+    return {
+        path.stem.removeprefix("postprocessed_")
+        for path in lake.glob("postprocessed_*.parquet")
+        if is_valid_parquet(path)
+    }
+
+
+def select_metadata(
+    path: Path,
+    start: datetime,
+    end: datetime,
+    *,
+    allowed_basenames: set[str] | None = None,
+) -> pd.DataFrame:
     if not path.is_file():
         raise FileNotFoundError(f"Task 2 calibration metadata not found: {path}")
 
@@ -150,6 +180,10 @@ def select_metadata(path: Path, start: datetime, end: datetime) -> pd.DataFrame:
     if "execution_timestamp" in header:
         usecols.append("execution_timestamp")
     frame = pd.read_csv(path, usecols=usecols, low_memory=False)
+    frame["filename_base"] = frame["filename_base"].astype(str).str.strip()
+    if allowed_basenames is not None:
+        allowed = {str(value).strip() for value in allowed_basenames}
+        frame = frame.loc[frame["filename_base"].isin(allowed)].copy()
     frame["acquisition_datetime"] = frame["filename_base"].map(acquisition_datetime)
 
     invalid_count = int(frame["acquisition_datetime"].isna().sum())
@@ -158,7 +192,8 @@ def select_metadata(path: Path, start: datetime, end: datetime) -> pd.DataFrame:
     frame = frame.loc[frame["acquisition_datetime"].between(start, end, inclusive="both")].copy()
     if frame.empty:
         raise ValueError(
-            f"No Task 2 calibration rows fall between {start.isoformat()} and {end.isoformat()}"
+            "No lake-backed Task 2 calibration rows fall between "
+            f"{start.isoformat()} and {end.isoformat()}"
         )
 
     # Reprocessing can append another calibration for the same acquisition.
@@ -354,7 +389,12 @@ def main() -> int:
         / "METADATA"
         / "task_2_metadata_calibration.csv"
     )
-    frame = add_calibration_availability_columns(select_metadata(metadata_path, start, end))
+    lake_basenames = valid_parquet_lake_basenames(station_root)
+    frame = add_calibration_availability_columns(
+        select_metadata(
+            metadata_path, start, end, allowed_basenames=lake_basenames,
+        )
+    )
 
     output_dir = station_root / "STAGE_1_PRODUCTS_TESTS" / TEST_OUTPUT_NAME
     output_dir.mkdir(parents=True, exist_ok=True)

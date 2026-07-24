@@ -16,13 +16,27 @@ import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 import yaml
+from scipy.interpolate import CubicSpline
 
 from calibration_context import generate_calibration_context
+from mingo00_product_selection import (
+    Mingo00Selection,
+    select_mingo00_products,
+    validate_close_parameters,
+)
 
 
 ANALYSIS_ROOT = Path(__file__).resolve().parents[3]
 STATIONS_ROOT = ANALYSIS_ROOT / "MINGO_ANALYSIS_STATIONS"
 DEFAULT_CONFIG = Path(__file__).with_name("config_test_3_event_gates.yaml")
+TOT_TO_CHARGE_CALIBRATION = (
+    ANALYSIS_ROOT
+    / "MINGO_ANALYSIS_SCRIPTS"
+    / "ANCILLARY"
+    / "CALIBRATIONS_AND_LUTS"
+    / "TOT_TO_CHARGE_CAL"
+    / "tot_to_charge_calibration.csv"
+)
 OUTPUT_NAME = "TEST_3_CONFIGURABLE_GATES"
 BASENAME_RE = re.compile(r"mi0[0-9]\d{11}")
 COMBINATORS = frozenset({"all", "any", "not"})
@@ -114,20 +128,36 @@ def load_configuration(path: Path) -> dict[str, Any]:
         config = yaml.safe_load(handle) or {}
     if not isinstance(config, dict):
         raise ValueError("Config root must be a YAML mapping")
-    required = ("station", "start_date", "end_date", "max_datafiles", "gates")
+    required = ("station", "max_datafiles", "gates")
     missing = [key for key in required if key not in config]
     if missing:
         raise ValueError("Missing config fields: " + ", ".join(missing))
-    start = boundary(config["start_date"], is_end=False)
-    end = boundary(config["end_date"], is_end=True)
+    resolved_station = station_name(config["station"])
+    if resolved_station == "MINGO00":
+        close_parameters = validate_close_parameters(config.get("mingo00_close_parameters"))
+        # MINGO00 acquisition dates are synthetic and must not restrict candidates.
+        start = datetime(2000, 1, 1)
+        end = datetime(2100, 1, 1) - timedelta(microseconds=1)
+    else:
+        date_missing = [key for key in ("start_date", "end_date") if key not in config]
+        if date_missing:
+            raise ValueError("Missing config fields: " + ", ".join(date_missing))
+        start = boundary(config["start_date"], is_end=False)
+        end = boundary(config["end_date"], is_end=True)
+        close_parameters = (
+            validate_close_parameters(config["mingo00_close_parameters"])
+            if "mingo00_close_parameters" in config
+            else ()
+        )
     maximum = int(config["max_datafiles"])
     if start > end or maximum < 1:
         raise ValueError("Require start_date <= end_date and max_datafiles >= 1")
     config.update(
-        station_name=station_name(config["station"]),
+        station_name=resolved_station,
         start=start,
         end=end,
         maximum=maximum,
+        close_parameters=close_parameters,
     )
     return config
 
@@ -187,6 +217,9 @@ def parse_gates(raw_gates: Any) -> list[Gate]:
     for index, raw_gate in enumerate(raw_gates, 1):
         if not isinstance(raw_gate, dict):
             raise ValueError(f"gates item {index} must be a mapping")
+        enabled = raw_gate.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise ValueError(f"gates item {index} enabled must be true or false")
         code = str(raw_gate.get("code", "")).strip()
         if not re.fullmatch(r"10*", code):
             raise ValueError(
@@ -203,10 +236,15 @@ def parse_gates(raw_gates: Any) -> list[Gate]:
             raise ValueError(f"Duplicate gate code, name, or short_label at gates item {index}")
         if not isinstance(condition, dict):
             raise ValueError(f"Gate {code} needs a condition mapping")
-        gates.append(Gate(code, int(code, 2), name, condition, short_label))
         used_codes.add(code)
         used_names.add(name)
         used_labels.add(short_label)
+        if enabled:
+            gates.append(Gate(code, int(code, 2), name, condition, short_label))
+        else:
+            print(f"Gate {code} ({name}) is disabled")
+    if not gates:
+        raise ValueError("At least one gate must have enabled: true")
     return gates
 
 
@@ -801,6 +839,198 @@ def write_efficiency_time_series(
     return csv_path, plot_count
 
 
+def enabled_gate_comparison_setting(
+    config: dict[str, Any], available: set[str],
+) -> dict[str, Any] | None:
+    raw = config.get("enabled_gate_comparison", {})
+    if raw is False:
+        return None
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError("enabled_gate_comparison must be a YAML mapping or false")
+    if not bool(raw.get("enabled", True)):
+        return None
+    time_column = str(raw.get("time_column", "datetime")).strip()
+    topology_column = str(raw.get("topology_column", "tt_task3_list")).strip()
+    missing = sorted({time_column, topology_column} - available)
+    if missing:
+        raise ValueError(
+            "Enabled-gate comparison columns absent from schema: " + ", ".join(missing)
+        )
+    try:
+        window = pd.Timedelta(str(raw.get("accumulation_timespan", "10min")))
+    except ValueError as exc:
+        raise ValueError("Invalid enabled_gate_comparison.accumulation_timespan") from exc
+    if window <= pd.Timedelta(0):
+        raise ValueError("enabled_gate_comparison.accumulation_timespan must be positive")
+    return {
+        "time_column": time_column,
+        "topology_column": topology_column,
+        "window": window,
+    }
+
+
+def write_enabled_gate_comparison(
+    frame: pd.DataFrame,
+    gates: list[Gate],
+    masks: dict[str, pd.Series],
+    setting: dict[str, Any],
+    output_dir: Path,
+    title: str,
+) -> tuple[Path, Path, Path, int]:
+    """Overlay efficiency and rate diagnostics for every enabled individual gate."""
+    time_column = setting["time_column"]
+    topology_column = setting["topology_column"]
+    window = setting["window"]
+    timestamps = pd.to_datetime(frame[time_column], errors="coerce")
+    topology_numeric = pd.to_numeric(frame[topology_column], errors="coerce")
+    topologies = topology_numeric.where(topology_numeric.mod(1).eq(0)).astype("Int64").astype("string")
+    valid_time = timestamps.notna()
+    if not bool(valid_time.any()):
+        raise ValueError(f"{time_column} contains no valid timestamps")
+    seconds = timestamps.loc[valid_time].dt.floor("s")
+    all_windows = pd.DatetimeIndex(
+        timestamps.loc[valid_time].dt.floor(window).drop_duplicates().sort_values(),
+        name="window_start",
+    )
+    exposure = pd.DataFrame({
+        "window_start": seconds.dt.floor(window),
+        "second": seconds,
+    }).groupby("window_start")["second"].nunique().reindex(all_windows, fill_value=0)
+
+    counted_topologies = ("123", "124", "134", "234", "1234")
+    missing_topology = {1: "234", 2: "134", 3: "124", 4: "123"}
+    rows: list[pd.DataFrame] = []
+    for gate in gates:
+        selected = valid_time & masks[gate.code]
+        selected_windows = timestamps.loc[selected].dt.floor(window)
+        gate_event_counts = selected_windows.value_counts(sort=False).reindex(
+            all_windows, fill_value=0,
+        )
+        selected_events = pd.DataFrame({
+            "window_start": selected_windows,
+            "topology": topologies.loc[selected],
+        })
+        counts = selected_events.groupby(["window_start", "topology"]).size().unstack(fill_value=0)
+        counts = counts.reindex(all_windows, fill_value=0)
+        for topology in counted_topologies:
+            if topology not in counts:
+                counts[topology] = 0
+        summary = pd.DataFrame({
+            "window_start": all_windows,
+            "window_end": all_windows + window,
+            "gate_code": gate.code,
+            "gate_name": gate.name,
+            "gate_label": gate.short_label or gate.name,
+            "observed_seconds": exposure.to_numpy(dtype=np.int64),
+            "gate_event_count": gate_event_counts.to_numpy(dtype=np.int64),
+        })
+        for topology in counted_topologies:
+            summary[f"topology_{topology}_count"] = (
+                pd.to_numeric(counts[topology], errors="coerce")
+                .fillna(0).astype(np.int64).to_numpy()
+            )
+        detected = summary["topology_1234_count"].to_numpy(dtype=float)
+        for plane, missing_code in missing_topology.items():
+            undetected = summary[f"topology_{missing_code}_count"].to_numpy(dtype=float)
+            denominator = detected + undetected
+            summary[f"plane_{plane}_efficiency"] = np.divide(
+                detected, denominator,
+                out=np.full(len(denominator), np.nan), where=denominator > 0,
+            )
+        efficiency_columns = [f"plane_{plane}_efficiency" for plane in range(1, 5)]
+        summary["efficiency_product"] = summary[efficiency_columns].prod(axis=1, min_count=4)
+        observed_seconds = summary["observed_seconds"].to_numpy(dtype=float)
+        summary["total_gate_rate_hz"] = np.divide(
+            summary["gate_event_count"].to_numpy(dtype=float), observed_seconds,
+            out=np.full(len(observed_seconds), np.nan), where=observed_seconds > 0,
+        )
+        summary["topology_1234_rate_hz"] = np.divide(
+            detected, observed_seconds,
+            out=np.full(len(observed_seconds), np.nan), where=observed_seconds > 0,
+        )
+        efficiency_product = summary["efficiency_product"].to_numpy(dtype=float)
+        rate_1234 = summary["topology_1234_rate_hz"].to_numpy(dtype=float)
+        summary["corrected_1234_rate_hz"] = np.divide(
+            rate_1234, efficiency_product,
+            out=np.full(len(rate_1234), np.nan),
+            where=np.isfinite(efficiency_product) & (efficiency_product > 0),
+        )
+        rows.append(summary)
+
+    comparison = pd.concat(rows, ignore_index=True)
+    csv_path = output_dir / "enabled_gate_comparison.csv"
+    comparison.to_csv(csv_path, index=False)
+    colors = plt.get_cmap("tab10").colors
+
+    efficiency_path = output_dir / "enabled_gate_plane_efficiencies.png"
+    efficiency_figure, efficiency_axes = plt.subplots(
+        4, 1, figsize=(16, 14), sharex=True, constrained_layout=True,
+    )
+    for gate_index, gate in enumerate(gates):
+        gate_rows = comparison.loc[comparison["gate_code"].eq(gate.code)]
+        label = f"{gate.short_label or gate.name} [{gate.code}]"
+        for plane, axis in enumerate(efficiency_axes, 1):
+            axis.plot(
+                gate_rows["window_start"], gate_rows[f"plane_{plane}_efficiency"],
+                color=colors[gate_index % len(colors)], marker=".", markersize=3,
+                linewidth=1.1, label=label,
+            )
+    for plane, axis in enumerate(efficiency_axes, 1):
+        axis.set(ylabel=f"Plane {plane}\nefficiency", ylim=(-0.02, 1.02))
+        axis.grid(True, alpha=0.25)
+    efficiency_axes[0].legend(ncols=min(4, len(gates)), fontsize=8)
+    efficiency_axes[-1].set_xlabel("Time")
+    efficiency_figure.suptitle(
+        f"{title}\nPlane efficiency by enabled gate | accumulation={window}",
+        fontsize=14,
+    )
+    efficiency_figure.autofmt_xdate()
+    efficiency_figure.savefig(efficiency_path, dpi=160)
+    plt.close(efficiency_figure)
+
+    metrics_path = output_dir / "enabled_gate_rate_efficiency_product.png"
+    metrics_figure, metrics_axes = plt.subplots(
+        3, 1, figsize=(16, 12), sharex=True, constrained_layout=True,
+    )
+    metric_specs = (
+        ("total_gate_rate_hz", "Total gate rate [Hz]", "Total selected-event rate per enabled gate"),
+        ("efficiency_product", "Efficiency product", "Product of the four plane efficiencies"),
+        (
+            "corrected_1234_rate_hz", "Corrected 1234 rate [Hz]",
+            "1234 rate × (1 / efficiency product)",
+        ),
+    )
+    for gate_index, gate in enumerate(gates):
+        gate_rows = comparison.loc[comparison["gate_code"].eq(gate.code)]
+        label = f"{gate.short_label or gate.name} [{gate.code}]"
+        for axis, (column, _, _) in zip(metrics_axes, metric_specs, strict=True):
+            axis.plot(
+                gate_rows["window_start"], gate_rows[column],
+                color=colors[gate_index % len(colors)], marker=".", markersize=3,
+                linewidth=1.1, label=label,
+            )
+    for axis, (_, ylabel, axis_title) in zip(metrics_axes, metric_specs, strict=True):
+        axis.set(ylabel=ylabel, title=axis_title)
+        axis.grid(True, alpha=0.25)
+    metrics_axes[0].legend(ncols=min(4, len(gates)), fontsize=8)
+    metrics_axes[-1].set_xlabel("Time")
+    metrics_figure.suptitle(
+        f"{title}\nEnabled-gate comparison | accumulation={window} | "
+        "rate denominator=observed timestamp-seconds",
+        fontsize=14,
+    )
+    metrics_figure.autofmt_xdate()
+    metrics_figure.savefig(metrics_path, dpi=160)
+    plt.close(metrics_figure)
+    print(
+        f"Enabled-gate comparison: {len(gates)} gate(s), {len(all_windows)} window(s), "
+        f"accumulation={window}"
+    )
+    return efficiency_path, metrics_path, csv_path, 2
+
+
 
 def plane_combination_setting(
     config: dict[str, Any], gates: list[Gate], available: set[str],
@@ -978,53 +1208,426 @@ def write_plane_combination_timeseries(
     return plot_path, csv_path, 1
 
 
-def theta_setting(config: dict[str, Any], available: set[str]) -> dict[str, Any] | None:
-    raw = config.get("theta_histograms", {})
+def angular_histogram_setting(
+    config: dict[str, Any], available: set[str],
+) -> dict[str, Any] | None:
+    raw = config.get("angular_histograms", config.get("theta_histograms", {}))
     if raw is False:
         return None
     if raw is None:
         raw = {}
     if not isinstance(raw, dict):
-        raise ValueError("theta_histograms must be a YAML mapping or false")
+        raise ValueError("angular_histograms must be a YAML mapping or false")
     if not bool(raw.get("enabled", True)):
         return None
-    column = str(raw.get("column", "event_theta")).strip()
-    if column not in available:
-        raise ValueError(f"Theta histogram column absent from schema: {column}")
-    bins = int(raw.get("bins", 90))
-    if bins < 1:
-        raise ValueError("theta_histograms.bins must be positive")
-    value_range = raw.get("range", [0, 90])
-    if not isinstance(value_range, (list, tuple)) or len(value_range) != 2:
-        raise ValueError("theta_histograms.range must contain [minimum, maximum]")
-    lower, upper = float(value_range[0]), float(value_range[1])
-    if lower >= upper:
-        raise ValueError("theta_histograms.range must be increasing")
+    raw_variables = raw.get("variables")
+    if raw_variables is None:
+        raw_variables = [{
+            "column": str(raw.get("column", "event_theta")),
+            "label": "Theta",
+            "slug": "theta",
+            "bins": raw.get("bins", 90),
+            "range": raw.get("range", [0, 90]),
+        }]
+    if not isinstance(raw_variables, list) or not raw_variables:
+        raise ValueError("angular_histograms.variables must be a nonempty list")
+    variables: list[dict[str, Any]] = []
+    seen_slugs: set[str] = set()
+    for index, item in enumerate(raw_variables, 1):
+        if not isinstance(item, dict):
+            raise ValueError(f"angular_histograms.variables item {index} must be a mapping")
+        column = str(item.get("column", "")).strip()
+        label = str(item.get("label", column)).strip()
+        slug = str(item.get("slug", label)).strip().lower()
+        slug = re.sub(r"[^a-z0-9]+", "_", slug).strip("_")
+        if not column or not label or not slug:
+            raise ValueError(f"angular_histograms.variables item {index} needs column and label")
+        if column not in available:
+            raise ValueError(f"Angular histogram column absent from schema: {column}")
+        if slug in seen_slugs:
+            raise ValueError(f"Duplicate angular histogram slug: {slug}")
+        bins = int(item.get("bins", raw.get("bins", 90)))
+        if bins < 1:
+            raise ValueError(f"angular_histograms variable {slug} bins must be positive")
+        value_range = item.get("range", raw.get("range", [0, 90]))
+        if not isinstance(value_range, (list, tuple)) or len(value_range) != 2:
+            raise ValueError(f"angular_histograms variable {slug} range needs [min, max]")
+        lower, upper = float(value_range[0]), float(value_range[1])
+        if lower >= upper:
+            raise ValueError(f"angular_histograms variable {slug} range must be increasing")
+        variables.append({
+            "column": column,
+            "label": label,
+            "slug": slug,
+            "bins": bins,
+            "range": (lower, upper),
+        })
+        seen_slugs.add(slug)
+    z_columns = [f"z_p{plane}" for plane in range(1, 5)]
+    if not set(z_columns).issubset(available):
+        z_columns = []
     return {
-        "column": column,
-        "bins": bins,
-        "range": (lower, upper),
+        "variables": variables,
         "degrees": bool(raw.get("convert_radians_to_degrees", True)),
         "include_combined_zero": bool(raw.get("include_combined_zero", True)),
+        "z_columns": z_columns,
+        "z_unit": str(raw.get("plane_z_unit", "mm")).strip(),
     }
 
 
-def write_theta_histograms(
+def charge_calibration_comparison_setting(
+    config: dict[str, Any], available: set[str],
+) -> dict[str, Any] | None:
+    """Resolve the non-commuting strip-sum/calibration comparison."""
+    raw = config.get("charge_calibration_comparison", {})
+    if raw is False:
+        return None
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError("charge_calibration_comparison must be a YAML mapping or false")
+    if not bool(raw.get("enabled", True)):
+        return None
+    suffix = str(raw.get("source_suffix", "qsum_cal")).strip()
+    columns = [
+        f"p{plane}_s{strip}_{suffix}"
+        for plane in range(1, 5)
+        for strip in range(1, 5)
+    ]
+    missing = sorted(set(columns) - available)
+    if missing:
+        raise ValueError(
+            "Charge-calibration comparison columns absent from schema: "
+            + ", ".join(missing)
+        )
+    raw_bins = raw.get("bins", 100)
+    if isinstance(raw_bins, str) and raw_bins.strip().lower() == "auto":
+        bins: int | str = "auto"
+    else:
+        bins = int(raw_bins)
+        if bins < 1:
+            raise ValueError(
+                "charge_calibration_comparison.bins must be a positive integer or auto"
+            )
+    minimum_active = int(raw.get("min_active_strips", 2))
+    if not 1 <= minimum_active <= 4:
+        raise ValueError(
+            "charge_calibration_comparison.min_active_strips must be in 1..4"
+        )
+    return {
+        "suffix": suffix,
+        "columns": columns,
+        "bins": bins,
+        "minimum_active": minimum_active,
+    }
+
+
+def write_per_strip_charge_histograms(
     frame: pd.DataFrame,
-    gates: list[Gate],
-    masks: dict[str, pd.Series],
+    setting: dict[str, Any],
+    spline: CubicSpline,
+    width_domain: tuple[float, float],
+    output_dir: Path,
+    title: str,
+) -> tuple[Path, Path]:
+    """Write matching 4x4 strip-ToT and calibrated-charge histogram grids."""
+    source_labels = (
+        frame["_source_basename"].astype(str).to_numpy()
+        if "_source_basename" in frame.columns
+        else np.full(len(frame), "selected data", dtype=object)
+    )
+    source_order = list(dict.fromkeys(source_labels.tolist()))
+    source_colors = plt.get_cmap("tab10").colors
+    suffix = setting["suffix"]
+    specifications = [
+        (
+            "00_per_strip_uncalibrated_tot_histograms.png",
+            "Uncalibrated ToT input within calibration domain", "ToT (ns)", False,
+        ),
+        (
+            "01_per_strip_calibrated_charge_histograms.png",
+            "ToT-to-charge calibrated", "Charge (fC)", True,
+        ),
+    ]
+    written: list[Path] = []
+    for filename, diagnostic_label, x_label, apply_spline in specifications:
+        figure, axes = plt.subplots(
+            4, 4, figsize=(16, 12), constrained_layout=True,
+        )
+        legend_handles: list[Any] = []
+        legend_labels: list[str] = []
+        for plane in range(1, 5):
+            for strip in range(1, 5):
+                axis = axes[plane - 1, strip - 1]
+                column = f"p{plane}_s{strip}_{suffix}"
+                widths = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
+                positive = np.isfinite(widths) & (widths > 0)
+                in_domain = (widths >= width_domain[0]) & (widths <= width_domain[1])
+                out_of_domain_count = int((positive & ~in_domain).sum())
+                valid = positive & in_domain
+                parts: list[np.ndarray] = []
+                part_labels: list[str] = []
+                part_colors: list[Any] = []
+                for source_index, source_name in enumerate(source_order):
+                    source_mask = valid & (source_labels == source_name)
+                    if not np.any(source_mask):
+                        continue
+                    values = widths[source_mask]
+                    parts.append(spline(values) if apply_spline else values)
+                    part_labels.append(source_name)
+                    part_colors.append(source_colors[source_index % len(source_colors)])
+                if parts:
+                    edges = np.histogram_bin_edges(
+                        np.concatenate(parts), bins=setting["bins"],
+                    )
+                    for values, part_label, part_color in zip(
+                        parts, part_labels, part_colors, strict=True,
+                    ):
+                        axis.hist(
+                            values, bins=edges, histtype="step", linewidth=1.25,
+                            color=part_color, label=part_label,
+                        )
+                    if not legend_handles:
+                        legend_handles, legend_labels = axis.get_legend_handles_labels()
+                else:
+                    axis.text(
+                        0.5, 0.5, "No positive values", ha="center", va="center",
+                        transform=axis.transAxes,
+                    )
+                axis.set_title(
+                    f"Plane {plane}, strip {strip} "
+                    f"(N={sum(len(part) for part in parts):,}, out={out_of_domain_count:,})",
+                    fontsize=10,
+                )
+                axis.grid(True, alpha=0.22)
+        figure.supxlabel(x_label)
+        figure.supylabel("Count")
+        figure.suptitle(
+            f"{title.partition("|")[0].strip()} | {diagnostic_label} per strip\n"
+            f"source: p#_s#_{suffix}",
+            fontsize=15,
+        )
+        if legend_handles:
+            figure.legend(
+                legend_handles, legend_labels, loc="upper right",
+                fontsize=8, title="Source file",
+            )
+        destination = output_dir / filename
+        figure.savefig(destination, dpi=160)
+        plt.close(figure)
+        written.append(destination)
+        print(f"Per-strip charge diagnostic: {destination}")
+    return written[0], written[1]
+
+
+def write_charge_calibration_comparison(
+    frame: pd.DataFrame,
     setting: dict[str, Any],
     output_dir: Path,
     title: str,
 ) -> tuple[Path, int]:
-    theta_column = setting["column"]
-    theta = pd.to_numeric(frame[theta_column], errors="coerce").to_numpy(dtype=float)
+    """Compare sum(calibrate(strip ToT)) with calibrate(sum(strip ToT))."""
+    calibration = pd.read_csv(TOT_TO_CHARGE_CALIBRATION)
+    required = {"Width", "Fast_Charge"}
+    if not required.issubset(calibration.columns):
+        raise ValueError(
+            f"Expected {required} in charge calibration {TOT_TO_CHARGE_CALIBRATION}"
+        )
+    calibration = calibration.loc[:, ["Width", "Fast_Charge"]].apply(
+        pd.to_numeric, errors="coerce"
+    ).dropna().sort_values("Width")
+    widths_table = calibration["Width"].to_numpy(dtype=float)
+    charges_table = calibration["Fast_Charge"].to_numpy(dtype=float)
+    if len(widths_table) < 2 or np.any(np.diff(widths_table) <= 0):
+        raise ValueError("Charge-calibration widths must be strictly increasing")
+    spline = CubicSpline(widths_table, charges_table, bc_type="natural")
+    write_per_strip_charge_histograms(
+        frame, setting, spline, (float(widths_table[0]), float(widths_table[-1])),
+        output_dir, title,
+    )
+
+    calibrate_then_sum: list[np.ndarray] = []
+    sum_then_calibrate: list[np.ndarray] = []
+    source_by_observation: list[np.ndarray] = []
+    plane_by_observation: list[np.ndarray] = []
+    source_labels = (
+        frame["_source_basename"].astype(str).to_numpy()
+        if "_source_basename" in frame.columns
+        else np.full(len(frame), "selected data", dtype=object)
+    )
+    suffix = setting["suffix"]
+    rejected_outside_domain = 0
+    for plane in range(1, 5):
+        columns = [f"p{plane}_s{strip}_{suffix}" for strip in range(1, 5)]
+        widths = frame[columns].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+        active = np.isfinite(widths) & (widths > 0)
+        active_count = active.sum(axis=1)
+        positive_widths = np.where(active, widths, 0.0)
+        width_sum = positive_widths.sum(axis=1)
+        in_domain = (
+            np.all(~active | (widths <= widths_table[-1]), axis=1)
+            & (width_sum >= widths_table[0])
+            & (width_sum <= widths_table[-1])
+        )
+        candidate = active_count >= setting["minimum_active"]
+        valid = candidate & in_domain
+        rejected_outside_domain += int((candidate & ~in_domain).sum())
+        if not np.any(valid):
+            continue
+        strip_charges = np.where(active[valid], spline(widths[valid]), 0.0)
+        calibrate_then_sum.append(strip_charges.sum(axis=1))
+        sum_then_calibrate.append(spline(width_sum[valid]))
+        source_by_observation.append(source_labels[valid])
+        plane_by_observation.append(
+            np.full(int(valid.sum()), plane, dtype=np.int8)
+        )
+
+    plot_path = output_dir / "strip_charge_calibration_order_comparison.png"
+    if not calibrate_then_sum:
+        raise ValueError(
+            "No valid multi-strip plane events remained for the charge-calibration "
+            "order comparison"
+        )
+    first = np.concatenate(calibrate_then_sum)
+    second = np.concatenate(sum_then_calibrate)
+    sources = np.concatenate(source_by_observation)
+    planes = np.concatenate(plane_by_observation)
+    combined = np.concatenate((first, second))
+    edges = np.histogram_bin_edges(combined, bins=setting["bins"])
+    difference = first - second
+
+    fig, axes = plt.subplots(
+        2, 2, figsize=(14, 10), sharex=True, sharey=True,
+        constrained_layout=True,
+    )
+    legend_handles: list[Any] = []
+    legend_labels: list[str] = []
+    for plane in range(1, 5):
+        axis = axes.flat[plane - 1]
+        plane_mask = planes == plane
+        plane_first = first[plane_mask]
+        plane_second = second[plane_mask]
+        axis.hist(
+            plane_first, bins=edges, histtype="stepfilled", alpha=0.30,
+            linewidth=1.6, color="tab:blue",
+            label="sum of calibrated strip charges",
+        )
+        axis.hist(
+            plane_second, bins=edges, histtype="step", linewidth=2.0,
+            color="tab:orange", label="calibration of summed strip ToT",
+        )
+        axis.set_title(f"Plane {plane}")
+        axis.grid(True, alpha=0.25)
+        if len(plane_first):
+            plane_difference = plane_first - plane_second
+            annotation = (
+                f"N = {len(plane_first):,}\n"
+                f"median difference = {np.median(plane_difference):+.1f} fC"
+            )
+        else:
+            annotation = "No valid plane events"
+        axis.text(
+            0.98, 0.97, annotation,
+            transform=axis.transAxes, ha="right", va="top",
+            bbox={"facecolor": "white", "alpha": 0.85, "edgecolor": "0.75"},
+        )
+        if not legend_handles:
+            legend_handles, legend_labels = axis.get_legend_handles_labels()
+    fig.supxlabel("Plane charge (fC)")
+    fig.supylabel("Plane-event count")
+    fig.suptitle(
+        f"{title.partition("|")[0].strip()} | ToT-to-charge calibration order by plane\n"
+        f"(at least {setting['minimum_active']} active strips)",
+        fontsize=15,
+    )
+    if legend_handles:
+        fig.legend(
+            legend_handles, legend_labels, loc="upper right",
+            bbox_to_anchor=(0.99, 0.96), fontsize=9,
+        )
+    fig.savefig(plot_path, dpi=160)
+    plt.close(fig)
+
+    scatter_path = output_dir / "strip_charge_calibration_order_scatter.png"
+    scatter_fig, scatter_axes = plt.subplots(
+        2, 2, figsize=(11, 10), sharex=True, sharey=True,
+        constrained_layout=True,
+    )
+    source_order = list(dict.fromkeys(sources.tolist()))
+    source_colors = plt.get_cmap("tab10").colors
+    lower = float(combined.min())
+    upper = float(combined.max())
+    for plane in range(1, 5):
+        scatter_axis = scatter_axes.flat[plane - 1]
+        plane_mask = planes == plane
+        for source_index, source_name in enumerate(source_order):
+            selection = plane_mask & (sources == source_name)
+            if not np.any(selection):
+                continue
+            scatter_axis.scatter(
+                second[selection], first[selection], s=7, alpha=0.22,
+                color=source_colors[source_index % len(source_colors)],
+                edgecolors="none", rasterized=True, label=source_name,
+            )
+        scatter_axis.plot(
+            [lower, upper], [lower, upper], color="black", linestyle="--",
+            linewidth=1.2, label="equal charge",
+        )
+        plane_difference = difference[plane_mask]
+        scatter_axis.set(
+            xlim=(lower, upper), ylim=(lower, upper),
+            title=f"Plane {plane} (N={int(plane_mask.sum()):,})",
+        )
+        scatter_axis.set_aspect("equal", adjustable="box")
+        scatter_axis.grid(True, alpha=0.25)
+        scatter_axis.text(
+            0.03, 0.97,
+            f"median y - x = {np.median(plane_difference):+.1f} fC",
+            transform=scatter_axis.transAxes, ha="left", va="top", fontsize=9,
+            bbox={"facecolor": "white", "alpha": 0.85, "edgecolor": "0.75"},
+        )
+    for scatter_axis in scatter_axes[1, :]:
+        scatter_axis.set_xlabel("Calibration of summed strip ToT (fC)")
+    for scatter_axis in scatter_axes[:, 0]:
+        scatter_axis.set_ylabel("Sum of calibrated strip charges (fC)")
+    scatter_axes[1, 1].legend(
+        loc="lower right", fontsize=8, title="Source file / reference",
+    )
+    scatter_fig.suptitle(
+        f"{title.partition("|")[0].strip()} | Calibration-order scatter by plane\n"
+        f"(at least {setting['minimum_active']} active strips)",
+        fontsize=15,
+    )
+    scatter_fig.savefig(scatter_path, dpi=160)
+    plt.close(scatter_fig)
+    print(f"Charge-calibration scatter: {scatter_path}")
+    print(
+        f"Charge-calibration comparison: {len(first):,} plane events; "
+        f"excluded {rejected_outside_domain:,} outside the "
+        f"[{widths_table[0]:g}, {widths_table[-1]:g}] ns calibration domain."
+    )
+    return plot_path, len(first)
+
+
+def write_angular_histogram_comparison(
+    frame: pd.DataFrame,
+    gates: list[Gate],
+    masks: dict[str, pd.Series],
+    setting: dict[str, Any],
+    variable: dict[str, Any],
+    output_dir: Path,
+    title: str,
+) -> tuple[Path, int]:
+    angle_column = variable["column"]
+    angle_label = variable["label"]
+    angle_slug = variable["slug"]
+    angle = pd.to_numeric(frame[angle_column], errors="coerce").to_numpy(dtype=float)
     if setting["degrees"]:
-        theta = np.degrees(theta)
+        angle = np.degrees(angle)
         unit = "degrees"
     else:
         unit = "radians"
-    finite = np.isfinite(theta)
+    finite = np.isfinite(angle)
     selections: list[tuple[str, str, str, np.ndarray]] = []
     for gate in gates:
         selections.append((
@@ -1042,7 +1645,7 @@ def write_theta_histograms(
             frame["gate_code"].astype(str).eq(code).to_numpy(dtype=bool),
         ))
 
-    edges = np.linspace(setting["range"][0], setting["range"][1], setting["bins"] + 1)
+    edges = np.linspace(variable["range"][0], variable["range"][1], variable["bins"] + 1)
     bin_widths = np.diff(edges)
     histogram_rows: list[dict[str, Any]] = []
     fig, axes = plt.subplots(
@@ -1052,7 +1655,7 @@ def write_theta_histograms(
     plotted_by_kind = {"individual": 0, "combined_exact": 0}
 
     for kind, code, name, gate_mask in selections:
-        values = theta[finite & gate_mask]
+        values = angle[finite & gate_mask]
         counts, _ = np.histogram(values, bins=edges)
         in_range_events = int(counts.sum())
         density = (
@@ -1073,7 +1676,7 @@ def write_theta_histograms(
                 "in_range_events": in_range_events,
             })
         if in_range_events == 0:
-            print(f"Warning: no in-range theta values for {kind} gate {code}")
+            print(f"Warning: no in-range {angle_label} values for {kind} gate {code}")
             continue
         legend_name = (
             next(gate.short_label or gate.name for gate in gates if gate.code == code)
@@ -1093,7 +1696,7 @@ def write_theta_histograms(
         title="Individual gates (events may appear in more than one curve)",
     )
     axes[1].set(
-        xlabel=f"{theta_column} [{unit}]",
+        xlabel=f"{angle_column} [{unit}]",
         ylabel=f"Probability density [{density_unit}]",
         title="Exact combined gate codes (mutually exclusive)",
     )
@@ -1106,19 +1709,55 @@ def write_theta_histograms(
                 0.5, 0.5, "No populated gates", ha="center", va="center",
                 transform=axis.transAxes,
             )
-    fig.suptitle(
-        f"{title}\nTheta density comparison with shared bins and x-axis",
-        fontsize=14,
+    title_parts = [part.strip() for part in title.split("|")]
+    compact_title = " | ".join(title_parts[:3])
+    z_labels: list[str] = []
+    for plane, column in enumerate(setting["z_columns"], 1):
+        values = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
+        finite_values = values[np.isfinite(values)]
+        if not len(finite_values):
+            label = "n/a"
+        else:
+            lower_z = float(np.min(finite_values))
+            upper_z = float(np.max(finite_values))
+            label = f"{lower_z:g}" if np.isclose(lower_z, upper_z) else f"{lower_z:g}–{upper_z:g}"
+        z_labels.append(f"P{plane}={label}")
+    z_title = (
+        f"PLANE Z POSITIONS [{setting['z_unit']}]: " + "  |  ".join(z_labels)
+        if z_labels else "PLANE Z POSITIONS: unavailable"
     )
-    plot_path = output_dir / "theta_gate_density_comparison.png"
+    fig.suptitle(
+        f"{compact_title}\n{z_title}\n"
+        f"{angle_label} density comparison with shared bins and x-axis",
+        fontsize=17,
+        fontweight="bold",
+    )
+    plot_path = output_dir / f"{angle_slug}_gate_density_comparison.png"
     written = int(any(plotted_by_kind.values()))
     if written:
         fig.savefig(plot_path, dpi=160)
     plt.close(fig)
 
-    csv_path = output_dir / "theta_histogram_density.csv"
+    csv_path = output_dir / f"{angle_slug}_histogram_density.csv"
     pd.DataFrame(histogram_rows).to_csv(csv_path, index=False)
     return csv_path, written
+
+
+def write_angular_histograms(
+    frame: pd.DataFrame,
+    gates: list[Gate],
+    masks: dict[str, pd.Series],
+    setting: dict[str, Any],
+    output_dir: Path,
+    title: str,
+) -> tuple[list[Path], int]:
+    results = [
+        write_angular_histogram_comparison(
+            frame, gates, masks, setting, variable, output_dir, title,
+        )
+        for variable in setting["variables"]
+    ]
+    return [csv_path for csv_path, _ in results], sum(written for _, written in results)
 
 
 def topology_charge_scatter_setting(
@@ -1747,15 +2386,41 @@ def main() -> int:
     topology_setting = derived_topology_setting(config)
     root = STATIONS_ROOT / config["station_name"]
     lake = root / "STAGE_1_PRODUCTS" / "EVENT_DATA" / "PARQUET_LAKE"
-    candidates = discover(lake, config["start"], config["end"])
-    files = tightest_block(candidates, config["maximum"])
+    simulation_selection: Mingo00Selection | None = None
+    if config["station_name"] == "MINGO00":
+        simulation_selection = select_mingo00_products(
+            lake,
+            config["maximum"],
+            config["close_parameters"],
+            product_factory=Product,
+            parquet_basename=parquet_basename,
+            acquisition_time=acquisition_time,
+        )
+        files = simulation_selection.products
+        print(
+            f"Found {simulation_selection.candidate_count} MINGO00 products with simulation "
+            f"metadata; selected tightest parameter cluster of {len(files)} using: "
+            + ", ".join(simulation_selection.close_parameters)
+        )
+        print(f"Parameter-cluster center: {simulation_selection.center_basename}")
+        for index, product in enumerate(files, 1):
+            param_id = simulation_selection.param_set_id_by_basename[product.basename]
+            distance = simulation_selection.distance_by_basename[product.basename]
+            values = simulation_selection.values_by_basename[product.basename]
+            print(
+                f"  {index}. param_set_id={param_id} distance={distance:.6g} "
+                f"{product.basename}  {values}"
+            )
+    else:
+        candidates = discover(lake, config["start"], config["end"])
+        files = tightest_block(candidates, config["maximum"])
+        print(f"Found {len(candidates)} files in range; selected tightest consecutive block of {len(files)}:")
+        for index, product in enumerate(files, 1):
+            print(f"  {index}. {product.acquired}  {product.basename}")
+        if len(files) > 1:
+            print(f"Acquisition-start span: {files[-1].acquired - files[0].acquired}")
     available, types = schemas(files)
     available_set = set(available)
-    print(f"Found {len(candidates)} files in range; selected tightest consecutive block of {len(files)}:")
-    for index, product in enumerate(files, 1):
-        print(f"  {index}. {product.acquired}  {product.basename}")
-    if len(files) > 1:
-        print(f"Acquisition-start span: {files[-1].acquired - files[0].acquired}")
     show_columns(available, types)
 
     derived_names = derived_column_names() if topology_setting["enabled"] else []
@@ -1777,8 +2442,12 @@ def main() -> int:
         raise ValueError("Derived strip-topology source columns absent: " + ", ".join(missing_sources))
     rate_setting = time_series_setting(config, available_set)
     efficiency_setting = efficiency_time_series_setting(config, gates, available_set)
+    gate_comparison = enabled_gate_comparison_setting(config, available_set)
     plane_combination = plane_combination_setting(config, gates, available_set)
-    histogram_setting = theta_setting(config, available_set)
+    histogram_setting = angular_histogram_setting(config, available_set)
+    calibration_comparison = charge_calibration_comparison_setting(
+        config, available_set,
+    )
     charge_scatter_setting = topology_charge_scatter_setting(
         config, gates, available_set,
     )
@@ -1793,10 +2462,17 @@ def main() -> int:
         *([] if efficiency_setting is None else [
             efficiency_setting["time_column"], efficiency_setting["topology_column"],
         ]),
+        *([] if gate_comparison is None else [
+            gate_comparison["time_column"], gate_comparison["topology_column"],
+        ]),
         *([] if plane_combination is None else [
             plane_combination["time_column"], plane_combination["topology_column"],
         ]),
-        *([] if histogram_setting is None else [histogram_setting["column"]]),
+        *([] if histogram_setting is None else [
+            *(variable["column"] for variable in histogram_setting["variables"]),
+            *histogram_setting["z_columns"],
+        ]),
+        *([] if calibration_comparison is None else calibration_comparison["columns"]),
         *(column for setting in charge_scatter_settings for column in setting["columns"]),
         *(column for setting in y_position_settings for column in setting["columns"]),
     ]))
@@ -1804,17 +2480,29 @@ def main() -> int:
     add_derived_topology_columns(frame, topology_setting)
     masks = assign_gates(frame, gates)
 
-    interval = f"{config['start']:%Y%m%d_%H%M%S}_{config['end']:%Y%m%d_%H%M%S}"
+    interval = (
+        "PARAMETER_CLOSE"
+        if simulation_selection is not None
+        else f"{config['start']:%Y%m%d_%H%M%S}_{config['end']:%Y%m%d_%H%M%S}"
+    )
     group = f"{files[0].basename}_{files[-1].basename}"
     output = root / "STAGE_1_PRODUCTS_TESTS" / OUTPUT_NAME / f"{interval}_{group}"
     rate_dir = output / "RATE_TIMESERIES"
     efficiency_dir = output / "EFFICIENCY_TIMESERIES"
+    gate_comparison_dir = output / "ENABLED_GATE_COMPARISON"
     plane_combination_dir = output / "PLANE_COMBINATIONS"
-    theta_dir = output / "THETA_HISTOGRAMS"
+    angular_dir = output / "ANGULAR_HISTOGRAMS"
+    charge_calibration_dir = output / "CHARGE_CALIBRATION_COMPARISON"
     scatter_dir = output / "SCATTERS"
-    for directory in (output, rate_dir, efficiency_dir, plane_combination_dir, theta_dir, scatter_dir):
+    for directory in (
+        output, rate_dir, efficiency_dir, gate_comparison_dir, plane_combination_dir, angular_dir,
+        charge_calibration_dir, scatter_dir,
+    ):
         directory.mkdir(parents=True, exist_ok=True)
-    for directory in (rate_dir, efficiency_dir, plane_combination_dir, theta_dir, scatter_dir):
+    for directory in (
+        rate_dir, efficiency_dir, gate_comparison_dir, plane_combination_dir, angular_dir,
+        charge_calibration_dir, scatter_dir,
+    ):
         for pattern in ("*.png", "*.csv"):
             for obsolete in directory.glob(pattern):
                 obsolete.unlink()
@@ -1828,6 +2516,11 @@ def main() -> int:
             "acquisition_datetime": product.acquired,
             "rows": pq.ParquetFile(product.path).metadata.num_rows,
             "path": str(product.path),
+            **(
+                simulation_selection.manifest_fields(product.basename)
+                if simulation_selection is not None
+                else {"selection_mode": "chronological_minimum_span"}
+            ),
         }
         for index, product in enumerate(files, 1)
     ]).to_csv(manifest_path, index=False)
@@ -1836,14 +2529,24 @@ def main() -> int:
     print("\nGate population summary:")
     print(summary.to_string(index=False))
 
-    title = (
-        f"{root.name} | {len(files)} consecutive files | "
-        f"{files[0].acquired:%Y-%m-%d %H:%M:%S} to {files[-1].acquired:%Y-%m-%d %H:%M:%S}"
-    )
+    if simulation_selection is not None:
+        title = (
+            f"{root.name} | {len(files)} simulation-parameter-close files | "
+            f"center={simulation_selection.center_basename} | "
+            "parameters=" + ",".join(simulation_selection.close_parameters)
+        )
+    else:
+        title = (
+            f"{root.name} | {len(files)} consecutive files | "
+            f"{files[0].acquired:%Y-%m-%d %H:%M:%S} to "
+            f"{files[-1].acquired:%Y-%m-%d %H:%M:%S}"
+        )
+    selected_start = min(product.acquired for product in files)
+    selected_end = max(product.acquired for product in files)
     calibration_paths = generate_calibration_context(
         root,
-        config["start"],
-        config["end"],
+        selected_start if simulation_selection is not None else config["start"],
+        selected_end if simulation_selection is not None else config["end"],
         output / "00_CALIBRATION_CONTEXT",
         title,
         {product.basename for product in files},
@@ -1861,6 +2564,19 @@ def main() -> int:
         efficiency_csv, efficiency_plots = write_efficiency_time_series(
             frame, gates, masks, efficiency_setting, efficiency_dir, title,
         )
+    gate_efficiency_plot: Path | None = None
+    gate_metrics_plot: Path | None = None
+    gate_comparison_csv: Path | None = None
+    gate_comparison_plots = 0
+    if gate_comparison is not None:
+        (
+            gate_efficiency_plot,
+            gate_metrics_plot,
+            gate_comparison_csv,
+            gate_comparison_plots,
+        ) = write_enabled_gate_comparison(
+            frame, gates, masks, gate_comparison, gate_comparison_dir, title,
+        )
     plane_combination_plot: Path | None = None
     plane_combination_csv: Path | None = None
     plane_combination_plots = 0
@@ -1870,11 +2586,19 @@ def main() -> int:
                 frame, gates, masks, plane_combination, plane_combination_dir, title,
             )
         )
-    theta_csv: Path | None = None
-    theta_plots = 0
+    angular_csvs: list[Path] = []
+    angular_plots = 0
     if histogram_setting is not None:
-        theta_csv, theta_plots = write_theta_histograms(
-            frame, gates, masks, histogram_setting, theta_dir, title,
+        angular_csvs, angular_plots = write_angular_histograms(
+            frame, gates, masks, histogram_setting, angular_dir, title,
+        )
+    charge_calibration_plot: Path | None = None
+    charge_calibration_values = 0
+    if calibration_comparison is not None:
+        charge_calibration_plot, charge_calibration_values = (
+            write_charge_calibration_comparison(
+                frame, calibration_comparison, charge_calibration_dir, title,
+            )
         )
     charge_scatter_results = [
         write_topology_charge_scatter(
@@ -1894,8 +2618,11 @@ def main() -> int:
     print(
         f"Wrote {len(calibration_paths) - 1} calibration context plot(s), "
         f"{rate_plots} gate-rate plot(s), {efficiency_plots} efficiency plot(s), "
+        f"{gate_comparison_plots} enabled-gate comparison plot(s), "
         f"{plane_combination_plots} plane-combination plot(s), "
-        f"{theta_plots} theta histogram(s), "
+        f"{angular_plots} angular histogram(s), "
+        f"{int(charge_calibration_plot is not None)} charge-calibration comparison "
+        f"plot(s) from {charge_calibration_values:,} plane events, "
         f"{charge_scatter_plots} topology-charge scatter plot(s), and "
         f"{y_position_plots} topology-Y plot(s)"
     )
@@ -1905,12 +2632,20 @@ def main() -> int:
         print(f"Gate rate data: {rate_csv}")
     if efficiency_csv is not None:
         print(f"Efficiency time-series data: {efficiency_csv}")
+    if gate_efficiency_plot is not None:
+        print(f"Enabled-gate efficiency overlay: {gate_efficiency_plot}")
+    if gate_metrics_plot is not None:
+        print(f"Enabled-gate rate/efficiency comparison: {gate_metrics_plot}")
+    if gate_comparison_csv is not None:
+        print(f"Enabled-gate comparison data: {gate_comparison_csv}")
     if plane_combination_plot is not None:
         print(f"Plane-combination plot: {plane_combination_plot}")
     if plane_combination_csv is not None:
         print(f"Plane-combination data: {plane_combination_csv}")
-    if theta_csv is not None:
-        print(f"Theta histogram data: {theta_csv}")
+    for angular_csv in angular_csvs:
+        print(f"Angular histogram data: {angular_csv}")
+    if charge_calibration_plot is not None:
+        print(f"Charge-calibration comparison: {charge_calibration_plot}")
     for plot_path, csv_path, plotted in charge_scatter_results:
         if plotted:
             print(f"Topology charge scatter: {plot_path}")

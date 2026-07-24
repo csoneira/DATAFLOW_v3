@@ -80,8 +80,15 @@ MASTER_STAGE_ROOT=/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/
 0 3 * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/ORCHESTRATION/CRON_RUN_LOGGED/cron_run_logged.sh $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/REMOTE_SYNC/STATION_AUTOMATION_SCRIPTS/update_mingo03.log -- rsync -avz --delete $HOME/DATAFLOW_v3/FOR_MINGO_SYSTEMS/station_automation_scripts/ rpcuser@mingo03:/home/rpcuser/station_automation_scripts/
 0 4 * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/ORCHESTRATION/CRON_RUN_LOGGED/cron_run_logged.sh $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/REMOTE_SYNC/STATION_AUTOMATION_SCRIPTS/update_mingo04.log -- rsync -avz --delete $HOME/DATAFLOW_v3/FOR_MINGO_SYSTEMS/station_automation_scripts/ rpcuser@mingo04:/home/rpcuser/station_automation_scripts/
 
-# Update the list of processed basenames
-0 * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/ORCHESTRATION/CRON_RUN_LOGGED/cron_run_logged.sh $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/UPDATE_EXECUTION_CSVS/update_execution_csvs.log -- /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/UPDATE_EXECUTION_CSVS/update_execution_csvs.sh --not-erase
+# Audit and reconcile Stage 0 through the Parquet Lake. This is now the sole
+# producer of MINGOxx_processed_basenames.csv: only valid lake Parquets count.
+# Repairs remain restricted to config_selection.yaml ranges and are deferred
+# while /home is at or above the script storage safety threshold.
+2-47/15 * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/ORCHESTRATION/CRON_RUN_LOGGED/cron_run_logged.sh $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/FILE_FLOW_TRACKER/file_flow_tracker.log -- /usr/bin/env python3 $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/FILE_FLOW_TRACKER/file_flow_tracker.py --apply
+
+# Lightweight read-only status refresh for real-time dashboards. It reuses the
+# last deep metadata snapshot and scans only live artifacts and lake files.
+* * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/ORCHESTRATION/CRON_RUN_LOGGED/cron_run_logged.sh $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/FILE_FLOW_TRACKER/file_flow_realtime.log -- /usr/bin/env python3 $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/FILE_FLOW_TRACKER/file_flow_realtime.py
 
 # Repair malformed STEP_1 event metadata files before downstream readers hit parser errors
 */15 * * * * /bin/bash $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/ORCHESTRATION/CRON_RUN_LOGGED/cron_run_logged.sh $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/OPERATIONS/FIX_METADATA_FILES/fix_event_metadata_files.log -- /usr/bin/flock -n $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/LOCKS/cron/fix_event_metadata_files.lock /usr/bin/env python3 $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/FIX_METADATA_FILES/fix_event_metadata_files.py --quiet-if-clean

@@ -732,6 +732,7 @@ cleanup() {
   release_argument_lock
 }
 trap cleanup EXIT
+start_runtime_watchdog
 
 log_info "guide_raw_to_corrected.sh started (stations=${stations_requested[*]} tasks=${tasks_requested[*]})."
 refresh_execution_pairs_from_config true

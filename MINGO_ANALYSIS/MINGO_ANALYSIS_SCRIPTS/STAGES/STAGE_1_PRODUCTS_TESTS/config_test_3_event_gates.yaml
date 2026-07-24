@@ -1,11 +1,22 @@
-# Test 3: configurable event gates over a tight chronological product group.
-station: 2
-start_date: "2026-01-19"
-end_date: "2026-01-21"
-max_datafiles: 100
+# Test 3: configurable event gates over a selected product group.
+station: 1
+
+# Used only when station is MINGO00. Dates are then ignored and the script
+# chooses the tightest group in this simulation-parameter space. This example
+# intentionally ignores flux_cm2_min.
+mingo00_close_parameters: [cos_n, z_plane_1, z_plane_2, z_plane_3, z_plane_4, efficiencies, trigger_combinations]
+
+# Ignored for MINGO00 because simulated acquisition dates are not real time.
+start_date: 2026-01-22 # "2026-01-19"
+end_date: 2026-01-30 # "2026-01-21"
+# Physical stations use a tight chronological block; MINGO00 uses a tight
+# cluster in mingo00_close_parameters.
+max_datafiles: 50
 
 # Calibration-history window shown before the gate plots. Use "full" for the
 # entire Task-2 metadata history, or e.g. "1week" for selected files ± one week.
+# Context points are restricted to valid Parquet Lake basenames and use the
+# newest calibration execution for each basename.
 context: "1week"
 
 
@@ -20,7 +31,18 @@ derived_strip_topology:
   active_when: "gt"
   threshold: 0
 
-# Every code must be a distinct binary power of two: "1", "10", "100", ...
+# The ToT-to-charge curve is nonlinear, so summing strip charges after
+# calibration need not agree with calibrating the summed strip ToT. Pool all
+# valid plane events with at least two positive strip ToTs in one histogram.
+charge_calibration_comparison:
+  enabled: true
+  source_suffix: "qsum_cal"
+  min_active_strips: 2
+  bins: "auto"
+
+# Set enabled to false to keep a gate definition without evaluating, exporting,
+# or plotting it. If enabled is omitted it defaults to true. Every code must be
+# a distinct binary power of two: "1", "10", "100", ...
 # An event satisfying several gates receives their bitwise sum. For example,
 # satisfying codes 1000, 10, and 1 produces the exact combined code 1011.
 # Conditions support nested all/any/not trees. Leaf operators are:
@@ -30,6 +52,7 @@ derived_strip_topology:
 gates:
   # AND: every plane has final charge below 80.
   - code: "1"
+    enabled: false
     name: "all_plane_charge_below_80"
     short_label: "Q80"
     condition:
@@ -41,6 +64,7 @@ gates:
 
   # Every plane has zero or one active strip.
   - code: "10"
+    enabled: false
     name: "cluster_size_zero_or_one_all_planes"
     short_label: "CS01"
     condition:
@@ -54,6 +78,7 @@ gates:
   # active strips inside inclusive [-1, 1]. Every other plane has cluster size
   # 0 or 1. Multiple valid 1001 planes are accepted.
   - code: "100"
+    enabled: false
     name: "at_least_one_1001_tdif_pm1_others_zero_or_one_and_qsum_lt_50"
     short_label: "1001"
     condition:
@@ -109,6 +134,7 @@ gates:
 
   # Gate 100 logic for a central adjacent-strip pair: topology 0110 (strips 2,3).
   - code: "1000"
+    enabled: false
     name: "at_least_one_0110_tdif_pm1_others_zero_or_one_and_qsum_lt_50"
     short_label: "0110"
     condition:
@@ -146,6 +172,7 @@ gates:
 
   # Gate 100 logic for topology 0101 (strips 2,4).
   - code: "10000"
+    enabled: false
     name: "at_least_one_0101_tdif_pm1_others_zero_or_one_and_qsum_lt_50"
     short_label: "0101"
     condition:
@@ -183,6 +210,7 @@ gates:
 
   # Gate 100 logic for topology 1010 (strips 1,3).
   - code: "100000"
+    enabled: false
     name: "at_least_one_1010_tdif_pm1_others_zero_or_one_and_qsum_lt_50"
     short_label: "1010"
     condition:
@@ -221,6 +249,7 @@ gates:
 
   # Gate 100 logic for topology 1100 (strips 1,2).
   - code: "1000000"
+    enabled: false
     name: "at_least_one_1100_tdif_pm1_others_zero_or_one_and_qsum_lt_50"
     short_label: "1100"
     condition:
@@ -258,6 +287,7 @@ gates:
 
   # Gate 100 logic for topology 0011 (strips 3,4).
   - code: "10000000"
+    enabled: false
     name: "at_least_one_0011_tdif_pm1_others_zero_or_one_and_qsum_lt_50"
     short_label: "0011"
     condition:
@@ -297,6 +327,7 @@ gates:
   # Accept every four-bit plane topology except the specified disjoint pairs.
   # The condition is an AND across planes: one forbidden plane rejects the event.
   - code: "100000000"
+    enabled: false
     name: "no_disjoint_plane_topology"
     short_label: "NG"
     condition:
@@ -310,6 +341,7 @@ gates:
   # Gate 100000000 plus timing agreement for every contiguous two-strip plane.
   # Other admitted topologies do not receive a pair-difference timing cut.
   - code: "1000000000"
+    enabled: false
     name: "no_disjoint_with_contiguous_pair_timing_consistency"
     short_label: "NGT"
     condition:
@@ -378,10 +410,60 @@ gates:
 
   # Reference gate: accept every event, including topology 0000.
   - code: "10000000000"
+    enabled: false
     name: "all_events"
     short_label: "ALL"
     condition:
       {column: "p1_strip_topology", op: "matches", value: "[01]{4}"}
+
+  # Strip 2 in every responding plane; allow at most one 0000 plane so the
+  # corresponding 3-of-4 events can be used to measure plane efficiency.
+  - code: "100000000000"
+    enabled: true
+    name: "topology_0100_with_up_to_one_empty_plane"
+    short_label: "0100_3of4"
+    condition:
+      all:
+        - {column: "p1_strip_topology", op: "in", values: ["0100", "0000"]}
+        - {column: "p2_strip_topology", op: "in", values: ["0100", "0000"]}
+        - {column: "p3_strip_topology", op: "in", values: ["0100", "0000"]}
+        - {column: "p4_strip_topology", op: "in", values: ["0100", "0000"]}
+        - &at_most_one_empty_plane
+          not:
+            any:
+              - {all: [{column: "p1_strip_topology", op: "eq", value: "0000"}, {column: "p2_strip_topology", op: "eq", value: "0000"}]}
+              - {all: [{column: "p1_strip_topology", op: "eq", value: "0000"}, {column: "p3_strip_topology", op: "eq", value: "0000"}]}
+              - {all: [{column: "p1_strip_topology", op: "eq", value: "0000"}, {column: "p4_strip_topology", op: "eq", value: "0000"}]}
+              - {all: [{column: "p2_strip_topology", op: "eq", value: "0000"}, {column: "p3_strip_topology", op: "eq", value: "0000"}]}
+              - {all: [{column: "p2_strip_topology", op: "eq", value: "0000"}, {column: "p4_strip_topology", op: "eq", value: "0000"}]}
+              - {all: [{column: "p3_strip_topology", op: "eq", value: "0000"}, {column: "p4_strip_topology", op: "eq", value: "0000"}]}
+
+  # Strip 3 in every responding plane, again allowing at most one 0000 plane.
+  - code: "1000000000000"
+    enabled: true
+    name: "topology_0010_with_up_to_one_empty_plane"
+    short_label: "0010_3of4"
+    condition:
+      all:
+        - {column: "p1_strip_topology", op: "in", values: ["0010", "0000"]}
+        - {column: "p2_strip_topology", op: "in", values: ["0010", "0000"]}
+        - {column: "p3_strip_topology", op: "in", values: ["0010", "0000"]}
+        - {column: "p4_strip_topology", op: "in", values: ["0010", "0000"]}
+        - *at_most_one_empty_plane
+
+  # In every responding plane accept strip 2, strips 2+3, or strip 3, with at
+  # most one 0000 plane.
+  - code: "10000000000000"
+    enabled: true
+    name: "topology_0100_or_0110_or_0010_with_up_to_one_empty_plane"
+    short_label: "MID_3of4"
+    condition:
+      all:
+        - {column: "p1_strip_topology", op: "in", values: ["0100", "0110", "0010", "0000"]}
+        - {column: "p2_strip_topology", op: "in", values: ["0100", "0110", "0010", "0000"]}
+        - {column: "p3_strip_topology", op: "in", values: ["0100", "0110", "0010", "0000"]}
+        - {column: "p4_strip_topology", op: "in", values: ["0100", "0110", "0010", "0000"]}
+        - *at_most_one_empty_plane
 
 # Events are first counted in each exact timestamp second and then accumulated.
 # Rates remain Hz and divide by the number of timestamp-seconds actually present
@@ -408,26 +490,45 @@ efficiency_time_series:
   selections: all
   include_combined_zero: false
 
+# Comparison of all and only the gates with enabled: true. The first figure has
+# four rows (one per plane) with enabled gates overlaid. The second has three
+# rows: total selected-gate rate, four-plane efficiency product, and the 1234
+# rate corrected by 1 / efficiency product.
+enabled_gate_comparison:
+  enabled: true
+  time_column: "datetime"
+  topology_column: "tt_task3_list"
+  accumulation_timespan: "10min"
+
 # Three-row diagnostic for one gate: 1234 rate, plane efficiencies plus their
 # product, and the efficiency-corrected 1234 rate. The rate denominator is the
 # number of timestamp-seconds actually observed in each accumulation window.
 plane_combinations:
-  enabled: true
+  enabled: false
   selection_kind: "individual"
   gate_code: "1000000000"
   time_column: "datetime"
   topology_column: "tt_task3_list"
   accumulation_timespan: "10min"
 
-theta_histograms:
+angular_histograms:
   enabled: true
-  column: "event_theta"
+  plane_z_unit: "mm"
   # Individual gates share one density panel; exact combined codes share a
-  # second density panel using the same bins and x-axis.
+  # second density panel using shared bins and x-axis for each angle.
   convert_radians_to_degrees: true
-  bins: 90
-  range: [0, 90]
   include_combined_zero: true
+  variables:
+    - column: "event_theta"
+      label: "Theta"
+      slug: "theta"
+      bins: 90
+      range: [0, 90]
+    - column: "event_phi"
+      label: "Phi"
+      slug: "phi"
+      bins: 180
+      range: [-180, 180]
 
 
 # Reuse both topology diagnostics below for these additional two-strip gates.
@@ -442,7 +543,7 @@ additional_topology_diagnostic_targets:
 # Gate-100 diagnostic: columns are planes 1..4; rows compare strip 1 with
 # strip 4 for Q_sum, T_dif, Q_dif, and T_sum. Axes are shared within rows.
 topology_charge_scatter:
-  enabled: true
+  enabled: false
   gate_code: "100"
   topology: "1001"
   variables:
@@ -460,7 +561,7 @@ topology_charge_scatter:
 # The Y overview contains time scatter and histogram; the charge figure contains
 # Q1 / (Q1 + Q4) versus Y and Q1 versus Q4 colored by Y.
 topology_y_position:
-  enabled: true
+  enabled: false
   gate_code: "100"
   topology: "1001"
   time_column: "datetime"

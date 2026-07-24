@@ -28,14 +28,17 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.patches import Rectangle
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 sys.path.append(str(ROOT_DIR))
 sys.path.append(str(ROOT_DIR / "MASTER_STEPS"))
 
 from STEP_SHARED.sim_utils import (
-    DEFAULT_BOUNDS,
-    DetectorBounds,
+    GEOMETRY_SCHEMA_VERSION,
+    RectBounds,
+    rect_bounds_to_dict,
+    resolve_active_area_bounds,
     ensure_dir,
     extract_param_set,
     extract_param_row_id,
@@ -60,7 +63,7 @@ from STEP_SHARED.sim_utils import (
 def calculate_intersections(
     df: pd.DataFrame,
     z_positions: Iterable[float],
-    bounds: DetectorBounds,
+    active_area_bounds: RectBounds,
     c_mm_per_ns: float,
 ) -> pd.DataFrame:
     z_positions = list(z_positions)
@@ -80,10 +83,10 @@ def calculate_intersections(
         t_sum = dz / (c_mm_per_ns * cos_theta)
 
         in_bounds = (
-            (x_proj >= bounds.x_min)
-            & (x_proj <= bounds.x_max)
-            & (y_proj >= bounds.y_min)
-            & (y_proj <= bounds.y_max)
+            (x_proj >= active_area_bounds.x_min)
+            & (x_proj <= active_area_bounds.x_max)
+            & (y_proj >= active_area_bounds.y_min)
+            & (y_proj <= active_area_bounds.y_max)
         )
 
         out[f"X_gen_{plane_idx}"] = np.where(in_bounds, x_proj, np.nan)
@@ -139,7 +142,12 @@ def _normalize_step_id(value: object) -> str | None:
         return text or None
 
 
-def plot_geometry_summary(df: pd.DataFrame, pdf: PdfPages, title: str) -> None:
+def plot_geometry_summary(
+    df: pd.DataFrame,
+    pdf: PdfPages,
+    title: str,
+    active_area_bounds: RectBounds,
+) -> None:
     required = {"Theta_gen", "Phi_gen", "tt_crossing"}
     if not required.issubset(df.columns):
         missing = ", ".join(sorted(required - set(df.columns)))
@@ -155,6 +163,19 @@ def plot_geometry_summary(df: pd.DataFrame, pdf: PdfPages, title: str) -> None:
         y = df[y_col].to_numpy()
         mask = ~np.isnan(x) & ~np.isnan(y)
         ax.scatter(x[mask], y[mask], s=1, alpha=0.2, rasterized=True)
+        ax.add_patch(
+            Rectangle(
+                (active_area_bounds.x_min, active_area_bounds.y_min),
+                active_area_bounds.x_max - active_area_bounds.x_min,
+                active_area_bounds.y_max - active_area_bounds.y_min,
+                fill=False,
+                edgecolor="black",
+                linewidth=1.2,
+                label="active gas area",
+            )
+        )
+        ax.set_xlim(active_area_bounds.x_min, active_area_bounds.x_max)
+        ax.set_ylim(active_area_bounds.y_min, active_area_bounds.y_max)
         ax.set_title(f"{x_col} vs {y_col}")
         ax.set_xlabel("X (mm)")
         ax.set_ylabel("Y (mm)")
@@ -318,6 +339,10 @@ def main() -> None:
         runtime_path = Path(__file__).resolve().parent / runtime_path
 
     physics_cfg, runtime_cfg, cfg, runtime_path = load_step_configs(config_path, runtime_path)
+    active_area_bounds, active_area_geometry_source = resolve_active_area_bounds(cfg)
+    normalized_active_area = rect_bounds_to_dict(active_area_bounds)
+    physics_cfg["active_area_bounds_mm"] = normalized_active_area
+    cfg["active_area_bounds_mm"] = normalized_active_area
 
     output_dir = Path(cfg["output_dir"])
     if not output_dir.is_absolute():
@@ -342,7 +367,7 @@ def main() -> None:
         ensure_dir(plot_dir)
         plot_path = plot_dir / f"{latest_path.stem}_plots.pdf"
         with PdfPages(plot_path) as pdf:
-            plot_geometry_summary(df, pdf, latest_path.stem)
+            plot_geometry_summary(df, pdf, latest_path.stem, active_area_bounds)
             plot_step2_summary(df, pdf)
         print(f"Saved {plot_path}")
         return
@@ -407,14 +432,6 @@ def main() -> None:
             if input_sim_run_mode == "random":
                 raise ValueError("No available input SIM_RUNs with param_row_id not marked done.")
             raise FileNotFoundError(f"No inputs found under {input_dir}.")
-    bounds_cfg = cfg.get("bounds_mm", {})
-    bounds = DetectorBounds(
-        x_min=float(bounds_cfg.get("x_min", DEFAULT_BOUNDS.x_min)),
-        x_max=float(bounds_cfg.get("x_max", DEFAULT_BOUNDS.x_max)),
-        y_min=float(bounds_cfg.get("y_min", DEFAULT_BOUNDS.y_min)),
-        y_max=float(bounds_cfg.get("y_max", DEFAULT_BOUNDS.y_max)),
-    )
-
     normalize = bool(runtime_cfg.get("normalize_to_first_plane", True))
     chunk_rows = cfg.get("chunk_rows")
     rng = np.random.default_rng(cfg.get("seed"))
@@ -437,7 +454,7 @@ def main() -> None:
         ensure_dir(plot_dir)
         plot_path = plot_dir / f"{latest_path.stem}_plots.pdf"
         with PdfPages(plot_path) as pdf:
-            plot_geometry_summary(df, pdf, latest_path.stem)
+            plot_geometry_summary(df, pdf, latest_path.stem, active_area_bounds)
             plot_step2_summary(df, pdf)
         print(f"Saved {plot_path}")
         return
@@ -674,6 +691,9 @@ def main() -> None:
     metadata = {
         "created_at": now_iso(),
         "step": "STEP_2",
+        "geometry_schema_version": GEOMETRY_SCHEMA_VERSION,
+        "active_area_bounds_mm": normalized_active_area,
+        "active_area_geometry_source": active_area_geometry_source,
         "config": physics_cfg,
         "runtime_config": runtime_cfg,
         "sim_run": sim_run,
@@ -748,7 +768,7 @@ def main() -> None:
                     continue
             else:
                 chunk_df = item
-            geom_chunk = calculate_intersections(chunk_df, z_positions, bounds, c_mm_per_ns)
+            geom_chunk = calculate_intersections(chunk_df, z_positions, active_area_bounds, c_mm_per_ns)
             if "tt_crossing" in geom_chunk.columns:
                 geom_chunk = geom_chunk[geom_chunk["tt_crossing"].notna()].reset_index(drop=True)
             geom_chunk = prune_step2(geom_chunk)
@@ -786,12 +806,12 @@ def main() -> None:
                 ensure_dir(plot_dir)
                 plot_path = plot_dir / f"{out_stem_base}_plots.pdf"
                 with PdfPages(plot_path) as pdf:
-                    plot_geometry_summary(sample_df, pdf, f"Step 2 (sample)")
+                    plot_geometry_summary(sample_df, pdf, f"Step 2 (sample)", active_area_bounds)
                     plot_step2_summary(sample_df, pdf)
             else:
                 print("Chunked mode enabled; skipping plots to limit memory usage.")
     else:
-        geom_df = calculate_intersections(muon_df, z_positions, bounds, c_mm_per_ns)
+        geom_df = calculate_intersections(muon_df, z_positions, active_area_bounds, c_mm_per_ns)
         if "tt_crossing" in geom_df.columns:
             geom_df = geom_df[geom_df["tt_crossing"].notna()].reset_index(drop=True)
         geom_df = prune_step2(geom_df)
@@ -802,7 +822,7 @@ def main() -> None:
             ensure_dir(plot_dir)
             plot_path = plot_dir / f"{out_stem_base}_plots.pdf"
             with PdfPages(plot_path) as pdf:
-                plot_geometry_summary(geom_df, pdf, "Step 2")
+                plot_geometry_summary(geom_df, pdf, "Step 2", active_area_bounds)
                 plot_step2_summary(geom_df, pdf)
     print(f"Saved {out_path}")
 

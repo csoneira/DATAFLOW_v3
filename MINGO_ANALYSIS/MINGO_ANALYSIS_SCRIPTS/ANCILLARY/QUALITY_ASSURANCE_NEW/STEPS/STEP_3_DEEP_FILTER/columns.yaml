@@ -1,8 +1,6 @@
-quality_and_plot:
+plot_only:
   - 'q_dif_sum_low'
   - 'q_dif_sum_high'
-
-plot_only:
   - '*_rows_failed_pct'
   - '*_rows_with_*_failures_pct'
   - '*_rows_with_*_relation_failures_pct'

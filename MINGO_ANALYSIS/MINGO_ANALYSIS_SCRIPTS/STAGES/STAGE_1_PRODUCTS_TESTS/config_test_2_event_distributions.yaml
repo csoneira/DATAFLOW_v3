@@ -1,13 +1,19 @@
-# Test 2: distributions from a tight chronological group of final Stage 1 files.
+# Test 2: distributions from a selected group of final Stage 1 files.
 # Station accepts 1, 01, or MINGO01.
-station: 2
+station: 1
+
+# Used only when station is MINGO00. Dates are then ignored and the script
+# chooses the tightest group in this simulation-parameter space. Remove or add
+# any supported step_final_simulation_params.csv field to change the metric.
+mingo00_close_parameters: [cos_n, z_plane_1, z_plane_2, z_plane_3, z_plane_4, efficiencies, trigger_combinations]
 
 # Acquisition time encoded in each basename. A date-only end includes the full day.
+# These boundaries are ignored for MINGO00 because its acquisition dates are synthetic.
 start_date: "2025-12-19"
 end_date: "2026-01-14"
 
-# Select at most this many chronologically consecutive files. The script chooses
-# the contiguous block whose first/last acquisition starts are closest in time.
+# Select at most this many files. Physical stations use the tightest chronological
+# block; MINGO00 uses the tightest cluster in the configured parameter space.
 max_datafiles: 5
 
 # Calibration-history window shown before the event plots. Use "full" for the
