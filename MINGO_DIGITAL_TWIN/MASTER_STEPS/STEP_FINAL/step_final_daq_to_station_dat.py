@@ -1025,6 +1025,68 @@ SIDECAR_REQUIRED_SOURCE_COLUMNS = (
 )
 
 
+RATE_COUNTER_SOURCE_COLUMNS = (
+    "sim_crossing_cumulative_count",
+    "sim_unit_efficiency_trigger_cumulative_count",
+)
+
+
+def aligned_geometric_rates(
+    selected_source_rows: pd.DataFrame,
+    rows_written: int,
+    elapsed_seconds: float,
+    payload_sampling: str,
+) -> tuple[float, float, str]:
+    """Calculate crossing and ideal-trigger rates over the final file interval."""
+    unavailable = (float("nan"), float("nan"))
+    if payload_sampling != "sequential_random_start":
+        return (*unavailable, "requires sequential_random_start sampling")
+    if rows_written < 2 or elapsed_seconds <= 0:
+        return (*unavailable, "selected interval has fewer than two rows or zero duration")
+    missing = [
+        column for column in RATE_COUNTER_SOURCE_COLUMNS
+        if column not in selected_source_rows.columns
+    ]
+    if missing:
+        return (*unavailable, "legacy input missing " + ",".join(missing))
+
+    selected = selected_source_rows.iloc[:rows_written]
+    rates: list[float] = []
+    for column in RATE_COUNTER_SOURCE_COLUMNS:
+        values = pd.to_numeric(selected[column], errors="coerce")
+        if values.isna().any():
+            return (*unavailable, f"{column} contains missing values")
+        array = values.to_numpy(dtype=float)
+        if not np.isfinite(array).all() or np.any(np.diff(array) < 0):
+            return (*unavailable, f"{column} is not monotonic in the selected interval")
+        delta = float(array[-1] - array[0])
+        rates.append(delta / elapsed_seconds)
+
+    if rates[1] > rates[0] + 1e-12:
+        return (*unavailable, "unit-efficiency trigger rate exceeds crossing rate")
+    return rates[0], rates[1], "available"
+
+
+def order_simulation_parameter_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    """Keep legacy columns stable and group the three interval-aligned rates."""
+    ordered = list(frame.columns)
+    if "original_rows" in ordered and "requested_rows" in ordered:
+        ordered.remove("original_rows")
+        ordered.insert(ordered.index("requested_rows"), "original_rows")
+
+    rate_columns = [
+        "particle_crossing_rate_hz",
+        "trigger_rate_unit_efficiency_hz",
+        "trigger_rate_hz",
+    ]
+    if "selected_rows" in ordered:
+        ordered = [column for column in ordered if column not in rate_columns]
+        insertion_index = ordered.index("selected_rows") + 1
+        for offset, column in enumerate(rate_columns):
+            if column in frame.columns:
+                ordered.insert(insertion_index + offset, column)
+    return frame.loc[:, ordered]
+
 def build_sidecar_source_record(row_dict: dict, source_row_index: int) -> dict:
     record = {
         "sim_event_id": row_dict.get("event_id", pd.NA),
@@ -1032,6 +1094,9 @@ def build_sidecar_source_record(row_dict: dict, source_row_index: int) -> dict:
     }
     for column in SIDECAR_REQUIRED_SOURCE_COLUMNS:
         record[column] = row_dict.get(column, pd.NA)
+    for column in RATE_COUNTER_SOURCE_COLUMNS:
+        if column in row_dict:
+            record[column] = row_dict[column]
     if "Z_gen" in row_dict:
         record["Z_gen"] = row_dict["Z_gen"]
     return record
@@ -1829,6 +1894,14 @@ def main() -> None:
             sim_params_needs_write = False
             if sim_params_path.exists():
                 sim_params_df = pd.read_csv(sim_params_path)
+                for rate_column in (
+                    "particle_crossing_rate_hz",
+                    "trigger_rate_unit_efficiency_hz",
+                ):
+                    if rate_column not in sim_params_df.columns:
+                        sim_params_df[rate_column] = np.nan
+                        sim_params_needs_write = True
+                sim_params_df = order_simulation_parameter_columns(sim_params_df)
                 drop_cols = [col for col in ("subfile_kind", "subfile_index") if col in sim_params_df.columns]
                 if drop_cols:
                     sim_params_df = sim_params_df.drop(columns=drop_cols)
@@ -2155,6 +2228,21 @@ def main() -> None:
                 if rows_written > 1 and trigger_time_span_seconds > 0
                 else 0.0
             )
+            (
+                particle_crossing_rate_hz,
+                trigger_rate_unit_efficiency_hz,
+                geometric_rate_status,
+            ) = aligned_geometric_rates(
+                selected_source_rows,
+                rows_written,
+                trigger_time_span_seconds,
+                payload_sampling,
+            )
+            if geometric_rate_status != "available":
+                _log_warn(
+                    f"Geometrical rates unavailable for {out_name}: "
+                    f"{geometric_rate_status}."
+                )
             next_start = (
                 last_time + timedelta(seconds=1)
                 if last_time is not None
@@ -2175,6 +2263,9 @@ def main() -> None:
                 "start_time": start_time.isoformat(),
                 "rate_hz": rate_hz,
                 "trigger_rate_hz": trigger_rate_hz,
+                "particle_crossing_rate_hz": particle_crossing_rate_hz,
+                "trigger_rate_unit_efficiency_hz": trigger_rate_unit_efficiency_hz,
+                "geometric_rate_status": geometric_rate_status,
                 "target_rows": requested_for_file,
                 "requested_rows": requested_for_file,
                 "selected_rows": selected_rows,
@@ -2214,6 +2305,8 @@ def main() -> None:
                 "original_rows": total_rows,
                 "requested_rows": requested_for_file,
                 "selected_rows": selected_rows,
+                "particle_crossing_rate_hz": particle_crossing_rate_hz,
+                "trigger_rate_unit_efficiency_hz": trigger_rate_unit_efficiency_hz,
                 "trigger_rate_hz": trigger_rate_hz,
                 "sample_start_index": sample_start_index,
                 "sidecar_file_name": sidecar_file_name,
@@ -2236,17 +2329,14 @@ def main() -> None:
                 df_params = pd.concat([df_params, pd.DataFrame(new_param_rows)], ignore_index=True)
             else:
                 df_params = pd.DataFrame(new_param_rows)
-            if "original_rows" in df_params.columns and "requested_rows" in df_params.columns:
-                ordered_columns = list(df_params.columns)
-                ordered_columns.remove("original_rows")
-                requested_rows_index = ordered_columns.index("requested_rows")
-                ordered_columns.insert(requested_rows_index, "original_rows")
-                df_params = df_params.loc[:, ordered_columns]
+            df_params = order_simulation_parameter_columns(df_params)
             write_csv_atomic(df_params, sim_params_path, index=False)
 
             _log_info(
                 f"Saved {out_path} (param_set_id={param_set_id}, "
                 f"requested_rows={requested_for_file}, selected_rows={selected_rows}, "
+                f"particle_crossing_rate_hz={particle_crossing_rate_hz:.6f}, "
+                f"trigger_rate_unit_efficiency_hz={trigger_rate_unit_efficiency_hz:.6f}, "
                 f"trigger_rate_hz={trigger_rate_hz:.6f})"
             )
 

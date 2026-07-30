@@ -106,7 +106,10 @@ from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.file_selection import (
     select_latest_candidate,
     sync_unprocessed_with_date_range,
 )
-from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.input_file_config import select_input_file_configuration
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.input_file_config import (
+    select_closest_valid_z_configuration,
+    select_input_file_configuration,
+)
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.path_config import (
     get_repo_root,
     resolve_home_path_from_config,
@@ -10370,14 +10373,11 @@ else:
 if np.isnan(z_positions).any() or np.all(z_positions == 0):
     if used_input_file:
         print("Warning: Invalid z_positions in selected configuration; searching for closest non-zero configuration.")
-        valid_rows = input_file.dropna(subset=["start"]).copy()
-        valid_rows["has_nonzero_z"] = valid_rows.apply(
-            lambda r: np.any(_zpos_from_conf(r) != 0), axis=1
+        selected_conf = select_closest_valid_z_configuration(
+            input_file,
+            reference_time=start_time,
         )
-        valid_rows = valid_rows[valid_rows["has_nonzero_z"]]
-        if not valid_rows.empty:
-            valid_rows["delta"] = (valid_rows["start_day"] - start_day).abs()
-            selected_conf = valid_rows.sort_values("delta").iloc[0]
+        if selected_conf is not None:
             print(f"Selected non-zero configuration: {selected_conf['conf']}")
             z_positions = _zpos_from_conf(selected_conf)
             try:

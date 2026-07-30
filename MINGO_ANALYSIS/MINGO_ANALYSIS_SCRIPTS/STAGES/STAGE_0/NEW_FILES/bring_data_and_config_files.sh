@@ -452,7 +452,11 @@ if [[ $connection_ok -eq 1 ]]; then
           log_warn "rsync encountered an error while fetching data."
         fi
       else
-        echo "No .dat files eligible for transfer after excluding logged entries."
+        if $date_range_filter_enabled; then
+          echo "No .dat files eligible for transfer after excluding logged entries and files outside the configured date ranges."
+        else
+          echo "No .dat files eligible for transfer after excluding logged entries."
+        fi
       fi
     else
       echo "No .dat files found to transfer."

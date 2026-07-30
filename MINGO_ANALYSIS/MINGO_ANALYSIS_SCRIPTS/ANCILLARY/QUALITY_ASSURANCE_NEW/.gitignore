@@ -7,3 +7,4 @@ qa_core/__pycache__/
 tests/__pycache__/
 STEPS/*/OUTPUTS/
 STEPS/*/TASK_*/
+ARCHIVED_RUN_OUTPUTS/

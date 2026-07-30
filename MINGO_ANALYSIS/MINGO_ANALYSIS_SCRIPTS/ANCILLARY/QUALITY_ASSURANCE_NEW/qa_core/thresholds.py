@@ -12,13 +12,22 @@ SUPPORTED_TOLERANCE_MODES = {"relative_pct", "absolute", "mad_multiplier", "iqr_
 SUPPORTED_REFERENCE_ZERO_POLICIES = {"keep", "drop_zeros_unless_all_zero"}
 
 
-def _coerce_optional_float(value: Any, *, field_name: str) -> float | None:
-    if value is None:
-        return None
-    result = float(value)
-    if result < 0:
-        raise ValueError(f"{field_name} cannot be negative.")
-    return result
+def _tolerance_from_mapping(
+    mapping: Mapping[str, Any],
+    *,
+    value_key: str,
+    percent_key: str,
+    default: float | None,
+) -> float | None:
+    """Read a fractional tolerance, preferring a human-readable percent key."""
+    percent = mapping.get(percent_key)
+    if percent is not None:
+        percent_value = float(percent)
+        if percent_value < 0:
+            raise ValueError(f"{percent_key} cannot be negative.")
+        return percent_value / 100.0
+    raw_value = mapping.get(value_key, default)
+    return None if raw_value is None else float(raw_value)
 
 
 @dataclass(frozen=True)
@@ -60,12 +69,17 @@ class ThresholdRule:
         return cls(
             center_method=str(mapping.get("center_method", "median")).strip() or "median",
             tolerance_mode=str(mapping.get("tolerance_mode", "relative_pct")).strip() or "relative_pct",
-            tolerance_value=float(mapping.get("tolerance_value", 0.10)),
-            lower_tolerance_value=_coerce_optional_float(
-                mapping.get("lower_tolerance_value"), field_name="lower_tolerance_value"
+            tolerance_value=float(_tolerance_from_mapping(
+                mapping, value_key="tolerance_value",
+                percent_key="tolerance_percent", default=0.10,
+            )),
+            lower_tolerance_value=_tolerance_from_mapping(
+                mapping, value_key="lower_tolerance_value",
+                percent_key="lower_tolerance_percent", default=None,
             ),
-            upper_tolerance_value=_coerce_optional_float(
-                mapping.get("upper_tolerance_value"), field_name="upper_tolerance_value"
+            upper_tolerance_value=_tolerance_from_mapping(
+                mapping, value_key="upper_tolerance_value",
+                percent_key="upper_tolerance_percent", default=None,
             ),
             min_samples=int(mapping.get("min_samples", 8)),
             reference_zero_policy=str(mapping.get("reference_zero_policy", "keep")).strip() or "keep",

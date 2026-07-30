@@ -1,0 +1,670 @@
+# Test 3: gate definitions for configurable event-gate analysis.
+
+# Set enabled to false to keep a gate definition without evaluating, exporting,
+# or plotting it. If enabled is omitted it defaults to true. Enabled gates receive
+# one-hot bits in their listed order: binary 1, 10, 100, ... . Titles, filenames,
+# and gate_code CSV fields use the decimal forms 1, 2, 4, ... . Disabled gates do
+# not consume a bit position. short_label is the stable configuration identifier.
+# Exact combinations use the decimal sum of the enabled gates they contain.
+# Conditions support nested all/any/not trees. Leaf operators are:
+# lt, le, gt, ge, between, eq, ne, in, not_in, is_finite, is_zero,
+# nonzero, isna, notna, matches (full regular-expression match), and
+# abs_diff_lt/abs_diff_le with column, other_column, and value.
+gates:
+  # AND: every plane has final charge below 80.
+  - enabled: false
+    name: "all_plane_charge_below_80"
+    short_label: "Q80"
+    condition:
+      all:
+        - {column: "p1_qsum", op: "lt", value: 80}
+        - {column: "p2_qsum", op: "lt", value: 80}
+        - {column: "p3_qsum", op: "lt", value: 80}
+        - {column: "p4_qsum", op: "lt", value: 80}
+
+  # Every plane has zero or one active strip.
+  - enabled: false
+    name: "cluster_size_zero_or_one_all_planes"
+    short_label: "CS01"
+    condition:
+      all:
+        - {column: "p1_cluster_size", op: "in", values: [0, 1]}
+        - {column: "p2_cluster_size", op: "in", values: [0, 1]}
+        - {column: "p3_cluster_size", op: "in", values: [0, 1]}
+        - {column: "p4_cluster_size", op: "in", values: [0, 1]}
+
+  # At least one plane has topology 1001, with calibrated T_dif for both
+  # active strips inside inclusive [-1, 1]. Every other plane has cluster size
+  # 0 or 1. Multiple valid 1001 planes are accepted.
+  - enabled: false
+    name: "at_least_one_1001_tdif_pm1_others_zero_or_one_and_qsum_lt_50"
+    short_label: "1001"
+    condition:
+      all:
+        - any:
+            - all:
+                - {column: "p1_strip_topology", op: "eq", value: "1001"}
+                - {column: "p1_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p1_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - all:
+                - {column: "p2_strip_topology", op: "eq", value: "1001"}
+                - {column: "p2_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p2_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - all:
+                - {column: "p3_strip_topology", op: "eq", value: "1001"}
+                - {column: "p3_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p3_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - all:
+                - {column: "p4_strip_topology", op: "eq", value: "1001"}
+                - {column: "p4_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p4_s4_tdif_cal", op: "between", values: [-1, 1]}
+        - any:
+            - all:
+                - {column: "p1_strip_topology", op: "eq", value: "1001"}
+                - {column: "p1_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p1_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - {column: "p1_cluster_size", op: "in", values: [0, 1]}
+        - any:
+            - all:
+                - {column: "p2_strip_topology", op: "eq", value: "1001"}
+                - {column: "p2_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p2_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - {column: "p2_cluster_size", op: "in", values: [0, 1]}
+        - any:
+            - all:
+                - {column: "p3_strip_topology", op: "eq", value: "1001"}
+                - {column: "p3_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p3_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - {column: "p3_cluster_size", op: "in", values: [0, 1]}
+        - any:
+            - all:
+                - {column: "p4_strip_topology", op: "eq", value: "1001"}
+                - {column: "p4_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p4_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - {column: "p4_cluster_size", op: "in", values: [0, 1]}
+        - any:
+            - all:
+              - {column: "p1_qsum", op: "lt", value: 50}
+              - {column: "p2_qsum", op: "lt", value: 50}
+              - {column: "p3_qsum", op: "lt", value: 50}
+              - {column: "p4_qsum", op: "lt", value: 50}
+
+  # Adjacent-strip logic for a central adjacent-strip pair: topology 0110 (strips 2,3).
+  - enabled: false
+    name: "at_least_one_0110_tdif_pm1_others_zero_or_one_and_qsum_lt_50"
+    short_label: "0110"
+    condition:
+      all:
+        - any:
+            - &g0110_p1
+              all:
+                - {column: "p1_strip_topology", op: "eq", value: "0110"}
+                - {column: "p1_s2_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p1_s3_tdif_cal", op: "between", values: [-1, 1]}
+            - &g0110_p2
+              all:
+                - {column: "p2_strip_topology", op: "eq", value: "0110"}
+                - {column: "p2_s2_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p2_s3_tdif_cal", op: "between", values: [-1, 1]}
+            - &g0110_p3
+              all:
+                - {column: "p3_strip_topology", op: "eq", value: "0110"}
+                - {column: "p3_s2_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p3_s3_tdif_cal", op: "between", values: [-1, 1]}
+            - &g0110_p4
+              all:
+                - {column: "p4_strip_topology", op: "eq", value: "0110"}
+                - {column: "p4_s2_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p4_s3_tdif_cal", op: "between", values: [-1, 1]}
+        - {any: [*g0110_p1, {column: "p1_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g0110_p2, {column: "p2_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g0110_p3, {column: "p3_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g0110_p4, {column: "p4_cluster_size", op: "in", values: [0, 1]}]}
+        - all:
+            - {column: "p1_qsum", op: "lt", value: 50}
+            - {column: "p2_qsum", op: "lt", value: 50}
+            - {column: "p3_qsum", op: "lt", value: 50}
+            - {column: "p4_qsum", op: "lt", value: 50}
+
+  # Adjacent-strip logic for topology 0101 (strips 2,4).
+  - enabled: false
+    name: "at_least_one_0101_tdif_pm1_others_zero_or_one_and_qsum_lt_50"
+    short_label: "0101"
+    condition:
+      all:
+        - any:
+            - &g0101_p1
+              all:
+                - {column: "p1_strip_topology", op: "eq", value: "0101"}
+                - {column: "p1_s2_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p1_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - &g0101_p2
+              all:
+                - {column: "p2_strip_topology", op: "eq", value: "0101"}
+                - {column: "p2_s2_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p2_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - &g0101_p3
+              all:
+                - {column: "p3_strip_topology", op: "eq", value: "0101"}
+                - {column: "p3_s2_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p3_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - &g0101_p4
+              all:
+                - {column: "p4_strip_topology", op: "eq", value: "0101"}
+                - {column: "p4_s2_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p4_s4_tdif_cal", op: "between", values: [-1, 1]}
+        - {any: [*g0101_p1, {column: "p1_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g0101_p2, {column: "p2_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g0101_p3, {column: "p3_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g0101_p4, {column: "p4_cluster_size", op: "in", values: [0, 1]}]}
+        - all:
+            - {column: "p1_qsum", op: "lt", value: 50}
+            - {column: "p2_qsum", op: "lt", value: 50}
+            - {column: "p3_qsum", op: "lt", value: 50}
+            - {column: "p4_qsum", op: "lt", value: 50}
+
+  # Adjacent-strip logic for topology 1010 (strips 1,3).
+  - enabled: false
+    name: "at_least_one_1010_tdif_pm1_others_zero_or_one_and_qsum_lt_50"
+    short_label: "1010"
+    condition:
+      all:
+        - any:
+            - &g1010_p1
+              all:
+                - {column: "p1_strip_topology", op: "eq", value: "1010"}
+                - {column: "p1_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p1_s3_tdif_cal", op: "between", values: [-1, 1]}
+            - &g1010_p2
+              all:
+                - {column: "p2_strip_topology", op: "eq", value: "1010"}
+                - {column: "p2_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p2_s3_tdif_cal", op: "between", values: [-1, 1]}
+            - &g1010_p3
+              all:
+                - {column: "p3_strip_topology", op: "eq", value: "1010"}
+                - {column: "p3_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p3_s3_tdif_cal", op: "between", values: [-1, 1]}
+            - &g1010_p4
+              all:
+                - {column: "p4_strip_topology", op: "eq", value: "1010"}
+                - {column: "p4_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p4_s3_tdif_cal", op: "between", values: [-1, 1]}
+        - {any: [*g1010_p1, {column: "p1_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g1010_p2, {column: "p2_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g1010_p3, {column: "p3_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g1010_p4, {column: "p4_cluster_size", op: "in", values: [0, 1]}]}
+        - all:
+            - {column: "p1_qsum", op: "lt", value: 50}
+            - {column: "p2_qsum", op: "lt", value: 50}
+            - {column: "p3_qsum", op: "lt", value: 50}
+            - {column: "p4_qsum", op: "lt", value: 50}
+
+
+  # Adjacent-strip logic for topology 1100 (strips 1,2).
+  - enabled: false
+    name: "at_least_one_1100_tdif_pm1_others_zero_or_one_and_qsum_lt_50"
+    short_label: "1100"
+    condition:
+      all:
+        - any:
+            - &g1100_p1
+              all:
+                - {column: "p1_strip_topology", op: "eq", value: "1100"}
+                - {column: "p1_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p1_s2_tdif_cal", op: "between", values: [-1, 1]}
+            - &g1100_p2
+              all:
+                - {column: "p2_strip_topology", op: "eq", value: "1100"}
+                - {column: "p2_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p2_s2_tdif_cal", op: "between", values: [-1, 1]}
+            - &g1100_p3
+              all:
+                - {column: "p3_strip_topology", op: "eq", value: "1100"}
+                - {column: "p3_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p3_s2_tdif_cal", op: "between", values: [-1, 1]}
+            - &g1100_p4
+              all:
+                - {column: "p4_strip_topology", op: "eq", value: "1100"}
+                - {column: "p4_s1_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p4_s2_tdif_cal", op: "between", values: [-1, 1]}
+        - {any: [*g1100_p1, {column: "p1_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g1100_p2, {column: "p2_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g1100_p3, {column: "p3_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g1100_p4, {column: "p4_cluster_size", op: "in", values: [0, 1]}]}
+        - all:
+            - {column: "p1_qsum", op: "lt", value: 50}
+            - {column: "p2_qsum", op: "lt", value: 50}
+            - {column: "p3_qsum", op: "lt", value: 50}
+            - {column: "p4_qsum", op: "lt", value: 50}
+
+  # Adjacent-strip logic for topology 0011 (strips 3,4).
+  - enabled: false
+    name: "at_least_one_0011_tdif_pm1_others_zero_or_one_and_qsum_lt_50"
+    short_label: "0011"
+    condition:
+      all:
+        - any:
+            - &g0011_p1
+              all:
+                - {column: "p1_strip_topology", op: "eq", value: "0011"}
+                - {column: "p1_s3_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p1_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - &g0011_p2
+              all:
+                - {column: "p2_strip_topology", op: "eq", value: "0011"}
+                - {column: "p2_s3_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p2_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - &g0011_p3
+              all:
+                - {column: "p3_strip_topology", op: "eq", value: "0011"}
+                - {column: "p3_s3_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p3_s4_tdif_cal", op: "between", values: [-1, 1]}
+            - &g0011_p4
+              all:
+                - {column: "p4_strip_topology", op: "eq", value: "0011"}
+                - {column: "p4_s3_tdif_cal", op: "between", values: [-1, 1]}
+                - {column: "p4_s4_tdif_cal", op: "between", values: [-1, 1]}
+        - {any: [*g0011_p1, {column: "p1_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g0011_p2, {column: "p2_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g0011_p3, {column: "p3_cluster_size", op: "in", values: [0, 1]}]}
+        - {any: [*g0011_p4, {column: "p4_cluster_size", op: "in", values: [0, 1]}]}
+        - all:
+            - {column: "p1_qsum", op: "lt", value: 50}
+            - {column: "p2_qsum", op: "lt", value: 50}
+            - {column: "p3_qsum", op: "lt", value: 50}
+            - {column: "p4_qsum", op: "lt", value: 50}
+
+  # Accept every four-bit plane topology except the specified disjoint pairs.
+  # The condition is an AND across planes: one forbidden plane rejects the event.
+  - enabled: false
+    name: "no_disjoint_plane_topology"
+    short_label: "NG"
+    condition:
+      all:
+        - {column: "p1_strip_topology", op: "not_in", values: ["1010", "0101", "1001"]}
+        - {column: "p2_strip_topology", op: "not_in", values: ["1010", "0101", "1001"]}
+        - {column: "p3_strip_topology", op: "not_in", values: ["1010", "0101", "1001"]}
+        - {column: "p4_strip_topology", op: "not_in", values: ["1010", "0101", "1001"]}
+
+  # NG logic plus timing agreement for every contiguous two-strip plane.
+  # Other admitted topologies do not receive a pair-difference timing cut.
+  - enabled: false
+    name: "no_disjoint_with_contiguous_pair_timing_consistency"
+    short_label: "NGT"
+    condition:
+      all:
+        - {column: "p1_strip_topology", op: "not_in", values: ["1010", "0101", "1001"]}
+        - {column: "p2_strip_topology", op: "not_in", values: ["1010", "0101", "1001"]}
+        - {column: "p3_strip_topology", op: "not_in", values: ["1010", "0101", "1001"]}
+        - {column: "p4_strip_topology", op: "not_in", values: ["1010", "0101", "1001"]}
+        - any:
+            - {column: "p1_strip_topology", op: "not_in", values: ["1100", "0110", "0011"]}
+            - all:
+                - {column: "p1_strip_topology", op: "eq", value: "1100"}
+                - {column: "p1_s1_tdif_cal", other_column: "p1_s2_tdif_cal", op: "abs_diff_lt", value: 0.25}
+                - {column: "p1_s1_tsum_cal", other_column: "p1_s2_tsum_cal", op: "abs_diff_lt", value: 2.5}
+            - all:
+                - {column: "p1_strip_topology", op: "eq", value: "0110"}
+                - {column: "p1_s2_tdif_cal", other_column: "p1_s3_tdif_cal", op: "abs_diff_lt", value: 0.25}
+                - {column: "p1_s2_tsum_cal", other_column: "p1_s3_tsum_cal", op: "abs_diff_lt", value: 2.5}
+            - all:
+                - {column: "p1_strip_topology", op: "eq", value: "0011"}
+                - {column: "p1_s3_tdif_cal", other_column: "p1_s4_tdif_cal", op: "abs_diff_lt", value: 0.25}
+                - {column: "p1_s3_tsum_cal", other_column: "p1_s4_tsum_cal", op: "abs_diff_lt", value: 2.5}
+        - any:
+            - {column: "p2_strip_topology", op: "not_in", values: ["1100", "0110", "0011"]}
+            - all:
+                - {column: "p2_strip_topology", op: "eq", value: "1100"}
+                - {column: "p2_s1_tdif_cal", other_column: "p2_s2_tdif_cal", op: "abs_diff_lt", value: 0.25}
+                - {column: "p2_s1_tsum_cal", other_column: "p2_s2_tsum_cal", op: "abs_diff_lt", value: 2.5}
+            - all:
+                - {column: "p2_strip_topology", op: "eq", value: "0110"}
+                - {column: "p2_s2_tdif_cal", other_column: "p2_s3_tdif_cal", op: "abs_diff_lt", value: 0.25}
+                - {column: "p2_s2_tsum_cal", other_column: "p2_s3_tsum_cal", op: "abs_diff_lt", value: 2.5}
+            - all:
+                - {column: "p2_strip_topology", op: "eq", value: "0011"}
+                - {column: "p2_s3_tdif_cal", other_column: "p2_s4_tdif_cal", op: "abs_diff_lt", value: 0.25}
+                - {column: "p2_s3_tsum_cal", other_column: "p2_s4_tsum_cal", op: "abs_diff_lt", value: 2.5}
+        - any:
+            - {column: "p3_strip_topology", op: "not_in", values: ["1100", "0110", "0011"]}
+            - all:
+                - {column: "p3_strip_topology", op: "eq", value: "1100"}
+                - {column: "p3_s1_tdif_cal", other_column: "p3_s2_tdif_cal", op: "abs_diff_lt", value: 0.25}
+                - {column: "p3_s1_tsum_cal", other_column: "p3_s2_tsum_cal", op: "abs_diff_lt", value: 2.5}
+            - all:
+                - {column: "p3_strip_topology", op: "eq", value: "0110"}
+                - {column: "p3_s2_tdif_cal", other_column: "p3_s3_tdif_cal", op: "abs_diff_lt", value: 0.25}
+                - {column: "p3_s2_tsum_cal", other_column: "p3_s3_tsum_cal", op: "abs_diff_lt", value: 2.5}
+            - all:
+                - {column: "p3_strip_topology", op: "eq", value: "0011"}
+                - {column: "p3_s3_tdif_cal", other_column: "p3_s4_tdif_cal", op: "abs_diff_lt", value: 0.25}
+                - {column: "p3_s3_tsum_cal", other_column: "p3_s4_tsum_cal", op: "abs_diff_lt", value: 2.5}
+        - any:
+            - {column: "p4_strip_topology", op: "not_in", values: ["1100", "0110", "0011"]}
+            - all:
+                - {column: "p4_strip_topology", op: "eq", value: "1100"}
+                - {column: "p4_s1_tdif_cal", other_column: "p4_s2_tdif_cal", op: "abs_diff_lt", value: 0.25}
+                - {column: "p4_s1_tsum_cal", other_column: "p4_s2_tsum_cal", op: "abs_diff_lt", value: 2.5}
+            - all:
+                - {column: "p4_strip_topology", op: "eq", value: "0110"}
+                - {column: "p4_s2_tdif_cal", other_column: "p4_s3_tdif_cal", op: "abs_diff_lt", value: 0.25}
+                - {column: "p4_s2_tsum_cal", other_column: "p4_s3_tsum_cal", op: "abs_diff_lt", value: 2.5}
+            - all:
+                - {column: "p4_strip_topology", op: "eq", value: "0011"}
+                - {column: "p4_s3_tdif_cal", other_column: "p4_s4_tdif_cal", op: "abs_diff_lt", value: 0.25}
+                - {column: "p4_s3_tsum_cal", other_column: "p4_s4_tsum_cal", op: "abs_diff_lt", value: 2.5}
+
+  # Reference gate: accept every event, including topology 0000.
+  - enabled: false
+    name: "all_events"
+    short_label: "ALL"
+    condition:
+      {column: "p1_strip_topology", op: "matches", value: "[01]{4}"}
+
+  # Strip 2 in every responding plane; allow at most one 0000 plane so the
+  # corresponding 3-of-4 events can be used to measure plane efficiency.
+  - enabled: false
+    name: "topology_0100_with_up_to_one_empty_plane"
+    short_label: "0100_3of4"
+    condition:
+      all:
+        - {column: "p1_strip_topology", op: "in", values: ["0100", "0000"]}
+        - {column: "p2_strip_topology", op: "in", values: ["0100", "0000"]}
+        - {column: "p3_strip_topology", op: "in", values: ["0100", "0000"]}
+        - {column: "p4_strip_topology", op: "in", values: ["0100", "0000"]}
+        - &at_most_one_empty_plane
+          not:
+            any:
+              - {all: [{column: "p1_strip_topology", op: "eq", value: "0000"}, {column: "p2_strip_topology", op: "eq", value: "0000"}]}
+              - {all: [{column: "p1_strip_topology", op: "eq", value: "0000"}, {column: "p3_strip_topology", op: "eq", value: "0000"}]}
+              - {all: [{column: "p1_strip_topology", op: "eq", value: "0000"}, {column: "p4_strip_topology", op: "eq", value: "0000"}]}
+              - {all: [{column: "p2_strip_topology", op: "eq", value: "0000"}, {column: "p3_strip_topology", op: "eq", value: "0000"}]}
+              - {all: [{column: "p2_strip_topology", op: "eq", value: "0000"}, {column: "p4_strip_topology", op: "eq", value: "0000"}]}
+              - {all: [{column: "p3_strip_topology", op: "eq", value: "0000"}, {column: "p4_strip_topology", op: "eq", value: "0000"}]}
+
+  # Strip 3 in every responding plane, again allowing at most one 0000 plane.
+  - enabled: false
+    name: "topology_0010_with_up_to_one_empty_plane"
+    short_label: "0010_3of4"
+    condition:
+      all:
+        - {column: "p1_strip_topology", op: "in", values: ["0010", "0000"]}
+        - {column: "p2_strip_topology", op: "in", values: ["0010", "0000"]}
+        - {column: "p3_strip_topology", op: "in", values: ["0010", "0000"]}
+        - {column: "p4_strip_topology", op: "in", values: ["0010", "0000"]}
+        - *at_most_one_empty_plane
+
+  # In every responding plane accept strip 2, strips 2+3, or strip 3, with at
+  # most one 0000 plane.
+  - enabled: false
+    name: "topology_0100_or_0110_or_0010_with_up_to_one_empty_plane"
+    short_label: "MID_3of4"
+    condition:
+      all:
+        - {column: "p1_strip_topology", op: "in", values: ["0100", "0110", "0010", "0000"]}
+        - {column: "p2_strip_topology", op: "in", values: ["0100", "0110", "0010", "0000"]}
+        - {column: "p3_strip_topology", op: "in", values: ["0100", "0110", "0010", "0000"]}
+        - {column: "p4_strip_topology", op: "in", values: ["0100", "0110", "0010", "0000"]}
+        - *at_most_one_empty_plane
+
+  # Every plane has cluster size 0 or 1, and at least three planes have one
+  # active strip. This accepts 3-of-4 and 4-of-4 events but rejects 2-of-4.
+  - enabled: false
+    name: "cluster_size_zero_or_one_all_planes_three_or_four_planes"
+    short_label: "CS01_3of4"
+    condition:
+      all:
+        - {column: "p1_cluster_size", op: "in", values: [0, 1]}
+        - {column: "p2_cluster_size", op: "in", values: [0, 1]}
+        - {column: "p3_cluster_size", op: "in", values: [0, 1]}
+        - {column: "p4_cluster_size", op: "in", values: [0, 1]}
+        - any:
+            - {all: [{column: "p1_cluster_size", op: "eq", value: 1}, {column: "p2_cluster_size", op: "eq", value: 1}, {column: "p3_cluster_size", op: "eq", value: 1}]}
+            - {all: [{column: "p1_cluster_size", op: "eq", value: 1}, {column: "p2_cluster_size", op: "eq", value: 1}, {column: "p4_cluster_size", op: "eq", value: 1}]}
+            - {all: [{column: "p1_cluster_size", op: "eq", value: 1}, {column: "p3_cluster_size", op: "eq", value: 1}, {column: "p4_cluster_size", op: "eq", value: 1}]}
+            - {all: [{column: "p2_cluster_size", op: "eq", value: 1}, {column: "p3_cluster_size", op: "eq", value: 1}, {column: "p4_cluster_size", op: "eq", value: 1}]}
+
+  # As in no_disjoint_plane_topology, reject disjoint two-strip patterns.
+  # Additionally allow only cluster sizes 0, 1, or 2 and require at least
+  # three responding planes (cluster size 1 or 2).
+  - enabled: false
+    name: "no_disjoint_plane_topology_cluster_size_zero_to_two_three_or_four_planes"
+    short_label: "NG_CS02_3of4"
+    condition:
+      all:
+        - {column: "p1_strip_topology", op: "not_in", values: ["1010", "0101", "1001"]}
+        - {column: "p2_strip_topology", op: "not_in", values: ["1010", "0101", "1001"]}
+        - {column: "p3_strip_topology", op: "not_in", values: ["1010", "0101", "1001"]}
+        - {column: "p4_strip_topology", op: "not_in", values: ["1010", "0101", "1001"]}
+        - {column: "p1_cluster_size", op: "in", values: [0, 1, 2]}
+        - {column: "p2_cluster_size", op: "in", values: [0, 1, 2]}
+        - {column: "p3_cluster_size", op: "in", values: [0, 1, 2]}
+        - {column: "p4_cluster_size", op: "in", values: [0, 1, 2]}
+        - any:
+            - {all: [{column: "p1_cluster_size", op: "in", values: [1, 2]}, {column: "p2_cluster_size", op: "in", values: [1, 2]}, {column: "p3_cluster_size", op: "in", values: [1, 2]}]}
+            - {all: [{column: "p1_cluster_size", op: "in", values: [1, 2]}, {column: "p2_cluster_size", op: "in", values: [1, 2]}, {column: "p4_cluster_size", op: "in", values: [1, 2]}]}
+            - {all: [{column: "p1_cluster_size", op: "in", values: [1, 2]}, {column: "p3_cluster_size", op: "in", values: [1, 2]}, {column: "p4_cluster_size", op: "in", values: [1, 2]}]}
+            - {all: [{column: "p2_cluster_size", op: "in", values: [1, 2]}, {column: "p3_cluster_size", op: "in", values: [1, 2]}, {column: "p4_cluster_size", op: "in", values: [1, 2]}]}
+
+  # Same topology and cluster-size restrictions as NG_CS02_3of4, but require
+  # at least two responding planes instead of at least three.
+  - enabled: false
+    name: "no_disjoint_plane_topology_cluster_size_zero_to_two"
+    short_label: "NG_CS02"
+    condition:
+      all:
+        - {column: "p1_strip_topology", op: "not_in", values: ["1010", "0101", "1001"]}
+        - {column: "p2_strip_topology", op: "not_in", values: ["1010", "0101", "1001"]}
+        - {column: "p3_strip_topology", op: "not_in", values: ["1010", "0101", "1001"]}
+        - {column: "p4_strip_topology", op: "not_in", values: ["1010", "0101", "1001"]}
+        - {column: "p1_cluster_size", op: "in", values: [0, 1, 2]}
+        - {column: "p2_cluster_size", op: "in", values: [0, 1, 2]}
+        - {column: "p3_cluster_size", op: "in", values: [0, 1, 2]}
+        - {column: "p4_cluster_size", op: "in", values: [0, 1, 2]}
+        - any:
+            - {all: [{column: "p1_cluster_size", op: "in", values: [1, 2]}, {column: "p2_cluster_size", op: "in", values: [1, 2]}]}
+            - {all: [{column: "p1_cluster_size", op: "in", values: [1, 2]}, {column: "p3_cluster_size", op: "in", values: [1, 2]}]}
+            - {all: [{column: "p1_cluster_size", op: "in", values: [1, 2]}, {column: "p4_cluster_size", op: "in", values: [1, 2]}]}
+            - {all: [{column: "p2_cluster_size", op: "in", values: [1, 2]}, {column: "p3_cluster_size", op: "in", values: [1, 2]}]}
+            - {all: [{column: "p2_cluster_size", op: "in", values: [1, 2]}, {column: "p4_cluster_size", op: "in", values: [1, 2]}]}
+            - {all: [{column: "p3_cluster_size", op: "in", values: [1, 2]}, {column: "p4_cluster_size", op: "in", values: [1, 2]}]}
+
+  # Three- or four-plane fitted tracks whose projected crossing is inside a
+  # centered fiducial circle at every plane. The projection also evaluates the
+  # crossing at the missing plane in a three-plane event.
+  - enabled: false
+    name: "fiducial_track_three_or_four_planes"
+    short_label: "FID_3of4"
+    condition:
+      all:
+        - {column: "tt_task3_list", op: "in", values: [123, 124, 134, 234, 1234]}
+        # P1 and P4 use the tighter 100 mm radius.
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p1", radius: 100}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p4", radius: 100}
+        # P2 and P3 use the 120 mm radius.
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p2", radius: 120}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p3", radius: 120}
+
+  # Three- or four-plane fitted tracks inside a 100 mm centered circle on all planes.
+  - enabled: true
+    name: "fiducial_track_50_all_four_planes"
+    short_label: "FID50_3of4"
+    condition:
+      all:
+        - {column: "tt_task3_list", op: "in", values: [123, 124, 134, 234, 1234]}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p1", radius: 50}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p2", radius: 50}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p3", radius: 50}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p4", radius: 50}
+
+
+  - enabled: true
+    name: "fiducial_track_60_all_four_planes"
+    short_label: "FID60_3of4"
+    condition:
+      all:
+        - {column: "tt_task3_list", op: "in", values: [123, 124, 134, 234, 1234]}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p1", radius: 60}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p2", radius: 60}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p3", radius: 60}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p4", radius: 60}
+
+  - enabled: true
+    name: "fiducial_track_70_all_four_planes"
+    short_label: "FID70_3of4"
+    condition:
+      all:
+        - {column: "tt_task3_list", op: "in", values: [123, 124, 134, 234, 1234]}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p1", radius: 70}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p2", radius: 70}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p3", radius: 70}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p4", radius: 70}
+
+  - enabled: true
+    name: "fiducial_track_80_all_four_planes"
+    short_label: "FID80_3of4"
+    condition:
+      all:
+        - {column: "tt_task3_list", op: "in", values: [123, 124, 134, 234, 1234]}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p1", radius: 80}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p2", radius: 80}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p3", radius: 80}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p4", radius: 80}
+
+  - enabled: true
+    name: "fiducial_track_90_all_four_planes"
+    short_label: "FID90_3of4"
+    condition:
+      all:
+        - {column: "tt_task3_list", op: "in", values: [123, 124, 134, 234, 1234]}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p1", radius: 90}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p2", radius: 90}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p3", radius: 90}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p4", radius: 90}
+
+  - enabled: true
+    name: "fiducial_track_100_all_four_planes"
+    short_label: "FID100_3of4"
+    condition:
+      all:
+        - {column: "tt_task3_list", op: "in", values: [123, 124, 134, 234, 1234]}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p1", radius: 100}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p2", radius: 100}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p3", radius: 100}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p4", radius: 100}
+
+  - enabled: true
+    name: "fiducial_track_110_all_four_planes"
+    short_label: "FID110_3of4"
+    condition:
+      all:
+        - {column: "tt_task3_list", op: "in", values: [123, 124, 134, 234, 1234]}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p1", radius: 110}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p2", radius: 110}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p3", radius: 110}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p4", radius: 110}
+
+  # Three- or four-plane fitted tracks inside a 150 mm centered circle on all planes.
+  - enabled: true
+    name: "fiducial_track_120_all_four_planes"
+    short_label: "FID120_3of4"
+    condition:
+      all:
+        - {column: "tt_task3_list", op: "in", values: [123, 124, 134, 234, 1234]}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p1", radius: 120}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p2", radius: 120}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p3", radius: 120}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p4", radius: 120}
+
+  # Three- or four-plane fitted tracks inside a 150 mm centered circle on all planes.
+  - enabled: true
+    name: "fiducial_track_130_all_four_planes"
+    short_label: "FID130_3of4"
+    condition:
+      all:
+        - {column: "tt_task3_list", op: "in", values: [123, 124, 134, 234, 1234]}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p1", radius: 130}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p2", radius: 130}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p3", radius: 130}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p4", radius: 130}
+
+  # Three- or four-plane fitted tracks inside a 150 mm centered circle on all planes.
+  - enabled: true
+    name: "fiducial_track_140_all_four_planes"
+    short_label: "FID140_3of4"
+    condition:
+      all:
+        - {column: "tt_task3_list", op: "in", values: [123, 124, 134, 234, 1234]}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p1", radius: 140}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p2", radius: 140}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p3", radius: 140}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p4", radius: 140}
+
+  # Three- or four-plane fitted tracks inside a 150 mm centered circle on all planes.
+  - enabled: true
+    name: "fiducial_track_150_all_four_planes"
+    short_label: "FID150_3of4"
+    condition:
+      all:
+        - {column: "tt_task3_list", op: "in", values: [123, 124, 134, 234, 1234]}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p1", radius: 150}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p2", radius: 150}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p3", radius: 150}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p4", radius: 150}
+
+  # Continue the centered-circle scan from 160 to 200 mm in 10 mm steps.
+  - enabled: true
+    name: "fiducial_track_160_all_four_planes"
+    short_label: "FID160_3of4"
+    condition:
+      all:
+        - {column: "tt_task3_list", op: "in", values: [123, 124, 134, 234, 1234]}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p1", radius: 160}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p2", radius: 160}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p3", radius: 160}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p4", radius: 160}
+
+  - enabled: true
+    name: "fiducial_track_170_all_four_planes"
+    short_label: "FID170_3of4"
+    condition:
+      all:
+        - {column: "tt_task3_list", op: "in", values: [123, 124, 134, 234, 1234]}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p1", radius: 170}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p2", radius: 170}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p3", radius: 170}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p4", radius: 170}
+
+  - enabled: true
+    name: "fiducial_track_180_all_four_planes"
+    short_label: "FID180_3of4"
+    condition:
+      all:
+        - {column: "tt_task3_list", op: "in", values: [123, 124, 134, 234, 1234]}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p1", radius: 180}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p2", radius: 180}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p3", radius: 180}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p4", radius: 180}
+
+  - enabled: true
+    name: "fiducial_track_190_all_four_planes"
+    short_label: "FID190_3of4"
+    condition:
+      all:
+        - {column: "tt_task3_list", op: "in", values: [123, 124, 134, 234, 1234]}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p1", radius: 190}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p2", radius: 190}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p3", radius: 190}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p4", radius: 190}
+
+  - enabled: true
+    name: "fiducial_track_200_all_four_planes"
+    short_label: "FID200_3of4"
+    condition:
+      all:
+        - {column: "tt_task3_list", op: "in", values: [123, 124, 134, 234, 1234]}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p1", radius: 200}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p2", radius: 200}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p3", radius: 200}
+        - {column: "event_x", op: "projected_inside_circle", y_column: "event_y", x_slope_column: "event_xp", y_slope_column: "event_yp", z_column: "z_p4", radius: 200}

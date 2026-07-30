@@ -4,7 +4,7 @@
 # minute hour day_of_month month day_of_week command
 # Cron files sometimes require ending with a newline, and this case is.
 
-# Updated at 2026-02-02 10:05
+# Updated at 2026-07-29 13:16
 
 # --------------------------------------------------------------------------------------
 # Merging daq data and log files
@@ -52,9 +52,12 @@ BASE_DIR=/home/rpcuser/station_automation_scripts
 # External BME
 */15 * * * * sleep 1; /home/rpcuser/bin/i2c.py -b 0      --log /home/rpcuser/logs
 
-# HV PS
+# HV PS original
 #* * * * * sleep 2; /home/rpcuser/bin/i2c.py -b 0 --hv --log /home/rpcuser/logs
 */15 * * * * sleep 2; /home/rpcuser/bin/HV/hv -b 0 -l
+
+# HV PS CAEN
+* * * * * sleep 10; /home/rpcuser/CAEN/monitor.py -MON >> /home/rpcuser/CAEN/cron_logs.txt
 
 # FlowMeter
 */15 * * * * sleep 3; /home/rpcuser/bin/flowmeter/bin/GetFlow 0 4

@@ -185,18 +185,40 @@ BACKUP_SERIES_SPECS: Sequence[BackupSeriesSpec] = (
     BackupSeriesSpec("sensors_int_RH_int", "DAQ01", "HR"),
     BackupSeriesSpec("sensors_int_Pressure_int", "DAQ01", "Press"),
 )
-LOCAL_LOG_BACKUP_SPECS: Mapping[str, Sequence[str]] = {
-    "sensors_bus0": (
-        "sensors_ext_Temperature_ext",
-        "sensors_ext_RH_ext",
-        "sensors_ext_Pressure_ext",
-    ),
-    "sensors_bus1": (
-        "sensors_int_Temperature_int",
-        "sensors_int_RH_int",
-        "sensors_int_Pressure_int",
-    ),
+LOCAL_LOG_BACKUP_LAYOUTS: Mapping[str, Mapping[str, int]] = {
+    # Zero-based positions after the timestamp in each raw backup line.
+    "hv": {
+        "hv_CurrentNeg": 6, "hv_CurrentPos": 7,
+        "hv_HVneg": 8, "hv_HVpos": 9,
+    },
+    "rates": {
+        "rates_Asserted": 0, "rates_Edge": 1, "rates_Accepted": 2,
+        "rates_Multiplexer1": 3, "rates_M2": 4, "rates_M3": 5,
+        "rates_M4": 6, "rates_CM1": 7, "rates_CM2": 8,
+        "rates_CM3": 9, "rates_CM4": 10,
+    },
+    "sensors_ext": {
+        "sensors_ext_Temperature_ext": 4,
+        "sensors_ext_RH_ext": 5,
+        "sensors_ext_Pressure_ext": 6,
+    },
+    "sensors_int": {
+        "sensors_int_Temperature_int": 4,
+        "sensors_int_RH_int": 5,
+        "sensors_int_Pressure_int": 6,
+    },
+    "odroid": {
+        "odroid_DiskFill1": 0, "odroid_DiskFill2": 1,
+        "odroid_DiskFillX": 2,
+    },
+    "flow": {
+        "flow_FlowRate1": 0, "flow_FlowRate2": 1,
+        "flow_FlowRate3": 2, "flow_FlowRate4": 3,
+    },
 }
+LOCAL_LOG_BACKUP_REQUIRED_COLUMNS = frozenset(
+    column for layout in LOCAL_LOG_BACKUP_LAYOUTS.values() for column in layout
+)
 
 
 def _load_yaml_mapping(path: Path) -> Mapping[str, object]:
@@ -588,37 +610,40 @@ def _local_log_backup_host_dir(
 
 def _load_local_backup_log(
     path: Path,
-    output_columns: Sequence[str],
+    value_layout: Mapping[str, int],
 ) -> pd.DataFrame:
+    """Parse one raw local-backup log without assuming a split date/time."""
+    output_columns = tuple(value_layout)
     try:
-        df = pd.read_csv(
-            path,
-            sep=r"[;\s]+",
-            header=None,
-            engine="python",
-            on_bad_lines="skip",
-        )
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except FileNotFoundError:
         return pd.DataFrame(columns=["Time", *output_columns])
 
-    if df.empty:
+    records: List[Dict[str, object]] = []
+    for line in lines:
+        tokens = [token for token in re.split(r"[;\s]+", line.strip()) if token]
+        if not tokens:
+            continue
+        if (
+            len(tokens) >= 2
+            and re.fullmatch(r"\d{4}-\d{2}-\d{2}", tokens[0])
+            and re.fullmatch(r"\d{2}:\d{2}:\d{2}(?:\.\d+)?", tokens[1])
+        ):
+            timestamp = f"{tokens[0]}T{tokens[1]}"
+            raw_values = tokens[2:]
+        else:
+            timestamp = tokens[0]
+            raw_values = tokens[1:]
+        record: Dict[str, object] = {"Time": timestamp}
+        for column, raw_index in value_layout.items():
+            record[column] = (
+                raw_values[raw_index] if raw_index < len(raw_values) else pd.NA
+            )
+        records.append(record)
+
+    if not records:
         return pd.DataFrame(columns=["Time", *output_columns])
-
-    expected_columns = 1 + 4 + len(output_columns)
-    if len(df.columns) > expected_columns:
-        df = df.iloc[:, :expected_columns]
-    elif len(df.columns) < expected_columns:
-        for _ in range(expected_columns - len(df.columns)):
-            df[len(df.columns)] = pd.NA
-
-    df.columns = [
-        "Time",
-        "Unused1",
-        "Unused2",
-        "Unused3",
-        "Unused4",
-        *output_columns,
-    ]
+    df = pd.DataFrame.from_records(records, columns=["Time", *output_columns])
     df["Time"] = pd.to_datetime(df["Time"], errors="coerce")
     df = df.dropna(subset=["Time"])
     for column in output_columns:
@@ -655,7 +680,9 @@ def restore_outputs_from_local_log_backup(
     if not requested_days:
         print("Local LOG_BACKUP restore skipped: selected date ranges are not fully bounded by day.")
         return False
-    if not force_rebuild and _backup_outputs_already_exist(output_root, requested_days):
+    if not force_rebuild and _backup_outputs_already_exist(
+        output_root, requested_days, LOCAL_LOG_BACKUP_REQUIRED_COLUMNS,
+    ):
         print("Local LOG_BACKUP restore skipped: requested daily outputs already exist.")
         return True
 
@@ -667,15 +694,20 @@ def restore_outputs_from_local_log_backup(
     day_count = 0
     for day_value in requested_days:
         frames: List[pd.DataFrame] = []
-        for sensor_name, output_columns in LOCAL_LOG_BACKUP_SPECS.items():
-            candidate_paths = (
-                host_dir / "done" / f"{sensor_name}_{day_value:%Y-%m-%d}.log",
-                host_dir / f"{sensor_name}_{day_value:%Y-%m-%d}.log",
+        for spec in LOG_SPECS:
+            value_layout = LOCAL_LOG_BACKUP_LAYOUTS[spec.name]
+            candidate_paths = tuple(
+                candidate
+                for directory in (host_dir / "done", host_dir)
+                for prefix in spec.prefixes
+                for candidate in sorted(
+                    directory.glob(f"{prefix}*{day_value:%Y-%m-%d}.log")
+                )
             )
             source_path = next((path for path in candidate_paths if path.exists()), None)
             if source_path is None:
                 continue
-            frame = _load_local_backup_log(source_path, output_columns)
+            frame = _load_local_backup_log(source_path, value_layout)
             if not frame.empty:
                 frames.append(frame)
 
@@ -804,13 +836,26 @@ def _enumerate_bounded_days(
 def _backup_outputs_already_exist(
     output_root: Path,
     requested_days: Sequence[date],
+    required_columns: Iterable[str] = (),
 ) -> bool:
+    """Check daily products and, when requested, their required schema."""
+    required = set(required_columns)
     if not requested_days:
         return False
-    return all(
-        (output_root / f"{day_value:%Y}" / f"{day_value:%m}" / f"lab_logs_{day_value:%Y_%m_%d}.csv").exists()
-        for day_value in requested_days
-    )
+    for day_value in requested_days:
+        output_path = (
+            output_root / f"{day_value:%Y}" / f"{day_value:%m}"
+            / f"lab_logs_{day_value:%Y_%m_%d}.csv"
+        )
+        if not output_path.exists():
+            return False
+        try:
+            columns = set(pd.read_csv(output_path, nrows=0).columns)
+        except Exception:
+            return False
+        if required and not required.issubset(columns):
+            return False
+    return True
 
 
 def restore_outputs_from_backup(

@@ -295,6 +295,59 @@ def run(
                 notes="No selected_rows metadata for file",
             )
 
+
+        rate_columns = (
+            "trigger_rate_hz",
+            "trigger_rate_unit_efficiency_hz",
+            "particle_crossing_rate_hz",
+        )
+        if not row.empty and all(column in row.columns for column in rate_columns):
+            rate_values = pd.to_numeric(
+                row.iloc[0].loc[list(rate_columns)], errors="coerce",
+            )
+            actual_rate = float(rate_values["trigger_rate_hz"])
+            unit_rate = float(rate_values["trigger_rate_unit_efficiency_hz"])
+            crossing_rate = float(rate_values["particle_crossing_rate_hz"])
+            new_rates_finite = np.isfinite([unit_rate, crossing_rate])
+            if new_rates_finite.all() and np.isfinite(actual_rate):
+                ordered = (
+                    0.0 <= actual_rate <= unit_rate + 1e-12
+                    and unit_rate <= crossing_rate + 1e-12
+                )
+                rb.add(
+                    test_id=f"{base_id}_rate_decomposition",
+                    test_name=f"{scan.file_name}: trigger-rate decomposition is ordered",
+                    metric_name="actual_le_unit_le_crossing",
+                    metric_value=int(ordered),
+                    expected_value=1,
+                    status="PASS" if ordered else "FAIL",
+                    notes=(
+                        f"actual={actual_rate:.9g}, unit_efficiency={unit_rate:.9g}, "
+                        f"crossing={crossing_rate:.9g}"
+                    ),
+                )
+            else:
+                available_new_rates = int(new_rates_finite.sum())
+                rb.add(
+                    test_id=f"{base_id}_rate_decomposition",
+                    test_name=f"{scan.file_name}: trigger-rate decomposition is ordered",
+                    metric_name="available_geometrical_rate_count",
+                    metric_value=available_new_rates,
+                    expected_value=2,
+                    status="SKIP" if available_new_rates == 0 else "WARN",
+                    notes="Historical or legacy input may not have geometrical counters.",
+                )
+        else:
+            rb.add(
+                test_id=f"{base_id}_rate_decomposition",
+                test_name=f"{scan.file_name}: trigger-rate decomposition is ordered",
+                metric_name="available_geometrical_rate_count",
+                metric_value=0,
+                expected_value=2,
+                status="SKIP",
+                notes="Rate-decomposition columns are absent.",
+            )
+
         if not row.empty and "param_hash" in row.columns:
             expected_hash = str(row.iloc[0]["param_hash"]).strip()
             if scan.param_hash is None:

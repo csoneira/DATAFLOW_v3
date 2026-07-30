@@ -17,9 +17,9 @@
 # assets folder.
 #
 # The list of files to refresh is kept in "plot_list.txt" (one entry per
-# line, relative to the workspace root).  Lines beginning with "#" or blank
-# are ignored.  Each entry may contain shell globs; matching files will be
-# copied to the assets directory if they are newer or missing.
+# line, relative to the workspace root). A source can optionally be followed
+# by "|" and its destination below the assets directory. Lines beginning with
+# "#" or blank are ignored. Each source may contain shell globs.
 
 set -euo pipefail
 
@@ -37,21 +37,49 @@ fi
 while IFS= read -r entry; do
   # strip whitespace
   entry="${entry%%#*}"      # remove comments after #
-  entry="$(echo "$entry" | xargs)"  # trim spaces
+  entry="${entry#"${entry%%[![:space:]]*}"}"
+  entry="${entry%"${entry##*[![:space:]]}"}"
   [[ -z "$entry" ]] && continue
+
+  source_entry="${entry%%|*}"
+  source_entry="${source_entry%"${source_entry##*[![:space:]]}"}"
+  if [[ "$entry" == *"|"* ]]; then
+    destination="${entry#*|}"
+    destination="${destination#"${destination%%[![:space:]]*}"}"
+    destination="${destination%"${destination##*[![:space:]]}"}"
+  else
+    destination="."
+  fi
+  if [[ -z "$source_entry" || -z "$destination" ]]; then
+    echo "[update_plots] invalid entry: '$entry'" >&2
+    exit 1
+  fi
 
   # expand glob(s)
   shopt -s nullglob
-  files=("$ROOT_DIR"/$entry)
+  files=("$ROOT_DIR"/$source_entry)
   shopt -u nullglob
 
   if [[ ${#files[@]} -eq 0 ]]; then
-    echo "[update_plots] no matches for '$entry'" >&2
+    echo "[update_plots] no matches for '$source_entry'" >&2
     continue
   fi
 
+  destination_path="$ASSETS_DIR/$destination"
+  if [[ ${#files[@]} -gt 1 || "$destination" == */ || "$destination" == "." ]]; then
+    mkdir -p "$destination_path"
+    destination_is_directory=true
+  else
+    mkdir -p "$(dirname "$destination_path")"
+    destination_is_directory=false
+  fi
+
   for file in "${files[@]}"; do
-    cp -u "$file" "$ASSETS_DIR/"
+    if [[ "$destination_is_directory" == true ]]; then
+      cp -u "$file" "$destination_path/"
+    else
+      cp -u "$file" "$destination_path"
+    fi
   done
 
 done < "$CONFIG_FILE"

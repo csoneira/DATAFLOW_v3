@@ -955,8 +955,29 @@ def plot_step4_summary(
     plt.close(fig)
 
 
+def select_step4_input_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Retain every upstream column needed by signal induction and provenance."""
+    needed = {
+        "event_id", "T_thick_s", "X_gen", "Y_gen", "Theta_gen", "Phi_gen",
+        "crossing_mask",
+    }
+    for plane_idx in range(1, 5):
+        needed.update(
+            {
+                f"avalanche_size_electrons_{plane_idx}",
+                f"avalanche_x_{plane_idx}",
+                f"avalanche_y_{plane_idx}",
+                f"T_sum_{plane_idx}_ns",
+            }
+        )
+    return df[[column for column in df.columns if column in needed]]
+
+
 def prune_step4(df: pd.DataFrame) -> pd.DataFrame:
-    keep = {"event_id", "T_thick_s", "X_gen", "Y_gen", "Theta_gen", "Phi_gen", "tt_hit"}
+    keep = {
+        "event_id", "T_thick_s", "X_gen", "Y_gen", "Theta_gen", "Phi_gen",
+        "tt_hit", "crossing_mask",
+    }
     for plane_idx in range(1, 5):
         keep.add(f"avalanche_gap_charge_fc_{plane_idx}")
         keep.add(f"induced_charge_total_fc_{plane_idx}")
@@ -1200,18 +1221,7 @@ def main() -> None:
         chunk: pd.DataFrame,
         debug_state: dict,
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
-        needed_cols = {"event_id", "T_thick_s", "X_gen", "Y_gen", "Theta_gen", "Phi_gen"}
-        for plane_idx in range(1, 5):
-            needed_cols.update(
-                {
-                    f"avalanche_size_electrons_{plane_idx}",
-                    f"avalanche_x_{plane_idx}",
-                    f"avalanche_y_{plane_idx}",
-                    f"T_sum_{plane_idx}_ns",
-                }
-            )
-        keep_cols = [col for col in chunk.columns if col in needed_cols]
-        chunk = chunk[keep_cols]
+        chunk = select_step4_input_columns(chunk)
         debug_event_index = None
         if not debug_state["captured"]:
             debug_event_index = select_debug_event(chunk, debug_rng)
@@ -1350,18 +1360,7 @@ def main() -> None:
     else:
         df, upstream_meta = load_with_metadata(input_path)
         print(f"Loaded {len(df):,} rows from {input_path.name}")
-        needed_cols = {"event_id", "T_thick_s", "X_gen", "Y_gen", "Theta_gen", "Phi_gen"}
-        for plane_idx in range(1, 5):
-            needed_cols.update(
-                {
-                    f"avalanche_size_electrons_{plane_idx}",
-                    f"avalanche_x_{plane_idx}",
-                    f"avalanche_y_{plane_idx}",
-                    f"T_sum_{plane_idx}_ns",
-                }
-            )
-        keep_cols = [col for col in df.columns if col in needed_cols]
-        df = df[keep_cols]
+        df = select_step4_input_columns(df)
         debug_event_index = select_debug_event(df, debug_rng)
         out_full = induce_signal(
             df,

@@ -112,9 +112,13 @@ def _format_axes(axes: Any) -> None:
 def _charge_plot(
     frame: pd.DataFrame, destination: Path, title: str, mask: pd.Series,
 ) -> None:
-    fig, axes = plt.subplots(3, 4, figsize=(19, 11), sharex=True, constrained_layout=True)
+    charge_families = ("Q_F", "Q_B")
+    fig, axes = plt.subplots(
+        len(charge_families), 4, figsize=(19, 8),
+        sharex=True, constrained_layout=True,
+    )
     colors = plt.get_cmap("tab10").colors
-    for row, family in enumerate(("Q_F", "Q_B", "Q_sum")):
+    for row, family in enumerate(charge_families):
         for plane in PLANES:
             axis = axes[row, plane - 1]
             legend_axis = row == 0 and plane == 4
@@ -162,6 +166,76 @@ def _time_plot(
             axis.legend(ncols=2, fontsize=8)
     _format_axes(axes)
     fig.suptitle(f"{title}\n{family} offsets (selected files in crimson)", fontsize=15)
+    fig.savefig(destination, dpi=160)
+    plt.close(fig)
+
+
+def _qf_vs_qb_plot(
+    frame: pd.DataFrame,
+    destination: Path,
+    title: str,
+    mask: pd.Series,
+) -> None:
+    """Plot paired front/back charge pedestal offsets for every channel."""
+    fig, axes = plt.subplots(
+        1, 4, figsize=(19, 5), constrained_layout=True,
+    )
+    colors = plt.get_cmap("tab10").colors
+    for plane in PLANES:
+        axis = axes[plane - 1]
+        plotted_values: list[pd.Series] = []
+        for strip in STRIPS:
+            qf = pd.to_numeric(
+                frame[f"P{plane}_s{strip}_Q_F"], errors="coerce",
+            )
+            qb = pd.to_numeric(
+                frame[f"P{plane}_s{strip}_Q_B"], errors="coerce",
+            )
+            valid = qf.notna() & qb.notna()
+            axis.scatter(
+                qf.loc[valid],
+                qb.loc[valid],
+                s=7,
+                alpha=0.50,
+                color=colors[strip - 1],
+                label=f"strip {strip}",
+            )
+            highlighted = valid & mask
+            if bool(highlighted.any()):
+                axis.scatter(
+                    qf.loc[highlighted],
+                    qb.loc[highlighted],
+                    s=14,
+                    facecolors="none",
+                    edgecolors="crimson",
+                    linewidths=0.6,
+                    zorder=5,
+                )
+            plotted_values.extend((qf.loc[valid], qb.loc[valid]))
+        finite_values = pd.concat(plotted_values, ignore_index=True).dropna()
+        if not finite_values.empty:
+            lower, upper = float(finite_values.min()), float(finite_values.max())
+            if lower == upper:
+                lower -= 0.5
+                upper += 0.5
+            axis.plot(
+                [lower, upper], [lower, upper],
+                color="0.35", linestyle="--", linewidth=0.9,
+                label="Q_F = Q_B",
+            )
+        axis.set(
+            xlabel="Q_F calibration offset",
+            ylabel="Q_B calibration offset",
+            title=f"Plane {plane}",
+        )
+        axis.grid(True, alpha=0.25)
+        if plane == 4:
+            axis.legend(ncols=2, fontsize=8)
+    fig.suptitle(
+        f"{title}\nPaired Q_F versus Q_B calibration offsets "
+        "(selected files outlined in crimson)",
+        fontsize=15,
+    )
     fig.savefig(destination, dpi=160)
     plt.close(fig)
 
@@ -287,6 +361,7 @@ def generate_calibration_context(
         output_dir / "03_tsum_offsets.png",
         output_dir / "04_slewing_parameters.png",
         output_dir / "05_calibration_availability.png",
+        output_dir / "08_qf_vs_qb_offsets.png",
     ]
     frame.to_csv(paths[0], index=False)
     plot_title = f"{title}\nCalibration context: {context_label}"
@@ -295,7 +370,8 @@ def generate_calibration_context(
     _time_plot(frame, paths[3], plot_title, "T_sum", mask)
     slewing_written = _slewing_plot(frame, paths[4], plot_title, mask)
     _availability_plot(frame, paths[5], plot_title, mask)
-    written = paths if slewing_written else [*paths[:4], paths[5]]
+    _qf_vs_qb_plot(frame, paths[6], plot_title, mask)
+    written = paths if slewing_written else [*paths[:4], *paths[5:]]
     print(
         f"Calibration context: {len(frame)} metadata point(s), "
         f"filtered to {len(lake_basenames)} valid Parquet Lake file(s); "
@@ -304,3 +380,180 @@ def generate_calibration_context(
         f"{context_end:%Y-%m-%d %H:%M:%S}) -> {output_dir}"
     )
     return written
+
+
+def generate_calibration_temperature_plots(
+    calibration_data_path: Path,
+    environment_data_path: Path,
+    output_dir: Path,
+    title: str,
+    selected_basenames: set[str],
+    *,
+    temperature_column: str = "sensors_int_Temperature_int",
+    synchronization_tolerance: pd.Timedelta = pd.Timedelta("30min"),
+) -> list[Path]:
+    """Relate persisted calibration offsets to synchronized detector temperature."""
+    calibration = pd.read_csv(calibration_data_path, low_memory=False)
+    environment = pd.read_csv(environment_data_path, low_memory=False)
+    if (
+        "acquisition_datetime" not in calibration
+        or "Time" not in environment
+        or temperature_column not in environment
+    ):
+        print(
+            "Warning: calibration-temperature plots skipped because synchronized "
+            "calibration or temperature columns are unavailable."
+        )
+        return []
+    calibration["acquisition_datetime"] = pd.to_datetime(
+        calibration["acquisition_datetime"], errors="coerce",
+    )
+    environment["Time"] = pd.to_datetime(environment["Time"], errors="coerce")
+    environment["temperature_c"] = pd.to_numeric(
+        environment[temperature_column], errors="coerce",
+    )
+    calibration = calibration.dropna(subset=["acquisition_datetime"]).sort_values(
+        "acquisition_datetime",
+    )
+    environment = environment.dropna(subset=["Time", "temperature_c"]).sort_values(
+        "Time",
+    )
+    if calibration.empty or environment.empty:
+        print("Warning: no synchronized calibration/temperature points to plot.")
+        return []
+    synchronized = pd.merge_asof(
+        calibration,
+        environment.loc[:, ["Time", "temperature_c"]],
+        left_on="acquisition_datetime",
+        right_on="Time",
+        direction="nearest",
+        tolerance=synchronization_tolerance,
+    )
+    synchronized = synchronized.dropna(subset=["temperature_c"])
+    if synchronized.empty:
+        print(
+            "Warning: no calibration points have an internal-temperature sample "
+            f"within {synchronization_tolerance}."
+        )
+        return []
+
+    selected = {
+        str(value).strip() for value in selected_basenames
+    }
+    selected_mask = synchronized["filename_base"].astype(str).str.strip().isin(
+        selected,
+    )
+    colors = plt.get_cmap("tab10").colors
+
+    def scatter_charge_families(
+        destination: Path,
+    ) -> None:
+        fig, axes = plt.subplots(
+            2, 4, figsize=(19, 9.2), sharex=True,
+            constrained_layout=True, squeeze=False,
+        )
+        for row, current_family in enumerate(("Q_F", "Q_B")):
+            for plane in PLANES:
+                axis = axes[row, plane - 1]
+                for strip in STRIPS:
+                    column = f"P{plane}_s{strip}_{current_family}"
+                    if column not in synchronized:
+                        continue
+                    values = pd.to_numeric(
+                        synchronized[column], errors="coerce",
+                    )
+                    valid = values.notna()
+                    axis.scatter(
+                        synchronized.loc[valid, "temperature_c"],
+                        values.loc[valid],
+                        s=7,
+                        alpha=0.48,
+                        color=colors[strip - 1],
+                        label=f"strip {strip}",
+                    )
+                    highlighted = valid & selected_mask
+                    if bool(highlighted.any()):
+                        axis.scatter(
+                            synchronized.loc[highlighted, "temperature_c"],
+                            values.loc[highlighted],
+                            s=14,
+                            facecolors="none",
+                            edgecolors="crimson",
+                            linewidths=0.65,
+                            zorder=5,
+                        )
+                axis.set_title(
+                    f"Plane {plane} — {current_family}"
+                )
+                axis.grid(True, alpha=0.25)
+                if plane == 1:
+                    axis.set_ylabel("Charge calibration offset")
+                if row == 0 and plane == 4:
+                    axis.legend(ncols=2, fontsize=8)
+        for axis in axes[-1, :]:
+            axis.set_xlabel("Internal temperature (°C)")
+        fig.suptitle(
+            f"{title}\nQ_F and Q_B calibration offsets versus synchronized "
+            "internal temperature "
+            f"(nearest within {synchronization_tolerance})",
+            fontsize=15,
+        )
+        fig.savefig(destination, dpi=160)
+        plt.close(fig)
+
+    tsum_paths: list[Path] = []
+    for plane in PLANES:
+        for strip in STRIPS:
+            column = f"P{plane}_s{strip}_T_sum"
+            if column not in synchronized:
+                continue
+            values = pd.to_numeric(synchronized[column], errors="coerce")
+            valid = values.notna()
+            destination = (
+                output_dir
+                / f"06_tsum_p{plane}_s{strip}_offset_vs_temperature.png"
+            )
+            fig, axis = plt.subplots(
+                figsize=(8, 6), constrained_layout=True,
+            )
+            axis.scatter(
+                synchronized.loc[valid, "temperature_c"],
+                values.loc[valid],
+                s=7,
+                alpha=0.50,
+                color=colors[strip - 1],
+                label="calibration points",
+            )
+            highlighted = valid & selected_mask
+            if bool(highlighted.any()):
+                axis.scatter(
+                    synchronized.loc[highlighted, "temperature_c"],
+                    values.loc[highlighted],
+                    s=14,
+                    facecolors="none",
+                    edgecolors="crimson",
+                    linewidths=0.6,
+                    label="selected files",
+                    zorder=5,
+                )
+            axis.set(
+                xlabel="Internal temperature (°C)",
+                ylabel="T_sum calibration offset",
+                title=(
+                    f"{title}\nPlane {plane}, strip {strip} T_sum offset "
+                    "versus synchronized internal temperature"
+                ),
+            )
+            axis.grid(True, alpha=0.25)
+            axis.legend(fontsize=8)
+            fig.savefig(destination, dpi=160)
+            plt.close(fig)
+            tsum_paths.append(destination)
+
+    charge_path = output_dir / "07_qf_qb_offsets_vs_temperature.png"
+    scatter_charge_families(charge_path)
+    print(
+        f"Calibration-temperature relationships: {len(synchronized):,} "
+        f"synchronized calibration point(s) -> {output_dir}"
+    )
+    return [*tsum_paths, charge_path]

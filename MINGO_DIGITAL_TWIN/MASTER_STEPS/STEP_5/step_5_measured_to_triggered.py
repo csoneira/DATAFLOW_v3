@@ -91,7 +91,10 @@ def compute_tdiff_qdiff(
 
 
 def prune_step5(df: pd.DataFrame) -> pd.DataFrame:
-    keep = {"event_id", "T_thick_s", "X_gen", "Y_gen", "Theta_gen", "Phi_gen"}
+    keep = {
+        "event_id", "T_thick_s", "X_gen", "Y_gen", "Theta_gen", "Phi_gen",
+        "crossing_mask",
+    }
     for plane_idx in range(1, 5):
         for strip_idx in range(1, 5):
             keep.add(f"Y_mea_{plane_idx}_s{strip_idx}")

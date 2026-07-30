@@ -35,6 +35,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.execution_logger import set_station, start_timer
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.debug_plots import plot_debug_histograms
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.file_selection import (
     file_name_in_any_date_range,
     load_date_ranges_from_config,
@@ -87,6 +88,7 @@ from plotting_functions import (
 task_number = 0
 STATION_CHOICES = ("0", "1", "2", "3", "4")
 TASK0_PLOT_ALIASES: tuple[str, ...] = (
+    "debug_suite",
     "acquisition_rate_vs_time_by_trigger_type",
     "acquisition_rate_vs_time_by_task_tt_with_histograms",
 )
@@ -631,6 +633,36 @@ if save_plots and task0_plot_enabled("acquisition_rate_vs_time_by_task_tt_with_h
         saved_plot_paths.append(plot_path)
     else:
         print("Task 0 acquisition-rate-by-task-tt plot skipped: no valid tt_task0_acq/datetime rows.", force=True)
+
+if create_debug_plots and task0_plot_enabled("debug_suite"):
+    if figure_directory is None:
+        figure_directory = (
+            task_directory
+            / "PLOTS"
+            / "FIGURE_DIRECTORY"
+            / f"FIGURES_EXEC_ON_{date_execution}"
+        )
+    debug_plot_directory = figure_directory / "DEBUG_PLOTS"
+    debug_plot_directory.mkdir(parents=True, exist_ok=True)
+    debug_fig_idx = plot_debug_histograms(
+        read_df,
+        list(read_df.columns),
+        thresholds=None,
+        title=f"Task 0 acquisition dataframe: all columns [DEBUG] (station {station})",
+        out_dir=str(debug_plot_directory),
+        fig_idx=1,
+        max_cols_per_fig=20,
+        exclude_zeros=True,
+        absolute_limit=1e5,
+        annotate_omissions=True,
+    )
+    debug_plot_paths = sorted(debug_plot_directory.glob("*_debug_*.png"))
+    saved_plot_paths.extend(debug_plot_paths)
+    print(
+        f"Task 0 debug suite saved {debug_fig_idx - 1} histogram page(s) "
+        f"covering {len(read_df.columns)} column(s).",
+        force=True,
+    )
 
 if create_pdf and saved_plot_paths and figure_directory is not None:
     save_pdf_filename = f"mingo{str(station).zfill(2)}_task0_{basename_no_ext}_{date_execution}.pdf"

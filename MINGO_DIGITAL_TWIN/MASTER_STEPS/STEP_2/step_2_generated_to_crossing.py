@@ -69,6 +69,7 @@ def calculate_intersections(
     z_positions = list(z_positions)
     out = df.copy()
     crossing_array = np.full(len(out), "", dtype=object)
+    crossing_mask = np.zeros(len(out), dtype=np.uint8)
 
     theta = out["Theta_gen"].to_numpy(dtype=float)
     tan_theta = np.tan(theta)
@@ -95,6 +96,7 @@ def calculate_intersections(
         out[f"T_sum_{plane_idx}_ns"] = np.where(in_bounds, t_sum, np.nan)
 
         crossing_array[in_bounds] = crossing_array[in_bounds] + str(plane_idx)
+        crossing_mask[in_bounds] |= np.uint8(1 << (plane_idx - 1))
 
     t_sum_cols = [f"T_sum_{idx}_ns" for idx in range(1, len(z_positions) + 1)]
     t_sum_matrix = out[t_sum_cols].to_numpy(dtype=float)
@@ -106,11 +108,15 @@ def calculate_intersections(
     crossing_series = pd.Series(crossing_array, dtype="string")
     crossing_series = crossing_series.replace("", pd.NA)
     out["tt_crossing"] = crossing_series
+    out["crossing_mask"] = crossing_mask
     return out
 
 
 def prune_step2(df: pd.DataFrame) -> pd.DataFrame:
-    keep = {"event_id", "T_thick_s", "X_gen", "Y_gen", "Theta_gen", "Phi_gen", "tt_crossing"}
+    keep = {
+        "event_id", "T_thick_s", "X_gen", "Y_gen", "Theta_gen", "Phi_gen",
+        "tt_crossing", "crossing_mask",
+    }
     for plane_idx in range(1, 5):
         keep.add(f"X_gen_{plane_idx}")
         keep.add(f"Y_gen_{plane_idx}")

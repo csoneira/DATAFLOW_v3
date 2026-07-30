@@ -61,7 +61,7 @@ Lineage fields commonly propagated:
 ### Registry files
 `step_final_output_registry.json` tracks emitted files and selection details.
 
-`step_final_simulation_params.csv` maps emitted files to full parameter rows and hash values. This file is critical for downstream geometry resolution in MASTER STEP_1.
+`step_final_simulation_params.csv` maps emitted files to full parameter rows and hash values. This file is critical for downstream geometry resolution in MASTER STEP_1. New sequential simulations also include `particle_crossing_rate_hz` and `trigger_rate_unit_efficiency_hz` beside the existing `trigger_rate_hz`; historical rows are intentionally nullable because removed intersteps cannot be reconstructed reliably.
 
 ## Chunking conventions
 When chunking is enabled:

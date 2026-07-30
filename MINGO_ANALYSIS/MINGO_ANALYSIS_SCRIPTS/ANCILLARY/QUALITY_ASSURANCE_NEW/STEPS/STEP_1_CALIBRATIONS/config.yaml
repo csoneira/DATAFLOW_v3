@@ -4,3 +4,12 @@ metadata_suffix: calibration
 metadata_type: calibration
 pass_column_template: task_{task_id}_calibration_pass
 threshold_rules_csv: task_2_column_rules.csv
+
+# QA thresholds in human-readable units. YAML rules override legacy CSV
+# threshold fields while the CSV continues to control plot/quality categories.
+quality_rules:
+  "*_Q_[BF]":
+    center_method: median
+    tolerance_mode: relative_pct
+    tolerance_percent: 2.0  # inclusive median ±2%; 2.0 means 2 percent
+    min_samples: 8

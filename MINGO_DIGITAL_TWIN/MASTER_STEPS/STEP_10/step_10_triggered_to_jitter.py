@@ -93,7 +93,11 @@ def apply_jitter(
 
 
 def prune_step10(df: pd.DataFrame) -> pd.DataFrame:
-    keep = {"event_id", "T_thick_s", "X_gen", "Y_gen", "Theta_gen", "Phi_gen", "daq_jitter_ns"}
+    keep = {
+        "event_id", "T_thick_s", "X_gen", "Y_gen", "Theta_gen", "Phi_gen",
+        "daq_jitter_ns", "sim_crossing_cumulative_count",
+        "sim_unit_efficiency_trigger_cumulative_count",
+    }
     for plane_idx in range(1, 5):
         for strip_idx in range(1, 5):
             keep.add(f"T_front_{plane_idx}_s{strip_idx}")

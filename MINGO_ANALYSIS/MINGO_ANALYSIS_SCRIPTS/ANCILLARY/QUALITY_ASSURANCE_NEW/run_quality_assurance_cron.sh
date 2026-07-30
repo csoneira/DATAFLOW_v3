@@ -2,7 +2,7 @@
 set -euo pipefail
 
 MODE="often"
-if [[ "${1:-}" == "often" || "${1:-}" == "plot" ]]; then
+if [[ "${1:-}" == "often" || "${1:-}" == "plot" || "${1:-}" == "qa-plot" ]]; then
   MODE="$1"
   shift
 fi

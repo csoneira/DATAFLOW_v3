@@ -100,7 +100,7 @@ def run(
         )
         return rb.to_frame().reindex(columns=RESULT_COLUMNS)
 
-    cols = ["event_id", "tt_crossing"]
+    cols = ["event_id", "tt_crossing", "crossing_mask"]
     for i in range(1, 5):
         cols.extend([f"X_gen_{i}", f"Y_gen_{i}", f"Z_gen_{i}", f"T_sum_{i}_ns"])
 
@@ -129,7 +129,7 @@ def run(
         status="PASS",
     )
 
-    required = set(cols)
+    required = set(cols) - {"crossing_mask"}
     missing = sorted(required - set(df.columns))
     rb.add(
         test_id="step2_required_columns",
@@ -155,6 +155,7 @@ def run(
 
     # tt_crossing consistency with valid planes.
     mismatch = 0
+    crossing_mask_mismatch = 0
     min_t_nonzero = 0
     neg_dt = 0
     superluminal = 0
@@ -176,6 +177,13 @@ def run(
         actual_tt = _norm_tt(row.get("tt_crossing"))
         if expected_tt != actual_tt:
             mismatch += 1
+        if "crossing_mask" in df.columns:
+            expected_mask = sum(1 << (plane - 1) for plane in valid_planes)
+            actual_mask = pd.to_numeric(
+                pd.Series([row.get("crossing_mask")]), errors="coerce",
+            ).iloc[0]
+            if pd.isna(actual_mask) or int(actual_mask) != expected_mask:
+                crossing_mask_mismatch += 1
 
         if ts:
             min_t = float(np.min(ts))
@@ -203,6 +211,20 @@ def run(
         threshold_low=0,
         threshold_high=0,
         status="PASS" if mismatch == 0 else "FAIL",
+    )
+
+    rb.add(
+        test_id="step2_crossing_mask_consistency",
+        test_name="crossing_mask matches valid planes",
+        metric_name="mismatch_rows",
+        metric_value=crossing_mask_mismatch if "crossing_mask" in df.columns else np.nan,
+        expected_value=0,
+        status=(
+            "PASS" if "crossing_mask" in df.columns and crossing_mask_mismatch == 0
+            else "FAIL" if "crossing_mask" in df.columns
+            else "SKIP"
+        ),
+        notes="Legacy STEP 2 outputs may not contain crossing_mask.",
     )
 
     rb.add(

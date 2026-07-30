@@ -12,13 +12,19 @@ REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.ANCILLARY.QUALITY_ASSURANCE_NEW.qa_core.common import deduplicate_metadata_rows_with_report  # noqa: E402
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.ANCILLARY.QUALITY_ASSURANCE_NEW.qa_core.common import (
+    deduplicate_metadata_rows_with_report,
+    metadata_path,
+)  # noqa: E402
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.ANCILLARY.QUALITY_ASSURANCE_NEW.qa_core.runner import (  # noqa: E402
     _collect_step_outputs,
     _generate_station_plots,
+    _quality_threshold_config_for_specs,
     _write_step_outputs,
+    load_step_bundle,
 )
-from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.ANCILLARY.QUALITY_ASSURANCE_NEW.orchestrate_quality_assurance import rotate_previous_outputs  # noqa: E402
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.ANCILLARY.QUALITY_ASSURANCE_NEW.orchestrate_quality_assurance import rotate_previous_outputs
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.ANCILLARY.QUALITY_ASSURANCE_NEW.qa_core.thresholds import resolve_threshold_rule  # noqa: E402
 
 
 class RunnerTests(unittest.TestCase):
@@ -275,8 +281,183 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(len(axes[1].collections), 2)
 
 
+    def test_quality_plot_draws_exact_persisted_passing_bands(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            task_output_dir = Path(tmp_dir) / "STEP_1_SAMPLE" / "TASK_1"
+            basenames = ["file_a", "file_b", "file_c"]
+            analyzed_df = pd.DataFrame({
+                "filename_base": basenames,
+                "plot_x": [1, 2, 3],
+                "metric_b": [2.0, 4.0, 6.0],
+                "metric_f": [3.0, 5.0, 7.0],
+            })
+            evaluations = pd.DataFrame([
+                {
+                    "filename_base": basename,
+                    "evaluation_column": column,
+                    "lower_bound": lower,
+                    "upper_bound": upper,
+                }
+                for basename in basenames
+                for column, lower, upper in (
+                    ("metric_b", 1.5, 6.5),
+                    ("metric_f", 2.5, 7.5),
+                )
+            ])
+            created_figures: dict[str, object] = {}
+
+            def fake_savefig(fig: object, fname: str | Path, *args: object, **kwargs: object) -> None:
+                created_figures[str(fname)] = fig
+                Path(fname).touch()
+
+            with patch("matplotlib.figure.Figure.savefig", new=fake_savefig):
+                created_paths = _generate_station_plots(
+                    task_output_dir=task_output_dir,
+                    station_name="MINGO01",
+                    task_id=1,
+                    metadata_type="sample",
+                    analyzed_df=analyzed_df,
+                    plot_columns=["metric_b", "metric_f"],
+                    config={
+                        "x_axis": {"mode": "column", "column": "plot_x"},
+                        "plots": {"format": "png"},
+                    },
+                    plot_config={
+                        "special": [{
+                            "name": "paired",
+                            "mode": "panels",
+                            "series_labels": ["B", "F"],
+                            "panels": [{
+                                "title": "metric",
+                                "columns": ["metric_b", "metric_f"],
+                            }],
+                        }],
+                    },
+                    quality_evaluations=evaluations,
+                )
+
+            axis = created_figures[str(created_paths[0])].axes[0]
+            self.assertEqual(len(axis.collections), 4)
+            self.assertEqual(
+                axis.get_legend_handles_labels()[1],
+                ["B", "B passing range", "F", "F passing range"],
+            )
+
+    def test_quality_plot_marks_queued_and_in_flight_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            task_output_dir = Path(tmp_dir) / "STEP_1_SAMPLE" / "TASK_1"
+            basenames = ["file_pass", "file_queued", "file_in_flight"]
+            analyzed_df = pd.DataFrame({
+                "filename_base": basenames,
+                "plot_x": [1, 2, 3],
+                "metric_b": [2.0, 9.0, 10.0],
+                "metric_f": [3.0, 10.0, 11.0],
+            })
+            evaluations = pd.DataFrame([
+                {
+                    "filename_base": basename,
+                    "evaluation_column": column,
+                    "lower_bound": 1.0,
+                    "upper_bound": 8.0,
+                    "status": "pass" if basename == "file_pass" else "fail",
+                }
+                for basename in basenames
+                for column in ("metric_b", "metric_f")
+            ])
+            retry_states = pd.DataFrame({
+                "basename": ["file_queued", "file_in_flight"],
+                "is_active": ["1", "1"],
+                "admitted_at": ["", "2026-07-24 16:00:00"],
+            })
+            created_figures: dict[str, object] = {}
+
+            def fake_savefig(fig: object, fname: str | Path, *args: object, **kwargs: object) -> None:
+                created_figures[str(fname)] = fig
+                Path(fname).touch()
+
+            with (
+                patch(
+                    "MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.ANCILLARY.QUALITY_ASSURANCE_NEW.qa_core.runner._load_retry_plot_states",
+                    return_value=retry_states,
+                ),
+                patch("matplotlib.figure.Figure.savefig", new=fake_savefig),
+            ):
+                created_paths = _generate_station_plots(
+                    task_output_dir=task_output_dir,
+                    station_name="MINGO01",
+                    task_id=1,
+                    metadata_type="sample",
+                    analyzed_df=analyzed_df,
+                    plot_columns=["metric_b", "metric_f"],
+                    config={
+                        "x_axis": {"mode": "column", "column": "plot_x"},
+                        "plots": {"format": "png"},
+                    },
+                    plot_config={
+                        "special": [{
+                            "name": "paired",
+                            "mode": "panels",
+                            "series_labels": ["B", "F"],
+                            "panels": [{
+                                "title": "metric",
+                                "columns": ["metric_b", "metric_f"],
+                            }],
+                        }],
+                    },
+                    quality_evaluations=evaluations,
+                )
+
+            axis = created_figures[str(created_paths[0])].axes[0]
+            self.assertEqual(
+                axis.get_legend_handles_labels()[1],
+                [
+                    "B", "QA fail: queued", "QA retry: in flight",
+                    "B passing range", "F", "F passing range",
+                ],
+            )
+            labels = [collection.get_label() for collection in axis.collections]
+            self.assertIn("QA fail: queued", labels)
+            self.assertIn("QA retry: in flight", labels)
+
+    def test_calibration_yaml_uses_configured_median_percentage(self) -> None:
+        qa_root = Path(__file__).resolve().parents[1]
+        step_dir = qa_root / "STEPS" / "STEP_1_CALIBRATIONS"
+        root_config = {
+            "quality_defaults": {
+                "center_method": "mean",
+                "tolerance_mode": "zscore",
+                "tolerance_value": 3.0,
+            },
+        }
+        config, _, _ = load_step_bundle(step_dir, root_config)
+        defaults, column_rules = _quality_threshold_config_for_specs(
+            step_dir=step_dir,
+            config=config,
+            specs_df=pd.DataFrame([{
+                "evaluation_column": "P1_s1_Q_B",
+                "source_column": "P1_s1_Q_B",
+            }]),
+        )
+        rule = resolve_threshold_rule(defaults, column_rules["P1_s1_Q_B"])
+
+        self.assertEqual(rule.center_method, "median")
+        self.assertEqual(rule.tolerance_mode, "relative_pct")
+        self.assertAlmostEqual(rule.tolerance_value, 0.02)
+
+    def test_metadata_path_is_lake_gated_product_metadata(self) -> None:
+        path = metadata_path(
+            Path("/repo"), "MINGO02", 2, "task_2_metadata_calibration.csv",
+        )
+        self.assertEqual(
+            path,
+            Path("/repo/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO02/")
+            / "STAGE_1_PRODUCTS/EVENT_DATA/METADATA/TASK_2/"
+            / "task_2_metadata_calibration.csv",
+        )
+
+
 class OutputRotationTests(unittest.TestCase):
-    def test_plot_rotation_keeps_exactly_one_previous_generation(self) -> None:
+    def test_plot_rotation_clears_active_outputs_and_centralizes_previous_generation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             qa_root = Path(temporary_directory)
             step_outputs = qa_root / "STEPS" / "STEP_1_SAMPLE" / "OUTPUTS"
@@ -287,18 +468,43 @@ class OutputRotationTests(unittest.TestCase):
             (step_outputs / "MINGO01" / "FILES" / "current.csv").write_text("current", encoding="utf-8")
             (total_outputs / "PLOTS").mkdir(parents=True)
             (total_outputs / "PLOTS" / "current.png").write_bytes(b"png")
+            authority = (
+                total_outputs / "FILES"
+                / "qa_all_stations_reprocessing_quality.csv"
+            )
+            authority.parent.mkdir(parents=True)
+            authority.write_text("quality_status\nfail\n", encoding="utf-8")
 
             rotated_dirs, moved_files, _ = rotate_previous_outputs(qa_root)
 
             self.assertEqual(rotated_dirs, 2)
-            self.assertEqual(moved_files, 2)
-            self.assertFalse((step_outputs / "MINGO01").exists())
-            self.assertFalse((step_outputs / "LAST" / "older.csv").exists())
-            self.assertTrue((step_outputs / "LAST" / "MINGO01" / "FILES" / "current.csv").exists())
-            self.assertTrue((total_outputs / "LAST" / "PLOTS" / "current.png").exists())
+            self.assertEqual(moved_files, 4)
+            self.assertEqual(list(step_outputs.iterdir()), [])
+            self.assertTrue(authority.exists())
+            self.assertEqual(
+                authority.read_text(encoding="utf-8"),
+                "quality_status\nfail\n",
+            )
+
+            previous = qa_root / "ARCHIVED_RUN_OUTPUTS" / "PREVIOUS_RUN"
+            archived_step = previous / "STEPS" / "STEP_1_SAMPLE" / "OUTPUTS"
+            archived_total = previous / "TOTAL_SUMMARY" / "OUTPUTS"
+            self.assertTrue(
+                (archived_step / "MINGO01" / "FILES" / "current.csv").exists()
+            )
+            self.assertTrue((archived_step / "LAST" / "older.csv").exists())
+            self.assertTrue((archived_total / "PLOTS" / "current.png").exists())
+            self.assertTrue(
+                (
+                    archived_total / "FILES"
+                    / "qa_all_stations_reprocessing_quality.csv"
+                ).exists()
+            )
 
             self.assertEqual(rotate_previous_outputs(qa_root), (0, 0, 0))
-            self.assertTrue((step_outputs / "LAST" / "MINGO01" / "FILES" / "current.csv").exists())
+            self.assertTrue(
+                (archived_step / "MINGO01" / "FILES" / "current.csv").exists()
+            )
 
 
 

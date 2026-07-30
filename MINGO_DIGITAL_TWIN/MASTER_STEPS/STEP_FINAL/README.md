@@ -29,8 +29,14 @@ Notes:
 - `input_collect` controls how multiple SIM_RUN inputs are matched.
 - STEP FINAL assigns `param_set_id` and `param_date` in the parameter mesh.
 - `.dat` outputs start with `# param_hash=<sha256>` matching `step_final_simulation_params.csv`.
-- Each new simulation-parameter row records `trigger_rate_hz`, measured as
-  `(selected_rows - 1) / (last_timestamp - first_timestamp)` for its `.dat` file.
+- Each new simulation-parameter row records three rates over the exact same
+  sequentially sampled `.dat` interval: `particle_crossing_rate_hz`,
+  `trigger_rate_unit_efficiency_hz`, and `trigger_rate_hz`. The latter remains
+  `(selected_rows - 1) / (last_timestamp - first_timestamp)`. The first two use
+  cumulative STEP-9 geometrical counters at the interval boundaries.
+- Their ratios define geometrical trigger efficiency, conditional detector-response
+  efficiency, and overall detection efficiency. Legacy inputs and non-sequential
+  sampling leave the two new fields empty and emit an explicit warning.
 - Each new row records `original_rows`, the total available STEP 10 input rows
   before STEP_FINAL sampling, immediately before `requested_rows`.
 - Output multiplicity is controlled independently from STEP_0 `repeat_samples`:

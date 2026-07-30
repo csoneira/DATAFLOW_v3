@@ -142,10 +142,16 @@ def build_column_manifest(
     return pd.DataFrame(records).sort_values("column_name").reset_index(drop=True)
 
 
-def manifest_plot_columns(manifest_df: pd.DataFrame) -> list[str]:
+def manifest_plot_columns(
+    manifest_df: pd.DataFrame, *, quality_and_plot_only: bool = False,
+) -> list[str]:
+    """Return plottable columns, optionally restricted to QA-driving plots."""
     if manifest_df.empty:
         return []
-    return manifest_df.loc[manifest_df["effective_plot"] == 1, "column_name"].astype(str).tolist()
+    mask = manifest_df["effective_plot"] == 1
+    if quality_and_plot_only:
+        mask &= manifest_df["requested_category"] == CATEGORY_QUALITY_AND_PLOT
+    return manifest_df.loc[mask, "column_name"].astype(str).tolist()
 
 
 def manifest_quality_columns(manifest_df: pd.DataFrame) -> list[str]:

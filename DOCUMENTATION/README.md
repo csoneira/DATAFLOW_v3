@@ -55,10 +55,5 @@ The documentation site is deployed from this repository via GitHub Actions and G
 
 ## Troubleshooting
 
-- Ensure Markdown syntax is valid.
 - Ensure new pages are included in `DOCUMENTATION/mkdocs.yml` navigation.
 - If deployment fails, inspect the latest GitHub Actions run for the workflow above.
-
-## Contact
-
-For issues or suggestions, open an issue in this repository.

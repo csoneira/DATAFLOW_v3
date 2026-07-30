@@ -83,7 +83,7 @@ Outputs:
 - `SIMULATION_OUTPUTS/INTERSTEPS/STEP_2_TO_3/SIM_RUN_*/step_2.(pkl|csv|chunks)`
 
 Core columns:
-- `X_gen_i`, `Y_gen_i`, `Z_gen_i`, `T_sum_i_ns`, `tt_crossing`
+- `X_gen_i`, `Y_gen_i`, `Z_gen_i`, `T_sum_i_ns`, `tt_crossing`, `crossing_mask`
 
 Failure modes:
 - missing mesh row for random geometry
@@ -204,6 +204,8 @@ Outputs:
 
 Core columns:
 - preserved channels + `tt_trigger`
+- `sim_crossing_cumulative_count` and
+  `sim_unit_efficiency_trigger_cumulative_count` when `crossing_mask` is available
 
 Failure modes:
 - empty trigger list -> empty output
@@ -220,6 +222,7 @@ Outputs:
 
 Core columns:
 - preserved channels + `daq_jitter_ns`
+- preserved geometrical rate counters from STEP 9 when available
 
 Failure modes:
 - missing channel columns (skipped)
@@ -247,6 +250,11 @@ Sidecar contract:
 - `sim_event_id` preserves the upstream STEP_10 `event_id`
 - ground truth includes `T_thick_s`, `X_gen`, `Y_gen`, `Theta_gen`, `Phi_gen`,
   and `Z_gen` when available
+- rate-counter provenance includes `sim_crossing_cumulative_count` and
+  `sim_unit_efficiency_trigger_cumulative_count` for new simulations
+- `step_final_simulation_params.csv` records interval-aligned
+  `particle_crossing_rate_hz`, `trigger_rate_unit_efficiency_hz`, and
+  `trigger_rate_hz`; legacy rows remain nullable
 
 Failure modes:
 - missing upstream lineage fields

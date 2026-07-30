@@ -12,22 +12,31 @@ Outputs: Files, logs, plots, or stdout/stderr side effects.
 Notes: Keep behavior configuration-driven and reproducible.
 """
 
+from __future__ import annotations
+
 # Run with
 # python3 minitrasgo_bot.py
 
 import os
+import hmac
+import shlex
+import socket
 import subprocess
 import sys
 from pathlib import Path
 
 import io
-import subprocess
 from datetime import datetime
 
 import matplotlib.pyplot as plt
 import pandas as pd
 
 SCRIPT_PATH = Path(__file__).resolve()
+BOT_DIRECTORY = SCRIPT_PATH.parent
+TERMINAL_PASSWORD_PATH = BOT_DIRECTORY / "TERMINAL_PASSWORD.txt"
+TERMINAL_BASE_DIRECTORY = Path.home()
+MAX_MESSAGE_CHARS = 3500
+TERMINAL_COMMAND_TIMEOUT_SEC = 300
 NOISE_CONTROL_PLANE_COMBINATION_REPORT_CANDIDATES = (
     SCRIPT_PATH.parents[3] / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS" / "ANCILLARY" / "PLOTTERS" / "METADATA" / "NOISE_CONTROL" / "PLOTS" / "noise_control_plane_combination_rate_report.pdf",
     Path("/home/rpcuser/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/PLOTTERS/METADATA/NOISE_CONTROL/PLOTS/noise_control_plane_combination_rate_report.pdf"),
@@ -59,7 +68,7 @@ except FileNotFoundError:
 # Get the API key for the specified station
 if station in api_keys:
     api_key = api_keys[station]
-    print(f"Using API key for station {station}: {api_key}")
+    print(f"Using configured API key for station {station}.")
 else:
     print(f"Error: No API key found for station {station}.")
     sys.exit(1)
@@ -75,20 +84,23 @@ BOT_COMMAND_SPECS = [
     ("start", "Welcome message"),
     ("get_username", "Show your Telegram username and ID"),
     ("get_chat_id", "Show the current chat ID"),
+    ("get_ip", "Show this station's IP addresses"),
+    ("terminal", "Enable authenticated terminal mode"),
+    ("exit", "Disable terminal mode"),
     ("send_voltage", "Send current high voltage"),
     ("send_gas_flow", "Send latest gas flow values"),
     ("send_internal_environment", "Send internal environment readings"),
     ("send_external_environment", "Send external environment readings"),
-    ("send_TRB_rates", "Send latest TRB rates"),
+    ("send_trb_rates", "Send latest TRB rates"),
     ("send_original_report", "Send the original PDF report"),
     ("send_daq_report", "Send the latest DAQ report"),
     ("send_results_vs_time_report", "Send the results-vs-time report"),
     ("send_weekly_results_report", "Send the weekly results report"),
     ("send_monitoring_report", "Send the monitoring report"),
-    ("send_noise_control_plane_combination_report", "Send the noise-control plane-combination PDF"),
+    ("noise_plane_report", "Send the noise-control plane-combination PDF"),
     ("plot_temperature", "Plot internal and external temperature"),
     ("plot_pressure", "Plot internal and external pressure"),
-    ("plot_RH", "Plot internal and external humidity"),
+    ("plot_rh", "Plot internal and external humidity"),
     ("plot_asserted_edge_accepted", "Plot TRB asserted, edge, accepted"),
     ("plot_multiplexers", "Plot multiplexer rates"),
     ("plot_coincidence_planes", "Plot coincidence-plane rates"),
@@ -110,6 +122,9 @@ passwords = {
     '5948691038': 'lidka_mingo', # Lidka
     # Add more users and passwords as needed
 }
+
+TERMINAL_ACTIVE_CHATS: set[int] = set()
+TERMINAL_CHAT_CWDS: dict[int, Path] = {}
 
 
 @bot.message_handler(commands=['get_username'])
@@ -158,6 +173,193 @@ def check_password(message, expected_password, func):
         func(message)
     else:
         bot.send_message(user_id, "Incorrect password. Action canceled.")
+
+
+def truncate_message(text: str) -> str:
+    if len(text) <= MAX_MESSAGE_CHARS:
+        return text
+    return text[: MAX_MESSAGE_CHARS - 3] + "..."
+
+
+def load_terminal_password() -> str | None:
+    environment_password = os.environ.get("MINITRASGO_TERMINAL_PASSWORD", "").strip()
+    if environment_password:
+        return environment_password
+    try:
+        password = TERMINAL_PASSWORD_PATH.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        print(
+            "Terminal mode disabled: password file not found at "
+            f"{TERMINAL_PASSWORD_PATH}"
+        )
+        return None
+    if not password:
+        print(f"Terminal mode disabled: password file is empty: {TERMINAL_PASSWORD_PATH}")
+        return None
+    return password
+
+
+def get_chat_cwd(chat_id: int) -> Path:
+    cwd = TERMINAL_CHAT_CWDS.get(chat_id, TERMINAL_BASE_DIRECTORY)
+    if not cwd.exists() or not cwd.is_dir():
+        cwd = TERMINAL_BASE_DIRECTORY
+        TERMINAL_CHAT_CWDS[chat_id] = cwd
+    return cwd
+
+
+def maybe_handle_cd_command(chat_id: int, command_text: str) -> str | None:
+    try:
+        tokens = shlex.split(command_text)
+    except ValueError as exc:
+        return truncate_message(f"$ {command_text}\nInvalid command syntax: {exc}")
+    if not tokens or tokens[0] != "cd":
+        return None
+    if len(tokens) > 2:
+        return truncate_message(f"$ {command_text}\nUsage: cd <path>")
+
+    current_cwd = get_chat_cwd(chat_id)
+    target_raw = tokens[1] if len(tokens) == 2 else "~"
+    target = Path(os.path.expandvars(os.path.expanduser(target_raw)))
+    target = (current_cwd / target).resolve() if not target.is_absolute() else target.resolve()
+    if not target.exists():
+        return truncate_message(
+            f"$ {command_text}\nExit code: 1\n"
+            f"/bin/bash: cd: {target}: No such file or directory"
+        )
+    if not target.is_dir():
+        return truncate_message(
+            f"$ {command_text}\nExit code: 1\n/bin/bash: cd: {target}: Not a directory"
+        )
+    TERMINAL_CHAT_CWDS[chat_id] = target
+    return truncate_message(f"$ {command_text}\nExit code: 0\nCurrent directory: {target}")
+
+
+def run_terminal_command(command_text: str, cwd: Path) -> str:
+    try:
+        result = subprocess.run(
+            command_text,
+            cwd=str(cwd),
+            shell=True,
+            executable="/bin/bash",
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=TERMINAL_COMMAND_TIMEOUT_SEC,
+        )
+    except subprocess.TimeoutExpired as exc:
+        partial = "".join(
+            part
+            for part in (
+                exc.stdout or "",
+                "\n" if exc.stdout and exc.stderr else "",
+                exc.stderr or "",
+            )
+        ).strip() or "<no output>"
+        return truncate_message(
+            f"$ {command_text}\nTimed out after {TERMINAL_COMMAND_TIMEOUT_SEC}s.\n{partial}"
+        )
+    except Exception as exc:
+        return truncate_message(f"$ {command_text}\nExecution failed: {exc}")
+
+    output = "".join(
+        part
+        for part in (
+            result.stdout or "",
+            "\n" if result.stdout and result.stderr else "",
+            result.stderr or "",
+        )
+    ).strip() or "<no output>"
+    return truncate_message(
+        f"$ {command_text}\nExit code: {result.returncode}\n{output}"
+    )
+
+
+def maybe_handle_terminal_message(message) -> bool:
+    chat_id = message.chat.id
+    if chat_id not in TERMINAL_ACTIVE_CHATS:
+        return False
+    text = (message.text or "").strip()
+    if not text:
+        bot.send_message(chat_id, "Terminal mode is active. Send a command or use /exit.")
+        return True
+    if text == "/exit":
+        TERMINAL_ACTIVE_CHATS.discard(chat_id)
+        TERMINAL_CHAT_CWDS.pop(chat_id, None)
+        bot.send_message(chat_id, "Terminal mode disabled.")
+        return True
+    cd_response = maybe_handle_cd_command(chat_id, text)
+    if cd_response is not None:
+        bot.send_message(chat_id, cd_response)
+        return True
+    bot.send_message(chat_id, run_terminal_command(text, get_chat_cwd(chat_id)))
+    return True
+
+
+def station_ip_report() -> str:
+    hostname = socket.gethostname()
+    try:
+        result = subprocess.run(
+            ["hostname", "-I"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+        addresses = list(dict.fromkeys(result.stdout.split()))
+    except (OSError, subprocess.SubprocessError):
+        addresses = []
+    if not addresses:
+        try:
+            addresses = sorted({
+                item[4][0]
+                for item in socket.getaddrinfo(hostname, None)
+                if item[4] and item[4][0]
+            })
+        except socket.gaierror:
+            addresses = []
+    address_lines = "\n".join(f"- {address}" for address in addresses) or "- unavailable"
+    return f"Station {station}\nHostname: {hostname}\nIP addresses:\n{address_lines}"
+
+
+@bot.message_handler(commands=['terminal', 'term'])
+def handle_terminal(message):
+    chat_id = message.chat.id
+    terminal_password = load_terminal_password()
+    if terminal_password is None:
+        bot.send_message(chat_id, "Terminal mode is disabled because no password is configured.")
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        bot.send_message(chat_id, "Usage: /term <password> (or /terminal <password>)")
+        return
+    if not hmac.compare_digest(parts[1].strip(), terminal_password):
+        bot.send_message(chat_id, "Wrong password.")
+        return
+    TERMINAL_ACTIVE_CHATS.add(chat_id)
+    TERMINAL_CHAT_CWDS[chat_id] = TERMINAL_BASE_DIRECTORY
+    bot.send_message(
+        chat_id,
+        f"Terminal mode enabled. Current directory: {TERMINAL_BASE_DIRECTORY}\n"
+        "Any text will run as a shell command. Use /exit to leave.",
+    )
+
+
+@bot.message_handler(commands=['exit'])
+def handle_terminal_exit(message):
+    chat_id = message.chat.id
+    if chat_id in TERMINAL_ACTIVE_CHATS:
+        TERMINAL_ACTIVE_CHATS.discard(chat_id)
+        TERMINAL_CHAT_CWDS.pop(chat_id, None)
+        bot.send_message(chat_id, "Terminal mode disabled.")
+        return
+    bot.send_message(chat_id, "Terminal mode is not active.")
+
+
+@bot.message_handler(commands=['get_ip', 'ip'])
+def send_station_ip(message):
+    if maybe_handle_terminal_message(message):
+        return
+    bot.send_message(message.chat.id, station_ip_report())
 
 
 def _first_existing_file(candidates):
@@ -265,7 +467,7 @@ def send_external_environment(message):
         bot.send_message(message.chat.id, output)
 
 
-@bot.message_handler(commands=['send_TRB_rates'])
+@bot.message_handler(commands=['send_TRB_rates', 'send_trb_rates'])
 def send_TRB_rates(message):
         bash_command = "tail /home/rpcuser/logs/clean_rates*"
         output = os.popen(bash_command).read()
@@ -460,7 +662,7 @@ def send_monitoring_report(message):
 			bot.send_document(message.chat.id, document)
 
 
-@bot.message_handler(commands=['send_noise_control_plane_combination_report'])
+@bot.message_handler(commands=['noise_plane_report', 'send_noise_control_plane_combination_report'])
 def send_noise_control_plane_combination_report(message):
 	_send_document_from_candidates(
 		message,
@@ -645,7 +847,7 @@ def plot_pressure(message):
     except Exception as e:
         bot.send_message(message.chat.id, f"Error generating pressure plot: {str(e)}")
 
-@bot.message_handler(commands=['plot_RH'])
+@bot.message_handler(commands=['plot_RH', 'plot_rh'])
 def plot_RH(message):
     try:
         # Get internal data (bus1)
@@ -914,6 +1116,8 @@ def plot_all_trb_rates(message):
 
 @bot.message_handler(func=lambda message: True)
 def echo_all(message):
+    if maybe_handle_terminal_message(message):
+        return
     string = '''
 ===========================================
             miniTRASGO Bot - Command Guide
@@ -924,6 +1128,9 @@ def echo_all(message):
     - /start: Greet the bot and receive a welcome message.
     - /get_username: Show your username, ID, and other details (share this info with csoneira@ucm.es).
     - /get_chat_id: Retrieve your unique Chat ID.
+    - /get_ip: Show the station hostname and IP addresses.
+    - /term <password>: Enable terminal mode (also available as /terminal).
+    - /exit: Leave terminal mode.
 
     -------------------------------------------
 

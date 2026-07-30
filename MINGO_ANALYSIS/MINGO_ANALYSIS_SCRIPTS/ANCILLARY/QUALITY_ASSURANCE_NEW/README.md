@@ -32,7 +32,42 @@ Current policy:
 - Only the Task 2 calibration columns matching `*_Q_B` and `*_Q_F` are quality-enabled.
 - Every other metadata family is configured as `plot_only` or `ignore`.
 - Metadata time-series plots use unconnected points; lines are not drawn between consecutive observations.
-- Plot-mode runs keep exactly one prior generation of figures and data under the corresponding `OUTPUTS/LAST` directory. A new plot run replaces that previous `LAST`; table-only `often` runs do not rotate plot outputs.
+- Plot-generating runs leave active `OUTPUTS` trees clean. Immediately before rerunning, the complete previous generation is moved to the centralized `ARCHIVED_RUN_OUTPUTS/PREVIOUS_RUN` tree. This retained generation is replaced on the next plot run; table-only `often` runs do not rotate outputs.
+
+## Passing limits and plotted bands
+
+QA reference populations come from the lake-gated product metadata under
+`MINGO_ANALYSIS_STATIONS/MINGOYY/STAGE_1_PRODUCTS/EVENT_DATA/METADATA/TASK_N`.
+The orchestrator publishes a metadata row there only after a valid final Parquet
+exists in that station Parquet Lake, and keeps the newest execution per basename.
+
+For the currently enabled calibration QA, each QF/QB value is compared within its
+matched detector-configuration epoch. `STEP_1_CALIBRATIONS/config.yaml` currently
+uses the epoch median, requires at least 8 values, and accepts the inclusive
+interval `median * (1 - 2/100) <= value <= median * (1 + 2/100)`. The percentage
+is configured in human units:
+
+```yaml
+quality_rules:
+  "*_Q_[BF]":
+    center_method: median
+    tolerance_mode: relative_pct
+    tolerance_percent: 2.0
+    min_samples: 8
+```
+
+`tolerance_percent: 2.0` means 2%, not 300%; asymmetric limits can use
+`lower_tolerance_percent` and `upper_tolerance_percent`. YAML `quality_rules`
+override legacy threshold fields from the column-rule CSV. The translucent B/F
+bands in `q_sides` are drawn from the exact persisted `lower_bound` and
+`upper_bound` values used for classification. A file passes only when all 32 QF/QB
+observables pass and none has a QA warning; any failed observable fails the file.
+
+In quality plots, ordinary B/F-coloured circles are passing values. A red `x`
+marks a failing value whose file is still queued for QA reprocessing. A purple
+diamond marks a failing value whose retry has already been admitted and is in
+flight. After successful reprocessing, the newest calibration replaces the old
+point and returns to an ordinary B/F circle.
 
 Only columns resolved as `quality_and_plot` or `quality_only` can place a
 basename in the reprocessing manifest. `plot_only`, `ignore`, and QA warnings
@@ -125,27 +160,30 @@ Only quality-enabled columns appear in the quality tables.
 ## Run
 
 ```bash
-python3 /home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/QUALITY_ASSURANCE_NEW/orchestrate_quality_assurance.py --mode plot
+python3 /home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/QUALITY_ASSURANCE_NEW/orchestrate_quality_assurance.py --mode qa-plot
 ```
 
 Examples:
 
 ```bash
 python3 /home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/QUALITY_ASSURANCE_NEW/orchestrate_quality_assurance.py --mode often --stations MINGO01
-python3 /home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/QUALITY_ASSURANCE_NEW/orchestrate_quality_assurance.py --mode plot --steps STEP_1_CALIBRATIONS --stations MINGO01
+python3 /home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/QUALITY_ASSURANCE_NEW/orchestrate_quality_assurance.py --mode qa-plot --steps STEP_1_CALIBRATIONS --stations MINGO01
 python3 /home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/QUALITY_ASSURANCE_NEW/orchestrate_quality_assurance.py --mode often --aggregate-only --stations MINGO01
 ```
 
-`--mode often` updates QA tables without regenerating plots. `--mode plot` updates both tables and plots.
+`--mode often` updates QA tables without regenerating plots. `--mode qa-plot` updates the tables and plots only columns categorized as `quality_and_plot`; it excludes `plot_only` and `quality_only`. `--mode plot` updates the tables and plots every plottable column.
 
 For cron usage there is also:
 
 ```bash
 /home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/QUALITY_ASSURANCE_NEW/run_quality_assurance_cron.sh often
+/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/QUALITY_ASSURANCE_NEW/run_quality_assurance_cron.sh qa-plot
 /home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/QUALITY_ASSURANCE_NEW/run_quality_assurance_cron.sh plot
 ```
 
-The wrapper keeps separate logs and non-blocking lock files per mode under `QUALITY_ASSURANCE_NEW/LOGS`.
+The wrapper keeps separate logs and a shared non-blocking lock under `QUALITY_ASSURANCE_NEW/LOGS`. The installed schedule is sourced from `CONFIG/add_to_crontab.info` and runs `qa-plot` hourly at minute 10. Its detailed log is `LOGS/quality_assurance_qa-plot.log`; the outer cron log is `OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/QUALITY_ASSURANCE_NEW/quality_assurance_qa_plot.cron.log`.
+
+The reprocessing authority table, `TOTAL_SUMMARY/OUTPUTS/FILES/qa_all_stations_reprocessing_quality.csv`, stays available during plot-output rotation and is replaced atomically after the new summary is complete. This prevents the five-minute Stage 0 retry-manifest jobs from observing a missing or partially written QA table.
 
 
 ## Problematic basenames and reprocessing

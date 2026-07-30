@@ -113,6 +113,97 @@ def resolve_trigger_combinations_for_input(
     return resolved, "param_mesh"
 
 
+CROSSING_MASK_COLUMN = "crossing_mask"
+CROSSING_COUNTER_COLUMN = "sim_crossing_cumulative_count"
+UNIT_TRIGGER_COUNTER_COLUMN = "sim_unit_efficiency_trigger_cumulative_count"
+_UNIT_TRIGGER_PASS_COLUMN = "_sim_unit_efficiency_trigger_pass"
+
+
+def trigger_plane_mask(trigger: str) -> int | None:
+    """Return the four-plane bitmask required by one trigger combination."""
+    required = 0
+    for character in str(trigger):
+        if character not in "1234":
+            return None
+        required |= 1 << (int(character) - 1)
+    return required or None
+
+
+def geometric_trigger_passes(
+    crossing_masks: pd.Series, triggers: List[str],
+) -> pd.Series:
+    """Evaluate the configured trigger using geometry only (unit efficiency)."""
+    numeric = pd.to_numeric(crossing_masks, errors="coerce")
+    if numeric.isna().any():
+        raise ValueError("crossing_mask contains missing or non-numeric values")
+    values = numeric.to_numpy(dtype=np.uint8)
+    passes = np.zeros(len(values), dtype=bool)
+    for trigger in triggers:
+        required = trigger_plane_mask(trigger)
+        if required is not None:
+            passes |= (values & np.uint8(required)) == np.uint8(required)
+    return pd.Series(passes, index=crossing_masks.index, dtype=bool)
+
+
+class GeometricRateCounter:
+    """Attach chunk-continuous crossing and ideal-trigger cumulative counters."""
+
+    def __init__(self) -> None:
+        self.available: bool | None = None
+        self.crossing_total = 0
+        self.unit_trigger_total = 0
+        self.actual_trigger_total = 0
+        self.reason: str | None = None
+
+    def annotate(self, frame: pd.DataFrame, triggers: List[str]) -> pd.DataFrame:
+        has_mask = CROSSING_MASK_COLUMN in frame.columns
+        if self.available is None:
+            self.available = has_mask
+        elif self.available != has_mask:
+            raise ValueError(
+                "Inconsistent crossing_mask presence across STEP 9 input chunks"
+            )
+        if not has_mask:
+            self.reason = "legacy input has no crossing_mask"
+            return frame
+
+        out = frame.copy()
+        masks = pd.to_numeric(out[CROSSING_MASK_COLUMN], errors="coerce")
+        if (
+            masks.isna().any()
+            or (~masks.between(1, 15)).any()
+            or ((masks % 1) != 0).any()
+        ):
+            raise ValueError("crossing_mask must contain integer values from 1 to 15")
+        ideal = geometric_trigger_passes(masks, triggers)
+        row_count = len(out)
+        out[CROSSING_COUNTER_COLUMN] = np.arange(
+            self.crossing_total + 1,
+            self.crossing_total + row_count + 1,
+            dtype=np.int64,
+        )
+        out[UNIT_TRIGGER_COUNTER_COLUMN] = (
+            ideal.to_numpy(dtype=np.int64).cumsum() + self.unit_trigger_total
+        )
+        out[_UNIT_TRIGGER_PASS_COLUMN] = ideal.to_numpy(dtype=bool)
+        self.crossing_total += row_count
+        self.unit_trigger_total += int(ideal.sum())
+        return out
+
+    def record_actual(self, count: int) -> None:
+        self.actual_trigger_total += int(count)
+
+    def summary(self) -> dict[str, object]:
+        return {
+            "version": 1,
+            "status": "available" if self.available else "unavailable",
+            "reason": self.reason,
+            "crossing_rows": int(self.crossing_total),
+            "unit_efficiency_trigger_rows": int(self.unit_trigger_total),
+            "actual_trigger_rows": int(self.actual_trigger_total),
+        }
+
+
 def passes_trigger(tt_value: str, triggers: List[str]) -> bool:
     for trig in triggers:
         if all(ch in tt_value for ch in trig):
@@ -120,8 +211,14 @@ def passes_trigger(tt_value: str, triggers: List[str]) -> bool:
     return False
 
 
-def apply_trigger(df: pd.DataFrame, triggers: List[str]) -> pd.DataFrame:
+def apply_trigger(
+    df: pd.DataFrame,
+    triggers: List[str],
+    rate_counter: GeometricRateCounter | None = None,
+) -> pd.DataFrame:
     out = df.copy()
+    if rate_counter is not None:
+        out = rate_counter.annotate(out, triggers)
     n = len(out)
     tt_array = ["" for _ in range(n)]
 
@@ -140,15 +237,28 @@ def apply_trigger(df: pd.DataFrame, triggers: List[str]) -> pd.DataFrame:
             plane_active |= active
         tt_array = [tt + str(plane_idx) if active else tt for tt, active in zip(tt_array, plane_active)]
 
-    tt_series = normalize_tt(pd.Series(tt_array))
+    tt_series = normalize_tt(pd.Series(tt_array, index=out.index))
     keep_mask = tt_series.apply(lambda val: passes_trigger(val, triggers))
+    if _UNIT_TRIGGER_PASS_COLUMN in out.columns:
+        incompatible = keep_mask & ~out[_UNIT_TRIGGER_PASS_COLUMN]
+        if incompatible.any():
+            raise ValueError(
+                "Actual STEP 9 trigger accepted events that do not satisfy the "
+                "unit-efficiency geometrical trigger"
+            )
     filtered = out[keep_mask].copy()
     filtered["tt_trigger"] = tt_series[keep_mask].values
+    filtered = filtered.drop(columns=[_UNIT_TRIGGER_PASS_COLUMN], errors="ignore")
+    if rate_counter is not None:
+        rate_counter.record_actual(len(filtered))
     return filtered
 
 
 def prune_step9(df: pd.DataFrame) -> pd.DataFrame:
-    keep = {"event_id", "T_thick_s", "X_gen", "Y_gen", "Theta_gen", "Phi_gen", "tt_trigger"}
+    keep = {
+        "event_id", "T_thick_s", "X_gen", "Y_gen", "Theta_gen", "Phi_gen",
+        "tt_trigger", CROSSING_COUNTER_COLUMN, UNIT_TRIGGER_COUNTER_COLUMN,
+    }
     for plane_idx in range(1, 5):
         for strip_idx in range(1, 5):
             keep.add(f"T_front_{plane_idx}_s{strip_idx}")
@@ -390,10 +500,12 @@ def main() -> None:
         "trigger_combinations": triggers,
         "trigger_source": trigger_source,
     }
+    rate_counter = GeometricRateCounter()
     if chunk_rows:
         def _iter_out() -> Iterable[pd.DataFrame]:
             for chunk in input_iter:
-                yield prune_step9(apply_trigger(chunk, triggers))
+                yield prune_step9(apply_trigger(chunk, triggers, rate_counter))
+            metadata["geometric_rate_counters"] = rate_counter.summary()
 
         manifest_path, last_chunk, row_count = write_chunked_output(
             _iter_out(),
@@ -416,7 +528,8 @@ def main() -> None:
         print(f"Saved {manifest_path}")
     else:
         df, upstream_meta = load_with_metadata(input_path)
-        filtered = prune_step9(apply_trigger(df, triggers))
+        filtered = prune_step9(apply_trigger(df, triggers, rate_counter))
+        metadata["geometric_rate_counters"] = rate_counter.summary()
         out_path = sim_run_dir / f"{out_stem}.{output_format}"
         save_with_metadata(filtered, out_path, metadata, output_format)
         if not args.no_plots:

@@ -49,6 +49,7 @@ from .status_reports import (
 )
 
 COMPONENT_COLUMN_RE = re.compile(r"^(?P<source>.+)__([0-9]+)$")
+REPO_ROOT = Path(__file__).resolve().parents[5]
 
 
 def _source_column_from_component_name(column_name: str) -> str | None:
@@ -132,6 +133,36 @@ def _resolve_effective_rule(
     return direct_rule
 
 
+def _yaml_quality_rule_override(
+    config: dict[str, Any],
+    evaluation_column: str,
+    source_column: str,
+) -> dict[str, Any]:
+    """Resolve the most specific YAML quality_rules pattern for one observable."""
+    raw_rules = config.get("quality_rules")
+    if raw_rules is None:
+        return {}
+    if not isinstance(raw_rules, dict):
+        raise ValueError("quality_rules must be a mapping of glob patterns to rules.")
+
+    candidates: list[tuple[tuple[int, int, int, int], dict[str, Any]]] = []
+    for row_index, (raw_pattern, raw_rule) in enumerate(raw_rules.items()):
+        pattern = str(raw_pattern).strip()
+        if not pattern:
+            continue
+        if not isinstance(raw_rule, dict):
+            raise ValueError(f"quality_rules[{pattern!r}] must be a mapping.")
+        if not (fnmatch(evaluation_column, pattern) or fnmatch(source_column, pattern)):
+            continue
+        wildcard_count = sum(pattern.count(token) for token in ("*", "?", "["))
+        literal_count = len(pattern.replace("*", "").replace("?", "").replace("[", "").replace("]", ""))
+        exact = int(pattern in {evaluation_column, source_column})
+        candidates.append(((exact, literal_count, -wildcard_count, row_index), dict(raw_rule)))
+    if not candidates:
+        return {}
+    return max(candidates, key=lambda item: item[0])[1]
+
+
 def _quality_threshold_config_for_specs(
     *,
     step_dir: Path,
@@ -141,9 +172,6 @@ def _quality_threshold_config_for_specs(
     rules = _threshold_rule_table(step_dir, config)
     defaults_cfg = config.get("quality_defaults")
     defaults = dict(defaults_cfg) if isinstance(defaults_cfg, dict) else None
-
-    if not rules:
-        return defaults, None
 
     default_rule, _ = split_default_rule(rules)
     if default_rule is not None:
@@ -159,9 +187,16 @@ def _quality_threshold_config_for_specs(
             evaluation_column,
             source_column=source_column,
         )
-        if resolved_rule is None:
-            continue
-        column_rules[evaluation_column] = rule_to_threshold_mapping(resolved_rule)
+        csv_mapping = (
+            rule_to_threshold_mapping(resolved_rule)
+            if resolved_rule is not None else {}
+        )
+        yaml_mapping = _yaml_quality_rule_override(
+            config, evaluation_column, source_column,
+        )
+        effective_mapping = deep_merge_dicts(csv_mapping, yaml_mapping)
+        if effective_mapping:
+            column_rules[evaluation_column] = effective_mapping
     return defaults, column_rules or None
 
 
@@ -519,6 +554,177 @@ def _coerce_ylim(value: Any) -> tuple[float, float] | None:
     return (lower, upper) if lower < upper else (upper, lower)
 
 
+def _quality_bounds_for_plot(
+    df: pd.DataFrame,
+    quality_evaluations: pd.DataFrame | None,
+    evaluation_column: str,
+) -> tuple[pd.Series, pd.Series] | None:
+    """Align persisted QA bounds to the plotted metadata rows by basename."""
+    required = {"filename_base", "evaluation_column", "lower_bound", "upper_bound"}
+    if (
+        quality_evaluations is None
+        or quality_evaluations.empty
+        or "filename_base" not in df.columns
+        or not required <= set(quality_evaluations.columns)
+    ):
+        return None
+    selected = quality_evaluations.loc[
+        quality_evaluations["evaluation_column"].astype(str).eq(evaluation_column),
+        ["filename_base", "lower_bound", "upper_bound"],
+    ].drop_duplicates(subset="filename_base", keep="last")
+    if selected.empty:
+        return None
+    aligned = df[["filename_base"]].merge(selected, on="filename_base", how="left")
+    lower = pd.to_numeric(aligned["lower_bound"], errors="coerce")
+    upper = pd.to_numeric(aligned["upper_bound"], errors="coerce")
+    if not (lower.notna() & upper.notna()).any():
+        return None
+    return lower, upper
+
+
+def _quality_status_for_plot(
+    df: pd.DataFrame,
+    quality_evaluations: pd.DataFrame | None,
+    evaluation_column: str,
+) -> pd.Series:
+    """Align persisted per-column QA status to plotted metadata rows."""
+    required = {"filename_base", "evaluation_column", "status"}
+    if (
+        quality_evaluations is None
+        or quality_evaluations.empty
+        or "filename_base" not in df.columns
+        or not required <= set(quality_evaluations.columns)
+    ):
+        return pd.Series("", index=df.index, dtype="object")
+    selected = quality_evaluations.loc[
+        quality_evaluations["evaluation_column"].astype(str).eq(evaluation_column),
+        ["filename_base", "status"],
+    ].drop_duplicates(subset="filename_base", keep="last")
+    aligned = df[["filename_base"]].merge(selected, on="filename_base", how="left")
+    return aligned["status"].fillna("").astype(str).str.strip().str.lower()
+
+
+def _load_retry_plot_states(station_name: str) -> pd.DataFrame:
+    """Load the station active QA retry lifecycle state for plot markers."""
+    station_id = int(station_name[-2:])
+    path = (
+        REPO_ROOT / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / station_name
+        / "STAGE_0" / "REPROCESSING" / "STEP_0" / "METADATA"
+        / f"qa_retry_state_{station_id}.csv"
+    )
+    if not path.is_file():
+        return pd.DataFrame(columns=["basename", "is_active", "admitted_at"])
+    frame = read_csv_if_exists(path)
+    required = {"basename", "is_active", "admitted_at"}
+    if frame.empty or not required <= set(frame.columns):
+        return pd.DataFrame(columns=["basename", "is_active", "admitted_at"])
+    return frame.loc[
+        frame["is_active"].astype(str).str.strip().eq("1"),
+        ["basename", "is_active", "admitted_at"],
+    ].drop_duplicates(subset="basename", keep="last")
+
+
+def _retry_phase_for_plot(
+    df: pd.DataFrame,
+    retry_states: pd.DataFrame | None,
+) -> pd.Series:
+    """Return queued or in_flight for active QA retry basenames."""
+    if (
+        retry_states is None
+        or retry_states.empty
+        or "filename_base" not in df.columns
+        or not {"basename", "admitted_at"} <= set(retry_states.columns)
+    ):
+        return pd.Series("", index=df.index, dtype="object")
+    selected = retry_states[["basename", "admitted_at"]].drop_duplicates(
+        subset="basename", keep="last"
+    )
+    aligned = df[["filename_base"]].merge(
+        selected, left_on="filename_base", right_on="basename", how="left"
+    )
+    admitted = aligned["admitted_at"].fillna("").astype(str).str.strip()
+    active = aligned["basename"].notna()
+    return pd.Series(
+        np.where(active & admitted.ne(""), "in_flight", np.where(active, "queued", "")),
+        index=df.index,
+        dtype="object",
+    )
+
+
+def _draw_quality_band(
+    ax: Any,
+    x_values: pd.Series,
+    bounds: tuple[pd.Series, pd.Series] | None,
+    *,
+    color: Any,
+    label: str,
+) -> bool:
+    if bounds is None:
+        return False
+    lower, upper = bounds
+    valid = lower.notna() & upper.notna()
+    if not valid.any():
+        return False
+    ax.fill_between(
+        x_values, lower, upper, where=valid, step="mid",
+        color=color, alpha=0.16, linewidth=0, label=label, zorder=0,
+    )
+    return True
+
+
+def _scatter_quality_points(
+    ax: Any,
+    *,
+    df: pd.DataFrame,
+    x_values: pd.Series,
+    y_values: pd.Series,
+    evaluation_column: str,
+    label: str,
+    marker_size: float,
+    quality_evaluations: pd.DataFrame | None,
+    marker_labels_used: set[str],
+) -> Any:
+    """Draw normal, queued-failure, and in-flight-failure point populations."""
+    statuses = _quality_status_for_plot(df, quality_evaluations, evaluation_column)
+    retry_phase = df.get(
+        "__qa_retry_phase__", pd.Series("", index=df.index, dtype="object")
+    ).astype(str)
+    valid = y_values.notna()
+    failed = valid & statuses.eq("fail")
+    in_flight = failed & retry_phase.eq("in_flight")
+    queued = failed & ~in_flight
+    ordinary = valid & ~failed
+
+    points = ax.scatter(
+        x_values[ordinary], y_values[ordinary],
+        s=marker_size**2, label=label, zorder=2,
+    )
+    facecolors = points.get_facecolors()
+    color = facecolors[0] if len(facecolors) else "tab:blue"
+    failure_size = max(marker_size * 2.8, 5.0) ** 2
+
+    if queued.any():
+        marker_label = "QA fail: queued"
+        ax.scatter(
+            x_values[queued], y_values[queued],
+            s=failure_size, marker="x", color="red", linewidths=0.9,
+            label=marker_label if marker_label not in marker_labels_used else "_nolegend_",
+            zorder=4,
+        )
+        marker_labels_used.add(marker_label)
+    if in_flight.any():
+        marker_label = "QA retry: in flight"
+        ax.scatter(
+            x_values[in_flight], y_values[in_flight],
+            s=failure_size, marker="D", color="purple", edgecolors="white",
+            linewidths=0.35,
+            label=marker_label if marker_label not in marker_labels_used else "_nolegend_",
+            zorder=5,
+        )
+        marker_labels_used.add(marker_label)
+    return color
+
+
 def _plot_columns_group(
     *,
     df: pd.DataFrame,
@@ -532,6 +738,7 @@ def _plot_columns_group(
     group_name: str,
     out_dir: Path,
     plot_defaults: dict[str, Any],
+    quality_evaluations: pd.DataFrame | None = None,
     ncols: int | None = None,
     nrows: int | None = None,
     sharey: bool | str = False,
@@ -559,12 +766,24 @@ def _plot_columns_group(
     for idx, col in enumerate(columns):
         ax = axes_flat[idx]
         y = pd.to_numeric(df[col], errors="coerce")
+        band_drawn = False
         if y.notna().any():
-            ax.scatter(x_values, y, s=marker_size**2)
+            color = _scatter_quality_points(
+                ax, df=df, x_values=x_values, y_values=y,
+                evaluation_column=col, label=col, marker_size=marker_size,
+                quality_evaluations=quality_evaluations, marker_labels_used=set(),
+            )
+            band_drawn = _draw_quality_band(
+                ax, x_values,
+                _quality_bounds_for_plot(df, quality_evaluations, col),
+                color=color, label="passing range",
+            )
         else:
             ax.text(0.5, 0.5, "no data", ha="center", va="center", color="gray", fontsize=9)
         ax.set_title(col, fontsize=8)
         ax.grid(True, alpha=0.25)
+        if band_drawn:
+            ax.legend(fontsize=7, loc="best")
         if ylim is not None:
             ax.set_ylim(*ylim)
 
@@ -596,6 +815,7 @@ def _plot_overlay_group(
     group_name: str,
     out_dir: Path,
     plot_defaults: dict[str, Any],
+    quality_evaluations: pd.DataFrame | None = None,
     ncols: int | None = None,
     nrows: int | None = None,
     sharey: bool | str = False,
@@ -625,26 +845,33 @@ def _plot_overlay_group(
         title = str(panel.get("title", f"panel_{idx + 1}"))
         columns = panel.get("columns", [])
         has_data = False
+        band_drawn = False
         plotted_labels: list[str] = []
+        marker_labels_used: set[str] = set()
         for series_idx, col in enumerate(columns):
             label = series_labels[series_idx] if series_idx < len(series_labels) else f"series_{series_idx + 1}"
             if not col or col not in df.columns:
                 continue
             y = pd.to_numeric(df[col], errors="coerce")
             if y.notna().any():
-                ax.scatter(
-                    x_values,
-                    y,
-                    s=marker_size**2,
-                    label=label,
+                color = _scatter_quality_points(
+                    ax, df=df, x_values=x_values, y_values=y,
+                    evaluation_column=str(col), label=label, marker_size=marker_size,
+                    quality_evaluations=quality_evaluations,
+                    marker_labels_used=marker_labels_used,
                 )
+                band_drawn = _draw_quality_band(
+                    ax, x_values,
+                    _quality_bounds_for_plot(df, quality_evaluations, str(col)),
+                    color=color, label=f"{label} passing range",
+                ) or band_drawn
                 has_data = True
                 plotted_labels.append(label)
         if not has_data:
             ax.text(0.5, 0.5, "no data", ha="center", va="center", color="gray", fontsize=9)
         ax.set_title(title, fontsize=8)
         ax.grid(True, alpha=0.25)
-        if len(plotted_labels) > 1:
+        if len(plotted_labels) > 1 or band_drawn:
             ax.legend(fontsize=7, loc="best")
         if ylim is not None:
             ax.set_ylim(*ylim)
@@ -729,6 +956,7 @@ def _generate_station_plots(
     plot_columns: list[str],
     config: dict[str, Any],
     plot_config: dict[str, Any],
+    quality_evaluations: pd.DataFrame | None = None,
 ) -> list[Path]:
     if analyzed_df.empty or not plot_columns:
         return []
@@ -739,6 +967,9 @@ def _generate_station_plots(
     sort_key = "__plot_x__" if x_label != "__timestamp__" else "__timestamp__"
     df = df.sort_values(sort_key).reset_index(drop=True)
     x_values = df["__plot_x__"]
+    df["__qa_retry_phase__"] = _retry_phase_for_plot(
+        df, _load_retry_plot_states(station_name)
+    )
 
     plots_dir = _output_plots_dir(task_output_dir, station_name)
     plot_defaults = deep_merge_dicts(
@@ -794,6 +1025,7 @@ def _generate_station_plots(
                 group_name=name,
                 out_dir=plots_dir,
                 plot_defaults=plot_defaults,
+                quality_evaluations=quality_evaluations,
                 ncols=ncols,
                 nrows=nrows,
                 sharey=sharey,
@@ -827,6 +1059,7 @@ def _generate_station_plots(
                 group_name=name,
                 out_dir=plots_dir,
                 plot_defaults=plot_defaults,
+                quality_evaluations=quality_evaluations,
                 ncols=ncols,
                 nrows=nrows,
                 sharey=sharey,
@@ -856,6 +1089,7 @@ def _generate_station_plots(
                 group_name=name,
                 out_dir=plots_dir,
                 plot_defaults=plot_defaults,
+                quality_evaluations=quality_evaluations,
                 ncols=ncols,
                 nrows=nrows,
                 sharey=sharey,
@@ -885,6 +1119,7 @@ def _generate_station_plots(
             group_name=f"default_{chunk_index}",
             out_dir=plots_dir,
             plot_defaults=plot_defaults,
+            quality_evaluations=quality_evaluations,
             ncols=default_ncols,
             sharey=default_sharey,
             ylim=default_ylim,
@@ -949,13 +1184,17 @@ def _build_quality_pass_dataframe(
     quality_columns: list[str],
     config: dict[str, Any],
     pass_column: str,
-) -> tuple[pd.DataFrame, Path | None]:
+) -> tuple[pd.DataFrame, Path | None, pd.DataFrame]:
     default_pass = float(config.get("pass_default_value", 1.0))
     if scope_df.empty:
-        return pd.DataFrame(columns=["filename_base", pass_column]), None
+        return pd.DataFrame(columns=["filename_base", pass_column]), None, pd.DataFrame()
 
     if not quality_columns:
-        return _build_pass_dataframe(scope_df, pass_column, default_pass), None
+        return (
+            _build_pass_dataframe(scope_df, pass_column, default_pass),
+            None,
+            pd.DataFrame(),
+        )
 
     file_df = scope_df[["filename_base", "__timestamp__", "qa_timestamp_source", "qa_in_scope"]].copy()
     file_df.rename(columns={"__timestamp__": "qa_timestamp"}, inplace=True)
@@ -1024,7 +1263,7 @@ def _build_quality_pass_dataframe(
         "qa_warning_reasons",
     ]
     available_columns = [column for column in ordered_columns if column in file_df.columns]
-    return file_df[available_columns].copy(), out_path
+    return file_df[available_columns].copy(), out_path, column_eval_df
 
 
 def _collect_step_outputs(
@@ -1198,6 +1437,7 @@ def run_step(
     root_config: dict[str, Any],
     stations_override: list[str] | None = None,
     generate_plots: bool = True,
+    quality_plots_only: bool = False,
 ) -> int:
     """Run one configured QA step across all configured stations/tasks."""
     config, category_config, plot_config = load_step_bundle(step_dir, root_config)
@@ -1260,7 +1500,9 @@ def run_step(
             )
             analyzed_df, epochs_df = _attach_epoch_metadata(repo_root, station_name, analyzed_df)
 
-            plot_columns = manifest_plot_columns(manifest_df)
+            plot_columns = manifest_plot_columns(
+                manifest_df, quality_and_plot_only=quality_plots_only,
+            )
             quality_columns = manifest_quality_columns(manifest_df)
             _cleanup_task_quality_artifacts(task_output_dir, station_name, metadata_type)
             _cleanup_task_plot_artifacts(task_output_dir, station_name)
@@ -1275,7 +1517,7 @@ def run_step(
                 quality_columns=quality_columns,
                 config=config,
             )
-            pass_df, quality_eval_path = _build_quality_pass_dataframe(
+            pass_df, quality_eval_path, column_eval_df = _build_quality_pass_dataframe(
                 task_output_dir=task_output_dir,
                 step_dir=step_dir,
                 station_name=station_name,
@@ -1302,6 +1544,7 @@ def run_step(
                     plot_columns=plot_columns,
                     config=config,
                     plot_config=plot_config,
+                    quality_evaluations=column_eval_df,
                 )
             else:
                 created_plots = []
@@ -1332,7 +1575,8 @@ def run_step(
 
     print(
         f"{step_dir.name} complete: tasks={len(task_ids)} stations={len(stations)} "
-        f"plots={total_plots} epoch_references={total_references} quality_tables={total_quality_tables}"
+        f"plots={total_plots} plot_scope={'quality_and_plot' if quality_plots_only else 'all_plottable'} "
+        f"epoch_references={total_references} quality_tables={total_quality_tables}"
     )
     return 0
 

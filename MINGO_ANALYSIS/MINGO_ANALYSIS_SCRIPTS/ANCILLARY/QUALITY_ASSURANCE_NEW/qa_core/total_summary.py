@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import tempfile
 from typing import Any
 
 import pandas as pd
@@ -12,6 +14,31 @@ from .status_plots import plot_column_status_grid, plot_step_score_grid, plot_to
 from .status_reports import build_parameter_status_summary
 
 OVERWRITTEN_METADATA_RE = "*_overwritten_metadata_rows.csv"
+
+
+def _atomic_to_csv(frame: pd.DataFrame, path: Path) -> None:
+    """Publish a CSV with one filesystem replace, never a partial generation."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_handle:
+            temporary_path = Path(temporary_handle.name)
+            frame.to_csv(temporary_handle, index=False)
+            temporary_handle.flush()
+            os.fsync(temporary_handle.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def _output_files_dir(base_dir: Path) -> Path:
@@ -364,7 +391,10 @@ def build_total_summary(
         global_wide_df.to_csv(global_files_dir / "qa_all_stations_quality_wide.csv", index=False)
         reprocessing_df = _build_reprocessing_quality_table(global_wide_df)
         reprocessing_df = _apply_failed_quality_versions(reprocessing_df, global_long_df)
-        reprocessing_df.to_csv(global_files_dir / "qa_all_stations_reprocessing_quality.csv", index=False)
+        _atomic_to_csv(
+            reprocessing_df,
+            global_files_dir / "qa_all_stations_reprocessing_quality.csv",
+        )
     if all_station_parameter_frames:
         pd.concat(all_station_parameter_frames, ignore_index=True).to_csv(
             global_files_dir / "qa_all_stations_parameter_summary.csv",

@@ -146,15 +146,32 @@ def _write_lake_gated_metadata(
             Path(temporary_name).unlink(missing_ok=True)
 
 
-def _rotate_output_directory(output_dir: Path) -> tuple[int, int]:
-    """Move the current output generation into OUTPUTS/LAST."""
+ARCHIVE_ROOT_NAME = "ARCHIVED_RUN_OUTPUTS"
+ARCHIVE_PREVIOUS_NAME = "PREVIOUS_RUN"
+ARCHIVE_STAGING_NAME = ".PREVIOUS_RUN_BUILDING"
+REPROCESSING_AUTHORITY_RELATIVE_PATH = (
+    Path("FILES") / "qa_all_stations_reprocessing_quality.csv"
+)
+
+
+def _rotate_output_directory(
+    output_dir: Path,
+    archive_destination: Path,
+    *,
+    preserve_relative_paths: frozenset[Path] = frozenset(),
+) -> tuple[int, int]:
+    """Archive outputs while optionally retaining live authority files.
+
+    Retained files are copied into the prior-run archive and left at their
+    active path until the new generation replaces them atomically. This keeps
+    cron consumers from observing a missing authority file during a rebuild.
+    """
     if not output_dir.is_dir():
         return 0, 0
 
     current_children = [
-        child
-        for child in output_dir.iterdir()
-        if child.name not in {"LAST", ".LAST_BUILDING"}
+        child for child in output_dir.iterdir()
+        if child.name != ARCHIVE_STAGING_NAME
     ]
     if not current_children:
         return 0, 0
@@ -162,33 +179,58 @@ def _rotate_output_directory(output_dir: Path) -> tuple[int, int]:
     moved_files = 0
     moved_bytes = 0
     for child in current_children:
-        if child.is_file():
-            moved_files += 1
-            moved_bytes += child.stat().st_size
-        elif child.is_dir():
-            for path in child.rglob("*"):
-                if path.is_file():
-                    moved_files += 1
-                    moved_bytes += path.stat().st_size
+        paths = [child] if child.is_file() else child.rglob("*")
+        for path in paths:
+            if path.is_file():
+                moved_files += 1
+                moved_bytes += path.stat().st_size
     if not moved_files:
         return 0, 0
 
-    last_dir = output_dir / "LAST"
-    staging_dir = output_dir / ".LAST_BUILDING"
-    if staging_dir.exists():
-        shutil.rmtree(staging_dir)
-    staging_dir.mkdir()
+    archive_destination.mkdir(parents=True, exist_ok=True)
     for child in current_children:
-        shutil.move(str(child), str(staging_dir / child.name))
+        if child.is_file():
+            relative_path = child.relative_to(output_dir)
+            destination = archive_destination / relative_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if relative_path in preserve_relative_paths:
+                shutil.copy2(child, destination)
+            else:
+                shutil.move(str(child), str(destination))
+            continue
 
-    if last_dir.exists():
-        shutil.rmtree(last_dir)
-    staging_dir.rename(last_dir)
+        for path in sorted(
+            (candidate for candidate in child.rglob("*") if candidate.is_file()),
+            key=lambda candidate: len(candidate.parts),
+        ):
+            relative_path = path.relative_to(output_dir)
+            destination = archive_destination / relative_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if relative_path in preserve_relative_paths:
+                shutil.copy2(path, destination)
+            else:
+                shutil.move(str(path), str(destination))
+
+        for directory in sorted(
+            (candidate for candidate in child.rglob("*") if candidate.is_dir()),
+            key=lambda candidate: len(candidate.parts),
+            reverse=True,
+        ):
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
+        try:
+            child.rmdir()
+        except OSError:
+            pass
     return moved_files, moved_bytes
 
 
-def rotate_previous_outputs(qa_root: Path, *, aggregate_only: bool = False) -> tuple[int, int, int]:
-    """Keep exactly one previous plot execution under each OUTPUTS/LAST."""
+def rotate_previous_outputs(
+    qa_root: Path, *, aggregate_only: bool = False,
+) -> tuple[int, int, int]:
+    """Move the prior generation outside active trees, retaining one generation."""
     scan_roots = [qa_root / "TOTAL_SUMMARY"]
     if not aggregate_only:
         scan_roots.insert(0, qa_root / "STEPS")
@@ -199,23 +241,58 @@ def rotate_previous_outputs(qa_root: Path, *, aggregate_only: bool = False) -> t
             continue
         for root, dir_names, _ in os.walk(scan_root):
             dir_names[:] = [
-                name
-                for name in dir_names
-                if name not in {".ATTIC", "LAST", ".LAST_BUILDING", "__pycache__"}
+                name for name in dir_names
+                if name not in {".ATTIC", "__pycache__"}
             ]
             root_path = Path(root)
             if root_path.name == "OUTPUTS":
                 output_dirs.append(root_path)
 
+    has_rotatable_files = any(
+        path.is_file()
+        and not (
+            output_dir == qa_root / "TOTAL_SUMMARY" / "OUTPUTS"
+            and path.relative_to(output_dir) == REPROCESSING_AUTHORITY_RELATIVE_PATH
+        )
+        for output_dir in output_dirs
+        for path in output_dir.rglob("*")
+    )
+    if not has_rotatable_files:
+        return 0, 0, 0
+
+    archive_root = qa_root / ARCHIVE_ROOT_NAME
+    staging_dir = archive_root / ARCHIVE_STAGING_NAME
+    if staging_dir.exists():
+        shutil.rmtree(staging_dir)
+    staging_dir.mkdir(parents=True, exist_ok=True)
+
     rotated_dirs = 0
     moved_files = 0
     moved_bytes = 0
     for output_dir in sorted(output_dirs, key=lambda path: len(path.parts), reverse=True):
-        directory_files, directory_bytes = _rotate_output_directory(output_dir)
+        archive_destination = staging_dir / output_dir.relative_to(qa_root)
+        preserve_relative_paths = (
+            frozenset({REPROCESSING_AUTHORITY_RELATIVE_PATH})
+            if output_dir == qa_root / "TOTAL_SUMMARY" / "OUTPUTS"
+            else frozenset()
+        )
+        directory_files, directory_bytes = _rotate_output_directory(
+            output_dir,
+            archive_destination,
+            preserve_relative_paths=preserve_relative_paths,
+        )
         if directory_files:
             rotated_dirs += 1
             moved_files += directory_files
             moved_bytes += directory_bytes
+
+    if moved_files:
+        previous_dir = archive_root / ARCHIVE_PREVIOUS_NAME
+        if previous_dir.exists():
+            shutil.rmtree(previous_dir)
+        staging_dir.rename(previous_dir)
+    else:
+        shutil.rmtree(staging_dir)
     return rotated_dirs, moved_files, moved_bytes
 
 
@@ -305,9 +382,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--steps", nargs="*", help="Optional step-name filter like: STEP_1_CALIBRATIONS")
     parser.add_argument(
         "--mode",
-        choices=("often", "plot"),
+        choices=("often", "plot", "qa-plot"),
         default="plot",
-        help="Cron-friendly run mode: 'often' updates tables only; 'plot' also regenerates plots.",
+        help=("Run mode: often updates tables only; plot draws every plottable "
+              "parameter; qa-plot draws only quality_and_plot parameters."),
     )
     parser.add_argument("--aggregate-only", action="store_true", help="Only rebuild TOTAL_SUMMARY from existing outputs.")
     parser.add_argument("--skip-total-summary", action="store_true", help="Run steps only.")
@@ -317,8 +395,12 @@ def main(argv: list[str] | None = None) -> int:
     pipeline_steps = _load_pipeline_steps(QA_ROOT)
     step_filter = _parse_step_filter(args.steps)
     stations_override = _parse_station_list(args.stations)
-    generate_plots = args.mode == "plot"
-    print(f"QUALITY_ASSURANCE_NEW mode={args.mode} generate_plots={generate_plots}")
+    generate_plots = args.mode in {"plot", "qa-plot"}
+    quality_plots_only = args.mode == "qa-plot"
+    print(
+        f"QUALITY_ASSURANCE_NEW mode={args.mode} generate_plots={generate_plots} "
+        f"plot_scope={'quality_and_plot' if quality_plots_only else 'all_plottable'}"
+    )
 
 
     if generate_plots:
@@ -327,7 +409,7 @@ def main(argv: list[str] | None = None) -> int:
             aggregate_only=args.aggregate_only,
         )
         print(
-            "Rotated previous QA outputs into OUTPUTS/LAST: "
+            "Archived previous QA outputs outside active OUTPUTS trees: "
             f"directories={rotated_dirs} files={rotated_files} bytes={rotated_bytes}"
         )
 
@@ -352,6 +434,7 @@ def main(argv: list[str] | None = None) -> int:
                 root_config=root_config,
                 stations_override=stations_override,
                 generate_plots=generate_plots,
+                quality_plots_only=quality_plots_only,
             )
     else:
         for step in pipeline_steps:
