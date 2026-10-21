@@ -364,7 +364,13 @@ def main() -> None:
             calibration_path = Path(calibration_path)
             if not calibration_path.is_absolute():
                 calibration_path = REPO_ROOT / calibration_path
-        charge_calibration = TotChargeCalibration.from_csv(calibration_path)
+        if calibration_path.is_file():
+            charge_calibration = TotChargeCalibration.from_csv(calibration_path)
+        else:
+            # The recovery clone lacks this scientific input. The checked-in
+            # q_to_time_factor is the documented fallback for that case.
+            print(f"WARNING: TOT calibration missing at {calibration_path}; using linear_q_to_time_factor fallback")
+            charge_conversion_model = "linear_q_to_time_factor"
     qfront_offsets = cfg.get("qfront_offsets", [[0, 0, 0, 0]] * 4)
     qback_offsets = cfg.get("qback_offsets", [[0, 0, 0, 0]] * 4)
     rng = np.random.default_rng(cfg.get("seed"))

@@ -45,7 +45,9 @@ mkdir -p "$(dirname "${LOCK_FILE}")"
 
   cpu_count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
   load_1m="$(awk '{print $1}' /proc/loadavg 2>/dev/null || echo 0)"
-  load_trigger="$(awk -v c="${cpu_count}" -v f="${load_factor}" 'BEGIN { printf "%.2f", c * f }')"
+  # Cron may inherit a locale whose decimal separator is a comma. Keep both
+  # formatting and comparison in the C numeric locale.
+  load_trigger="$(LC_ALL=C awk -v c="${cpu_count}" -v f="${load_factor}" 'BEGIN { printf "%.2f", c * f }')"
 
   cleanup_dead_run_step_lock() {
     local lock_dir="${BASE_DIR}/OPERATIONS/OPERATIONS_RUNTIME/LOCKS/simulation/run_step_continuous.lock"
@@ -201,7 +203,7 @@ mkdir -p "$(dirname "${LOCK_FILE}")"
   done
 
   match_count="${#pid_to_cmd[@]}"
-  load_trip="$(awk -v l="${load_1m}" -v t="${load_trigger}" 'BEGIN {print (l >= t) ? 1 : 0}')"
+  load_trip="$(LC_ALL=C awk -v l="${load_1m}" -v t="${load_trigger}" 'BEGIN {print (l >= t) ? 1 : 0}')"
 
   should_kill=0
   reasons=()

@@ -2,6 +2,7 @@
 import importlib.util
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
@@ -30,8 +31,16 @@ class RecoverySafetyTests(unittest.TestCase):
 
     def test_every_job_has_gate_and_no_system_python(self):
         _, commands = recovery.cron_paths(recovery.render_cron())
-        self.assertEqual(len(commands), 68)
-        self.assertTrue(any('run_main_simulation_cycle.sh' in c for c in commands))
+        source = recovery.expand(
+            (recovery.CONTENTS / 'cron/analysis_pc.crontab').read_text()
+        )
+        scheduled_lines = [
+            line for line in source.splitlines()
+            if line.strip() and not line.startswith('#') and not re.match(r'^\w+=', line)
+        ]
+        self.assertEqual(len(commands), len(scheduled_lines))
+        # The checked-in schedule intentionally keeps simulation cron disabled.
+        self.assertFalse(any('run_main_simulation_cycle.sh' in c for c in commands))
         self.assertTrue(any('guide_raw_to_corrected.sh -s 4' in c for c in commands))
         for command in commands:
             self.assertIn('/CONFIG/SETUP/run-job.sh -- ', command)

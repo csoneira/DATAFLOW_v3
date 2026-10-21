@@ -20,7 +20,7 @@ RESET_MARKER="${SIM_INTERSTEPS_RESET_MARKER:-${ROOT_DIR}/OPERATIONS/OPERATIONS_R
 FINAL_LOCK="${SIM_FINAL_LOCK:-${ROOT_DIR}/OPERATIONS/OPERATIONS_RUNTIME/LOCKS/cron/sim_final.lock}"
 STEP_FINAL_SCRIPT="${SIM_STEP_FINAL_SCRIPT:-${ROOT_DIR}/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py}"
 STEP_FINAL_CONFIG="${SIM_STEP_FINAL_CONFIG:-${ROOT_DIR}/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_FINAL/config_step_final_physics.yaml}"
-PYTHON_BIN="${SIM_PYTHON_BIN:-/usr/bin/python3}"
+PYTHON_BIN="${SIM_PYTHON_BIN:-${PYTHON_BIN:-$HOME/DATAFLOW_v3/.venv/bin/python3}}"
 
 # The main controller needs final_lock together with its enqueue and processing
 # locks to clear stale intersteps. If a reset is pending, do not compete for the
