@@ -1,0 +1,7 @@
+{
+  "session": "pipeline_monitor",
+  "windows": [
+    {"name": "Pipeline check", "panes": ["flow", "processes"]},
+    {"name": "Execution logs", "panes": ["logs"]}
+  ]
+}

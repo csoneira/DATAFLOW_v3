@@ -3,6 +3,19 @@
 The scripts in this directory maintain an append-safe backup for the remote log
 trees on `mingo01`, `mingo02`, `mingo03`, and `mingo04`.
 
+This job copies only each station's `/home/rpcuser/logs/` tree into this
+analysis PC's ignored runtime directory. It is not an off-site backup and does
+not copy HLD data or fetch from CESGA.
+
+The station crontab has a separate CESGA job (`/home/rpcuser/bin/backupCesga.sh`)
+that copies `/media/externalDisk/hlds/done/` to
+`trasgo@mastercr1.igfae.usc.es:/lustre/Trasgo/mingo01` (the tracked crontab
+shows this destination for mingo01). The analysis pipeline separately fetches
+reprocessing HLD files from `rpcuser@backuplip:/local/experiments/MINGOS/`.
+The repository does not show how CESGA data reaches `backuplip`; the station's
+`backupLIP.sh` cron entry is commented out. It also does not define an off-PC
+backup destination for this analysis machine's runtime data/products.
+
 Mutable backup data is stored separately under:
 
 `OPERATIONS/OPERATIONS_RUNTIME/REMOTE_LOG_BACKUP/`
@@ -37,17 +50,14 @@ Run the backup manually:
 bash /home/mingo/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/REMOTE_LOG_BACKUP/run_log_backup.sh
 ```
 
-Install the 12-hour cron entry:
+The analysis-PC setup installs the fixed schedule, including the 12-hour
+remote-log backup job:
 
 ```bash
-bash /home/mingo/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/REMOTE_LOG_BACKUP/install_log_backup_cron.sh
+bash /home/mingo/DATAFLOW_v3/CONFIG/SETUP/setup.sh --apply
 ```
 
-Print the cron line without installing it:
-
-```bash
-bash /home/mingo/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/REMOTE_LOG_BACKUP/install_log_backup_cron.sh --print-only
-```
+The schedule is versioned in `CONFIG/CONTENTS/cron/analysis_pc.crontab`.
 
 ## Notes
 

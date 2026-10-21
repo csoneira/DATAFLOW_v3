@@ -1,0 +1,3 @@
+# Only for interactive Tk status GUIs / legacy Octave PDF reporting.
+python3-tk
+default-jre-headless

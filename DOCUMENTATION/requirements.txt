@@ -1,2 +1,1 @@
-mkdocs
-mkdocs-material
+../CONFIG/CONTENTS/packages/docs-requirements.txt

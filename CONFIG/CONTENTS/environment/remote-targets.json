@@ -1,0 +1,60 @@
+[
+  {
+    "alias": "mingo01",
+    "required": true,
+    "directories": [
+      "/home/rpcuser/station_automation_scripts",
+      "/home/rpcuser/logs",
+      "/media/externalDisk/gate/system/devices/TRB3/data/daqData/asci"
+    ],
+    "files": []
+  },
+  {
+    "alias": "mingo02",
+    "required": true,
+    "directories": [
+      "/home/rpcuser/station_automation_scripts",
+      "/home/rpcuser/logs",
+      "/media/externalDisk/gate/system/devices/TRB3/data/daqData/asci"
+    ],
+    "files": []
+  },
+  {
+    "alias": "mingo03",
+    "required": true,
+    "directories": [
+      "/home/rpcuser/station_automation_scripts",
+      "/home/rpcuser/logs",
+      "/media/externalDisk/gate/system/devices/TRB3/data/daqData/asci"
+    ],
+    "files": []
+  },
+  {
+    "alias": "mingo04",
+    "required": false,
+    "directories": [
+      "/home/rpcuser/station_automation_scripts",
+      "/home/rpcuser/logs",
+      "/media/externalDisk/gate/system/devices/TRB3/data/daqData/asci"
+    ],
+    "files": []
+  },
+  {
+    "alias": "ana",
+    "required": true,
+    "directories": [
+      "/home/rpcuser/db_backups/mingo01"
+    ],
+    "files": [
+      "/home/rpcuser/db_backups/mingo01/mingo01.tar"
+    ]
+  },
+  {
+    "alias": "backuplip",
+    "required": true,
+    "directories": [
+      "/local/experiments/MINGOS"
+    ],
+    "files": []
+  }
+]

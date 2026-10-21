@@ -1,0 +1,38 @@
+# Recovered from analysis PC ~/.ssh/config on 2026-09-22.
+# localhost here is the loopback of the ana jump host, not this analysis PC.
+Host ana
+    HostName ocean.lipc
+    User rpcuser
+    Port 40022
+
+Host backuplip
+    HostName 10.0.1.20
+    User rpcuser
+    Port 22
+
+Host mingo01
+    HostName localhost
+    Port 20001
+Host mingo02
+    HostName localhost
+    Port 20002
+Host mingo03
+    HostName localhost
+    Port 20003
+Host mingo04
+    HostName localhost
+    Port 20004
+Host mingo01 mingo02 mingo03 mingo04
+    User rpcuser
+    ProxyJump ana
+
+Host ana backuplip mingo01 mingo02 mingo03 mingo04
+    IdentityFile ~/.ssh/id_ed25519_dataflow
+    IdentitiesOnly yes
+    StrictHostKeyChecking yes
+    BatchMode yes
+    ConnectTimeout 10
+    ServerAliveInterval 10
+    ServerAliveCountMax 2
+
+Host *

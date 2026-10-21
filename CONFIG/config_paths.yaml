@@ -1,4 +1,4 @@
 # Canonical path configuration for DATAFLOW_v3.
 # Keep user-specific absolute paths defined only here.
-home_path: /home/mingo
+home_path: "~"
 repo_name: DATAFLOW_v3

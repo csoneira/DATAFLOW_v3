@@ -1,0 +1,2 @@
+# Rendered with validated local username and root-owned executable paths.
+@USER@ ALL=(root) NOPASSWD: @SWAPOFF@ -a, @SWAPON@ -a, @SWAPOFF@ --help, @SWAPON@ --help

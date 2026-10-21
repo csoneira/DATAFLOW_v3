@@ -1,0 +1,11 @@
+# Excluded receiver files are protected from --delete (never --delete-excluded).
+/bot_scripts/API.txt
+/bot_scripts/TERMINAL_PASSWORD.txt
+/.env
+/.env.*
+*.pem
+id_ed25519*
+id_rsa*
+__pycache__/
+*.log
+*.lock
