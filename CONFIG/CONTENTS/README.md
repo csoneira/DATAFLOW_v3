@@ -2,7 +2,7 @@
 
 `CONTENTS` is the public, declarative machine inventory; `SETUP` applies and
 checks it. The primary machine is a Debian/Ubuntu analysis PC owned by the
-normal user whose home contains `DATAFLOW_v3`. A station's `rpcuser` crontab,
+normal user whose home contains the `mingo-computing` checkout. A station's `rpcuser` crontab,
 DAQ, hardware, and system packages are separate and must be recovered on the
 station; the analysis PC setup never installs the station crontab.
 

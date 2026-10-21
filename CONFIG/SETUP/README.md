@@ -3,8 +3,8 @@
 Run once after cloning on the analysis PC, as the pipeline user:
 
 ```bash
-git clone https://github.com/csoneira/DATAFLOW_v3 ~/DATAFLOW_v3
-cd ~/DATAFLOW_v3
+git clone https://github.com/csoneira/mingo-computing.git
+cd mingo-computing
 bash CONFIG/SETUP/setup.sh --apply
 ```
 

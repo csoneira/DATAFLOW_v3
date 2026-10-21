@@ -1,11 +1,11 @@
 # miniTRASGO Documentation
 
-This MkDocs documentation is part of the main `DATAFLOW_v3` repository and lives in `DOCUMENTATION/`.
+This MkDocs documentation is part of the `mingo-computing` repository and lives in `DOCUMENTATION/`.
 
 ## Location in this repository
 
 ```text
-DATAFLOW_v3/
+mingo-computing/
 ├── DOCUMENTATION/
 │   ├── mkdocs.yml
 │   ├── requirements.txt
@@ -51,7 +51,7 @@ The documentation site is deployed from this repository via GitHub Actions and G
 - Trigger: push to `main` and manual `workflow_dispatch`
 - Build source: `DOCUMENTATION/`
 - Published artifact: `DOCUMENTATION/site/`
-- Hosted URL: <https://csoneira.github.io/DATAFLOW_v3/>
+- Hosted URL: <https://csoneira.github.io/mingo-computing/>
 
 ## Troubleshooting
 

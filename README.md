@@ -1,8 +1,10 @@
-# DATAFLOW_v3
+# MINGO Computing
 
-For a new analysis PC, clone this repository to `~/DATAFLOW_v3` and run:
+For a new analysis PC, clone this repository and run setup from the checkout:
 
 ```bash
+git clone https://github.com/csoneira/mingo-computing.git
+cd mingo-computing
 bash CONFIG/SETUP/setup.sh --apply
 ```
 

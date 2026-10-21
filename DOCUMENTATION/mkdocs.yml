@@ -1,7 +1,7 @@
-site_name: DATAFLOW_v3 Documentation
-site_url: https://csoneira.github.io/DATAFLOW_v3/
-repo_name: csoneira/DATAFLOW_v3
-repo_url: https://github.com/csoneira/DATAFLOW_v3
+site_name: MINGO Computing Documentation
+site_url: https://csoneira.github.io/mingo-computing/
+repo_name: csoneira/mingo-computing
+repo_url: https://github.com/csoneira/mingo-computing
 
 nav:
   - Overview:
