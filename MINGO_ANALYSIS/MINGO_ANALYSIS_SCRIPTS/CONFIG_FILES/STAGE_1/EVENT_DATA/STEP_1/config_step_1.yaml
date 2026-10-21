@@ -39,7 +39,7 @@ step_1_overrides:
   file_selection_mode: random
 
 metadata_outputs:
-  activation: false
+  activation: true
   calibration: true
   chi2_four_plane: true
   deep_filter: true
@@ -48,9 +48,9 @@ metadata_outputs:
   filter: true
   gate_test: true
   noise_control: true
-  pattern: false
+  pattern: true
   profiling: true
-  rate_histogram: false
+  rate_histogram: true
   specific: true
   status: true
   trigger_type: true
