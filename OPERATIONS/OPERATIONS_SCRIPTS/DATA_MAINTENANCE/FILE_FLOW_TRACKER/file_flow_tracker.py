@@ -26,6 +26,12 @@ from typing import Iterable, Sequence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
+PIPELINE_LOCK_ROOT = Path(
+    os.environ.get(
+        "FILE_FLOW_TRACKER_PIPELINE_LOCK_ROOT",
+        REPO_ROOT / "OPERATIONS" / "OPERATIONS_RUNTIME" / "LOCKS" / "cron",
+    )
+)
 STATIONS_ROOT = REPO_ROOT / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS"
 RUNTIME_ROOT = REPO_ROOT / "OPERATIONS" / "OPERATIONS_RUNTIME" / "FILE_FLOW_TRACKER"
 PROCESSED_ROOT = (
@@ -358,7 +364,13 @@ def queue_states(obs: FileObservation) -> dict[int, str]:
     }
 
 
-def classify(obs: FileObservation, now: float, stale_seconds: float) -> tuple[str, str, int]:
+def classify(
+    obs: FileObservation,
+    now: float,
+    stale_seconds: float,
+    *,
+    station_pipeline_busy: bool = False,
+) -> tuple[str, str, int]:
     queues = queue_states(obs)
     highest = max(
         [artifact.task for artifact in obs.artifacts if artifact.task is not None] + [-1]
@@ -370,8 +382,6 @@ def classify(obs: FileObservation, now: float, stale_seconds: float) -> tuple[st
     if obs.archive_present:
         obs.anomalies.append("invalid_parquet_archive")
         return "archive_invalid", "quarantine_invalid_archive_and_resume", highest
-    if obs.metadata_tasks:
-        obs.anomalies.append("processing_metadata_without_archive")
     processing = [
         artifact
         for artifact in obs.artifacts
@@ -379,6 +389,8 @@ def classify(obs: FileObservation, now: float, stale_seconds: float) -> tuple[st
     ]
     if obs.active_reprocessing:
         return "active_reprocessing", "wait", highest
+    if processing and station_pipeline_busy:
+        return f"processing_task_{max(a.task or 0 for a in processing)}", "wait", highest
     if processing and any(now - artifact.mtime < stale_seconds for artifact in processing):
         return f"processing_task_{max(a.task or 0 for a in processing)}", "wait", highest
     if processing:
@@ -415,6 +427,7 @@ def classify(obs: FileObservation, now: float, stale_seconds: float) -> tuple[st
             and now - obs.newest_metadata_timestamp < stale_seconds
         ):
             return "recent_metadata_pending_archive", "wait", highest
+        obs.anomalies.append("processing_metadata_without_archive")
         obs.anomalies.append("metadata_or_guard_only")
         return "metadata_only_missing_archive", "clear_metadata_and_acquisition_guards", highest
     if obs.in_selected_range:
@@ -746,6 +759,15 @@ def run(
         totals = {"files": 0, "archived": 0, "anomalies": 0, "actions": 0}
 
         for station in stations:
+            station_lock_path = PIPELINE_LOCK_ROOT / f"guide_raw_to_corrected_s{station}.lock"
+            station_lock_path.parent.mkdir(parents=True, exist_ok=True)
+            station_lock = station_lock_path.open("a+")
+            try:
+                fcntl.flock(station_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                station_pipeline_busy = False
+            except BlockingIOError:
+                station_pipeline_busy = True
+                station_lock.close()
             observations, _ = scan_station(
                 station,
                 stations_root=stations_root,
@@ -760,11 +782,15 @@ def run(
                 obs.event_time = event_time_from_base(base)
                 obs.in_selected_range = all_dates or within_ranges(obs.event_time, ranges)
                 state, recommended, highest = classify(
-                    obs, datetime.now(timezone.utc).timestamp(), stale_hours * 3600.0
+                    obs,
+                    datetime.now(timezone.utc).timestamp(),
+                    stale_hours * 3600.0,
+                    station_pipeline_busy=station_pipeline_busy,
                 )
                 may_repair = (
                     apply
                     and not processed_lists_only
+                    and not station_pipeline_busy
                     and repair_disk_ok
                     and (all_dates or selection_ok)
                     and obs.in_selected_range
@@ -831,6 +857,9 @@ def run(
                     "repair_disk_ok": int(repair_disk_ok),
                 }
             )
+            if not station_pipeline_busy:
+                fcntl.flock(station_lock, fcntl.LOCK_UN)
+                station_lock.close()
 
         atomic_write_csv(
             runtime_root / "summary_latest.csv",

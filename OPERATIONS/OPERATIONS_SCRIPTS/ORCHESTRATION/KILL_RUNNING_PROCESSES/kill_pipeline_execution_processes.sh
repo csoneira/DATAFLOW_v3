@@ -27,7 +27,7 @@ if [[ "$REPO_ROOT" == "/" ]]; then
   exit 1
 fi
 
-CRON_FILE="$REPO_ROOT/CONFIG/add_to_crontab.info"
+CRON_FILE="$REPO_ROOT/OPERATIONS/OPERATIONS_RUNTIME/SETUP/analysis_pc.crontab"
 this_pid=$$
 
 if [[ ! -f "$CRON_FILE" ]]; then

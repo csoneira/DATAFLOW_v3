@@ -17,9 +17,7 @@ if str(REPO_ROOT) not in sys.path:
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.step1_shared import canonicalize_step1_columns
 
 
-OUTPUT_PATH = Path(
-    "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/columns_review.md"
-)
+OUTPUT_PATH = REPO_ROOT / "OPERATIONS/OPERATIONS_RUNTIME/OBSERVABILITY/columns_review.md"
 
 
 @dataclass(frozen=True)
@@ -38,7 +36,7 @@ SECTIONS = [
     #         "TASK_0/INPUT_FILES/COMPLETED_DIRECTORY/*.dat"
     #     ),
     #     glob_pattern=(
-    #         "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+    #         f"{REPO_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
     #         "TASK_0/INPUT_FILES/COMPLETED_DIRECTORY/*.dat"
     #     ),
     # ),
@@ -49,7 +47,7 @@ SECTIONS = [
             "TASK_1/INPUT_FILES/COMPLETED_DIRECTORY/raw_*.parquet"
         ),
         glob_pattern=(
-            "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            f"{REPO_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
             "TASK_1/INPUT_FILES/COMPLETED_DIRECTORY/raw_*.parquet"
         ),
         exclude_prefixes=("selftrigger_",),
@@ -61,7 +59,7 @@ SECTIONS = [
             "TASK_0/OUTPUT_FILES/selftrigger_raw_*.parquet"
         ),
         glob_pattern=(
-            "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            f"{REPO_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
             "TASK_0/OUTPUT_FILES/selftrigger_raw_*.parquet"
         ),
     ),
@@ -72,7 +70,7 @@ SECTIONS = [
             "TASK_2/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
         ),
         glob_pattern=(
-            "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            f"{REPO_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
             "TASK_2/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
         ),
     ),
@@ -83,7 +81,7 @@ SECTIONS = [
             "TASK_3/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
         ),
         glob_pattern=(
-            "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            f"{REPO_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
             "TASK_3/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
         ),
     ),
@@ -94,7 +92,7 @@ SECTIONS = [
             "TASK_4/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
         ),
         glob_pattern=(
-            "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            f"{REPO_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
             "TASK_4/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
         ),
     ),
@@ -105,7 +103,7 @@ SECTIONS = [
             "TASK_5/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
         ),
         glob_pattern=(
-            "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
+            f"{REPO_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
             "TASK_5/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
         ),
     ),
@@ -116,7 +114,7 @@ SECTIONS = [
             "PARQUET_LAKE/postprocessed_*.parquet"
         ),
         glob_pattern=(
-            "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO04/STAGE_1_PRODUCTS/EVENT_DATA/"
+            f"{REPO_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO04/STAGE_1_PRODUCTS/EVENT_DATA/"
             "PARQUET_LAKE/postprocessed_*.parquet",
         ),
     ),

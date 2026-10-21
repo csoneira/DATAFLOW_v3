@@ -44,4 +44,22 @@ elif [[ ! -s "$marker_path" && -f "$log_path" && ! -s "$log_path" ]]; then
   rm -f "$log_path"
 fi
 
+# One atomic latest-result CSV per scheduled job. The existing error finder
+# still owns issue classification; these files provide current exit status.
+runtime_root="${DATAFLOW_ROOT:-$HOME/DATAFLOW_v3}/OPERATIONS/OPERATIONS_RUNTIME"
+case "$log_path" in
+  "$runtime_root/CRON_LOGS/"*) relative="${log_path#"$runtime_root/CRON_LOGS/"}" ;;
+  *) relative="$(basename -- "$log_path")" ;;
+esac
+status_file="$runtime_root/CRON_STATUS/${relative%.log}.csv"
+mkdir -p "$(dirname -- "$status_file")"
+status_tmp="$(mktemp "${status_file}.XXXXXX")"
+status=ok
+if [[ $rc -ne 0 ]]; then status=failed; fi
+if [[ "$silent_expected_lock_contention" == true ]]; then status=skipped_lock; fi
+printf 'started_at_utc,finished_at_utc,exit_code,status\n%s,%s,%d,%s\n' \
+  "$started_at" "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$rc" "$status" >"$status_tmp"
+chmod 0600 "$status_tmp"
+mv -f -- "$status_tmp" "$status_file"
+
 exit "$rc"

@@ -105,20 +105,27 @@ YAML_CONFIG_TARGETS: Sequence[Tuple[Path, Path, str, str]] = (
         "stage 1 step 1 task 5 config",
     ),
     (
-        CONFIG_ROOT / "STAGE_1" / "EVENT_DATA" / "STEP_2" / "config_step_2.yaml",
-        SNAPSHOT_ROOT / "STAGE_1_EVENT_DATA_STEP_2",
-        "config_step_2.json",
-        "stage 1 step 2 config",
+        CONFIG_ROOT / "STAGE_2" / "EVENT_DATA" / "STEP_1_ACCUMULATION" / "config_step_1_accumulation.yaml",
+        SNAPSHOT_ROOT / "STAGE_2_EVENT_DATA_STEP_1_ACCUMULATION",
+        "config_step_1_accumulation.json",
+        "stage 2 event accumulation config",
+    ),
+    (
+        CONFIG_ROOT / "STAGE_2" / "EVENT_DATA" / "STEP_2_DAILY_EVENT_DATA" / "config_step_2_daily_event_data.yaml",
+        SNAPSHOT_ROOT / "STAGE_2_EVENT_DATA_STEP_2_DAILY_EVENT_DATA",
+        "config_step_2_daily_event_data.json",
+        "stage 2 daily event data config",
     ),
 )
 
-CSV_CONFIG_TARGETS: Sequence[Tuple[Path, Path, str, str]] = (
+CSV_CONFIG_TARGETS: Sequence[Tuple[Path, Path, str, str]] = tuple(
     (
-        CONFIG_ROOT / "STAGE_1" / "EVENT_DATA" / "STEP_1" / "config_parameters.csv",
-        SNAPSHOT_ROOT / "PARAMETERS",
-        "parameters.json",
-        "parameter config",
-    ),
+        CONFIG_ROOT / "STAGE_1" / "EVENT_DATA" / "STEP_1" / f"TASK_{task}" / f"config_parameters_task_{task}.csv",
+        SNAPSHOT_ROOT / f"STAGE_1_EVENT_DATA_STEP_1_TASK_{task}",
+        f"config_parameters_task_{task}.json",
+        f"stage 1 step 1 task {task} parameters",
+    )
+    for task in range(6)
 )
 
 
