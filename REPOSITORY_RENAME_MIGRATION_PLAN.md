@@ -1263,6 +1263,9 @@ After the move, setup applied successfully and reported 148 passes, 3 warnings,
 and no failures. The warnings concern the missing QA summary, unavailable
 `mingo04` SSH, and an undocumented second backup-PC endpoint. GitHub Actions
 passed for both simulation checks and documentation deployment at the renamed
-repository. The Pages deployment reported success, although the first HTTP
-probe of the new public URL returned 404; that endpoint must be checked again
-after propagation before treating public-site availability as verified.
+repository. The first HTTP probe exposed that the docs source had no root
+`index.md`, so MkDocs deployed only a 404 page. A minimal home page linking to
+the existing operations guides and notebook archive was added. The subsequent
+documentation deployment passed and
+`https://csoneira.github.io/mingo-computing/` returned HTTP 200 with the
+`MINGO Computing Documentation` title.

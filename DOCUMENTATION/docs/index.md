@@ -14,4 +14,4 @@ Documentation for the MINGO computing and miniTRASGO detector operations.
 ## Reference material
 
 - [Notebook archive](NOTEBOOKS/README.md)
-- [Repository setup guide](../README.md)
+- [Documentation deployment notes](../README.md)
