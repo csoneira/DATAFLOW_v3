@@ -1097,11 +1097,17 @@ def _normalize_step1_raw_line_for_numpy(line: str) -> str:
 
 def _parse_step1_raw_line_fast(line: str, expected_columns: int) -> np.ndarray | None:
     stripped = line.strip()
-    values = np.fromstring(stripped, sep=" ", dtype=np.float64)
-    if values.size == expected_columns and step1_raw_values_have_valid_date(values[:3]):
+    try:
+        values = np.fromstring(stripped, sep=" ", dtype=np.float64)
+    except ValueError:
+        values = None
+    if values is not None and values.size == expected_columns and step1_raw_values_have_valid_date(values[:3]):
         return values
     normalized = _normalize_step1_raw_line_for_numpy(stripped)
-    values = np.fromstring(normalized, sep=" ", dtype=np.float64)
+    try:
+        values = np.fromstring(normalized, sep=" ", dtype=np.float64)
+    except ValueError:
+        return None
     if values.size == expected_columns and step1_raw_values_have_valid_date(values[:3]):
         return values
     return None
@@ -1145,11 +1151,15 @@ def build_step1_raw_input_dataframe(
                     rejectfile.write(f"Line {i} (Wrong column count): {line.strip()}\n")
                     continue
 
-                parsed_values = np.fromstring(
-                    cleaned_line.replace(",", " "),
-                    sep=" ",
-                    dtype=np.float64,
-                )
+                try:
+                    parsed_values = np.fromstring(
+                        cleaned_line.replace(",", " "),
+                        sep=" ",
+                        dtype=np.float64,
+                    )
+                except ValueError:
+                    rejectfile.write(f"Line {i} (Malformed numeric data): {line.strip()}\n")
+                    continue
                 if parsed_values.size != expected_columns:
                     rejectfile.write(f"Line {i} (Wrong column count): {line.strip()}\n")
                     continue
