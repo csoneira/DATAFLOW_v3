@@ -2597,6 +2597,8 @@ config = resolve_step1_effective_task_config(
     filter_parameter_config_file_path=filter_parameter_config_file_path,
     log_fn=print,
 )
+config["_plot_station_id"] = station
+config["_plot_task_number"] = task_number
 file_selection_mode = str(config.get("file_selection_mode", "new")).strip().lower()
 process_only_qa_retry_files = bool(config.get("process_only_qa_retry_files", False))
 prioritize_other_than_qa_files = bool(config.get("prioritize_other_than_qa_files", True))

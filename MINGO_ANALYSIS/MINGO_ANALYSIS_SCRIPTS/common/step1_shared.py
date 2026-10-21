@@ -55,6 +55,7 @@ STEP1_TASK_OVERRIDE_KEYS: Tuple[str, ...] = (
     "file_selection_mode",
     "complete_reanalysis",
     "create_plots",
+    "periodic_plotting_interval_hours",
     "keep_all_columns_output",
     "process_only_qa_retry_files",
     "prioritize_other_than_qa_files",
@@ -1602,7 +1603,7 @@ def replicate_joined_metadata_rows(
         if not path.exists() or path.stat().st_size == 0:
             continue
         try:
-            metadata_df = pd.read_csv(path)
+            metadata_df = pd.read_csv(path, low_memory=False)
         except Exception as exc:
             if log_fn is not None:
                 log_fn(f"Warning: unable to replicate joined metadata in {path}: {exc}")
@@ -1892,6 +1893,12 @@ def resolve_step1_plot_options(
     (plot_mode, create_plots, create_essential_plots, save_plots,
      create_pdf, show_plots, create_debug_plots)
     """
+    station_id = config_obj.get("_plot_station_id")
+    task_number = config_obj.get("_plot_task_number")
+    if station_id is not None and task_number is not None:
+        apply_step1_periodic_plot_gate(
+            config_obj, station_id=str(station_id), task_number=int(task_number)
+        )
     plot_mode = _normalize_plot_mode(config_obj.get("create_plots", None))
     create_plots = plot_mode in {"usual", "all"}
     create_debug_plots = plot_mode in {"debug", "all"}
@@ -1908,6 +1915,71 @@ def resolve_step1_plot_options(
         show_plots,
         create_debug_plots,
     )
+
+
+def apply_step1_periodic_plot_gate(
+    config_obj: dict,
+    *,
+    station_id: str,
+    task_number: int,
+    log_fn: Callable[..., None] = builtins.print,
+) -> bool:
+    """Enable configured plots once per station/task interval.
+
+    A positive periodic_plotting_interval_hours uses the alias catalog through
+    the normal ``usual`` plot mode when create_plots is unset/none. Each due
+    interval is coordinated across concurrent task processes with flock.
+    """
+    if config_obj.get("_periodic_plot_gate_applied"):
+        return bool(config_obj.get("_periodic_plot_due", False))
+    raw_interval = config_obj.get("periodic_plotting_interval_hours")
+    if raw_interval in (None, "", False):
+        return False
+    try:
+        interval_hours = float(raw_interval)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("periodic_plotting_interval_hours must be a positive number or null") from exc
+    if not math.isfinite(interval_hours) or interval_hours <= 0:
+        raise ValueError("periodic_plotting_interval_hours must be a positive number or null")
+
+    explicit_mode = _normalize_plot_mode(config_obj.get("create_plots"))
+    if explicit_mode != "none":
+        # Existing explicit plotting mode continues to control the selected plots;
+        # the interval only limits how often that mode is run.
+        pass
+    else:
+        explicit_mode = "usual"
+
+    repo_root = Path.home() / "DATAFLOW_v3"
+    schedule_dir = repo_root / "OPERATIONS" / "OPERATIONS_RUNTIME" / "PLOT_SCHEDULE"
+    schedule_dir.mkdir(parents=True, exist_ok=True)
+    schedule_file = schedule_dir / f"stage1_station_{station_id}_task_{task_number}.timestamp"
+    interval_seconds = interval_hours * 3600.0
+    now = datetime.now().timestamp()
+    with schedule_file.with_suffix(".lock").open("a+") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        try:
+            try:
+                last = float(schedule_file.read_text(encoding="utf-8").strip())
+            except (OSError, ValueError):
+                last = 0.0
+            due = now - last >= interval_seconds
+            if due:
+                schedule_file.write_text(f"{now:.6f}\n", encoding="utf-8")
+        finally:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+
+    if due:
+        config_obj["create_plots"] = explicit_mode
+        log_fn(
+            f"Periodic plotting enabled for station {station_id} task {task_number} "
+            f"(interval={interval_hours:g} h, mode={explicit_mode})."
+        )
+    else:
+        config_obj["create_plots"] = "none"
+    config_obj["_periodic_plot_gate_applied"] = True
+    config_obj["_periodic_plot_due"] = due
+    return due
 
 
 STEP1_PLOT_STATUSES: Tuple[str, ...] = ("none", "debug", "usual", "essential")

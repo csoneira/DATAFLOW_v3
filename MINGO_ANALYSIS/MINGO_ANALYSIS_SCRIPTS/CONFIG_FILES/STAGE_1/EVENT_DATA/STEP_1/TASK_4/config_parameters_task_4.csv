@@ -1,4 +1,6 @@
 parameter,default,station_1,station_2,station_3,station_4,source_task
+charge_plot_limit_left,0,0,0,0,0,
+charge_plot_limit_right,110,110,110,110,110,
 T_sum_RPC_left,,,,,,task_3_filter
 T_sum_RPC_right,,,,,,task_3_filter
 det_pos_filter,200,200,200,200,200,

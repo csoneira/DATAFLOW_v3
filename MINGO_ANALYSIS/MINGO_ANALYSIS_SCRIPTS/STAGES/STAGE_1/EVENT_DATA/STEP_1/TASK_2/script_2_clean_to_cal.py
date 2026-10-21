@@ -64,7 +64,7 @@ import yaml
 from scipy.constants import c
 from scipy.interpolate import CubicSpline
 from scipy.ndimage import gaussian_filter1d
-from scipy.optimize import curve_fit
+from scipy.optimize import OptimizeWarning, curve_fit
 from scipy.signal import find_peaks
 from scipy.stats import norm, median_abs_deviation, binned_statistic_2d
 
@@ -683,7 +683,7 @@ def _joined_analysis_candidate_names(
         )
         return [selected_file_name]
 
-    tolerance = pd.Timedelta(hours=tolerance_hours)
+    tolerance = pd.to_timedelta(tolerance_hours, unit="h")
     order = os.environ.get("DATAFLOW_STEP1_SELECTION_ORDER", "latest").strip().lower()
     prefer_older = order not in {"oldest", "fifo", "first"}
     selected_names: list[str] = [selected_file_name]
@@ -1541,10 +1541,10 @@ def apply_task2_qfb_correction(
             qdif = pd.to_numeric(df[qdif_col], errors="coerce").to_numpy(dtype=float)
             corrected = qdif.copy()
             corrected[application_mask] -= polynomial(qsum[application_mask], *np.asarray(coeffs, dtype=float))
-            target_dtype = df[qdif_col].dtype
-            if pd.api.types.is_float_dtype(target_dtype):
-                corrected = np.asarray(corrected, dtype=target_dtype)
-            df.loc[:, qdif_col] = corrected
+            # Keep the calculation in float64.  The fitted correction can
+            # exceed float32's range for outlier events; narrowing here turns
+            # those values into infinities before the configured filters run.
+            df[qdif_col] = corrected
 
 def apply_task2_qtdif_correction(
     df: pd.DataFrame,
@@ -1572,10 +1572,10 @@ def apply_task2_qtdif_correction(
             qdif = pd.to_numeric(df[qdif_col], errors="coerce").to_numpy(dtype=float)
             corrected = qdif.copy()
             corrected[application_mask] -= polynomial(tdif[application_mask], *np.asarray(coeffs, dtype=float))
-            target_dtype = df[qdif_col].dtype
-            if pd.api.types.is_float_dtype(target_dtype):
-                corrected = np.asarray(corrected, dtype=target_dtype)
-            df.loc[:, qdif_col] = corrected
+            # Keep the calculation in float64.  The fitted correction can
+            # exceed float32's range for outlier events; narrowing here turns
+            # those values into infinities before the configured filters run.
+            df[qdif_col] = corrected
 
 def snapshot_nonzero_mask(df: pd.DataFrame, columns: Iterable[str]) -> tuple[list[str], np.ndarray]:
     """Capture a boolean mask of non-zero values before a zeroing operation."""
@@ -4273,14 +4273,18 @@ def _compute_derivative_pedestal_metrics(
             )
 
             try:
-                popt, _ = curve_fit(
-                    rising_exponential,
-                    x_segment,
-                    y_segment,
-                    p0=p0,
-                    bounds=bounds,
-                    maxfev=20000,
-                )
+                with warnings.catch_warnings(record=True) as fit_warnings:
+                    warnings.simplefilter("always", OptimizeWarning)
+                    popt, _ = curve_fit(
+                        rising_exponential,
+                        x_segment,
+                        y_segment,
+                        p0=p0,
+                        bounds=bounds,
+                        maxfev=20000,
+                    )
+                if any(issubclass(item.category, OptimizeWarning) for item in fit_warnings):
+                    raise RuntimeError("exponential fit covariance is indeterminate")
                 exp_fit_x = np.linspace(x_segment[0], x_segment[-1], 300)
                 exp_fit_y = rising_exponential(exp_fit_x, *popt)
                 y_min = float(np.min(exp_fit_y))
@@ -8303,6 +8307,8 @@ config = resolve_step1_effective_task_config(
     warn_if_missing_filter=True,
     log_fn=print,
 )
+config["_plot_station_id"] = station
+config["_plot_task_number"] = task_number
 calibration_subsample_config_path = (
     Path(task_config_root)
     / str(config.get("calibration_subsample_config_yaml", "config_calibration_subsample_task_2.yaml"))
@@ -9458,6 +9464,9 @@ FILTER_METRIC_NAMES: tuple[str, ...] = (
     "calibrated_t_sum_rows_affected_pct",
     "post_charge_q_sum_rows_affected_pct",
     "strip_combination_filter_rows_affected_pct",
+    "final_calibrated_strip_gate_rows_affected_pct",
+    "final_calibrated_strip_gate_strip_blocks_zeroed",
+    "final_calibrated_strip_gate_values_zeroed",
     "q_sum_all_zero_rows_removed_pct",
     "data_purity_percentage",
     "all_components_zero_rows_removed_pct",
@@ -10176,8 +10185,8 @@ if datetime_series.empty:
             param_hash=str(global_variables.get("param_hash", "")),
         )
     sys.exit(0)
-datetime_value = datetime_series.iloc[0]
-end_datetime_value = datetime_series.iloc[-1]
+datetime_value = datetime_series.min()
+end_datetime_value = datetime_series.max()
 
 start_time = datetime_value
 end_time = end_datetime_value
@@ -10784,9 +10793,22 @@ if apply_charge_side:
     # ----------------------------------------------------------------------------------
 
     if calibrate_charge_ns_to_fc and charge_test is not None:
+        home_path = str(resolve_home_path_from_config(config))
+        tot_to_charge_cal_path = (
+            f"{home_path}/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/"
+            "ANCILLARY/CALIBRATIONS_AND_LUTS/TOT_TO_CHARGE_CAL/"
+            "tot_to_charge_calibration.csv"
+        )
+        if not os.path.isfile(tot_to_charge_cal_path):
+            print(
+                "WARNING: TOT-to-charge calibration is unavailable at "
+                f"{tot_to_charge_cal_path}; skipping ns-to-fC conversion."
+            )
+            calibrate_charge_ns_to_fc = False
+
+    if calibrate_charge_ns_to_fc and charge_test is not None:
 
         # Load calibration
-        home_path = str(resolve_home_path_from_config(config))
         tot_to_charge_cal_path = f"{home_path}/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/CALIBRATIONS_AND_LUTS/TOT_TO_CHARGE_CAL/tot_to_charge_calibration.csv"
         FEE_calibration_df = pd.read_csv(tot_to_charge_cal_path)
         FEE_calibration = {
@@ -13498,6 +13520,18 @@ if task2_slewing_enabled and apply_slewing_correction_from_pair_fit:
 final_calibrated_strip_gate_summary = apply_task2_final_calibrated_strip_gate(
     working_df,
     final_calibrated_strip_gate_config,
+)
+record_activity_metric(
+    "final_calibrated_strip_gate_rows_affected_pct",
+    final_calibrated_strip_gate_summary["rows_affected"],
+    len(working_df),
+    label="rows with at least one calibrated strip block zeroed",
+)
+filter_metrics["final_calibrated_strip_gate_strip_blocks_zeroed"] = float(
+    final_calibrated_strip_gate_summary["strip_blocks_zeroed"]
+)
+filter_metrics["final_calibrated_strip_gate_values_zeroed"] = float(
+    final_calibrated_strip_gate_summary["values_zeroed"]
 )
 print(
     "[task2-final-calibrated-strip-gate] "

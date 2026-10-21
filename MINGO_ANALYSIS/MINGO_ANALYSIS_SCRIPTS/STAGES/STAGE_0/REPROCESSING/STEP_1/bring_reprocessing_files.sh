@@ -442,6 +442,7 @@ cleanup() {
   [[ -n "$compressed_list_file" ]] && rm -f "$compressed_list_file"
   [[ -n "$uncompressed_list_file" ]] && rm -f "$uncompressed_list_file"
   [[ -n "$new_downloads_file" ]] && rm -f "$new_downloads_file"
+  return 0
 }
 trap cleanup EXIT
 

@@ -61,8 +61,7 @@ fi
 
 station=$1
 
-# Ensure snap-installed utilities such as yq are available even under cron
-export PATH="/snap/bin:$PATH"
+# setup.sh supplies pinned kislyuk/yq in .venv; do not shadow it with snap yq.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MASTER_DIR="$SCRIPT_DIR"
@@ -531,7 +530,7 @@ OUTPUT_FILE="$config_file_directory/input_file_mingo0${station}.csv"
 # Download the file using wget with minimal console output (write to a temp file then move atomically)
 echo "Downloading logbook for Station $station..."
 TMP_DL_FILE="$(mktemp "${OUTPUT_FILE}.tmp.XXXXXXXX")"
-if wget -q --show-progress --no-check-certificate \
+if wget -q --show-progress \
      "https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&id=${SHEET_ID}&gid=${GID}" \
      -O "${TMP_DL_FILE}"; then
     mv "${TMP_DL_FILE}" "${OUTPUT_FILE}"

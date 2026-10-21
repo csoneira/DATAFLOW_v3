@@ -130,6 +130,7 @@ from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.step1_shared import (
     add_topology_task2_strip,
     add_topology_task3_plane,
     add_trigger_type_total_offender_threshold_metadata,
+    apply_step1_periodic_plot_gate,
     build_events_per_second_metadata,
     build_step1_cli_parser,
     build_step1_filtered_print,
@@ -225,6 +226,12 @@ def normalize_task3_plot_catalog_status(raw_value: object) -> str:
     return status
 
 def resolve_task3_plot_options(config_obj: Dict[str, object]) -> tuple[str, bool, bool, bool, bool, bool, bool]:
+    station_id = config_obj.get("_plot_station_id")
+    task_id = config_obj.get("_plot_task_number")
+    if station_id is not None and task_id is not None:
+        apply_step1_periodic_plot_gate(
+            config_obj, station_id=str(station_id), task_number=int(task_id), log_fn=print
+        )
     plot_mode = normalize_task3_plot_mode(config_obj.get("create_plots", None))
     create_plots = plot_mode in {"usual", "all"}
     create_debug_plots = plot_mode in {"debug", "all"}
@@ -3003,6 +3010,8 @@ config = resolve_step1_effective_task_config(
     filter_parameter_config_file_path=filter_parameter_config_file_path,
     log_fn=print,
 )
+config["_plot_station_id"] = station
+config["_plot_task_number"] = task_number
 file_selection_mode = str(config.get("file_selection_mode", "new")).strip().lower()
 process_only_qa_retry_files = bool(config.get("process_only_qa_retry_files", False))
 joined_analysis_files = coerce_positive_int_config(config.get("joined_analysis_files"), default=1)

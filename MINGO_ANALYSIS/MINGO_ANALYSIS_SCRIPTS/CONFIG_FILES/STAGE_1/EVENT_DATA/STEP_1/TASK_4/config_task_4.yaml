@@ -11,6 +11,9 @@ complete_reanalysis: false
 # create_plots options: null | debug | usual | essential | all
 # Task 4 plot alias statuses live in config_plots_task_4.yaml
 create_plots: null
+# Task 4 filter values are supplied by config_parameters_task_4.csv and its
+# task_3_filter references; this task has no separate filter overlay CSV.
+use_filter_parameter_config: false
 keep_all_columns_output: true
 joined_analysis_files: 3
 joined_analysis_time_tolerance_hours: 5

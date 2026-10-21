@@ -798,12 +798,13 @@ configuration.alarms(4) = alarm;
 alarm = initAlarm(); alarm.system = SYSTEMNAME;alarm.active        = 0; alarm.type          = 'Online Monitoring'; alarm.TO     = {'rpc.slow.control@gmail.com';'csoneira.alarms@gmail.com'};
 configuration.alarms(5) = alarm; 
 
-DB.active               =                           1;
+% Legacy database publishing is opt-in; the analysis unpacker does not use it.
+DB.active = 0; % Legacy DB publishing needs a new credential and secure transport design.
 
 DB.connection.remoteIP  =                 'localhost';
 DB.connection.port      =                     '15432';
 DB.connection.user      =                   'mingo01';
-DB.connection.pass      =               'mingo01@lip';
+DB.connection.pass = ''; % No password in public source or shell command arguments.
 DB.connection.key       = '/home/alberto/.ssh/id_rsa';
 
 DB.tmpFolder            = ['/tmp/'];                                                                                     %mkdirOS([DB.tmpFolder],OS,1);

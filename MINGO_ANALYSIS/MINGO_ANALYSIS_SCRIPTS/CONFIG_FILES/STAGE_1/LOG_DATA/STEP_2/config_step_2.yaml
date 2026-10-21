@@ -6,7 +6,7 @@ selection:
 
 backup_restore:
   enabled: true
-  local_log_backup_root: /home/mingo/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/REMOTE_LOG_BACKUP
+  local_log_backup_root: ~/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/REMOTE_LOG_BACKUP
   ssh_host: ana
   station_dump_paths:
     1: /home/rpcuser/db_backups/mingo01/mingo01.tar

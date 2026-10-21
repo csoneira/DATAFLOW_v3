@@ -340,6 +340,8 @@ config = resolve_step1_effective_task_config(
     use_filter_parameter_config=False,
     log_fn=print,
 )
+config["_plot_station_id"] = station
+config["_plot_task_number"] = task_number
 task0_plot_status_by_alias = load_step1_task_plot_catalog(
     plot_catalog_file_path,
     TASK0_PLOT_ALIASES,

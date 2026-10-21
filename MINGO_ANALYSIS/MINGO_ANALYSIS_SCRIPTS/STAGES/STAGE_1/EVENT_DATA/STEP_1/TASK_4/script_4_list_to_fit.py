@@ -2651,9 +2651,9 @@ def _intersect_required_indices(*indices):
 
 def _required_track_efficiency_hit_columns():
     return tuple(
-        f"P{plane}_{suffix}"
+        f"p{plane}_{suffix}"
         for plane in range(1, 5)
-        for suffix in ("T_dif_final", "Y_final")
+        for suffix in ("tdif", "ypos")
     )
 
 def _extract_track_efficiency_hit_arrays(df_plot, tdiff_to_x):
@@ -4889,6 +4889,8 @@ config = resolve_step1_effective_task_config(
     warn_if_missing_filter=True,
     log_fn=print,
 )
+config["_plot_station_id"] = station
+config["_plot_task_number"] = task_number
 file_selection_mode = str(config.get("file_selection_mode", "new")).strip().lower()
 process_only_qa_retry_files = bool(config.get("process_only_qa_retry_files", False))
 joined_analysis_files = coerce_positive_int_config(config.get("joined_analysis_files"), default=1)
@@ -8297,7 +8299,10 @@ if bool(efficiency_metadata_payload.get("available", False)) and task4_plot_tt_c
         tt_task4_fit_1234_index=_tt_task4_fit_1234_index,
     )
 
-if (create_essential_plots or create_plots) and task4_plot_enabled("tim_th_chi_sigmafit_1234_histogram"):
+if (
+    (create_essential_plots or create_plots)
+    and task4_plot_enabled("tim_th_chi_sigmafit_1234_histogram")
+):
     fig_idx = render_task4_chi2_four_plane_histogram(
         working_df=working_df,
         base_cond=base_cond,

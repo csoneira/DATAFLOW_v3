@@ -1346,6 +1346,8 @@ config = resolve_step1_effective_task_config(
     plot_parameter_config_file_path=plot_parameter_config_file_path,
     log_fn=print,
 )
+config["_plot_station_id"] = station
+config["_plot_task_number"] = task_number
 task5_gate_config_path = Path(config_file_path).with_name(
     str(config.get("gate_config_yaml", TASK5_GATE_CONFIG_DEFAULT_NAME))
 )

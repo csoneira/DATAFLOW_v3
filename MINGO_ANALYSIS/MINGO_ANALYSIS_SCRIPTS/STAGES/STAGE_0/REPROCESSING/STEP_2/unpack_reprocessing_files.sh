@@ -908,7 +908,7 @@ process_single_hld() {
             echo "All HLD files in the queue belonged to other stations and were reassigned."
         fi
         echo "No HLD files available in UNPROCESSED or PROCESSING."
-        return 1
+        return 3  # Queue exhausted, not an unpacking failure.
     fi
 
     local selected_file
@@ -1126,20 +1126,14 @@ process_single_hld() {
     return 0
 }
 
-if $loop_mode; then
-    iteration=0
-    while true; do
-        if process_single_hld; then
-            ((iteration++))
-            continue
-        fi
-        if (( iteration == 0 )); then
-            exit 1
-        fi
-        break
-    done
-else
-    if ! process_single_hld; then
-        exit 1
+while true; do
+    if process_single_hld; then
+        $loop_mode || break
+    else
+        result=$?
+        # An empty queue completes normally, including before the first file.
+        [[ $result -eq 3 ]] && break
+        exit "$result"
     fi
-fi
+done
+exit 0

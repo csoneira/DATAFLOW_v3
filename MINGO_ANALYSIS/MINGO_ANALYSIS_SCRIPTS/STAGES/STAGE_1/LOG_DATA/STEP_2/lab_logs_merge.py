@@ -1012,6 +1012,8 @@ def main() -> int:
     candidate_files = sorted(
         path for path in unprocessed_root.glob("**/*") if path.is_file()
     )
+    if args.dry_run:
+        candidate_files = sorted(set(candidate_files).union(planned_moves))
 
     if args.all and completed_root.exists():
         candidate_files.extend(

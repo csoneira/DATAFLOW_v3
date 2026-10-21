@@ -1,0 +1,11 @@
+parameter,default,station_1,station_2,station_3,station_4,source_task
+T_side_left_pre_cal_default,-200,-128,-135,-160,-135,
+T_side_right_pre_cal_default,-100,-105,-100,-130,-100,
+Q_side_left_pre_cal_default,80,80,80,75,80,
+Q_side_right_pre_cal_default,600,150,600,600,600,
+channel_combination_q_sum_left,70,85,70,70,70,
+channel_combination_q_sum_right,650,150,500,500,500,
+channel_combination_q_dif_threshold,325,40,250,250,250,
+channel_combination_t_sum_left,-140,-125,-140,-140,-140,
+channel_combination_t_sum_right,-100,-100,-100,-100,-100,
+channel_combination_t_dif_threshold,7,4,5,5,5,
