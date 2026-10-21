@@ -9198,7 +9198,7 @@ if "tt_task3_list" in working_df.columns and task3_any_plot_enabled(
                     threshold_to_idx[float(thr)] = idx
 
                 for i_row, q_col in enumerate(q_cols):
-                    plane = int(q_col.split("_")[0].replace("P", ""))
+                    plane = int(q_col.split("_", 1)[0][1:])
                     color = plane_colors.get(plane, "black")
                     for j_col, thr in enumerate(scan_thresholds):
                         ax = axes[i_row, j_col]
@@ -9568,7 +9568,7 @@ if "tt_task3_list" in working_df.columns and task3_any_plot_enabled(
             q_sum_cols_asym = [f"p{p}_qsum" for p in range(1, 5) if f"p{p}_qsum" in working_df.columns]
             q_dif_cols_asym = [f"p{p}_qdif" for p in range(1, 5) if f"p{p}_qdif" in working_df.columns]
             paired_planes = [
-                (int(qs.split("_")[0].replace("P", "")), qs, qd)
+                (int(qs.split("_", 1)[0][1:]), qs, qd)
                 for qs, qd in zip(q_sum_cols_asym, q_dif_cols_asym)
             ]
             if paired_planes:
