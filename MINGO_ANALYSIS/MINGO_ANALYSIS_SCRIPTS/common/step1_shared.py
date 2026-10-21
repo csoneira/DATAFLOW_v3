@@ -1950,7 +1950,7 @@ def apply_step1_periodic_plot_gate(
     else:
         explicit_mode = "usual"
 
-    repo_root = Path.home() / "DATAFLOW_v3"
+    repo_root = get_repo_root()
     schedule_dir = repo_root / "OPERATIONS" / "OPERATIONS_RUNTIME" / "PLOT_SCHEDULE"
     schedule_dir.mkdir(parents=True, exist_ok=True)
     schedule_file = schedule_dir / f"stage1_station_{station_id}_task_{task_number}.timestamp"

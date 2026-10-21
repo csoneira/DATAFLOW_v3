@@ -10,16 +10,16 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-
-DEFAULT_INPUT = Path(
-    "/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/"
-    "step_final_simulation_params.csv"
+REPO_ROOT = next(
+    (parent for parent in Path(__file__).resolve().parents if (parent / "CONFIG" / "config_paths.yaml").is_file()),
+    None,
 )
+if REPO_ROOT is None:
+    raise RuntimeError(f"Could not locate repository root from {__file__}")
 
-OUTPUT_DIR = Path(
-    "/home/mingo/DATAFLOW_v3/MINGO_DICTIONARY_CREATION_AND_TEST/"
-    "ONLY_LUT/PLOTS"
-)
+DEFAULT_INPUT = REPO_ROOT / "MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/step_final_simulation_params.csv"
+
+OUTPUT_DIR = REPO_ROOT / "MINGO_DICTIONARY_CREATION_AND_TEST/ONLY_LUT/PLOTS"
 
 OUTPUT_PNG = OUTPUT_DIR / "trigger_rate_over_flux_vs_mean_efficiency.png"
 

@@ -42,8 +42,7 @@ For example:
     13   -> e1 * (1-e2)   * e3       * (1-e4)
 
 Output:
-    /home/mingo/DATAFLOW_v3/MINGO_DICTIONARY_CREATION_AND_TEST/
-    ONLY_LUT_FOUR_THREE_TWO_TOTAL/PLOTS/
+    MINGO_DICTIONARY_CREATION_AND_TEST/ONLY_LUT_FOUR_THREE_TWO_TOTAL/PLOTS/
     aggregate_trigger_rate_over_flux_vs_mean_efficiency.png
 """
 
@@ -60,21 +59,17 @@ import numpy as np
 import pandas as pd
 
 
-DEFAULT_RATE_INPUT = Path(
-    "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/"
-    "MINGO00/STAGE_1/EVENT_DATA/STEP_1/TASK_0/METADATA/"
-    "task_0_metadata_trigger_type.csv"
+REPO_ROOT = next(
+    (parent for parent in Path(__file__).resolve().parents if (parent / "CONFIG" / "config_paths.yaml").is_file()),
+    None,
 )
+if REPO_ROOT is None:
+    raise RuntimeError(f"Could not locate repository root from {__file__}")
+DEFAULT_RATE_INPUT = REPO_ROOT / "MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/TASK_0/METADATA/task_0_metadata_trigger_type.csv"
 
-DEFAULT_SIMULATION_INPUT = Path(
-    "/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/"
-    "step_final_simulation_params.csv"
-)
+DEFAULT_SIMULATION_INPUT = REPO_ROOT / "MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/step_final_simulation_params.csv"
 
-OUTPUT_DIR = Path(
-    "/home/mingo/DATAFLOW_v3/MINGO_DICTIONARY_CREATION_AND_TEST/"
-    "ONLY_LUT_FOUR_THREE_TWO_TOTAL/PLOTS"
-)
+OUTPUT_DIR = REPO_ROOT / "MINGO_DICTIONARY_CREATION_AND_TEST/ONLY_LUT_FOUR_THREE_TWO_TOTAL/PLOTS"
 
 OUTPUT_PNG = OUTPUT_DIR / "aggregate_trigger_rate_over_flux_vs_mean_efficiency.png"
 

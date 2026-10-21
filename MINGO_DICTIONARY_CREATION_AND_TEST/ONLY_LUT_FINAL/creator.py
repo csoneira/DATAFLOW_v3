@@ -83,21 +83,17 @@ import pandas as pd
 QUANTILES_TO_USE = [0, 1, 2, 3]
 
 
-DEFAULT_GATE_INPUT = Path(
-    "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/"
-    "MINGO00/STAGE_1/EVENT_DATA/STEP_1/TASK_0/METADATA/"
-    "task_0_metadata_gate_test.csv"
+REPO_ROOT = next(
+    (parent for parent in Path(__file__).resolve().parents if (parent / "CONFIG" / "config_paths.yaml").is_file()),
+    None,
 )
+if REPO_ROOT is None:
+    raise RuntimeError(f"Could not locate repository root from {__file__}")
+DEFAULT_GATE_INPUT = REPO_ROOT / "MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/TASK_0/METADATA/task_0_metadata_gate_test.csv"
 
-DEFAULT_SIMULATION_INPUT = Path(
-    "/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/"
-    "step_final_simulation_params.csv"
-)
+DEFAULT_SIMULATION_INPUT = REPO_ROOT / "MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/step_final_simulation_params.csv"
 
-OUTPUT_DIR = Path(
-    "/home/mingo/DATAFLOW_v3/MINGO_DICTIONARY_CREATION_AND_TEST/"
-    "ONLY_LUT_FINAL/PLOTS"
-)
+OUTPUT_DIR = REPO_ROOT / "MINGO_DICTIONARY_CREATION_AND_TEST/ONLY_LUT_FINAL/PLOTS"
 
 OUTPUT_PNG_RATE = OUTPUT_DIR / "poster_lut_gate_q00_rate_vs_mean_efficiency.png"
 OUTPUT_PNG_LUT = OUTPUT_DIR / "poster_lut_gate_effective_area_and_correction.png"

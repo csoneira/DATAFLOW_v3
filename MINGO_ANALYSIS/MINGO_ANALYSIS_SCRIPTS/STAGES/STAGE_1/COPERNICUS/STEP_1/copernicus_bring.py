@@ -41,6 +41,7 @@ if str(REPO_ROOT) not in sys.path:
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.execution_logger import set_station, start_timer
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.path_config import (
     get_master_config_root,
+    get_repo_root,
     resolve_home_path_from_config,
 )
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.selection_config import (
@@ -332,8 +333,7 @@ def main() -> int:
     latitude = locations[station]["latitude"]
     longitude = locations[station]["longitude"]
 
-    home_path = resolve_home_path_from_config(config)
-    station_dir = home_path / "DATAFLOW_v3" / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / f"MINGO0{station}"
+    station_dir = get_repo_root() / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / f"MINGO0{station}"
     copernicus_root = station_dir / "STAGE_1" / "COPERNICUS"
     step1_root = copernicus_root / "STEP_1"
     input_root = step1_root / "INPUT_FILES"

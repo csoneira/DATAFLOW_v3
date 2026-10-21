@@ -1,4 +1,20 @@
 #!/usr/bin/env bash
+
+# Resolve the checkout from this script's location when the caller did not provide it.
+if [[ -z "${DATAFLOW_ROOT:-}" ]]; then
+  _repo_probe="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+  while [[ "$_repo_probe" != "/" && ! -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; do
+    _repo_probe="$(dirname -- "$_repo_probe")"
+  done
+  if [[ -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh"
+  else
+    echo "Could not locate repository root from ${BASH_SOURCE[0]}" >&2
+    exit 2
+  fi
+fi
+unset _repo_probe
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
 # Script: OPERATIONS/OPERATIONS_SCRIPTS/NOTIFICATIONS/TELEGRAM_BOT/kill_bot_and_restart.sh
@@ -20,9 +36,9 @@ set -euo pipefail
 
 # ----- CONFIGURE BELOW -----
 SERVICE_NAME=""                          # e.g. my-telegram-bot.service (leave empty if not using systemd)
-BOT_CMD="/bin/bash $HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/NOTIFICATIONS/TELEGRAM_BOT/persistent_telegram_bot_check.sh"   # full command to start the bot (used when SERVICE_NAME is empty)
+BOT_CMD="/bin/bash ${DATAFLOW_ROOT}/OPERATIONS/OPERATIONS_SCRIPTS/NOTIFICATIONS/TELEGRAM_BOT/persistent_telegram_bot_check.sh"   # full command to start the bot (used when SERVICE_NAME is empty)
 BOT_NAME="mingo_analysis_bot.py"                # pattern used to find running bot with pgrep -f (fallback if BOT_CMD is not unique)
-LOG_FILE="$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/NOHUP_LOGS/kill_bot_nohup.log"      # where nohup will append logs
+LOG_FILE="${DATAFLOW_ROOT}/OPERATIONS/OPERATIONS_RUNTIME/NOHUP_LOGS/kill_bot_nohup.log"      # where nohup will append logs
 WAIT_SEC=1                               # seconds to wait for graceful shutdown
 # ----------------------------
 

@@ -2569,7 +2569,7 @@ debug_mode = False
 home_path = str(resolve_home_path_from_config(config))
 
 # ~/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/QUALITY_ASSURANCE
-REFERENCE_TABLES_DIR = Path(home_path) / "DATAFLOW_v3" / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS" / "ANCILLARY" / "QUALITY_ASSURANCE" / "REFERENCE_TABLES"
+REFERENCE_TABLES_DIR = get_repo_root() / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS" / "ANCILLARY" / "QUALITY_ASSURANCE" / "REFERENCE_TABLES"
 
 # -----------------------------------------------------------------------------
 

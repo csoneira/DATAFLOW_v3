@@ -16,6 +16,7 @@ Notes: Keep behavior configuration-driven and reproducible.
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -216,7 +217,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--param-mesh",
-        default="~/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv",
+        default=str(next(parent for parent in Path(__file__).resolve().parents if (parent / "CONFIG" / "config_paths.yaml").is_file()) / "MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv"),
         help="Path to param_mesh.csv",
     )
     parser.add_argument(

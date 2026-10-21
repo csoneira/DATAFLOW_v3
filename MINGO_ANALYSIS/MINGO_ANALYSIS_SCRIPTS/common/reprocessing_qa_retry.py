@@ -29,6 +29,7 @@ import pandas as pd
 import yaml
 
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.selection_config import parse_station_id
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.path_config import get_repo_root
 
 
 MANIFEST_COLUMNS = [
@@ -354,7 +355,7 @@ def build_retry_manifest(
         raise ValueError("qa_retry.enabled is true but qa_retry.source_csv is empty.")
     source_csv = Path(source_csv_raw).expanduser()
     if not source_csv.is_absolute():
-        source_csv = Path.home() / source_csv
+        source_csv = get_repo_root() / source_csv
     if not source_csv.exists():
         raise FileNotFoundError(f"QA retry source CSV not found: {source_csv}")
 

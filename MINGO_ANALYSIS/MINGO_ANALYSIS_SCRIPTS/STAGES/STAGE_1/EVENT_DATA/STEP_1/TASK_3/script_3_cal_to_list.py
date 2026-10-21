@@ -3067,7 +3067,7 @@ status_execution_date = initialize_status_row(
     completion_fraction=0.0,
 )
 home_path = str(resolve_home_path_from_config(config))
-REFERENCE_TABLES_DIR = Path(home_path) / "DATAFLOW_v3" / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS" / "CONFIG_FILES" / "METADATA_REPRISE" / "REFERENCE_TABLES"
+REFERENCE_TABLES_DIR = get_repo_root() / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS" / "CONFIG_FILES" / "METADATA_REPRISE" / "REFERENCE_TABLES"
 # Round execution time to seconds and format it in YYYY-MM-DD_HH.MM.SS
 execution_time = str(start_execution_time_counting).split('.')[0]  # Remove microseconds
 print("Execution time is:", execution_time)

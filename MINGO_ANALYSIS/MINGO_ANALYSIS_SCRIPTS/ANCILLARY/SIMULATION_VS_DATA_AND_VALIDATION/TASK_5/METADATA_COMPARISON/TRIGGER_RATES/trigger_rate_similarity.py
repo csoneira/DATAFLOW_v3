@@ -20,9 +20,15 @@ from matplotlib.lines import Line2D
 
 
 THIS_DIR = Path(__file__).resolve().parent
+REPO_ROOT = next(
+    (parent for parent in Path(__file__).resolve().parents if (parent / "CONFIG" / "config_paths.yaml").is_file()),
+    None,
+)
+if REPO_ROOT is None:
+    raise RuntimeError(f"Could not locate repository root from {__file__}")
 DEFAULT_CONFIG_PATH = THIS_DIR / "trigger_rate_similarity_config.json"
-BASE = Path("/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS")
-DEFAULT_SIMULATED_DATA_ROOT = Path("/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA")
+BASE = REPO_ROOT / "MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS"
+DEFAULT_SIMULATED_DATA_ROOT = REPO_ROOT / "MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA"
 
 EFF_COLS = [
     "eff1_robust_xyphi",

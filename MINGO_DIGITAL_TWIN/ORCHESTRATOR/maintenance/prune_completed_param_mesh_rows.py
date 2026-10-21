@@ -21,7 +21,12 @@ from pathlib import Path
 
 import pandas as pd
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
+ROOT_DIR = next(
+    (parent for parent in Path(__file__).resolve().parents if (parent / "CONFIG" / "config_paths.yaml").is_file()),
+    None,
+)
+if ROOT_DIR is None:
+    raise RuntimeError(f"Could not locate repository root from {__file__}")
 sys.path.append(str(ROOT_DIR))
 sys.path.append(str(ROOT_DIR / "MASTER_STEPS"))
 
@@ -63,7 +68,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--param-mesh",
-        default="~/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv",
+        default=str(ROOT_DIR / "MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv"),
         help="Path to param_mesh.csv",
     )
     parser.add_argument(

@@ -8,10 +8,10 @@ on event_id, and writes angular reconstruction diagnostics under PLOTS next to
 this script.
 
 Intended installed path:
-    /home/mingo/DATAFLOW_v3/MINGO_SIMULATION_VS_SIMULATION/compare_sidecar_with_simulated_data.py
+    MINGO_SIMULATION_VS_SIMULATION/compare_sidecar_with_simulated_data.py
 
 Default output path:
-    /home/mingo/DATAFLOW_v3/MINGO_SIMULATION_VS_SIMULATION/PLOTS
+    MINGO_SIMULATION_VS_SIMULATION/PLOTS
 """
 
 from __future__ import annotations
@@ -42,23 +42,17 @@ from matplotlib.colors import Normalize
 from matplotlib.patches import Rectangle
 
 
-DEFAULT_STEP12_DIR = Path(
-    "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/"
-    "MINGO00/STAGE_1_PRODUCTS/EVENT_DATA/PARQUET_LAKE"
-)
-DEFAULT_SIDECAR_DIR = Path(
-    "/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/"
-    "SIMULATED_DATA/FILES_SIDECARS"
-)
-DEFAULT_SIM_PARAMS_CSV = Path(
-    "/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/"
-    "SIMULATED_DATA/step_final_simulation_params.csv"
-)
-DEFAULT_STEP2_REGION_CONFIG = Path(
-    "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/"
-    "CONFIG_FILES/STAGE_2/EVENT_DATA/STEP_1_ACCUMULATION/config_step_1_accumulation.yaml"
-)
 SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = next(
+    (parent for parent in Path(__file__).resolve().parents if (parent / "CONFIG" / "config_paths.yaml").is_file()),
+    None,
+)
+if REPO_ROOT is None:
+    raise RuntimeError(f"Could not locate repository root from {__file__}")
+DEFAULT_STEP12_DIR = REPO_ROOT / "MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1_PRODUCTS/EVENT_DATA/PARQUET_LAKE"
+DEFAULT_SIDECAR_DIR = REPO_ROOT / "MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/FILES_SIDECARS"
+DEFAULT_SIM_PARAMS_CSV = REPO_ROOT / "MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/step_final_simulation_params.csv"
+DEFAULT_STEP2_REGION_CONFIG = REPO_ROOT / "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_2/EVENT_DATA/STEP_1_ACCUMULATION/config_step_1_accumulation.yaml"
 DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "PLOTS"
 
 PIPELINE_PREFIXES = (

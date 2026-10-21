@@ -1,4 +1,20 @@
 #!/bin/bash
+
+# Resolve the checkout from this script's location when the caller did not provide it.
+if [[ -z "${DATAFLOW_ROOT:-}" ]]; then
+  _repo_probe="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+  while [[ "$_repo_probe" != "/" && ! -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; do
+    _repo_probe="$(dirname -- "$_repo_probe")"
+  done
+  if [[ -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh"
+  else
+    echo "Could not locate repository root from ${BASH_SOURCE[0]}" >&2
+    exit 2
+  fi
+fi
+unset _repo_probe
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
 # Script: MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_0/NEW_FILES/bring_data_and_config_files.sh
@@ -78,7 +94,7 @@ if [[ ! "$station" =~ ^[1-4]$ ]]; then
   exit 1
 fi
 
-NEW_FILES_CONFIG_FILE="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_0/NEW_FILES/config_new_files.yaml"
+NEW_FILES_CONFIG_FILE="${DATAFLOW_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_0/NEW_FILES/config_new_files.yaml"
 
 is_new_files_station_enabled() {
   local station_id="$1"
@@ -89,6 +105,7 @@ is_new_files_station_enabled() {
   decision=$(python3 - "$cfg_path" "$station_id" <<'PY' || true
 import sys
 from pathlib import Path
+import os
 
 cfg_path, station_raw = sys.argv[1:3]
 
@@ -98,7 +115,7 @@ except Exception:
   print("1")
   raise SystemExit(0)
 
-repo_root = Path.home() / "DATAFLOW_v3"
+repo_root = Path(os.environ["DATAFLOW_ROOT"])
 if str(repo_root) not in sys.path:
   sys.path.append(str(repo_root))
 
@@ -154,10 +171,11 @@ load_new_files_date_ranges() {
 import sys
 import shlex
 from pathlib import Path
+import os
 
 cfg_path = sys.argv[1]
 station_raw = sys.argv[2]
-repo_root = Path.home() / "DATAFLOW_v3"
+repo_root = Path(os.environ["DATAFLOW_ROOT"])
 if str(repo_root) not in sys.path:
     sys.path.append(str(repo_root))
 
@@ -283,7 +301,7 @@ load_new_files_date_ranges
 # Prevent concurrent runs for the same station. File-descriptor locking avoids confusing the
 # cron wrapper (whose command line contains this script path) with another transfer process.
 # --------------------------------------------------------------------------------------------
-new_files_lock_dir="${DATAFLOW_RUNTIME_ROOT:-$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME}/LOCKS/cron"
+new_files_lock_dir="${DATAFLOW_RUNTIME_ROOT:-${DATAFLOW_ROOT}/OPERATIONS/OPERATIONS_RUNTIME}/LOCKS/cron"
 mkdir -p "$new_files_lock_dir"
 new_files_lock_file="$new_files_lock_dir/bring_data_and_config_files_mingo0${station}.lock"
 exec 8>"$new_files_lock_file"
@@ -308,8 +326,8 @@ mingo_direction="mingo0$station"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15)
 RSYNC_RSH_CMD="ssh -o BatchMode=yes -o ConnectTimeout=15"
 
-station_directory="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0$station"
-config_file_directory="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_0/ONLINE_RUN_DICTIONARY/STATION_$station"
+station_directory="${DATAFLOW_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0$station"
+config_file_directory="${DATAFLOW_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_0/ONLINE_RUN_DICTIONARY/STATION_$station"
 stage0_directory="$station_directory/STAGE_0/NEW_FILES"
 stage0_to_1_directory="$station_directory/STAGE_0_TO_1"
 metadata_directory="$stage0_directory/METADATA"

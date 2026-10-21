@@ -1,4 +1,20 @@
 #!/bin/bash
+
+# Resolve the checkout from this script's location when the caller did not provide it.
+if [[ -z "${DATAFLOW_ROOT:-}" ]]; then
+  _repo_probe="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+  while [[ "$_repo_probe" != "/" && ! -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; do
+    _repo_probe="$(dirname -- "$_repo_probe")"
+  done
+  if [[ -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh"
+  else
+    echo "Could not locate repository root from ${BASH_SOURCE[0]}" >&2
+    exit 2
+  fi
+fi
+unset _repo_probe
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
 # Script: MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/LOG_DATA/STEP_1/lab_logs_bring_and_clean.sh
@@ -102,9 +118,9 @@ done
 # STATUS_TIMESTAMP=""
 # STATUS_CSV=""
 
-LAB_LOGS_CONFIG_SHARED="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/LOG_DATA/config_lab_logs.yaml"
-LAB_LOGS_CONFIG_STEP1="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/LOG_DATA/STEP_1/config_step_1.yaml"
-LAB_LOGS_COLUMN_COUNTS_CSV="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/LOG_DATA/STEP_1/config_step_1.csv"
+LAB_LOGS_CONFIG_SHARED="${DATAFLOW_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/LOG_DATA/config_lab_logs.yaml"
+LAB_LOGS_CONFIG_STEP1="${DATAFLOW_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/LOG_DATA/STEP_1/config_step_1.yaml"
+LAB_LOGS_COLUMN_COUNTS_CSV="${DATAFLOW_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/LOG_DATA/STEP_1/config_step_1.csv"
 
 is_lab_logs_station_enabled() {
   local station_id="$1"
@@ -112,6 +128,7 @@ is_lab_logs_station_enabled() {
   decision=$(python3 - "$station_id" "$LAB_LOGS_CONFIG_SHARED" "$LAB_LOGS_CONFIG_STEP1" <<'PY' || true
 import sys
 from pathlib import Path
+import os
 
 station_raw, shared_cfg, step_cfg = sys.argv[1:4]
 
@@ -121,7 +138,7 @@ except Exception:
     print("1")
     raise SystemExit(0)
 
-repo_root = Path.home() / "DATAFLOW_v3"
+repo_root = Path(os.environ["DATAFLOW_ROOT"])
 if str(repo_root) not in sys.path:
     sys.path.append(str(repo_root))
 
@@ -155,12 +172,13 @@ load_lab_logs_date_ranges() {
 import sys
 import shlex
 from pathlib import Path
+import os
 
 shared_path = sys.argv[1]
 step_path = sys.argv[2]
 station_raw = sys.argv[3]
 
-repo_root = Path.home() / "DATAFLOW_v3"
+repo_root = Path(os.environ["DATAFLOW_ROOT"])
 if str(repo_root) not in sys.path:
     sys.path.append(str(repo_root))
 
@@ -306,7 +324,7 @@ mingo_direction="mingo0$station"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15)
 RSYNC_RSH_CMD="ssh -o BatchMode=yes -o ConnectTimeout=15"
 
-LAB_LOGS_ROOT="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0${station}/STAGE_1/LOG_DATA"
+LAB_LOGS_ROOT="${DATAFLOW_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0${station}/STAGE_1/LOG_DATA"
 STEP1_ROOT="${LAB_LOGS_ROOT}/STEP_1"
 STEP1_INPUT="${STEP1_ROOT}/INPUT_FILES"
 STEP1_INPUT_UNPROCESSED="${STEP1_INPUT}/UNPROCESSED"

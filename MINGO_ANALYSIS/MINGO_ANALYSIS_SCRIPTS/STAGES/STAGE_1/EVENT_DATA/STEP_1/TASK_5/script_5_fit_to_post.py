@@ -1325,7 +1325,7 @@ task5_plot_status_by_alias = load_step1_task_plot_catalog(
 debug_mode = False
 
 home_path = str(resolve_home_path_from_config(config))
-REFERENCE_TABLES_DIR = Path(home_path) / "DATAFLOW_v3" / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS" / "CONFIG_FILES" / "METADATA_REPRISE" / "REFERENCE_TABLES"
+REFERENCE_TABLES_DIR = get_repo_root() / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS" / "CONFIG_FILES" / "METADATA_REPRISE" / "REFERENCE_TABLES"
 
 # -----------------------------------------------------------------------------
 # Stuff that could change between mingos --------------------------------------

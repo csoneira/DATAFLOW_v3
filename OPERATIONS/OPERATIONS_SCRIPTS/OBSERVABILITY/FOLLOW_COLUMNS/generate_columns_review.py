@@ -10,7 +10,12 @@ import sys
 import pandas as pd
 import pyarrow.parquet as pq
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
+REPO_ROOT = next(
+    (parent for parent in Path(__file__).resolve().parents if (parent / "CONFIG" / "config_paths.yaml").is_file()),
+    None,
+)
+if REPO_ROOT is None:
+    raise RuntimeError(f"Could not locate repository root from {__file__}")
 if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
@@ -43,8 +48,7 @@ SECTIONS = [
     Section(
         title="TASK_0 -> TASK_1",
         display_pattern=(
-            "~/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
-            "TASK_1/INPUT_FILES/COMPLETED_DIRECTORY/raw_*.parquet"
+            "MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/TASK_1/INPUT_FILES/COMPLETED_DIRECTORY/raw_*.parquet"
         ),
         glob_pattern=(
             f"{REPO_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
@@ -55,8 +59,7 @@ SECTIONS = [
     Section(
         title="TASK_0 -> SELFTRIGGER",
         display_pattern=(
-            "~/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
-            "TASK_0/OUTPUT_FILES/selftrigger_raw_*.parquet"
+            "MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/TASK_0/OUTPUT_FILES/selftrigger_raw_*.parquet"
         ),
         glob_pattern=(
             f"{REPO_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
@@ -66,8 +69,7 @@ SECTIONS = [
     Section(
         title="TASK_1 -> TASK_2",
         display_pattern=(
-            "~/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
-            "TASK_2/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
+            "MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/TASK_2/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
         ),
         glob_pattern=(
             f"{REPO_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
@@ -77,8 +79,7 @@ SECTIONS = [
     Section(
         title="TASK_2 -> TASK_3",
         display_pattern=(
-            "~/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
-            "TASK_3/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
+            "MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/TASK_3/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
         ),
         glob_pattern=(
             f"{REPO_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
@@ -88,8 +89,7 @@ SECTIONS = [
     Section(
         title="TASK_3 -> TASK_4",
         display_pattern=(
-            "~/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
-            "TASK_4/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
+            "MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/TASK_4/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
         ),
         glob_pattern=(
             f"{REPO_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
@@ -99,8 +99,7 @@ SECTIONS = [
     Section(
         title="TASK_4 -> TASK_5",
         display_pattern=(
-            "~/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
-            "TASK_5/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
+            "MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/TASK_5/INPUT_FILES/COMPLETED_DIRECTORY/*_*.parquet"
         ),
         glob_pattern=(
             f"{REPO_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO00/STAGE_1/EVENT_DATA/STEP_1/"
@@ -110,8 +109,7 @@ SECTIONS = [
     Section(
         title="TASK_5 -> OUT",
         display_pattern=(
-            "~/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO04/STAGE_1_PRODUCTS/EVENT_DATA/"
-            "PARQUET_LAKE/postprocessed_*.parquet"
+            "MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO04/STAGE_1_PRODUCTS/EVENT_DATA/PARQUET_LAKE/postprocessed_*.parquet"
         ),
         glob_pattern=(
             f"{REPO_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO04/STAGE_1_PRODUCTS/EVENT_DATA/"

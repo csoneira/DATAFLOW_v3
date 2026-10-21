@@ -21,7 +21,12 @@ import pathlib
 import sys
 from collections import OrderedDict
 
-ROOT = pathlib.Path.home() / "DATAFLOW_v3"
+ROOT = next(
+    (parent for parent in pathlib.Path(__file__).resolve().parents if (parent / "CONFIG" / "config_paths.yaml").is_file()),
+    None,
+)
+if ROOT is None:
+    raise RuntimeError(f"Could not locate repository root from {__file__}")
 STEP_FINAL_CSV = (
     ROOT
     / "MINGO_DIGITAL_TWIN"

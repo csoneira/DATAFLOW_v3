@@ -44,7 +44,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.execution_logger import set_station, start_timer
-from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.path_config import get_master_config_root, resolve_home_path_from_config
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.path_config import get_master_config_root, get_repo_root
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.selection_config import (
     date_in_ranges,
     effective_date_ranges_for_station,
@@ -598,8 +598,7 @@ def main() -> int:
     set_station(station_id)
     start_timer(__file__)
 
-    base_path = resolve_home_path_from_config(config)
-    station_dir = base_path / "DATAFLOW_v3" / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / f"MINGO0{station_id}"
+    station_dir = get_repo_root() / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / f"MINGO0{station_id}"
 
     event_config = config.get("event_data") or {}
     lab_config = config.get("lab_logs") or {}

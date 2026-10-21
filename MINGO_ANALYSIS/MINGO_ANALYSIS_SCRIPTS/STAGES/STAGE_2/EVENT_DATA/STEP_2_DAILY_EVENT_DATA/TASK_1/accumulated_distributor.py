@@ -26,6 +26,14 @@ from typing import Dict, Iterable, List, Tuple
 
 import pandas as pd
 
+CURRENT_PATH = Path(__file__).resolve()
+REPO_ROOT = next(
+    (parent for parent in CURRENT_PATH.parents if (parent / "CONFIG" / "config_paths.yaml").is_file()),
+    None,
+)
+if REPO_ROOT is None:
+    raise RuntimeError(f"Could not locate repository root from {CURRENT_PATH}")
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -161,7 +169,7 @@ def main() -> int:
     args = parse_args()
     station = args.station
 
-    station_dir = Path.home() / "DATAFLOW_v3" / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / f"MINGO0{station}"
+    station_dir = REPO_ROOT / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / f"MINGO0{station}"
     step2_to_3_dir = station_dir / "STAGE_2" / "EVENT_DATA" / "ACCUMULATED_EVENTS"
     step3_root = station_dir / "STAGE_2" / "EVENT_DATA" / "STEP_2_DAILY_EVENT_DATA"
     task1_root = step3_root / "TASK_1"

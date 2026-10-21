@@ -40,9 +40,17 @@ TERMINAL_BASE_DIRECTORY = Path.home()
 MAX_MESSAGE_CHARS = 3500
 TERMINAL_COMMAND_TIMEOUT_SEC = 300
 NOISE_CONTROL_PLANE_COMBINATION_REPORT_CANDIDATES = (
-    SCRIPT_PATH.parents[3] / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS" / "ANCILLARY" / "PLOTTERS" / "METADATA" / "NOISE_CONTROL" / "PLOTS" / "noise_control_plane_combination_rate_report.pdf",
-    Path("/home/rpcuser/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/PLOTTERS/METADATA/NOISE_CONTROL/PLOTS/noise_control_plane_combination_rate_report.pdf"),
-    Path("/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/PLOTTERS/METADATA/NOISE_CONTROL/PLOTS/noise_control_plane_combination_rate_report.pdf"),
+    *(
+        [
+            next(
+                parent for parent in SCRIPT_PATH.parents
+                if (parent / "CONFIG" / "config_paths.yaml").is_file()
+            ) / "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/PLOTTERS/METADATA/NOISE_CONTROL/PLOTS/noise_control_plane_combination_rate_report.pdf"
+        ]
+        if any((parent / "CONFIG" / "config_paths.yaml").is_file() for parent in SCRIPT_PATH.parents)
+        else []
+    ),
+    *(Path(os.environ["MINGO_NOISE_CONTROL_REPORT"]) for _ in [0] if os.environ.get("MINGO_NOISE_CONTROL_REPORT")),
 )
 
 # Check if a station number is provided

@@ -15,10 +15,24 @@
 
 set -euo pipefail
 
+if [[ -z "${DATAFLOW_ROOT:-}" ]]; then
+  _repo_probe="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+  while [[ "$_repo_probe" != "/" && ! -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; do
+    _repo_probe="$(dirname -- "$_repo_probe")"
+  done
+  [[ -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]] || {
+    echo "Could not locate repository root from ${BASH_SOURCE[0]}" >&2
+    exit 2
+  }
+  # shellcheck source=/dev/null
+  source "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh"
+fi
+unset _repo_probe
+
 show_help() {
   cat <<'EOF'
 top_large_dirs.sh
-Lists the largest directories under DATAFLOW_v3 and SAFE_DATAFLOW_v3.
+Lists the largest directories under the current checkout and SAFE_DATAFLOW_v3.
 
 Usage:
   top_large_dirs.sh [count] [--depth N]
@@ -30,8 +44,8 @@ Options:
 Arguments:
   count         Number of entries to show (default: 30).
 
-By default the script runs without sudo and only examines DATAFLOW_v3 and
-SAFE_DATAFLOW_v3 under the current user's home.
+By default the script runs without sudo and only examines the current checkout
+and SAFE_DATAFLOW_v3 under the current user's home.
 EOF
 }
 
@@ -83,7 +97,7 @@ fi
 
 HOME_DIR="${HOME:?HOME is not set}"
 SEARCH_ROOTS=(
-  "${HOME_DIR}/DATAFLOW_v3"
+  "${DATAFLOW_ROOT}"
   "${HOME_DIR}/SAFE_DATAFLOW_v3"
 )
 

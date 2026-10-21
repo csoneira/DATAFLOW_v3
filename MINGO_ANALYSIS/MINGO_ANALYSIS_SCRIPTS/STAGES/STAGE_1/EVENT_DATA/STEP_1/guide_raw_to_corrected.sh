@@ -1,4 +1,20 @@
 #!/bin/bash
+
+# Resolve the checkout from this script's location when the caller did not provide it.
+if [[ -z "${DATAFLOW_ROOT:-}" ]]; then
+  _repo_probe="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+  while [[ "$_repo_probe" != "/" && ! -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; do
+    _repo_probe="$(dirname -- "$_repo_probe")"
+  done
+  if [[ -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh"
+  else
+    echo "Could not locate repository root from ${BASH_SOURCE[0]}" >&2
+    exit 2
+  fi
+fi
+unset _repo_probe
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
 # Script: MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/guide_raw_to_corrected.sh
@@ -161,10 +177,10 @@ TASK_LABELS=(
   "fit_to_corr"
 )
 
-TRAFFIC_LIGHT_DIR="$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/TRAFFIC_LIGHT"
+TRAFFIC_LIGHT_DIR="${DATAFLOW_ROOT}/OPERATIONS/OPERATIONS_RUNTIME/TRAFFIC_LIGHT"
 TRAFFIC_QUEUE_FILE=""
 TRAFFIC_QUEUE_FILE_PREFIX="stage1_step1_station_task_queue"
-config_file="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/config_step_1.yaml"
+config_file="${DATAFLOW_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/config_step_1.yaml"
 
 # Runtime tuning (overridden by config_step_1.yaml if present)
 STEP1_CONFIG_REFRESH_S=${STEP1_CONFIG_REFRESH_S:-30}
@@ -173,7 +189,7 @@ STEP1_RESOURCE_BACKOFF_S=${STEP1_RESOURCE_BACKOFF_S:-15}
 STEP1_ALREADY_RUNNING_LOG_S=${STEP1_ALREADY_RUNNING_LOG_S:-300}
 LAST_CONFIG_REFRESH_TS=0
 LAST_CONFIG_MTIME=0
-GLOBAL_LOG_THROTTLE_DIR="$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/LOG_THROTTLE"
+GLOBAL_LOG_THROTTLE_DIR="${DATAFLOW_ROOT}/OPERATIONS/OPERATIONS_RUNTIME/LOG_THROTTLE"
 
 sanitize_key() {
   local key="$1"
@@ -210,8 +226,8 @@ station_has_task0_backlog() {
   local station_tag station_name stage0_dir task0_unprocessed_dir
   station_tag="$(printf 'mi%02d' "$station")"
   station_name="MINGO$(printf '%02d' "$station")"
-  stage0_dir="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/${station_name}/STAGE_0_TO_1"
-  task0_unprocessed_dir="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/${station_name}/STAGE_1/EVENT_DATA/STEP_1/TASK_0/INPUT_FILES/UNPROCESSED_DIRECTORY"
+  stage0_dir="${DATAFLOW_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/${station_name}/STAGE_0_TO_1"
+  task0_unprocessed_dir="${DATAFLOW_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/${station_name}/STAGE_1/EVENT_DATA/STEP_1/TASK_0/INPUT_FILES/UNPROCESSED_DIRECTORY"
   if [[ -d "$stage0_dir" ]] && compgen -G "${stage0_dir}/${station_tag}*.dat" >/dev/null; then
     return 0
   fi
@@ -377,7 +393,7 @@ parse_list() {
 ALL_STATIONS=(0 1 2 3 4)
 ALL_TASK_IDS=(0 1 2 3 4 5)
 
-LOCK_BASE_DIR="$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/LOCKS/guide_raw_to_corrected"
+LOCK_BASE_DIR="${DATAFLOW_ROOT}/OPERATIONS/OPERATIONS_RUNTIME/LOCKS/guide_raw_to_corrected"
 ARG_LOCK_FILE=""
 ARG_LOCK_FD=""
 LOCK_SIGNATURE_DESC=""

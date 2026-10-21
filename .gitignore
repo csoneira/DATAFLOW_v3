@@ -3,7 +3,7 @@
 # ----------------------------------------------------------------------
 .github/workflows/bug-detector.yml
 add_to_rclone.info
-/home/mingo/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/NOTIFICATIONS/TELEGRAM_BOT/TERMINAL_PASSWORD.txt
+OPERATIONS/OPERATIONS_SCRIPTS/NOTIFICATIONS/TELEGRAM_BOT/TERMINAL_PASSWORD.txt
 
 # ----------------------------------------------------------------------
 # Runtime/generated directories

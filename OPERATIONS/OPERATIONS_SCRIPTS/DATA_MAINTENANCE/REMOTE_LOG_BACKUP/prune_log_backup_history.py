@@ -14,12 +14,15 @@ from typing import Iterable
 
 import yaml
 
-
-DEFAULT_ROOT = Path.home() / "DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/REMOTE_LOG_BACKUP"
-DEFAULT_SELECTION_CONFIG = Path.home() / (
-    "DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/"
-    "config_selection.yaml"
+REPO_ROOT = next(
+    (parent for parent in Path(__file__).resolve().parents if (parent / "CONFIG" / "config_paths.yaml").is_file()),
+    None,
 )
+if REPO_ROOT is None:
+    raise RuntimeError(f"Could not locate repository root from {__file__}")
+
+DEFAULT_ROOT = REPO_ROOT / "OPERATIONS/OPERATIONS_RUNTIME/REMOTE_LOG_BACKUP"
+DEFAULT_SELECTION_CONFIG = REPO_ROOT / "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/config_selection.yaml"
 HOST_PATTERN = re.compile(r"^mingo(\d{2})$")
 DATED_NAME_PATTERN = re.compile(
     r"(?<!\d)(?P<year>20\d{2})[-_](?P<month>\d{2})[-_](?P<day>\d{2})(?!\d)"

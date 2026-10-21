@@ -12,17 +12,19 @@ import numpy as np
 import pandas as pd
 from matplotlib.colors import LogNorm
 
+REPO_ROOT = next(
+    (parent for parent in Path(__file__).resolve().parents if (parent / "CONFIG" / "config_paths.yaml").is_file()),
+    None,
+)
+if REPO_ROOT is None:
+    raise RuntimeError(f"Could not locate repository root from {__file__}")
 
 station_of_study = 2
 MAX_REFERENCE_SIMULATION_FILES = 20
 
-BASE = Path("/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS")
-SIMULATION_PARAMS_FILE = Path(
-    "/home/mingo/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/step_final_simulation_params.csv"
-)
-PLOT_OUTPUT_DIR = Path(
-    "/home/mingo/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/SIMULATION_TUNING/ANGULAR_DISTRIBUTION/PLOTS"
-)
+BASE = REPO_ROOT / "MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS"
+SIMULATION_PARAMS_FILE = REPO_ROOT / "MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/step_final_simulation_params.csv"
+PLOT_OUTPUT_DIR = REPO_ROOT / "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/SIMULATION_TUNING/ANGULAR_DISTRIBUTION/PLOTS"
 PLOT_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 EXECUTION_STAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 

@@ -1,2 +1,2 @@
 # Compatibility entry point: explicit session launcher, never ~/.tmux.conf.
-run-shell "bash \"$HOME/DATAFLOW_v3/CONFIG/SETUP/start-dataflow-tmux\" --detach"
+run-shell "bash \"$HOME/.local/bin/start-dataflow-tmux\" --detach"

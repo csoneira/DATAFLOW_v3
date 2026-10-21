@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -12,10 +13,34 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common import reprocessing_qa_retry  # noqa: E402
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.reprocessing_qa_retry import build_retry_manifest, mark_retry_admitted  # noqa: E402
 
 
 class ReprocessingQARetryTests(unittest.TestCase):
+    def test_relative_source_csv_resolves_from_repository_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            config_path = root / "config.yaml"
+            source_csv = root / "qa.csv"
+            config_path.write_text(
+                "qa_retry:\n  enabled: true\n  source_csv: qa.csv\n  selectors: []\n",
+                encoding="utf-8",
+            )
+            pd.DataFrame(columns=["station_name", "filename_base", "plot_timestamp", "quality_status"]).to_csv(
+                source_csv, index=False
+            )
+            with patch.object(reprocessing_qa_retry, "get_repo_root", return_value=root):
+                summary = build_retry_manifest(
+                    config_paths=[config_path],
+                    station=1,
+                    clean_csv=root / "clean.csv",
+                    output_csv=root / "manifest.csv",
+                    state_csv=root / "state.csv",
+                    now_timestamp="2026-10-21 10:00:00",
+                )
+            self.assertEqual(summary["manifest_rows"], 0)
+
     def test_manifest_reopens_only_when_failed_versions_are_newer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

@@ -24,6 +24,8 @@ import time
 from contextlib import contextmanager
 from typing import Iterator, Optional, Union
 
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.path_config import get_repo_root
+
 __all__ = [
     "log_execution",
     "LOG_PATH",
@@ -32,7 +34,7 @@ __all__ = [
     "write_log_entry",
 ]
 
-LOG_PATH = pathlib.Path(os.path.expanduser("~/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/python_execution_log.csv"))
+LOG_PATH = get_repo_root() / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / "python_execution_log.csv"
 _CSV_HEADER = ("script_name", "station", "date_of_execution", "duration_seconds")
 
 _timer_started = False

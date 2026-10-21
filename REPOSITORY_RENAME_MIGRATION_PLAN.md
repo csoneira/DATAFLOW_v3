@@ -1211,3 +1211,30 @@ When this document is handed to Codex, the following rules are mandatory:
 The central engineering criterion is simple:
 
 > **`mingo-computing` must work because the code discovers where it is installed, not because every old literal was mechanically replaced with a new literal.**
+
+---
+
+## 26. Implementation audit discoveries
+
+The fresh implementation audit found several relocation dependencies that need to
+be included in the pre-rename verification, in addition to the files listed in
+the original inventory:
+
+- `UNPACKER_ZERO_STAGE_FILES/software/conf/initConf.m` builds the Octave
+  software root from `$HOME/DATAFLOW_v3`; resolve it from `mfilename('fullpath')`.
+- Stage-0 and Stage-1 shell wrappers contain inline Python blocks that separately
+  construct `Path.home() / "DATAFLOW_v3"`. They need the wrapper's dynamically
+  resolved `DATAFLOW_ROOT` passed through the environment.
+- `OPERATIONS/.../CLEANERS/top_large_dirs.sh` searches for a sibling directory
+  literally named `DATAFLOW_v3`. It should locate the checkout from its script
+  path while leaving the historical `SAFE_DATAFLOW_v3` backup root intact.
+- The terminal-password ignore entry was an absolute path under the old checkout;
+  make the ignore rule repository-relative.
+- `CONFIG/add_to_tmux.info` is a compatibility entry point and should invoke the
+  setup-managed `~/.local/bin/start-dataflow-tmux` launcher rather than a script
+  under the old checkout path.
+- Some Python tools were finding the checkout only because the ignored runtime
+  station-data directory existed. Root discovery should use checked-in markers
+  such as `CONFIG/config_paths.yaml` instead.
+
+These are implementation notes, not exceptions to the relocated-checkout gate.

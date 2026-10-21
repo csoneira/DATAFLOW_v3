@@ -1,4 +1,20 @@
 #!/bin/bash
+
+# Resolve the checkout from this script's location when the caller did not provide it.
+if [[ -z "${DATAFLOW_ROOT:-}" ]]; then
+  _repo_probe="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+  while [[ "$_repo_probe" != "/" && ! -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; do
+    _repo_probe="$(dirname -- "$_repo_probe")"
+  done
+  if [[ -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh"
+  else
+    echo "Could not locate repository root from ${BASH_SOURCE[0]}" >&2
+    exit 2
+  fi
+fi
+unset _repo_probe
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
 # Script: MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_0/REPROCESSING/STEP_2/unpack_reprocessing_files.sh
@@ -134,6 +150,7 @@ is_reprocessing_step_enabled() {
 decision=$(python3 - "$cfg_path" "$station_id" "$step_id" <<'PY' || true
 import sys
 from pathlib import Path
+import os
 
 cfg_path, station_raw, step_raw = sys.argv[1:4]
 
@@ -200,7 +217,7 @@ if station_id is None or step_id is None:
     print("1")
     raise SystemExit(0)
 
-repo_root = Path.home() / "DATAFLOW_v3"
+repo_root = Path(os.environ["DATAFLOW_ROOT"])
 if str(repo_root) not in sys.path:
     sys.path.append(str(repo_root))
 
@@ -331,7 +348,7 @@ if $reprocess_completed; then
     echo "Station ${station} is in reprocess_completed_stations: duplicate-protection checks are disabled."
 fi
 
-STATIONS_BASE="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS"
+STATIONS_BASE="${DATAFLOW_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS"
 station_directory="${STATIONS_BASE}/MINGO${station_code}"
 reprocessing_directory="${station_directory}/STAGE_0/REPROCESSING/STEP_2"
 step0_directory="${station_directory}/STAGE_0/REPROCESSING/STEP_0"
@@ -372,7 +389,7 @@ declare -A dat_unpacked_basenames=()
 declare -A qa_retry_basenames=()
 declare -A active_reprocessing_basenames=()
 
-# csv_path="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0${station}/database_status_${station}.csv"
+# csv_path="${DATAFLOW_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0${station}/database_status_${station}.csv"
 csv_header="basename,start_date,hld_remote_add_date,hld_local_add_date,dat_add_date,list_ev_name,list_ev_add_date,acc_name,acc_add_date,merge_add_date"
 
 ensure_dat_unpacked_csv() {

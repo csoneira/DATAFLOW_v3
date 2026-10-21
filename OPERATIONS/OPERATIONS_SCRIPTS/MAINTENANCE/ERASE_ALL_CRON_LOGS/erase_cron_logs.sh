@@ -1,4 +1,20 @@
 #!/usr/bin/env bash
+
+# Resolve the checkout from this script's location when the caller did not provide it.
+if [[ -z "${DATAFLOW_ROOT:-}" ]]; then
+  _repo_probe="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+  while [[ "$_repo_probe" != "/" && ! -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; do
+    _repo_probe="$(dirname -- "$_repo_probe")"
+  done
+  if [[ -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh"
+  else
+    echo "Could not locate repository root from ${BASH_SOURCE[0]}" >&2
+    exit 2
+  fi
+fi
+unset _repo_probe
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
 # Script: OPERATIONS/OPERATIONS_SCRIPTS/MAINTENANCE/ERASE_ALL_CRON_LOGS/erase_cron_logs.sh
@@ -36,8 +52,8 @@ EOF
 
 DRY_RUN=false
 KEEP_LINES="${CRON_LOG_KEEP_LINES:-1000}"
-LOG_DIR="${CRON_LOG_DIR:-$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS}"
-CRONTAB_FILE="${CRONTAB_FILE:-$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/SETUP/analysis_pc.crontab}"
+LOG_DIR="${CRON_LOG_DIR:-${DATAFLOW_ROOT}/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS}"
+CRONTAB_FILE="${CRONTAB_FILE:-${DATAFLOW_ROOT}/OPERATIONS/OPERATIONS_RUNTIME/SETUP/analysis_pc.crontab}"
 
 while (( $# > 0 )); do
   case "$1" in
@@ -84,7 +100,7 @@ if [[ ! -f "$CRONTAB_FILE" ]]; then
   exit 1
 fi
 
-LOCK_FILE="$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/LOCKS/cron/truncate_cron_logs.lock"
+LOCK_FILE="${DATAFLOW_ROOT}/OPERATIONS/OPERATIONS_RUNTIME/LOCKS/cron/truncate_cron_logs.lock"
 mkdir -p "$(dirname "$LOCK_FILE")"
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then

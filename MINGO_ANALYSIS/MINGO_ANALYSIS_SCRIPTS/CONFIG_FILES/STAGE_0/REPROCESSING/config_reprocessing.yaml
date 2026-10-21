@@ -17,7 +17,7 @@ step_policies:
 
 qa_retry:
   enabled: true
-  source_csv: ~/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/QUALITY_ASSURANCE_NEW/TOTAL_SUMMARY/OUTPUTS/FILES/qa_all_stations_reprocessing_quality.csv
+  source_csv: MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/QUALITY_ASSURANCE_NEW/TOTAL_SUMMARY/OUTPUTS/FILES/qa_all_stations_reprocessing_quality.csv
   selectors:
     - id: all_quality_failures
       target_stations: [1, 2, 3, 4]

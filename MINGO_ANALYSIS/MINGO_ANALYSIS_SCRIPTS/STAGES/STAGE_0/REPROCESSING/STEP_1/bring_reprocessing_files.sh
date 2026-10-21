@@ -1,4 +1,20 @@
 #!/usr/bin/env bash
+
+# Resolve the checkout from this script's location when the caller did not provide it.
+if [[ -z "${DATAFLOW_ROOT:-}" ]]; then
+  _repo_probe="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+  while [[ "$_repo_probe" != "/" && ! -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; do
+    _repo_probe="$(dirname -- "$_repo_probe")"
+  done
+  if [[ -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh"
+  else
+    echo "Could not locate repository root from ${BASH_SOURCE[0]}" >&2
+    exit 2
+  fi
+fi
+unset _repo_probe
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
 # Script: MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_0/REPROCESSING/STEP_1/bring_reprocessing_files.sh
@@ -185,7 +201,7 @@ fi
 ##############################################################################
 # Target directories
 ##############################################################################
-station_directory="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0${station}"
+station_directory="${DATAFLOW_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0${station}"
 reprocessing_directory="${station_directory}/STAGE_0/REPROCESSING/STEP_1"
 input_directory="${reprocessing_directory}/INPUT_FILES"
 output_directory="${reprocessing_directory}/OUTPUT_FILES"
@@ -224,6 +240,7 @@ is_reprocessing_step_enabled() {
   decision=$(python3 - "$cfg_path" "$station_id" "$step_id" <<'PY' || true
 import sys
 from pathlib import Path
+import os
 
 cfg_path, station_raw, step_raw = sys.argv[1:4]
 
@@ -290,7 +307,7 @@ if station_id is None or step_id is None:
     print("1")
     raise SystemExit(0)
 
-repo_root = Path.home() / "DATAFLOW_v3"
+repo_root = Path(os.environ["DATAFLOW_ROOT"])
 if str(repo_root) not in sys.path:
     sys.path.append(str(repo_root))
 
@@ -704,7 +721,7 @@ if [[ ! -s "$clean_metadata_csv" ]]; then
     sleep "$refresh_delay_sec"
   fi
 
-  lock_dir="$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/LOCKS"
+  lock_dir="${DATAFLOW_ROOT}/OPERATIONS/OPERATIONS_RUNTIME/LOCKS"
   lock_file="${lock_dir}/prepare_reprocessing_metadata_refresh.lock"
   mkdir -p "$lock_dir"
 

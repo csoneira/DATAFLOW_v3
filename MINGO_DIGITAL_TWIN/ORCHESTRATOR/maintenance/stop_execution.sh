@@ -1,4 +1,20 @@
 #!/usr/bin/env bash
+
+# Resolve the checkout from this script's location when the caller did not provide it.
+if [[ -z "${DATAFLOW_ROOT:-}" ]]; then
+  _repo_probe="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+  while [[ "$_repo_probe" != "/" && ! -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; do
+    _repo_probe="$(dirname -- "$_repo_probe")"
+  done
+  if [[ -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh"
+  else
+    echo "Could not locate repository root from ${BASH_SOURCE[0]}" >&2
+    exit 2
+  fi
+fi
+unset _repo_probe
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
 # Script: MINGO_DIGITAL_TWIN/ORCHESTRATOR/maintenance/stop_execution.sh
@@ -18,7 +34,7 @@
 
 set -u
 
-BASE_DIR="$HOME/DATAFLOW_v3"
+BASE_DIR="${DATAFLOW_ROOT}"
 LOCK_FILE="${BASE_DIR}/OPERATIONS/OPERATIONS_RUNTIME/LOCKS/cron/stop_execution.lock"
 LOG_DIR="${BASE_DIR}/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/ANCILLARY/CLEANERS"
 INTERNAL_LOG="${LOG_DIR}/stop_execution_internal.log"
@@ -134,10 +150,10 @@ mkdir -p "$(dirname "${LOCK_FILE}")"
   }
 
   declare -a patterns=(
-    "$HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ORCHESTRATOR/core/run_step.sh"
-    "$HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_0/step_0_setup_to_blank.py"
-    "$HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py"
-    "$HOME/DATAFLOW_v3/MINGO_DIGITAL_TWIN/ORCHESTRATOR/maintenance/sim_maintenance.py"
+    "${DATAFLOW_ROOT}/MINGO_DIGITAL_TWIN/ORCHESTRATOR/core/run_step.sh"
+    "${DATAFLOW_ROOT}/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_0/step_0_setup_to_blank.py"
+    "${DATAFLOW_ROOT}/MINGO_DIGITAL_TWIN/MASTER_STEPS/STEP_FINAL/step_final_daq_to_station_dat.py"
+    "${DATAFLOW_ROOT}/MINGO_DIGITAL_TWIN/ORCHESTRATOR/maintenance/sim_maintenance.py"
   )
 
   declare -A pid_to_cmd=()

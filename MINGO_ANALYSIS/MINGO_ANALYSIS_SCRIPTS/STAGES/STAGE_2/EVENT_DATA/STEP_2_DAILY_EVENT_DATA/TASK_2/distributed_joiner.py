@@ -565,7 +565,7 @@ def main() -> int:
     output_value_columns = list(output_schema["value_columns"])
     output_extra_columns = list(output_schema["extra_columns"])
 
-    station_dir = Path.home() / "DATAFLOW_v3" / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / f"MINGO0{station}"
+    station_dir = REPO_ROOT / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / f"MINGO0{station}"
     stage2_event_data = station_dir / "STAGE_2" / "EVENT_DATA" / "STEP_2_DAILY_EVENT_DATA"
     task1_to_2_root = stage2_event_data / "TASK_1_TO_2"
     task2_output_root = stage2_event_data / "TASK_2" / "OUTPUT_FILES"

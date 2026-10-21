@@ -1,4 +1,20 @@
 #!/usr/bin/env bash
+
+# Resolve the checkout from this script's location when the caller did not provide it.
+if [[ -z "${DATAFLOW_ROOT:-}" ]]; then
+  _repo_probe="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+  while [[ "$_repo_probe" != "/" && ! -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; do
+    _repo_probe="$(dirname -- "$_repo_probe")"
+  done
+  if [[ -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh"
+  else
+    echo "Could not locate repository root from ${BASH_SOURCE[0]}" >&2
+    exit 2
+  fi
+fi
+unset _repo_probe
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
 # Script: MINGO_DIGITAL_TWIN/ORCHESTRATOR/core/run_step.sh
@@ -198,7 +214,7 @@ if [[ -f "$SIM_LOG_HELPER" ]]; then
 fi
 RUN_STEP_STRUCTURED_LOG_PATH="${ROOT_RUNTIME_DIR}/CRON_LOGS/SIMULATION/STRUCTURED/run_step.jsonl"
 # lock used to serialize standalone final-step executions (cron or manual).
-FINAL_LOCK="$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/LOCKS/cron/sim_final.lock"
+FINAL_LOCK="${DATAFLOW_ROOT}/OPERATIONS/OPERATIONS_RUNTIME/LOCKS/cron/sim_final.lock"
 RUN_STEP_STATE_DIR="${RUN_STEP_STATE_DIR:-${ROOT_RUNTIME_DIR}/STATE/run_step}"
 RUN_STEP_LOG_DIR="${RUN_STEP_LOG_DIR:-${ROOT_RUNTIME_DIR}/CRON_LOGS/SIMULATION/RUN_STEP}"
 RUN_STEP_LOCK_DIR="${RUN_STEP_LOCK_DIR:-${ROOT_RUNTIME_DIR}/LOCKS/simulation/run_step_continuous.lock}"

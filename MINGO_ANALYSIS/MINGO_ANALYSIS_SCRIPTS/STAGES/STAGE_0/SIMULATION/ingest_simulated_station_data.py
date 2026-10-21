@@ -23,8 +23,19 @@ import shutil
 import tempfile
 from datetime import datetime
 from pathlib import Path
+import sys
 
-DEFAULT_SIM_SOURCE_DIR = "~/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/FILES"
+REPO_ROOT = next(
+    (parent for parent in Path(__file__).resolve().parents if (parent / "CONFIG" / "config_paths.yaml").is_file()),
+    None,
+)
+if REPO_ROOT is None:
+    raise RuntimeError(f"Could not locate repository root from {__file__}")
+sys.path.insert(0, str(REPO_ROOT))
+
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.path_config import get_repo_root
+
+DEFAULT_SIM_SOURCE_DIR = get_repo_root() / "MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/FILES"
 REGISTRY_FIELDS = ["basename", "execution_timestamp"]
 LIVE_REGISTRY_FILENAME = "imported_basenames.csv"
 HISTORY_REGISTRY_FILENAME = "imported_basenames_history.csv"

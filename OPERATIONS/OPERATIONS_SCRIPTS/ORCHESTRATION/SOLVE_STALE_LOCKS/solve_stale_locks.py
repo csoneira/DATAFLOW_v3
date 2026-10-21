@@ -26,10 +26,16 @@ from pathlib import Path
 from typing import Iterable
 
 
-DEFAULT_LOCK_DIR = Path.home() / "DATAFLOW_v3" / "OPERATIONS/OPERATIONS_RUNTIME" / "LOCKS"
+REPO_ROOT = next(
+    (parent for parent in Path(__file__).resolve().parents if (parent / "CONFIG" / "config_paths.yaml").is_file()),
+    None,
+)
+if REPO_ROOT is None:
+    raise RuntimeError(f"Could not locate repository root from {__file__}")
+DEFAULT_LOCK_DIR = REPO_ROOT / "OPERATIONS/OPERATIONS_RUNTIME/LOCKS"
 UNPACK_LOCK_NAME = ".unpack_shared.lock"
 DEFAULT_LOG_FILE = (
-    Path.home() / "DATAFLOW_v3" / "OPERATIONS/OPERATIONS_RUNTIME" / "CRON_LOGS" / "solve_stale_locks.log"
+    REPO_ROOT / "OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/solve_stale_locks.log"
 )
 # Task-level locks should clear faster so the pipeline does not get stuck if a task died
 # before releasing its lock.

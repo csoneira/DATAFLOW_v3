@@ -1,15 +1,31 @@
 #!/usr/bin/env bash
 
+# Resolve the checkout from this script's location when the caller did not provide it.
+if [[ -z "${DATAFLOW_ROOT:-}" ]]; then
+  _repo_probe="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+  while [[ "$_repo_probe" != "/" && ! -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; do
+    _repo_probe="$(dirname -- "$_repo_probe")"
+  done
+  if [[ -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh"
+  else
+    echo "Could not locate repository root from ${BASH_SOURCE[0]}" >&2
+    exit 2
+  fi
+fi
+unset _repo_probe
+
 # Direct execution:
 #   watch -n 1 -c -t \
-#     /home/mingo/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/FILE_FLOW_TRACKER/watch_file_flow.sh
+#     ${DATAFLOW_ROOT}/OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/FILE_FLOW_TRACKER/watch_file_flow.sh
 #
 # Select one station:
 #   watch -n 1 -c -t \
-#     /home/mingo/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/FILE_FLOW_TRACKER/watch_file_flow.sh 2
+#     ${DATAFLOW_ROOT}/OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/FILE_FLOW_TRACKER/watch_file_flow.sh 2
 #
 # Using the ~/.bashrc function, which you can add like:
-#   watch_file_flow() { watch -n 1 -c -t /home/mingo/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/FILE_FLOW_TRACKER/watch_file_flow.sh "$@"; }
+#   watch_file_flow() { watch -n 1 -c -t ${DATAFLOW_ROOT}/OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/FILE_FLOW_TRACKER/watch_file_flow.sh "$@"; }
 #
 # And use it like:
 #   watch_file_flow       # all stations
@@ -17,7 +33,7 @@
 
 set -euo pipefail
 
-TRACKER_DIR="$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/FILE_FLOW_TRACKER"
+TRACKER_DIR="${DATAFLOW_ROOT}/OPERATIONS/OPERATIONS_RUNTIME/FILE_FLOW_TRACKER"
 ROWS="${ROWS:-25}"
 
 usage() {

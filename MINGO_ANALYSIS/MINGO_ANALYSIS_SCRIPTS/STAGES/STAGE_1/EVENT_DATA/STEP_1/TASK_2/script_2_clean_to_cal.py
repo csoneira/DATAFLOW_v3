@@ -8275,8 +8275,8 @@ task2_plot_status_by_alias = load_step1_task_plot_catalog(
 debug_mode = False
 
 home_path = str(resolve_home_path_from_config(config))
-REFERENCE_TABLES_DIR = Path(home_path) / "DATAFLOW_v3" / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS" / "CONFIG_FILES" / "METADATA_REPRISE" / "REFERENCE_TABLES"
-QA_CALIBRATION_DIR = Path(home_path) / "DATAFLOW_v3" / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS" / "ANCILLARY" / "QUALITY_ASSURANCE" / "OUTPUT_FILES"
+REFERENCE_TABLES_DIR = get_repo_root() / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS" / "CONFIG_FILES" / "METADATA_REPRISE" / "REFERENCE_TABLES"
+QA_CALIBRATION_DIR = get_repo_root() / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS" / "ANCILLARY" / "QUALITY_ASSURANCE" / "OUTPUT_FILES"
 current_conf_number: Optional[int] = None
 found_calibration = False
 
@@ -10795,9 +10795,9 @@ if apply_charge_side:
     if calibrate_charge_ns_to_fc and charge_test is not None:
         home_path = str(resolve_home_path_from_config(config))
         tot_to_charge_cal_path = (
-            f"{home_path}/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/"
-            "ANCILLARY/CALIBRATIONS_AND_LUTS/TOT_TO_CHARGE_CAL/"
-            "tot_to_charge_calibration.csv"
+            str(get_repo_root() / "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/"
+                "ANCILLARY/CALIBRATIONS_AND_LUTS/TOT_TO_CHARGE_CAL/"
+                "tot_to_charge_calibration.csv")
         )
         if not os.path.isfile(tot_to_charge_cal_path):
             print(
@@ -10809,7 +10809,7 @@ if apply_charge_side:
     if calibrate_charge_ns_to_fc and charge_test is not None:
 
         # Load calibration
-        tot_to_charge_cal_path = f"{home_path}/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/CALIBRATIONS_AND_LUTS/TOT_TO_CHARGE_CAL/tot_to_charge_calibration.csv"
+        tot_to_charge_cal_path = str(get_repo_root() / "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/CALIBRATIONS_AND_LUTS/TOT_TO_CHARGE_CAL/tot_to_charge_calibration.csv")
         FEE_calibration_df = pd.read_csv(tot_to_charge_cal_path)
         FEE_calibration = {
             "Width": FEE_calibration_df['Width'].tolist(),

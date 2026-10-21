@@ -1,4 +1,20 @@
 #!/usr/bin/env bash
+
+# Resolve the checkout from this script's location when the caller did not provide it.
+if [[ -z "${DATAFLOW_ROOT:-}" ]]; then
+  _repo_probe="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+  while [[ "$_repo_probe" != "/" && ! -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; do
+    _repo_probe="$(dirname -- "$_repo_probe")"
+  done
+  if [[ -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh"
+  else
+    echo "Could not locate repository root from ${BASH_SOURCE[0]}" >&2
+    exit 2
+  fi
+fi
+unset _repo_probe
 # =============================================================================
 # Script: OPERATIONS/OPERATIONS_SCRIPTS/DATA_MAINTENANCE/REMOTE_LOG_BACKUP/run_log_backup.sh
 # Purpose: Maintain an append-safe backup of remote MINGO log trees.
@@ -26,7 +42,7 @@ Usage:
 Options:
   --host NAME           Backup only one host. Can be repeated.
   --root PATH           Override runtime backup root.
-                        Default: ~/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/REMOTE_LOG_BACKUP
+                        Default: repository-relative OPERATIONS/OPERATIONS_RUNTIME/REMOTE_LOG_BACKUP
   --source-base PATH    Local test source base; expects PATH/<host>/...
   --remote-user USER    Override remote SSH user. Default: rpcuser
   --remote-root PATH    Override remote log root. Default: /home/rpcuser/logs
@@ -214,13 +230,13 @@ backup_one_host() {
   log "Backup completed for $host"
 }
 
-DEFAULT_BACKUP_ROOT="$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/REMOTE_LOG_BACKUP"
+DEFAULT_BACKUP_ROOT="${DATAFLOW_ROOT}/OPERATIONS/OPERATIONS_RUNTIME/REMOTE_LOG_BACKUP"
 DEFAULT_REMOTE_USER="rpcuser"
 DEFAULT_REMOTE_ROOT="/home/rpcuser/logs"
 DEFAULT_HOSTS=(mingo01 mingo02 mingo03 mingo04)
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 HISTORY_PRUNER="${LOG_BACKUP_HISTORY_PRUNER:-$SCRIPT_DIR/prune_log_backup_history.py}"
-DEFAULT_SELECTION_CONFIG="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/config_selection.yaml"
+DEFAULT_SELECTION_CONFIG="${DATAFLOW_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/config_selection.yaml"
 
 BACKUP_ROOT="${LOG_BACKUP_ROOT:-$DEFAULT_BACKUP_ROOT}"
 REMOTE_USER="${LOG_BACKUP_REMOTE_USER:-$DEFAULT_REMOTE_USER}"

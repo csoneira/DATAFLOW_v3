@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from pathlib import Path
 from typing import Iterable
 import time
 import subprocess
@@ -277,12 +278,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Combined size/expected SIM_RUN report.")
     parser.add_argument(
         "--intersteps-dir",
-        default="~/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS",
+        default=str(next(parent for parent in Path(__file__).resolve().parents if (parent / "CONFIG" / "config_paths.yaml").is_file()) / "MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS"),
         help="INTERSTEPS base directory.",
     )
     parser.add_argument(
         "--param-mesh",
-        default="~/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv",
+        default=str(next(parent for parent in Path(__file__).resolve().parents if (parent / "CONFIG" / "config_paths.yaml").is_file()) / "MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv"),
         help="Path to param_mesh.csv.",
     )
     parser.add_argument(

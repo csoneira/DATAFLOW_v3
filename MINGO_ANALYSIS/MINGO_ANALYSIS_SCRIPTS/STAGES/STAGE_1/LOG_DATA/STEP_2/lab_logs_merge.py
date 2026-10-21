@@ -46,6 +46,7 @@ if str(REPO_ROOT) not in sys.path:
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.execution_logger import set_station, start_timer
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.path_config import (
     get_master_config_root,
+    get_repo_root,
     resolve_home_path_from_config,
 )
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.selection_config import (
@@ -598,6 +599,8 @@ def _local_log_backup_root(backup_config: Mapping[str, object]) -> Optional[Path
     if not raw_root:
         return None
     root = Path(str(raw_root)).expanduser()
+    if not root.is_absolute():
+        root = get_repo_root() / root
     return root if root.exists() else None
 
 
@@ -970,8 +973,7 @@ def main() -> int:
     set_station(station)
     start_timer(__file__)
 
-    base_path = resolve_home_path_from_config()
-    station_dir = base_path / "DATAFLOW_v3" / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / f"MINGO0{station}"
+    station_dir = get_repo_root() / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS" / f"MINGO0{station}"
     lab_logs_root = station_dir / "STAGE_1" / "LOG_DATA"
 
     step1_root = lab_logs_root / "STEP_1"

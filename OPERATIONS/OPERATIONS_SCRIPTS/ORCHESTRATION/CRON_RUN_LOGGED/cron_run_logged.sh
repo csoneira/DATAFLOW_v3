@@ -1,4 +1,20 @@
 #!/usr/bin/env bash
+
+# Resolve the checkout from this script's location when the caller did not provide it.
+if [[ -z "${DATAFLOW_ROOT:-}" ]]; then
+  _repo_probe="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+  while [[ "$_repo_probe" != "/" && ! -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; do
+    _repo_probe="$(dirname -- "$_repo_probe")"
+  done
+  if [[ -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh"
+  else
+    echo "Could not locate repository root from ${BASH_SOURCE[0]}" >&2
+    exit 2
+  fi
+fi
+unset _repo_probe
 # Run a cron command while avoiding empty destination logs.
 
 set -uo pipefail
@@ -46,7 +62,7 @@ fi
 
 # One atomic latest-result CSV per scheduled job. The existing error finder
 # still owns issue classification; these files provide current exit status.
-runtime_root="${DATAFLOW_ROOT:-$HOME/DATAFLOW_v3}/OPERATIONS/OPERATIONS_RUNTIME"
+runtime_root="${DATAFLOW_ROOT}/OPERATIONS/OPERATIONS_RUNTIME"
 case "$log_path" in
   "$runtime_root/CRON_LOGS/"*) relative="${log_path#"$runtime_root/CRON_LOGS/"}" ;;
   *) relative="$(basename -- "$log_path")" ;;

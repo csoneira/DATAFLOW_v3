@@ -1,4 +1,20 @@
 #!/usr/bin/env bash
+
+# Resolve the checkout from this script's location when the caller did not provide it.
+if [[ -z "${DATAFLOW_ROOT:-}" ]]; then
+  _repo_probe="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+  while [[ "$_repo_probe" != "/" && ! -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; do
+    _repo_probe="$(dirname -- "$_repo_probe")"
+  done
+  if [[ -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh"
+  else
+    echo "Could not locate repository root from ${BASH_SOURCE[0]}" >&2
+    exit 2
+  fi
+fi
+unset _repo_probe
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
 # Script: MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_0/REPROCESSING/STEP_0/prepare_reprocessing_metadata.sh
@@ -115,8 +131,8 @@ while [[ "${MASTER_DIR}" != "/" && "$(basename "${MASTER_DIR}")" != "MINGO_ANALY
 done
 REPO_ROOT="$(dirname "$(dirname "${MASTER_DIR}")")"
 
-config_file_shared="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_0/REPROCESSING/config_reprocessing.yaml"
-config_file_step="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_0/REPROCESSING/STEP_0/config_step_0.yaml"
+config_file_shared="${DATAFLOW_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_0/REPROCESSING/config_reprocessing.yaml"
+config_file_step="${DATAFLOW_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_0/REPROCESSING/STEP_0/config_step_0.yaml"
 
 is_reprocessing_step_enabled() {
   local station_id="$1"
@@ -128,6 +144,7 @@ is_reprocessing_step_enabled() {
   decision=$(python3 - "$cfg_path" "$station_id" "$step_id" <<'PY' || true
 import sys
 from pathlib import Path
+import os
 
 cfg_path, station_raw, step_raw = sys.argv[1:4]
 
@@ -194,7 +211,7 @@ if station_id is None or step_id is None:
   print("1")
   raise SystemExit(0)
 
-repo_root = Path.home() / "DATAFLOW_v3"
+repo_root = Path(os.environ["DATAFLOW_ROOT"])
 if str(repo_root) not in sys.path:
   sys.path.append(str(repo_root))
 
@@ -273,7 +290,7 @@ if ! is_reprocessing_step_enabled "$station" 0; then
   exit 0
 fi
 
-station_directory="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0${station}"
+station_directory="${DATAFLOW_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0${station}"
 step0_directory="${station_directory}/STAGE_0/REPROCESSING/STEP_0"
 metadata_directory="${step0_directory}/METADATA"
 input_directory="${step0_directory}/INPUT_FILES"
@@ -334,6 +351,7 @@ load_prepare_metadata_config() {
 import sys
 import shlex
 from pathlib import Path
+import os
 
 try:
   import yaml
@@ -380,7 +398,7 @@ def parse_positive_int(value):
     return None
   return parsed if parsed > 0 else None
 
-repo_root = Path.home() / "DATAFLOW_v3"
+repo_root = Path(os.environ["DATAFLOW_ROOT"])
 if str(repo_root) not in sys.path:
   sys.path.append(str(repo_root))
 

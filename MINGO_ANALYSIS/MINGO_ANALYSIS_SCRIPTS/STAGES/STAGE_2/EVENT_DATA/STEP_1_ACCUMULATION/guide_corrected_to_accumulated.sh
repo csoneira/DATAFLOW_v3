@@ -1,4 +1,20 @@
 #!/bin/bash
+
+# Resolve the checkout from this script's location when the caller did not provide it.
+if [[ -z "${DATAFLOW_ROOT:-}" ]]; then
+  _repo_probe="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+  while [[ "$_repo_probe" != "/" && ! -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; do
+    _repo_probe="$(dirname -- "$_repo_probe")"
+  done
+  if [[ -f "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$_repo_probe/CONFIG/CONTENTS/environment/dataflow.sh"
+  else
+    echo "Could not locate repository root from ${BASH_SOURCE[0]}" >&2
+    exit 2
+  fi
+fi
+unset _repo_probe
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
 # Script: MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_2/EVENT_DATA/STEP_1_ACCUMULATION/guide_corrected_to_accumulated.sh
@@ -89,7 +105,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 ALL_STATIONS=(0 1 2 3 4)
-TRAFFIC_LIGHT_DIR="$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/TRAFFIC_LIGHT"
+TRAFFIC_LIGHT_DIR="${DATAFLOW_ROOT}/OPERATIONS/OPERATIONS_RUNTIME/TRAFFIC_LIGHT"
 TRAFFIC_QUEUE_FILE="$TRAFFIC_LIGHT_DIR/stage2_event_step1_accumulation_station_queue.txt"
 
 SELF_INVOCATION_PIDS=()
@@ -316,7 +332,7 @@ process_station() {
   local station="$1"
   log_info "Processing station ${station} (STAGE_2 EVENT_DATA STEP_1_ACCUMULATION)."
 
-  local station_directory="$HOME/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0$station"
+  local station_directory="${DATAFLOW_ROOT}/MINGO_ANALYSIS/MINGO_ANALYSIS_STATIONS/MINGO0$station"
   local input_directory="$station_directory/STAGE_1_PRODUCTS/EVENT_DATA/PARQUET_LAKE"
   local base_working_directory="$station_directory/STAGE_2/EVENT_DATA/STEP_1_ACCUMULATION"
 

@@ -497,8 +497,7 @@ print("----------------------------------------------------------------------")
 # Load calibration
 home_path = str(resolve_home_path_from_config(config))
 tot_to_charge_cal_path = (
-    Path(home_path)
-    / "DATAFLOW_v3"
+    get_repo_root()
     / "MINGO_ANALYSIS"
     / "MINGO_ANALYSIS_SCRIPTS"
     / "ANCILLARY"
@@ -4350,7 +4349,7 @@ if side_calculations:
         
         # Load the LUT
         # Induction section calibration LUT.
-        induction_section_lut_file = f"{home_path}/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_2/EVENT_DATA/STEP_1_ACCUMULATION/INDUCTION_SECTION/induction_section_lut.csv"
+        induction_section_lut_file = get_repo_root() / "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/CONFIG_FILES/STAGE_2/EVENT_DATA/STEP_1_ACCUMULATION/INDUCTION_SECTION/induction_section_lut.csv"
         induction_section_lut_df = pd.read_csv(induction_section_lut_file)
 
         # Initialize a list to store the best induction section values for each plane

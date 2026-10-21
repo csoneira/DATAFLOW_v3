@@ -16,6 +16,7 @@ Notes: Keep behavior configuration-driven and reproducible.
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import fcntl
 import json
 import re
@@ -192,12 +193,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--intersteps-dir",
-        default="~/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS",
+        default=str(next(parent for parent in Path(__file__).resolve().parents if (parent / "CONFIG" / "config_paths.yaml").is_file()) / "MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS"),
         help="Base INTERSTEPS directory.",
     )
     parser.add_argument(
         "--param-mesh",
-        default="~/DATAFLOW_v3/MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv",
+        default=str(next(parent for parent in Path(__file__).resolve().parents if (parent / "CONFIG" / "config_paths.yaml").is_file()) / "MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/INTERSTEPS/STEP_0_TO_1/param_mesh.csv"),
         help="Path to param_mesh.csv.",
     )
     parser.add_argument(
@@ -216,7 +217,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--step-final-lock",
-        default="~/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/LOCKS/cron/sim_final.lock",
+        default=str(next(parent for parent in Path(__file__).resolve().parents if (parent / "CONFIG" / "config_paths.yaml").is_file()) / "OPERATIONS/OPERATIONS_RUNTIME/LOCKS/cron/sim_final.lock"),
         help=(
             "Lock file used by STEP_FINAL cron. If locked, STEP_10_TO_FINAL cleanup is skipped "
             "to avoid deleting active inputs."

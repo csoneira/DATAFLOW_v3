@@ -38,7 +38,7 @@ else
     HOSTNAME    = 1;
     SYSTEMNAME  = env_system;
     % Software location
-    HOME        = [getenv('HOME') '/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_0/REPROCESSING/UNPACKER_ZERO_STAGE_FILES/']; # <--------------------------------------------
+    HOME        = [fileparts(fileparts(fileparts(mfilename('fullpath')))) filesep];
     % System data structure
     SYS         = [HOME 'system/'];
     INTERPRETER = 'octave';

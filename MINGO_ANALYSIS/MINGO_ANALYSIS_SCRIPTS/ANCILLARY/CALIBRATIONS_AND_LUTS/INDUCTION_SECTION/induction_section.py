@@ -41,6 +41,7 @@ if str(REPO_ROOT) not in sys.path:
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.execution_logger import start_timer
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.path_config import (
     get_master_config_root,
+    get_repo_root,
     resolve_home_path_from_config,
 )
 
@@ -106,7 +107,7 @@ lut_df = pd.DataFrame(lut, columns=["avalanche_width", "cluster_size_1", "cluste
 print(lut_df)
 
 # Save the LUT to a file
-lut_df.to_csv(f"{home_path}/DATAFLOW_v3/MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/lut.csv", index=False)
+lut_df.to_csv(get_repo_root() / "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/ANCILLARY/lut.csv", index=False)
 
 print("LUT generated and saved to lut.csv")
 # %%

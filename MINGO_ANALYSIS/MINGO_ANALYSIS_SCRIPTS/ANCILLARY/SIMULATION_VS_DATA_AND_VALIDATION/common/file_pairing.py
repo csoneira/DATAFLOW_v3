@@ -35,8 +35,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.path_config import get_repo_root
 
-DATAFLOW_ROOT = Path("/home/mingo/DATAFLOW_v3")
+
+DATAFLOW_ROOT = get_repo_root()
 STATIONS_BASE = DATAFLOW_ROOT / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS"
 SIMULATION_PARAMS_CSV = DATAFLOW_ROOT / "MINGO_DIGITAL_TWIN/SIMULATION_OUTPUTS/SIMULATED_DATA/step_final_simulation_params.csv"
 EFF_COLS = [
