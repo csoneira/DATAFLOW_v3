@@ -11,7 +11,7 @@
 # source path | destination path below DOCUMENTATION/docs/assets
 
 # Dictionary validation: simulated efficiency versus estimated efficiency.
-MINGO_DICTIONARY_CREATION_AND_TEST/STEPS/STEP_1_SETUP/STEP_1_2_BUILD_DICTIONARY/OUTPUTS/PLOTS/1_2_7_scatter_eff_sim_vs_estimated.png | figures/analysis/efficiency/dictionary-simulated-vs-estimated-efficiency.png
+MINGO_DICTIONARY_CREATION_AND_TEST/THE_COMPLICATED_METHOD/STEPS/STEP_1_SETUP/STEP_1_3_BUILD_DICTIONARY/OUTPUTS/PLOTS/1_3_*_scatter_eff_sim_vs_estimated.png | figures/analysis/efficiency/dictionary-simulated-vs-estimated-efficiency.png
 
 # Angular response: efficiencies of inner planes versus zenith angle.
 DOCUMENTATION/docs/NOTEBOOKS/2026/02_FEBRUARY/FIGURES/2026_02_18_step3_eff2_eff3_theta.png | figures/analysis/efficiency/inner-plane-efficiency-vs-zenith-angle.png

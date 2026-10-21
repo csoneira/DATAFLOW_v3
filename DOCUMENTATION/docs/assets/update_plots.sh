@@ -20,6 +20,7 @@
 # line, relative to the workspace root). A source can optionally be followed
 # by "|" and its destination below the assets directory. Lines beginning with
 # "#" or blank are ignored. Each source may contain shell globs.
+# Missing generated sources leave the published assets unchanged.
 
 set -euo pipefail
 
@@ -61,7 +62,7 @@ while IFS= read -r entry; do
   shopt -u nullglob
 
   if [[ ${#files[@]} -eq 0 ]]; then
-    echo "[update_plots] no matches for '$source_entry'" >&2
+    echo "[update_plots] no matches for '$source_entry'; keeping existing asset" >&2
     continue
   fi
 
@@ -75,6 +76,10 @@ while IFS= read -r entry; do
   fi
 
   for file in "${files[@]}"; do
+    if [[ ! -e "$file" ]]; then
+      echo "[update_plots] source not generated: '$source_entry'; keeping existing asset" >&2
+      continue
+    fi
     if [[ "$destination_is_directory" == true ]]; then
       cp -u "$file" "$destination_path/"
     else

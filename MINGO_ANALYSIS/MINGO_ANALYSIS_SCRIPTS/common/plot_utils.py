@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import matplotlib
+import yaml
 
 matplotlib.use("Agg")  # ensure non-interactive backend for batch jobs
 
@@ -28,6 +29,7 @@ from matplotlib.backends.backend_pdf import PdfPages  # noqa: E402
 from matplotlib.artist import Artist  # noqa: E402
 from matplotlib.offsetbox import DrawingArea, TextArea, HPacker, VPacker  # noqa: E402
 from matplotlib.spines import Spine  # noqa: E402
+from .path_config import get_master_config_root
 
 __all__ = [
     "collect_saved_plot_paths",
@@ -35,10 +37,35 @@ __all__ = [
     "rasterize_figure",
     "pdf_save_rasterized_page",
     "save_rasterized_pdf",
+    "metadata_output_status_suffix",
 ]
 
 
 UNSUPPORTED_RASTER_TYPES = (TextArea, DrawingArea, HPacker, VPacker, Spine)
+
+
+def metadata_output_status_suffix(output_type: str) -> str:
+    """Return a visible report-title note when a STEP_1 metadata output is disabled."""
+    config_path = (
+        get_master_config_root()
+        / "STAGE_1"
+        / "EVENT_DATA"
+        / "STEP_1"
+        / "config_step_1.yaml"
+    )
+    try:
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return ""
+    outputs = config.get("metadata_outputs", {})
+    if not isinstance(outputs, dict) or output_type not in outputs:
+        return ""
+    value = outputs[output_type]
+    if value is False or value == 0 or (
+        isinstance(value, str) and value.strip().lower() in {"false", "0", "no", "off"}
+    ):
+        return f" — {output_type} metadata disabled in config; no new rows"
+    return ""
 
 
 def ensure_plot_state(
