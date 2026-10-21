@@ -2,8 +2,8 @@
 # =============================================================================
 # DATAFLOW_v3 Script Header v1
 # Script: FOR_MINGO_SYSTEMS/station_automation_scripts/hv_analysis/plateau_CAEN_CLI.sh
-# Purpose: Run a stepped high-voltage plateau scan on all eight CAEN channels
-#          with clean DAQ file boundaries.
+# Purpose: Run simultaneous or plane-by-plane CAEN HV scans with clean DAQ
+#          file boundaries and optional deadline-based dwell allocation.
 # Owner: DATAFLOW_v3 contributors
 # Sign-off: csoneira <csoneira@ucm.es>
 # Last Updated: 2026-07-30
@@ -27,16 +27,22 @@ START_HV="5.2"
 END_HV="5.5"
 STEP_HV="0.05"
 TIME_PER_VOLTAGE_MIN="60"
+POINTS=""
+FINISH_AT=""
 SAFE_HV="5.3"
+NOMINAL_HV=""
 SETTLE_SECONDS="300"
 CAEN_ISET="1"
 
 ASSUME_YES=0
 DRY_RUN=0
+TIME_WAS_SET=0
+SCAN_MODE="all-channels"
 
 CAEN_DIR="${PLATEAU_CAEN_DIR:-/home/rpcuser/CAEN}"
 CAEN_CONTROLLER="${PLATEAU_CAEN_CONTROLLER:-${CAEN_DIR}/monitor.py}"
 CAEN_CHANNELS="${PLATEAU_CAEN_CHANNELS:-0 1 2 3 4 5 6 7}"
+ALL_CAEN_CHANNELS="0 1 2 3 4 5 6 7"
 
 DAQ_DIR="${PLATEAU_DAQ_DIR:-/home/rpcuser/trbsoft/userscripts/trb}"
 DAQ_START_SCRIPT="${PLATEAU_DAQ_START_SCRIPT:-${DAQ_DIR}/startRun.sh}"
@@ -58,7 +64,7 @@ Run a high-voltage plateau scan using the CAEN power supply. Each voltage
 interval is placed in a fresh DAQ run:
 
   1. Stop DABC cleanly with SIGINT.
-  2. Apply the same voltage to CAEN channels 0 through 7.
+  2. Apply the voltage to all configured channels or only one detector plane.
   3. Wait for HV settling.
   4. Start DABC.
   5. Acquire for the requested time.
@@ -74,11 +80,18 @@ Options:
                            (default: ${END_HV})
   -i, --step KV           Positive HV increment in kV
                            (default: ${STEP_HV})
+  -p, --points N          Number of evenly spaced points, endpoints included
+  --finish-at DATETIME    Allocate dwell time to finish by a UTC date/time
+                           (example: '2026-10-19 06:00:00 UTC')
   -t, --time MIN          Measurement time per voltage in minutes
                            (default: ${TIME_PER_VOLTAGE_MIN})
   -f, --safe KV           Safe HV restored after the scan
                            (default: ${SAFE_HV})
-  -w, --settle SEC        Settling time after all eight channels are updated
+  --nominal KV            Required nominal HV for --plane-by-plane mode
+  --plane-by-plane        Scan P1..P4 in sequence, changing only each plane's
+                           pair (P1: 0,4; P2: 1,5; P3: 2,6; P4: 3,7)
+  --all-channels          Apply each point to all configured channels
+  -w, --settle SEC        Settling time after scan channels are updated
                            (default: ${SETTLE_SECONDS})
   -c, --current VALUE     CAEN ISET applied to every channel
                            (default: ${CAEN_ISET})
@@ -101,6 +114,8 @@ Environment overrides:
 Examples:
   ${PROGRAM_NAME} -s 5.1 -e 5.8 -i 0.06 -t 120 -f 5.6
   ${PROGRAM_NAME} --start 5.1 --end 5.8 --step 0.06 --time 120 --safe 5.6
+  ${PROGRAM_NAME} --start 5.4 --end 5.8 --points 5 --finish-at '2026-10-19 06:00:00 UTC' --safe 5.5
+  ${PROGRAM_NAME} --start 5.2 --end 5.8 --points 10 --time 1440 --nominal 5.5 --plane-by-plane
   ${PROGRAM_NAME} -s 5.1 -e 5.22 -i 0.06 -t 1 -f 5.3 -w 0 --dry-run --yes
 EOF
 }
@@ -158,9 +173,20 @@ while (( $# > 0 )); do
             STEP_HV="$2"
             shift 2
             ;;
+        -p|--points)
+            require_value "$1" "$#"
+            POINTS="$2"
+            shift 2
+            ;;
+        --finish-at)
+            require_value "$1" "$#"
+            FINISH_AT="$2"
+            shift 2
+            ;;
         -t|--time)
             require_value "$1" "$#"
             TIME_PER_VOLTAGE_MIN="$2"
+            TIME_WAS_SET=1
             shift 2
             ;;
         -f|--safe)
@@ -177,6 +203,19 @@ while (( $# > 0 )); do
             require_value "$1" "$#"
             CAEN_ISET="$2"
             shift 2
+            ;;
+        --nominal)
+            require_value "$1" "$#"
+            NOMINAL_HV="$2"
+            shift 2
+            ;;
+        --plane-by-plane)
+            SCAN_MODE="plane-by-plane"
+            shift
+            ;;
+        --all-channels)
+            SCAN_MODE="all-channels"
+            shift
             ;;
         -y|--yes)
             ASSUME_YES=1
@@ -225,11 +264,34 @@ is_nonnegative_integer "${DAQ_START_TIMEOUT_SECONDS}" ||
 is_nonnegative_integer "${FILE_CLOSE_GRACE_SECONDS}" ||
     die "PLATEAU_FILE_CLOSE_GRACE_SECONDS must be a nonnegative integer."
 
+if [[ -n "${POINTS}" ]]; then
+    is_nonnegative_integer "${POINTS}" && (( POINTS >= 1 )) ||
+        die "Point count must be a positive integer."
+fi
+
+if [[ -n "${FINISH_AT}" && "${TIME_WAS_SET}" == 1 ]]; then
+    die "Use either --finish-at or --time, not both."
+fi
+
 awk -v start="${START_HV}" -v end="${END_HV}" \
     'BEGIN { exit !(end >= start) }' ||
     die "Ending HV must be greater than or equal to starting HV."
 
 validate_channel_list
+
+if [[ "${SCAN_MODE}" == "plane-by-plane" ]]; then
+    [[ -n "${NOMINAL_HV}" ]] ||
+        die "--plane-by-plane requires --nominal KV so the other planes remain at their nominal value."
+    is_positive_decimal "${NOMINAL_HV}" ||
+        die "Nominal HV must be a positive number."
+fi
+
+if [[ -n "${FINISH_AT}" ]]; then
+    FINISH_EPOCH="$(date -d "${FINISH_AT}" +%s 2>/dev/null)" ||
+        die "Cannot parse --finish-at. Use a UTC time such as '2026-10-19 06:00:00 UTC'."
+    (( FINISH_EPOCH > $(date +%s) )) ||
+        die "--finish-at must be in the future."
+fi
 
 for command in awk date flock pgrep seq sleep tail; do
     command -v "${command}" >/dev/null 2>&1 ||
@@ -252,13 +314,48 @@ exec 9>"${LOCK_FILE}"
 flock -n 9 ||
     die "Another CAEN plateau scan is already active (lock: ${LOCK_FILE})."
 
-mapfile -t VOLTAGES < <(seq "${START_HV}" "${STEP_HV}" "${END_HV}")
+if [[ -n "${POINTS}" ]]; then
+    if (( POINTS == 1 )); then
+        awk -v start="${START_HV}" -v end="${END_HV}" 'BEGIN { exit !(start == end) }' ||
+            die "A one-point scan requires identical start and end voltages."
+        VOLTAGES=("${START_HV}")
+    else
+        mapfile -t VOLTAGES < <(
+            awk -v start="${START_HV}" -v end="${END_HV}" -v points="${POINTS}" \
+                'BEGIN { for (i = 0; i < points; i++) printf "%.6f\n", start + i * (end - start) / (points - 1) }'
+        )
+    fi
+else
+    mapfile -t VOLTAGES < <(seq "${START_HV}" "${STEP_HV}" "${END_HV}")
+fi
 (( ${#VOLTAGES[@]} > 0 )) ||
     die "The requested voltage sequence is empty."
 
-TIME_PER_VOLTAGE_SECONDS=$((TIME_PER_VOLTAGE_MIN * 60))
-MEASUREMENT_SECONDS=$((${#VOLTAGES[@]} * TIME_PER_VOLTAGE_SECONDS))
-EXPECTED_SECONDS=$((MEASUREMENT_SECONDS + ${#VOLTAGES[@]} * SETTLE_SECONDS))
+declare -a PLANE_CHANNELS=("0 4" "1 5" "2 6" "3 7")
+SCAN_GROUPS=1
+if [[ "${SCAN_MODE}" == "plane-by-plane" ]]; then
+    SCAN_GROUPS=4
+fi
+TOTAL_VOLTAGE_POINTS=$((${#VOLTAGES[@]} * SCAN_GROUPS))
+
+if [[ -n "${FINISH_AT}" ]]; then
+    remaining_seconds=$((FINISH_EPOCH - $(date +%s)))
+    # Reserve DAQ stop/start limits, settling intervals, and a ten-minute
+    # margin for CAEN command and system timing variation.
+    fixed_overhead=$((TOTAL_VOLTAGE_POINTS * SETTLE_SECONDS + \
+        TOTAL_VOLTAGE_POINTS * (DAQ_START_TIMEOUT_SECONDS + DAQ_STOP_TIMEOUT_SECONDS + FILE_CLOSE_GRACE_SECONDS) + \
+        DAQ_STOP_TIMEOUT_SECONDS + DAQ_START_TIMEOUT_SECONDS + 600))
+    available_measurement_seconds=$((remaining_seconds - fixed_overhead))
+    (( available_measurement_seconds > 0 )) ||
+        die "There is not enough time before --finish-at for settling, DAQ transitions, and the safety margin."
+    TIME_PER_VOLTAGE_SECONDS=$((available_measurement_seconds / TOTAL_VOLTAGE_POINTS))
+else
+    TIME_PER_VOLTAGE_SECONDS=$((TIME_PER_VOLTAGE_MIN * 60))
+fi
+MEASUREMENT_SECONDS=$((TOTAL_VOLTAGE_POINTS * TIME_PER_VOLTAGE_SECONDS))
+EXPECTED_SECONDS=$((MEASUREMENT_SECONDS + TOTAL_VOLTAGE_POINTS * SETTLE_SECONDS + \
+    TOTAL_VOLTAGE_POINTS * (DAQ_START_TIMEOUT_SECONDS + DAQ_STOP_TIMEOUT_SECONDS + FILE_CLOSE_GRACE_SECONDS) + \
+    DAQ_STOP_TIMEOUT_SECONDS + DAQ_START_TIMEOUT_SECONDS))
 
 MEASUREMENT_HOURS="$(
     awk -v seconds="${MEASUREMENT_SECONDS}" \
@@ -271,8 +368,19 @@ EXPECTED_HOURS="$(
 
 printf 'Plateau measurement time: %s hours\n' "${MEASUREMENT_HOURS}"
 printf 'Expected wall time including HV settling: %s hours\n' "${EXPECTED_HOURS}"
-printf 'Voltage points (%d): %s kV\n' "${#VOLTAGES[@]}" "${VOLTAGES[*]}"
-printf 'Safe final voltage: %s kV\n' "${SAFE_HV}"
+printf 'Scan mode: %s\n' "${SCAN_MODE}"
+printf 'Voltage points per scan group (%d): %s kV\n' "${#VOLTAGES[@]}" "${VOLTAGES[*]}"
+printf 'Total DAQ measurement points: %d\n' "${TOTAL_VOLTAGE_POINTS}"
+printf 'Dwell per point: %d seconds (%.2f hours)\n' "${TIME_PER_VOLTAGE_SECONDS}" \
+    "$(awk -v seconds="${TIME_PER_VOLTAGE_SECONDS}" 'BEGIN { printf "%.2f", seconds / 3600 }')"
+if [[ -n "${FINISH_AT}" ]]; then
+    printf 'Requested finish: %s\n' "${FINISH_AT}"
+fi
+if [[ "${SCAN_MODE}" == "plane-by-plane" ]]; then
+    printf 'Nominal voltage for non-scanned planes and final state: %s kV\n' "${NOMINAL_HV}"
+else
+    printf 'Safe final voltage: %s kV\n' "${SAFE_HV}"
+fi
 printf 'CAEN controller: %s\n' "${CAEN_CONTROLLER}"
 printf 'CAEN channels: %s\n' "${CAEN_CHANNELS}"
 printf 'CAEN ISET per channel: %s\n' "${CAEN_ISET}"
@@ -354,13 +462,18 @@ kv_to_volts() {
 }
 
 set_hv_all_channels() {
+    set_hv_channels "$1" "${CAEN_CHANNELS}"
+}
+
+set_hv_channels() {
     local voltage_kv="$1"
+    local channel_list="$2"
     local voltage_v
     local channel
     local -a channels=()
 
     voltage_v="$(kv_to_volts "${voltage_kv}")"
-    read -r -a channels <<<"${CAEN_CHANNELS}"
+    read -r -a channels <<<"${channel_list}"
 
     log "Applying ${voltage_kv} kV (${voltage_v} V) to CAEN channels: ${channels[*]}."
 
@@ -386,7 +499,7 @@ set_hv_all_channels() {
         log "CAEN channel ${channel}: VSET=${voltage_v} V, ISET=${CAEN_ISET}, ON."
     done
 
-    log "All configured CAEN channels are set to ${voltage_kv} kV."
+    log "CAEN channels ${channels[*]} are set to ${voltage_kv} kV."
 }
 
 start_daq() {
@@ -410,7 +523,7 @@ start_daq() {
     (
         cd "${DAQ_DIR}"
         nohup /bin/bash "${DAQ_START_SCRIPT}" \
-            >>"${DAQ_START_LOG}" 2>&1 </dev/null &
+            >>"${DAQ_START_LOG}" 2>&1 </dev/null 9>&- &
     )
 
     deadline=$((SECONDS + DAQ_START_TIMEOUT_SECONDS))
@@ -442,7 +555,14 @@ restore_after_failure() {
         log "Interrupted or failed; attempting safe recovery."
 
         if stop_daq_cleanly; then
-            if set_hv_all_channels "${SAFE_HV}"; then
+            if [[ "${SCAN_MODE}" == "plane-by-plane" ]]; then
+                recovery_result=0
+                set_hv_channels "${RECOVERY_HV}" "${ALL_CAEN_CHANNELS}" || recovery_result=$?
+            else
+                recovery_result=0
+                set_hv_all_channels "${RECOVERY_HV}" || recovery_result=$?
+            fi
+            if (( recovery_result == 0 )); then
                 start_daq ||
                     log "Safe HV was restored, but DAQ could not be restarted."
             else
@@ -460,37 +580,66 @@ trap 'exit 130' INT TERM
 trap 'restore_after_failure $?' EXIT
 
 HARDWARE_TOUCHED=1
+RECOVERY_HV="${SAFE_HV}"
+if [[ "${SCAN_MODE}" == "plane-by-plane" ]]; then
+    RECOVERY_HV="${NOMINAL_HV}"
+fi
 
 stop_daq_cleanly ||
     die "Cannot establish a clean initial DAQ boundary."
 
-for voltage in "${VOLTAGES[@]}"; do
-    printf '%s\n' '***************************'
-    log "Starting plateau point at ${voltage} kV."
+if [[ "${SCAN_MODE}" == "plane-by-plane" ]]; then
+    set_hv_channels "${NOMINAL_HV}" "${ALL_CAEN_CHANNELS}" ||
+        die "Failed to establish nominal HV on all CAEN channels."
 
-    set_hv_all_channels "${voltage}" ||
-        die "Failed to set all CAEN channels to ${voltage} kV."
+    for plane_index in 0 1 2 3; do
+        plane_number=$((plane_index + 1))
+        plane_channels="${PLANE_CHANNELS[plane_index]}"
+        log "Starting plane ${plane_number}; scanning channels ${plane_channels} while other planes stay at ${NOMINAL_HV} kV."
+        for voltage in "${VOLTAGES[@]}"; do
+            printf '%s\n' '***************************'
+            log "Starting plane ${plane_number} at ${voltage} kV."
+            set_hv_channels "${voltage}" "${plane_channels}" ||
+                die "Failed to set plane ${plane_number} channels to ${voltage} kV."
+            sleep_for "${SETTLE_SECONDS}" "HV settling"
+            start_daq || die "DAQ failed to start at plane ${plane_number}, ${voltage} kV."
+            sleep_for "${TIME_PER_VOLTAGE_SECONDS}" \
+                "plane ${plane_number} measurement at ${voltage} kV"
+            stop_daq_cleanly ||
+                die "DAQ failed to stop cleanly after plane ${plane_number}, ${voltage} kV."
+            log "Completed plane ${plane_number} point at ${voltage} kV."
+        done
+        set_hv_channels "${NOMINAL_HV}" "${plane_channels}" ||
+            die "Failed to restore plane ${plane_number} to nominal HV."
+    done
+    FINAL_HV="${NOMINAL_HV}"
+else
+    for voltage in "${VOLTAGES[@]}"; do
+        printf '%s\n' '***************************'
+        log "Starting simultaneous all-plane point at ${voltage} kV."
+        set_hv_all_channels "${voltage}" ||
+            die "Failed to set all CAEN channels to ${voltage} kV."
+        sleep_for "${SETTLE_SECONDS}" "HV settling"
+        start_daq || die "DAQ failed to start at ${voltage} kV."
+        sleep_for "${TIME_PER_VOLTAGE_SECONDS}" "measurement at ${voltage} kV"
+        stop_daq_cleanly ||
+            die "DAQ failed to stop cleanly after measurement at ${voltage} kV."
+        log "Completed simultaneous all-plane point at ${voltage} kV."
+    done
+    FINAL_HV="${SAFE_HV}"
+fi
 
-    sleep_for "${SETTLE_SECONDS}" "HV settling"
-
-    start_daq ||
-        die "DAQ failed to start at ${voltage} kV."
-
-    sleep_for "${TIME_PER_VOLTAGE_SECONDS}" \
-        "measurement at ${voltage} kV"
-
-    stop_daq_cleanly ||
-        die "DAQ failed to stop cleanly after measurement at ${voltage} kV."
-
-    log "Completed plateau point at ${voltage} kV."
-done
-
-set_hv_all_channels "${SAFE_HV}" ||
-    die "Failed to restore all CAEN channels to the safe HV."
+if [[ "${SCAN_MODE}" == "plane-by-plane" ]]; then
+    set_hv_channels "${FINAL_HV}" "${ALL_CAEN_CHANNELS}" ||
+        die "Failed to restore all CAEN channels to the nominal HV."
+else
+    set_hv_all_channels "${FINAL_HV}" ||
+        die "Failed to restore all configured CAEN channels to the final HV."
+fi
 
 start_daq ||
     die "DAQ failed to restart at the safe HV."
 
 COMPLETED=1
 
-log "Plateau measurement ended; safe HV ${SAFE_HV} kV restored on all configured CAEN channels and DAQ running."
+log "Plateau measurement ended; final HV ${FINAL_HV} kV restored on all configured CAEN channels and DAQ running."

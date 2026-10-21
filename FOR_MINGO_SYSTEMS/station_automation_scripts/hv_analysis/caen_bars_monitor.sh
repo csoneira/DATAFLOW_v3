@@ -8,17 +8,21 @@
 #   Plane 4: UP=CH3, DOWN=CH7
 #
 # Usage:
-#   ./caen_hv_bars.sh
-#   ./caen_hv_bars.sh /home/rpcuser/logs/hv_2026-07-30.log
-#   ./caen_hv_bars.sh /home/rpcuser/logs/hv_2026-07-30.log 2
+#   ./caen_bars_monitor.sh
+#   ./caen_bars_monitor.sh /home/rpcuser/logs/hv_2026-07-30.log
+#   ./caen_bars_monitor.sh /home/rpcuser/logs/hv_2026-07-30.log 2
 #
 # Arguments:
-#   1: log file
+#   1: optional legacy log path; its directory is used, but the newest log
+#      is selected automatically on every refresh
 #   2: refresh interval in seconds
 
 set -Eeuo pipefail
 
-LOG_FILE="${1:-/home/rpcuser/logs/hv_$(date +%F).log}"
+LOG_DIR="${CAEN_LOG_DIR:-/home/rpcuser/logs}"
+if [[ -n "${1:-}" ]]; then
+    LOG_DIR="${CAEN_LOG_DIR:-$(dirname -- "$1")}"
+fi
 REFRESH_SECONDS="${2:-30}"
 
 MIN_KV=0
@@ -28,6 +32,24 @@ BAR_WIDTH=60
 die() {
     printf 'ERROR: %s\n' "$*" >&2
     exit 1
+}
+
+latest_log_file() {
+    local candidate candidate_date best_date="" best_path=""
+    local candidates=("${LOG_DIR}"/done/hv_????-??-??.log "${LOG_DIR}"/hv_????-??-??.log)
+
+    for candidate in "${candidates[@]}"; do
+        [[ -f "${candidate}" ]] || continue
+        candidate_date="${candidate##*hv_}"
+        candidate_date="${candidate_date%.log}"
+        # The root copy wins over the archived copy while today's log is open.
+        if [[ -z "${best_date}" || "${candidate_date}" > "${best_date}" || "${candidate_date}" == "${best_date}" ]]; then
+            best_date="${candidate_date}"
+            best_path="${candidate}"
+        fi
+    done
+
+    printf '%s' "${best_path}"
 }
 
 [[ "${REFRESH_SECONDS}" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
@@ -89,16 +111,23 @@ render_bar() {
 }
 
 while true; do
+    LOG_FILE="$(latest_log_file)"
+
     tput civis
     clear
 
     printf 'CAEN HIGH-VOLTAGE MONITOR\n'
     printf 'Scale: %.0f kV [%*s] %.0f kV\n' \
         "${MIN_KV}" "${BAR_WIDTH}" "" "${MAX_KV}"
-    printf 'Log: %s\n\n' "${LOG_FILE}"
+    if [[ -n "${LOG_FILE}" ]]; then
+        printf 'Log: %s\n\n' "${LOG_FILE}"
+    else
+        printf 'Log: waiting for the newest hv_YYYY-MM-DD.log in %s or %s/done\n\n' \
+            "${LOG_DIR}" "${LOG_DIR}"
+    fi
 
-    if [[ ! -r "${LOG_FILE}" ]]; then
-        printf 'Waiting for readable log file...\n'
+    if [[ -z "${LOG_FILE}" || ! -r "${LOG_FILE}" ]]; then
+        printf 'Waiting for a readable CAEN HV log file...\n'
         sleep "${REFRESH_SECONDS}"
         continue
     fi

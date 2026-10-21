@@ -15,31 +15,50 @@
 
 cd /home/rpcuser/logs/'done'
 
+shopt -s nullglob
+log_dir=/home/rpcuser/logs
+today=$(date +%F)
+
+# Archive completed CAEN daily files without touching LIP's hv0_* files.
+for caen_log in "$log_dir"/hv_????-??-??.log; do
+    log_date=${caen_log##*/hv_}
+    log_date=${log_date%.log}
+    if [[ "$log_date" < "$today" ]]; then
+        mv -n -- "$caen_log" .
+    fi
+done
+
 pwd
 
-rm merged_Flow0.txt
-rm merged_hv0.txt
-rm merged_sensors_bus0.txt
-rm merged_sensors_bus1.txt
-rm merged_rates.txt
+rm -f merged_Flow0.txt merged_hv0.txt merged_sensors_bus0.txt merged_sensors_bus1.txt merged_rates.txt merged_hv_caen.txt
+: > merged_Flow0.txt
+: > merged_hv0.txt
+: > merged_sensors_bus0.txt
+: > merged_sensors_bus1.txt
+: > merged_rates.txt
+: > merged_hv_caen.txt
 
 echo 'Starting Flow merge'
 
-cat Flow0* >> merged_Flow0.txt
+flow_logs=(Flow0*)
+((${#flow_logs[@]})) && cat "${flow_logs[@]}" >> merged_Flow0.txt
 
 echo 'Flow done'
 
 echo 'Starting HV merge'
 
-cat hv0* >> merged_hv0.txt
+lip_hv_logs=(hv0*)
+((${#lip_hv_logs[@]})) && cat "${lip_hv_logs[@]}" >> merged_hv0.txt
 sed -i 's/T/ /' merged_hv0.txt
 
 echo 'HV done'
 
 echo 'Starting environmental sensors merge'
 
-cat sensors_bus0* >> merged_sensors_bus0.txt
-cat sensors_bus1* >> merged_sensors_bus1.txt
+sensors_bus0_logs=(sensors_bus0*)
+sensors_bus1_logs=(sensors_bus1*)
+((${#sensors_bus0_logs[@]})) && cat "${sensors_bus0_logs[@]}" >> merged_sensors_bus0.txt
+((${#sensors_bus1_logs[@]})) && cat "${sensors_bus1_logs[@]}" >> merged_sensors_bus1.txt
 
 sed -i 's/T/ /' merged_sensors_bus*
 sed -i 's/;//' merged_sensors_bus*
@@ -49,8 +68,15 @@ echo 'Done'
 
 echo 'Starting TRB rate merge'
 
-cat rates* >> merged_rates.txt
+rate_logs=(rates*)
+((${#rate_logs[@]})) && cat "${rate_logs[@]}" >> merged_rates.txt
 sed -i 's/T/ /' merged_rates*
 sed -i 's/;//' merged_rates*
 
 echo 'TRB rate merge done'
+
+echo 'Starting CAEN HV merge'
+caen_logs=(hv_????-??-??.log)
+((${#caen_logs[@]})) && cat "${caen_logs[@]}" >> merged_hv_caen.txt
+sed -i 's/T/ /' merged_hv_caen.txt
+echo 'CAEN HV merge done'

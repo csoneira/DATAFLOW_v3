@@ -24,6 +24,15 @@ cat hv0* > clean_hv0.txt
 sed -i 's/T/ /' clean_hv0.txt
 echo "HV file done"
 
+# CAEN logs use hv_YYYY-MM-DD.log and remain separate from LIP's hv0_* logs.
+caen_log="hv_$(date +%F).log"
+: > clean_hv_caen.txt
+if [[ -f "$caen_log" ]]; then
+    cat "$caen_log" > clean_hv_caen.txt
+fi
+sed -i 's/T/ /' clean_hv_caen.txt
+echo "CAEN HV file done"
+
 cat sensors_bus0* > clean_sensors_bus0.txt
 cat sensors_bus1* > clean_sensors_bus1.txt
 
