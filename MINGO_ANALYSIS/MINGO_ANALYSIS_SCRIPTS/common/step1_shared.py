@@ -37,7 +37,10 @@ from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.config_loader import (
     load_parameter_overrides,
 )
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.file_selection import extract_run_datetime_from_name
-from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.path_config import get_master_config_root
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.path_config import (
+    get_master_config_root,
+    get_repo_root,
+)
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.reprocessing_utils import infer_station_number_from_processing_name
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.selection_config import load_yaml_mapping
 
