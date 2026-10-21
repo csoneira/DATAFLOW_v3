@@ -19,6 +19,8 @@ import logging
 import os
 import shlex
 import subprocess
+import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 import telebot
@@ -30,6 +32,12 @@ TOKEN_PATH = TELEGRAM_DIR / "API_TOKEN.txt"
 RESTART_SCRIPT = TELEGRAM_DIR / "kill_bot_and_restart.sh"
 TERMINAL_PASSWORD_PATH = TELEGRAM_DIR / "TERMINAL_PASSWORD.txt"
 WELCOME_MESSAGE_PATH = TELEGRAM_DIR / "WELCOME_MESSAGE.txt"
+MINGO01_RECENT_OUTPUT = BASE_DIR / "OPERATIONS" / "OPERATIONS_RUNTIME" / "TELEGRAM_RECENT_MINGO01"
+MINGO01_RECENT_BUILDER = (
+    BASE_DIR / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS" / "STAGES"
+    / "STAGE_1_PRODUCTS_TESTS" / "build_mingo01_telegram_recent.py"
+)
+MINGO01_RECENT_BUILD_LOCK = threading.Lock()
 
 PDF_TARGETS = {
     "definitive_execution_report": {
@@ -267,6 +275,44 @@ PDF_COMMAND_ALIASES: dict[str, tuple[str, ...]] = {
     "backpressure_monitor": ("backpressure",),
 }
 
+RECENT_IMAGE_TARGETS = {
+    "mingo01_charge_offsets": {
+        "path": MINGO01_RECENT_OUTPUT / "calibration" / "01_charge_offsets.png",
+        "aliases": ("cal_charge",),
+        "description": "MINGO01 rolling 7-day calibration charge offsets",
+    },
+    "mingo01_tdif_offsets": {
+        "path": MINGO01_RECENT_OUTPUT / "calibration" / "02_tdif_offsets.png",
+        "aliases": ("cal_tdif",),
+        "description": "MINGO01 rolling 7-day calibration time-difference offsets",
+    },
+    "mingo01_tsum_offsets": {
+        "path": MINGO01_RECENT_OUTPUT / "calibration" / "03_tsum_offsets.png",
+        "aliases": ("cal_tsum",),
+        "description": "MINGO01 rolling 7-day calibration time-sum offsets",
+    },
+    "mingo01_slewing": {
+        "path": MINGO01_RECENT_OUTPUT / "calibration" / "04_slewing_parameters.png",
+        "aliases": ("cal_slew",),
+        "description": "MINGO01 rolling 7-day calibration slewing parameters",
+    },
+    "mingo01_calibration_availability": {
+        "path": MINGO01_RECENT_OUTPUT / "calibration" / "05_calibration_availability.png",
+        "aliases": ("cal_available",),
+        "description": "MINGO01 rolling 7-day calibration metadata availability",
+    },
+    "mingo01_recent_rates": {
+        "path": MINGO01_RECENT_OUTPUT / "environment" / "02_rates_and_reduced_field.png",
+        "aliases": ("rates_recent",),
+        "description": "MINGO01 rolling 7-day trigger, multiplexer and coincidence rates",
+    },
+    "mingo01_recent_environment": {
+        "path": MINGO01_RECENT_OUTPUT / "environment" / "01_environment_overview.png",
+        "aliases": ("env_recent",),
+        "description": "MINGO01 rolling 7-day temperature, pressure, humidity, HV and flow context",
+    },
+}
+
 BOT_COMMAND_ALIASES: dict[str, tuple[str, ...]] = {
     "task_pdfs": ("taskpdf",),
     "clean_dataflow_status": ("clean_status",),
@@ -292,6 +338,9 @@ DEFAULT_HELP_TEXT = (
     "Quick Start:\n"
     "  /start or /help - Show this guide.\n"
     "  /taskpdf - Interactive latest task PDF (station + task).\n"
+    "  /mingo01_recent - Send the recent MINGO01 calibration and rate plots.\n"
+    "  /cal_charge, /cal_tdif, /cal_tsum, /cal_slew - Calibration plots.\n"
+    "  /rates_recent, /env_recent - Recent rates and environment plots.\n"
     "  /term <password> - Enable terminal mode.\n"
     "  /exit - Disable terminal mode.\n"
     "  /restart - Restart this bot.\n\n"
@@ -351,6 +400,23 @@ def load_token(token_path: Path) -> str:
     return token
 
 
+if "--check-config" in sys.argv:
+    # Recovery smoke test: no polling, handlers, terminal commands or messages.
+    try:
+        checked_bot = telebot.TeleBot(load_token(TOKEN_PATH))
+        if not TERMINAL_PASSWORD_PATH.read_text(encoding="utf-8").strip():
+            raise ValueError("Empty terminal password")
+        if "--online" in sys.argv:
+            telebot.apihelper.CONNECT_TIMEOUT = 10
+            telebot.apihelper.READ_TIMEOUT = 10
+            checked_bot.get_me()
+    except Exception:
+        # API exception strings can contain credential-bearing URLs.
+        print("Telegram configuration/authentication check failed; inspect credential files privately.")
+        sys.exit(1)
+    print("Telegram configuration check passed; polling was not started.")
+    sys.exit(0)
+
 bot = telebot.TeleBot(load_token(TOKEN_PATH))
 HELP_TEXT = load_help_text(WELCOME_MESSAGE_PATH)
 TERMINAL_ACTIVE_CHATS: set[int] = set()
@@ -393,6 +459,51 @@ def send_pdf(chat_id: int, pdf_path: Path, description: str) -> None:
         bot.send_message(chat_id, f"Unable to send file due to error: {exc}")
 
 
+def send_image(chat_id: int, image_path: Path, description: str) -> None:
+    if not image_path.is_file():
+        bot.send_message(chat_id, f"Image not found: {image_path}")
+        return
+
+    created = datetime.fromtimestamp(image_path.stat().st_mtime)
+    caption = f"{description}\nGenerated: {created:%Y-%m-%d %H:%M}"
+    try:
+        with image_path.open("rb") as handle:
+            bot.send_photo(chat_id, handle, caption=caption)
+    except Exception as exc:  # pragma: no cover - defensive for runtime failures
+        logging.exception("Failed to send %s", image_path)
+        bot.send_message(chat_id, f"Unable to send image due to error: {exc}")
+
+
+def refresh_mingo01_recent_plots() -> tuple[bool, str]:
+    """Rebuild rolling MINGO01 reports from the current lake and log products."""
+    with MINGO01_RECENT_BUILD_LOCK:
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(MINGO01_RECENT_BUILDER),
+                    "--days",
+                    "7",
+                    "--output-dir",
+                    str(MINGO01_RECENT_OUTPUT),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=900,
+                cwd=BASE_DIR,
+            )
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or exc.stdout or str(exc)).strip()
+            logging.error("Failed to refresh MINGO01 recent plots: %s", detail)
+            return False, detail[-1200:]
+        except Exception as exc:
+            logging.exception("Failed to refresh MINGO01 recent plots")
+            return False, str(exc)
+    logging.info("Refreshed MINGO01 recent plots: %s", result.stdout.strip())
+    return True, result.stdout.strip()
+
+
 def register_static_pdf_command(commands: tuple[str, ...], path: Path, description: str) -> None:
     @bot.message_handler(commands=list(commands))
     def handler(message, pdf_path=path, caption=description):  # type: ignore[misc]
@@ -400,6 +511,21 @@ def register_static_pdf_command(commands: tuple[str, ...], path: Path, descripti
             return
         clear_task_pdf_request(message.chat.id)
         send_pdf(message.chat.id, pdf_path, caption)
+
+
+def register_static_image_command(commands: tuple[str, ...], path: Path, description: str) -> None:
+    @bot.message_handler(commands=list(commands))
+    def handler(message, image_path=path, caption=description):  # type: ignore[misc]
+        if maybe_handle_terminal_message(message):
+            return
+        clear_task_pdf_request(message.chat.id)
+        recent_paths = {payload["path"] for payload in RECENT_IMAGE_TARGETS.values()}
+        if image_path in recent_paths:
+            refreshed, detail = refresh_mingo01_recent_plots()
+            if not refreshed:
+                bot.send_message(message.chat.id, f"Could not refresh MINGO01 plots: {detail}")
+                return
+        send_image(message.chat.id, image_path, caption)
 
 
 def clear_task_pdf_request(chat_id: int) -> None:
@@ -473,6 +599,12 @@ for command, payload in PDF_TARGETS.items():
     register_static_pdf_command((command, *aliases), payload["path"], payload["description"])
     ALL_PDF_COMMANDS.update((command, *aliases))
 
+ALL_IMAGE_COMMANDS: set[str] = set()
+for command, payload in RECENT_IMAGE_TARGETS.items():
+    aliases = payload["aliases"]
+    register_static_image_command((command, *aliases), payload["path"], payload["description"])
+    ALL_IMAGE_COMMANDS.update((command, *aliases))
+
 
 @bot.message_handler(commands=["start", "help"])
 def send_welcome(message):
@@ -480,6 +612,29 @@ def send_welcome(message):
         return
     clear_task_pdf_request(message.chat.id)
     bot.send_message(message.chat.id, HELP_TEXT)
+
+
+@bot.message_handler(commands=["mingo01_recent"])
+def send_mingo01_recent(message):  # type: ignore[misc]
+    if maybe_handle_terminal_message(message):
+        return
+    clear_task_pdf_request(message.chat.id)
+    chat_id = message.chat.id
+    refreshed, detail = refresh_mingo01_recent_plots()
+    if not refreshed:
+        bot.send_message(chat_id, f"Could not refresh MINGO01 plots: {detail}")
+        return
+    bot.send_message(chat_id, "MINGO01 rolling 7-day results, rebuilt from current products: calibration, rates and environment.")
+    for key in (
+        "mingo01_charge_offsets",
+        "mingo01_tdif_offsets",
+        "mingo01_tsum_offsets",
+        "mingo01_slewing",
+        "mingo01_recent_rates",
+        "mingo01_recent_environment",
+    ):
+        payload = RECENT_IMAGE_TARGETS[key]
+        send_image(chat_id, payload["path"], payload["description"])
 
 
 @bot.message_handler(commands=["task_pdfs", *BOT_COMMAND_ALIASES.get("task_pdfs", ())])
@@ -743,6 +898,9 @@ def maybe_handle_terminal_message(message) -> bool:
 
 
 def _handle_cleaner_command(message, force: bool) -> None:
+    if force and message.chat.id not in TERMINAL_ACTIVE_CHATS:
+        bot.send_message(message.chat.id, "Authenticate with /terminal <password> before forcing cleanup.")
+        return
     clear_task_pdf_request(message.chat.id)
     try:
         response = run_cleaner(force)
@@ -835,12 +993,14 @@ def handle_unknown_text(message):
         return
 
     known_commands = {f"/{cmd}" for cmd in ALL_PDF_COMMANDS}
+    known_commands.update(f"/{cmd}" for cmd in ALL_IMAGE_COMMANDS)
     known_commands.update(
         {
             "/start",
             "/help",
             "/task_pdfs",
             "/taskpdf",
+            "/mingo01_recent",
             "/clean_dataflow_status",
             "/clean_status",
             "/clean_dataflow_force",

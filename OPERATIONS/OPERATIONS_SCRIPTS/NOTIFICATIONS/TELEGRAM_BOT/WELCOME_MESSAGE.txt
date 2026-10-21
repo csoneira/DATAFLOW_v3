@@ -5,6 +5,14 @@
 Quick Start:
   /start or /help - Show this guide.
   /taskpdf - Interactive latest task PDF (station + task).
+  /mingo01_recent - Send recent MINGO01 calibration, rate and environment plots.
+  /cal_charge - MINGO01 charge calibration offsets.
+  /cal_tdif - MINGO01 time-difference calibration offsets.
+  /cal_tsum - MINGO01 time-sum calibration offsets.
+  /cal_slew - MINGO01 calibration slewing parameters.
+  /cal_available - MINGO01 calibration metadata availability.
+  /rates_recent - MINGO01 trigger, multiplexer and coincidence rates.
+  /env_recent - MINGO01 temperature, pressure, humidity, HV and flow context.
   /term <password> - Enable terminal mode.
   /exit - Disable terminal mode.
   /restart - Restart this bot.
@@ -28,6 +36,9 @@ Other Analysis PDFs (short commands):
   /trig_rate - Trigger-rate metadata PDF.
   /config_meta - [📄 configurations_metadata_report.pdf] Configuration z-position metadata PDF.
   /rates_meta - Rates metadata PDF.
+  Note: /rates_meta is currently empty because rate-histogram metadata is disabled;
+  use /rates_recent for rates from the station log data. Logged HV is zero in
+  the current window, so its derived reduced-field value is not physically meaningful.
   /chi2_4p - [📄 task4_chi2_four_plane_report.pdf] Task 4 chi2 four-plane histogram PDF.
   /exec_meta - Execution metadata PDF.
   /eff_meta - Efficiency metadata PDF.

@@ -19,7 +19,7 @@
 
 set -euo pipefail
 
-PYTHON_BIN="${PYTHON_BIN:-/usr/bin/python3}"
+PYTHON_BIN="${PYTHON_BIN:-$HOME/DATAFLOW_v3/.venv/bin/python3}"
 BOT_SCRIPT="${BOT_SCRIPT:-$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_SCRIPTS/NOTIFICATIONS/TELEGRAM_BOT/mingo_analysis_bot.py}"
 LOG_DIR="${LOG_DIR:-$HOME/DATAFLOW_v3/OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS}"
 LOG_FILE="${LOG_FILE:-${LOG_DIR}/bot_analysis.log}"
@@ -46,6 +46,11 @@ fi
 
 if [[ ! -f "$BOT_SCRIPT" ]]; then
   log "ERROR: bot script missing at $BOT_SCRIPT"
+  exit 1
+fi
+
+if ! "$PYTHON_BIN" "$BOT_SCRIPT" --check-config >/dev/null 2>&1; then
+  log "ERROR: bot configuration is missing or invalid; startup skipped"
   exit 1
 fi
 
