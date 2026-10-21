@@ -1238,3 +1238,31 @@ the original inventory:
   such as `CONFIG/config_paths.yaml` instead.
 
 These are implementation notes, not exceptions to the relocated-checkout gate.
+
+## 27. Production move findings (2026-10-21)
+
+The pre-move machine audit found one active helper outside the repository-managed
+`.bashrc` block: a `watch_file_flow` function with an absolute
+`/home/mingo/DATAFLOW_v3` path. It was changed to use the dynamically populated
+`DATAFLOW_ROOT`. The setup-managed source block itself was regenerated from the
+new checkout as expected.
+
+The crontab outside its managed block contains old-checkout paths only in
+commented examples. These were retained as inactive user history; setup rendered
+the managed schedule for `/home/mingo/mingo-computing`, and the unmanaged crontab
+content was verified byte-for-byte unchanged.
+
+During the move window, an already-running bot process recreated a small
+`OPERATIONS/OPERATIONS_RUNTIME/CRON_LOGS/bot_analysis.log` under the old path.
+That log was preserved under the new checkout's runtime log directory, the bot
+was relaunched against the rebuilt virtual environment, and the residual old
+directory was removed. The stale monitor panes were stopped and the managed
+`pipeline_monitor` session was recreated from the new checkout.
+
+After the move, setup applied successfully and reported 148 passes, 3 warnings,
+and no failures. The warnings concern the missing QA summary, unavailable
+`mingo04` SSH, and an undocumented second backup-PC endpoint. GitHub Actions
+passed for both simulation checks and documentation deployment at the renamed
+repository. The Pages deployment reported success, although the first HTTP
+probe of the new public URL returned 404; that endpoint must be checked again
+after propagation before treating public-site availability as verified.
