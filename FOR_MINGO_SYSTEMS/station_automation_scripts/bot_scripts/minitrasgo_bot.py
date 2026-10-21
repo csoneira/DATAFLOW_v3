@@ -13,12 +13,14 @@ Notes: Keep behavior configuration-driven and reproducible.
 """
 
 from __future__ import annotations
+import json
 
 # Run with
 # python3 minitrasgo_bot.py
 
 import os
 import hmac
+import math
 import shlex
 import socket
 import subprocess
@@ -26,7 +28,7 @@ import sys
 from pathlib import Path
 
 import io
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -87,7 +89,9 @@ BOT_COMMAND_SPECS = [
     ("get_ip", "Show this station's IP addresses"),
     ("terminal", "Enable authenticated terminal mode"),
     ("exit", "Disable terminal mode"),
-    ("send_voltage", "Send current high voltage"),
+    ("send_voltage", "Send LIP power-supply voltage (legacy alias)"),
+    ("send_voltage_lip", "Send LIP power-supply voltage"),
+    ("send_voltage_caen", "Send voltage status for all CAEN channels"),
     ("send_gas_flow", "Send latest gas flow values"),
     ("send_internal_environment", "Send internal environment readings"),
     ("send_external_environment", "Send external environment readings"),
@@ -105,6 +109,8 @@ BOT_COMMAND_SPECS = [
     ("plot_multiplexers", "Plot multiplexer rates"),
     ("plot_coincidence_planes", "Plot coincidence-plane rates"),
     ("plot_all_trb_rates", "Plot all TRB rates"),
+    ("plot_hv_lip", "Plot LIP high voltage"),
+    ("plot_hv_caen", "Plot CAEN channel voltages"),
     ("restart_tunnel", "Restart the tunnel"),
     ("gas_weight_measurement", "Log a gas-bottle weight measurement"),
 ]
@@ -116,15 +122,42 @@ try:
 except Exception as exc:
     print(f"Warning: failed to publish Telegram command menu: {exc}")
 
-passwords = {
-    '6445882713': 'mingo@1234', # Cayetano
-    '6888390801': 'mingo_ito', # Victor Nouvilas
-    '5948691038': 'lidka_mingo', # Lidka
-    # Add more users and passwords as needed
-}
+def load_user_passwords() -> dict[str, str]:
+    """Load per-user bot passwords from local configuration, never from Git."""
+    env_value = os.environ.get("MINITRASGO_USER_PASSWORDS_JSON", "").strip()
+
+    try:
+        if env_value:
+            data = json.loads(env_value)
+        else:
+            password_path = BOT_DIRECTORY / "USER_PASSWORDS.json"
+            data = json.loads(password_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        print(
+            "Password-protected bot commands disabled: "
+            f"{BOT_DIRECTORY / 'USER_PASSWORDS.json'} not found"
+        )
+        return {}
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"Password-protected bot commands disabled: {exc}")
+        return {}
+
+    if not isinstance(data, dict):
+        print("Password-protected bot commands disabled: invalid password map")
+        return {}
+
+    return {
+        str(user_id): password
+        for user_id, password in data.items()
+        if str(user_id).strip() and isinstance(password, str) and password
+    }
+
+
+passwords = load_user_passwords()
 
 TERMINAL_ACTIVE_CHATS: set[int] = set()
 TERMINAL_CHAT_CWDS: dict[int, Path] = {}
+PENDING_PLOT_REQUESTS: dict[tuple[int, int], tuple[object, object]] = {}
 
 
 @bot.message_handler(commands=['get_username'])
@@ -169,7 +202,7 @@ def check_password(message, expected_password, func):
     user_id = message.from_user.id
     user_password = message.text
 
-    if user_password == expected_password:
+    if hmac.compare_digest(user_password, expected_password):
         func(message)
     else:
         bot.send_message(user_id, "Incorrect password. Action canceled.")
@@ -390,8 +423,7 @@ def send_welcome(message):
     chat_id = message.chat.id
     bot.reply_to(message, "Howdy, how are you doing? Type anything to see what you can do with the miniTRASGO bot.")
 
-@bot.message_handler(commands=['send_voltage'])
-def send_voltage(message):
+def _send_lip_voltage(message):
     binary_path = '/home/rpcuser/bin/HV/hv -b 0'
     print(binary_path)
 
@@ -415,6 +447,28 @@ def send_voltage(message):
     response = f'{result.stdout}' if result else "No response due to error."
     print(response)
     bot.send_message(message.chat.id, response)
+
+
+@bot.message_handler(commands=['send_voltage', 'send_voltage_lip'])
+def send_voltage_lip(message):
+    _send_lip_voltage(message)
+
+
+@bot.message_handler(commands=['send_voltage_caen'])
+def send_voltage_caen(message):
+    controller = Path('/home/rpcuser/CAEN/monitor.py')
+    if not controller.is_file():
+        bot.send_message(message.chat.id, "The CAEN power supply is not installed at this station.")
+        return
+    command = [str(controller), '-S']
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=20, check=False)
+        response = result.stdout.strip() or result.stderr.strip() or "CAEN monitor returned no status."
+        if result.returncode != 0:
+            response = f"CAEN status failed (exit {result.returncode}):\n{response}"
+        bot.send_message(message.chat.id, response[:MAX_MESSAGE_CHARS])
+    except Exception as exc:
+        bot.send_message(message.chat.id, f"Error reading CAEN voltage status: {exc}")
 
 
 @bot.message_handler(commands=['send_gas_flow'])
@@ -734,9 +788,8 @@ from datetime import datetime
 import io
 import os
 
-def parse_sensor_data(bash_command):
-    """Parse sensor data from bash command output"""
-    output = os.popen(bash_command).read()
+def parse_sensor_data(output):
+    """Parse sensor rows from one or more raw dated log files."""
     lines = output.strip().split('\n')
     
     timestamps = []
@@ -746,7 +799,8 @@ def parse_sensor_data(bash_command):
     
     for line in lines:
         if line.strip():
-            parts = line.split()
+            normalized = line.replace("T", " ").replace(";", "").replace("nan nan nan nan ", "")
+            parts = normalized.split()
             if len(parts) >= 4:
                 try:
                     # Parse timestamp
@@ -765,21 +819,149 @@ def parse_sensor_data(bash_command):
 
 number_of_plot_lines = 10000
 
+
+def _request_plot_days(message, renderer):
+    bot.send_message(message.chat.id, "How many days back should I plot? Floating admitted.")
+    PENDING_PLOT_REQUESTS[(message.chat.id, message.from_user.id)] = (message, renderer)
+
+
+def _format_plot_days(days):
+    return f"{days:g}"
+
+
+def _filter_plot_series(timestamps, days, *series):
+    end = datetime.now()
+    start = end - timedelta(days=days)
+    indices = [index for index, timestamp in enumerate(timestamps) if start <= timestamp <= end]
+    return ([timestamps[index] for index in indices],) + tuple(
+        [[values[index] for index in indices] for values in series]
+    )
+
+
+def _parse_log_timestamp(value):
+    return datetime.fromisoformat(value.replace("T", " "))
+
+
+def _read_recent_logs(pattern, days):
+    log_root = Path("/home/rpcuser/logs")
+    cutoff_date = (datetime.now() - timedelta(days=days)).date()
+    paths = sorted(log_root.glob(pattern)) + sorted((log_root / "done").glob(pattern))
+    lines = []
+    for path in paths:
+        try:
+            file_date = datetime.strptime(path.stem.rsplit("_", 1)[-1], "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if file_date < cutoff_date:
+            continue
+        try:
+            lines.extend(path.read_text(encoding="utf-8", errors="replace").splitlines())
+        except OSError:
+            continue
+    return "\n".join(lines)
+
+
+def _read_voltage_log(supply, days):
+    log_root = Path("/home/rpcuser/logs")
+    patterns = {"lip": "hv0_????-??-??.log", "caen": "hv_????-??-??.log"}
+    if supply not in patterns:
+        raise ValueError(f"Unknown HV supply: {supply}")
+
+    paths = sorted(log_root.glob(patterns[supply])) + sorted((log_root / "done").glob(patterns[supply]))
+    timestamps = []
+    values = [[] for _ in range(8 if supply == "caen" else 1)]
+    cutoff = datetime.now() - timedelta(days=days)
+    for path in paths:
+        try:
+            with path.open(encoding="utf-8", errors="replace") as log_file:
+                for line in log_file:
+                    parts = line.split()
+                    if not parts:
+                        continue
+                    try:
+                        timestamp = _parse_log_timestamp(parts[0])
+                        if timestamp < cutoff or timestamp > datetime.now():
+                            continue
+                        if supply == "caen":
+                            if len(parts) < 65:
+                                continue
+                            channel_values = [float(parts[2 + channel * 8]) for channel in range(8)]
+                        else:
+                            if len(parts) <= 13:
+                                continue
+                            channel_values = [float(parts[13])]
+                    except (ValueError, IndexError):
+                        continue
+                    timestamps.append(timestamp)
+                    for channel, value in enumerate(channel_values):
+                        values[channel].append(value)
+        except OSError:
+            continue
+
+    timestamps, *values = _filter_plot_series(timestamps, days, *values)
+    return timestamps, values
+
+
+def _plot_voltage(message, days, supply):
+    try:
+        timestamps, values = _read_voltage_log(supply, days)
+        if not timestamps:
+            bot.send_message(message.chat.id, f"No {supply.upper()} HV log data found in the last {_format_plot_days(days)} day(s).")
+            return
+        fig, ax = plt.subplots(figsize=(12, 6))
+        if supply == "caen":
+            for channel, channel_values in enumerate(values):
+                ax.plot(timestamps, channel_values, label=f"Channel {channel}", marker="o", linestyle="None", markersize=3)
+            ax.set_ylabel("Voltage (V)")
+            title, caption = "CAEN HV by channel", f"CAEN high voltage, last {_format_plot_days(days)} day(s)"
+        else:
+            ax.plot(timestamps, values[0], "bo", linestyle="None", label="LIP Vset", markersize=3)
+            ax.set_ylabel("Voltage (kV)")
+            title, caption = "LIP global high voltage", f"LIP high voltage, last {_format_plot_days(days)} day(s)"
+        ax.set_title(title)
+        ax.set_xlabel("Time")
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d %H:%M"))
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        fig.autofmt_xdate()
+        fig.tight_layout()
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=250, bbox_inches="tight")
+        buf.seek(0)
+        plt.close(fig)
+        bot.send_photo(message.chat.id, buf, caption=caption)
+    except Exception as exc:
+        bot.send_message(message.chat.id, f"Error generating {supply.upper()} HV plot: {exc}")
+
+
+@bot.message_handler(commands=['plot_hv_lip'])
+def plot_hv_lip(message):
+    _request_plot_days(message, lambda original, days: _plot_voltage(original, days, "lip"))
+
+
+@bot.message_handler(commands=['plot_hv_caen'])
+def plot_hv_caen(message):
+    _request_plot_days(message, lambda original, days: _plot_voltage(original, days, "caen"))
+
 @bot.message_handler(commands=['plot_temperature'])
 def plot_temperature(message):
+    _request_plot_days(message, _plot_temperature)
+
+
+def _plot_temperature(message, days):
     try:
         # Get internal data (bus1)
-        internal_bash = f"tail -n {number_of_plot_lines} /home/rpcuser/logs/clean_sensors_bus1*"
-        int_times, int_temps, _, _ = parse_sensor_data(internal_bash)
+        int_times, int_temps, _, _ = parse_sensor_data(_read_recent_logs("sensors_bus1_*.log", days))
         
         # Get external data (bus0)
-        external_bash = f"tail -n {number_of_plot_lines} /home/rpcuser/logs/clean_sensors_bus0*"
-        ext_times, ext_temps, _, _ = parse_sensor_data(external_bash)
+        ext_times, ext_temps, _, _ = parse_sensor_data(_read_recent_logs("sensors_bus0_*.log", days))
+        int_times, int_temps = _filter_plot_series(int_times, days, int_temps)
+        ext_times, ext_temps = _filter_plot_series(ext_times, days, ext_temps)
         
         # Create plot
         plt.figure(figsize=(12, 6))
-        plt.plot(int_times, int_temps, 'r-o', label='Internal Temperature', linewidth=2, markersize=4)
-        plt.plot(ext_times, ext_temps, 'b-o', label='External Temperature', linewidth=2, markersize=4)
+        plt.plot(int_times, int_temps, 'ro', label='Internal Temperature', markersize=4)
+        plt.plot(ext_times, ext_temps, 'bo', label='External Temperature', markersize=4)
         
         plt.title('Temperature Comparison - Internal vs External', fontsize=14, fontweight='bold')
         plt.xlabel('Time', fontsize=12)
@@ -808,19 +990,23 @@ def plot_temperature(message):
 
 @bot.message_handler(commands=['plot_pressure'])
 def plot_pressure(message):
+    _request_plot_days(message, _plot_pressure)
+
+
+def _plot_pressure(message, days):
     try:
         # Get internal data (bus1)
-        internal_bash = f"tail -n {number_of_plot_lines} /home/rpcuser/logs/clean_sensors_bus1*"
-        int_times, _, _, int_pressures = parse_sensor_data(internal_bash)
+        int_times, _, _, int_pressures = parse_sensor_data(_read_recent_logs("sensors_bus1_*.log", days))
         
         # Get external data (bus0)
-        external_bash = f"tail -n {number_of_plot_lines} /home/rpcuser/logs/clean_sensors_bus0*"
-        ext_times, _, _, ext_pressures = parse_sensor_data(external_bash)
+        ext_times, _, _, ext_pressures = parse_sensor_data(_read_recent_logs("sensors_bus0_*.log", days))
+        int_times, int_pressures = _filter_plot_series(int_times, days, int_pressures)
+        ext_times, ext_pressures = _filter_plot_series(ext_times, days, ext_pressures)
         
         # Create plot
         plt.figure(figsize=(12, 6))
-        plt.plot(int_times, int_pressures, 'r-o', label='Internal Pressure', linewidth=2, markersize=4)
-        plt.plot(ext_times, ext_pressures, 'b-o', label='External Pressure', linewidth=2, markersize=4)
+        plt.plot(int_times, int_pressures, 'ro', label='Internal Pressure', markersize=4)
+        plt.plot(ext_times, ext_pressures, 'bo', label='External Pressure', markersize=4)
         
         plt.title('Pressure Comparison - Internal vs External', fontsize=14, fontweight='bold')
         plt.xlabel('Time', fontsize=12)
@@ -849,19 +1035,23 @@ def plot_pressure(message):
 
 @bot.message_handler(commands=['plot_RH', 'plot_rh'])
 def plot_RH(message):
+    _request_plot_days(message, _plot_RH)
+
+
+def _plot_RH(message, days):
     try:
         # Get internal data (bus1)
-        internal_bash = f"tail -n {number_of_plot_lines} /home/rpcuser/logs/clean_sensors_bus1*"
-        int_times, _, int_humidity, _ = parse_sensor_data(internal_bash)
+        int_times, _, int_humidity, _ = parse_sensor_data(_read_recent_logs("sensors_bus1_*.log", days))
         
         # Get external data (bus0)
-        external_bash = f"tail -n {number_of_plot_lines} /home/rpcuser/logs/clean_sensors_bus0*"
-        ext_times, _, ext_humidity, _ = parse_sensor_data(external_bash)
+        ext_times, _, ext_humidity, _ = parse_sensor_data(_read_recent_logs("sensors_bus0_*.log", days))
+        int_times, int_humidity = _filter_plot_series(int_times, days, int_humidity)
+        ext_times, ext_humidity = _filter_plot_series(ext_times, days, ext_humidity)
         
         # Create plot
         plt.figure(figsize=(12, 6))
-        plt.plot(int_times, int_humidity, 'r-o', label='Internal Relative Humidity', linewidth=2, markersize=4)
-        plt.plot(ext_times, ext_humidity, 'b-o', label='External Relative Humidity', linewidth=2, markersize=4)
+        plt.plot(int_times, int_humidity, 'ro', label='Internal Relative Humidity', markersize=4)
+        plt.plot(ext_times, ext_humidity, 'bo', label='External Relative Humidity', markersize=4)
         
         plt.title('Relative Humidity Comparison - Internal vs External', fontsize=14, fontweight='bold')
         plt.xlabel('Time', fontsize=12)
@@ -889,9 +1079,8 @@ def plot_RH(message):
         bot.send_message(message.chat.id, f"Error generating humidity plot: {str(e)}")
 
 
-def parse_trb_rates_data(bash_command):
-    """Parse TRB rates data from bash command output"""
-    output = os.popen(bash_command).read()
+def parse_trb_rates_data(output):
+    """Parse TRB rate rows from one or more raw dated log files."""
     lines = output.strip().split('\n')
     
     timestamps = []
@@ -909,7 +1098,7 @@ def parse_trb_rates_data(bash_command):
     
     for line in lines:
         if line.strip():
-            parts = line.split()
+            parts = line.replace("T", " ").replace(";", "").split()
             if len(parts) >= 13:  # Expecting 13 columns based on your header
                 try:
                     # Parse timestamp
@@ -936,16 +1125,22 @@ def parse_trb_rates_data(bash_command):
 
 @bot.message_handler(commands=['plot_asserted_edge_accepted'])
 def plot_asserted_edge_accepted(message):
+    _request_plot_days(message, _plot_asserted_edge_accepted)
+
+
+def _plot_asserted_edge_accepted(message, days):
     try:
         # Get TRB rates data
-        trb_bash = f"tail -n {number_of_plot_lines} /home/rpcuser/logs/clean_rates*"
-        timestamps, asserted, edge, accepted, _, _, _, _, _, _, _, _ = parse_trb_rates_data(trb_bash)
+        timestamps, asserted, edge, accepted, _, _, _, _, _, _, _, _ = parse_trb_rates_data(
+            _read_recent_logs("rates_*.log", days)
+        )
+        timestamps, asserted, edge, accepted = _filter_plot_series(timestamps, days, asserted, edge, accepted)
         
         # Create plot
         plt.figure(figsize=(12, 6))
-        plt.plot(timestamps, asserted, 'r-o', label='Asserted', linewidth=2, markersize=4)
-        plt.plot(timestamps, edge, 'g-o', label='Edge', linewidth=2, markersize=4)
-        plt.plot(timestamps, accepted, 'b-o', label='Accepted', linewidth=2, markersize=4)
+        plt.plot(timestamps, asserted, 'ro', label='Asserted', markersize=4)
+        plt.plot(timestamps, edge, 'go', label='Edge', markersize=4)
+        plt.plot(timestamps, accepted, 'bo', label='Accepted', markersize=4)
         
         plt.title('TRB Rates - Asserted, Edge, Accepted', fontsize=14, fontweight='bold')
         plt.xlabel('Time', fontsize=12)
@@ -974,17 +1169,23 @@ def plot_asserted_edge_accepted(message):
 
 @bot.message_handler(commands=['plot_multiplexers'])
 def plot_multiplexers(message):
+    _request_plot_days(message, _plot_multiplexers)
+
+
+def _plot_multiplexers(message, days):
     try:
         # Get TRB rates data
-        trb_bash = f"tail -n {number_of_plot_lines} /home/rpcuser/logs/clean_rates*"
-        timestamps, _, _, _, m1, m2, m3, m4, _, _, _, _ = parse_trb_rates_data(trb_bash)
+        timestamps, _, _, _, m1, m2, m3, m4, _, _, _, _ = parse_trb_rates_data(
+            _read_recent_logs("rates_*.log", days)
+        )
+        timestamps, m1, m2, m3, m4 = _filter_plot_series(timestamps, days, m1, m2, m3, m4)
         
         # Create plot
         plt.figure(figsize=(12, 6))
-        plt.plot(timestamps, m1, 'r-o', label='Multiplexer 1', linewidth=2, markersize=4)
-        plt.plot(timestamps, m2, 'g-o', label='Multiplexer 2', linewidth=2, markersize=4)
-        plt.plot(timestamps, m3, 'b-o', label='Multiplexer 3', linewidth=2, markersize=4)
-        plt.plot(timestamps, m4, 'm-o', label='Multiplexer 4', linewidth=2, markersize=4)
+        plt.plot(timestamps, m1, 'ro', label='Multiplexer 1', markersize=4)
+        plt.plot(timestamps, m2, 'go', label='Multiplexer 2', markersize=4)
+        plt.plot(timestamps, m3, 'bo', label='Multiplexer 3', markersize=4)
+        plt.plot(timestamps, m4, 'mo', label='Multiplexer 4', markersize=4)
         
         plt.title('TRB Rates - Multiplexers 1-4', fontsize=14, fontweight='bold')
         plt.xlabel('Time', fontsize=12)
@@ -1013,17 +1214,23 @@ def plot_multiplexers(message):
 
 @bot.message_handler(commands=['plot_coincidence_planes'])
 def plot_coincidence_planes(message):
+    _request_plot_days(message, _plot_coincidence_planes)
+
+
+def _plot_coincidence_planes(message, days):
     try:
         # Get TRB rates data
-        trb_bash = f"tail -n {number_of_plot_lines} /home/rpcuser/logs/clean_rates*"
-        timestamps, _, _, _, _, _, _, _, cm1, cm2, cm3, cm4 = parse_trb_rates_data(trb_bash)
+        timestamps, _, _, _, _, _, _, _, cm1, cm2, cm3, cm4 = parse_trb_rates_data(
+            _read_recent_logs("rates_*.log", days)
+        )
+        timestamps, cm1, cm2, cm3, cm4 = _filter_plot_series(timestamps, days, cm1, cm2, cm3, cm4)
         
         # Create plot
         plt.figure(figsize=(12, 6))
-        plt.plot(timestamps, cm1, 'r-o', label='Coincidence Plane 1', linewidth=2, markersize=4)
-        plt.plot(timestamps, cm2, 'g-o', label='Coincidence Plane 2', linewidth=2, markersize=4)
-        plt.plot(timestamps, cm3, 'b-o', label='Coincidence Plane 3', linewidth=2, markersize=4)
-        plt.plot(timestamps, cm4, 'm-o', label='Coincidence Plane 4', linewidth=2, markersize=4)
+        plt.plot(timestamps, cm1, 'ro', label='Coincidence Plane 1', markersize=4)
+        plt.plot(timestamps, cm2, 'go', label='Coincidence Plane 2', markersize=4)
+        plt.plot(timestamps, cm3, 'bo', label='Coincidence Plane 3', markersize=4)
+        plt.plot(timestamps, cm4, 'mo', label='Coincidence Plane 4', markersize=4)
         
         plt.title('TRB Rates - Coincidence Planes 1-4', fontsize=14, fontweight='bold')
         plt.xlabel('Time', fontsize=12)
@@ -1052,18 +1259,26 @@ def plot_coincidence_planes(message):
 
 @bot.message_handler(commands=['plot_all_trb_rates'])
 def plot_all_trb_rates(message):
+    _request_plot_days(message, _plot_all_trb_rates)
+
+
+def _plot_all_trb_rates(message, days):
     try:
         # Get TRB rates data
-        trb_bash = f"tail -n {number_of_plot_lines} /home/rpcuser/logs/clean_rates*"
-        timestamps, asserted, edge, accepted, m1, m2, m3, m4, cm1, cm2, cm3, cm4 = parse_trb_rates_data(trb_bash)
+        timestamps, asserted, edge, accepted, m1, m2, m3, m4, cm1, cm2, cm3, cm4 = parse_trb_rates_data(
+            _read_recent_logs("rates_*.log", days)
+        )
+        timestamps, asserted, edge, accepted, m1, m2, m3, m4, cm1, cm2, cm3, cm4 = _filter_plot_series(
+            timestamps, days, asserted, edge, accepted, m1, m2, m3, m4, cm1, cm2, cm3, cm4
+        )
         
         # Create subplots
         fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(14, 12))
         
         # Plot 1: Asserted, Edge, Accepted
-        ax1.plot(timestamps, asserted, 'r-o', label='Asserted', linewidth=2, markersize=3)
-        ax1.plot(timestamps, edge, 'g-o', label='Edge', linewidth=2, markersize=3)
-        ax1.plot(timestamps, accepted, 'b-o', label='Accepted', linewidth=2, markersize=3)
+        ax1.plot(timestamps, asserted, 'ro', label='Asserted', markersize=3)
+        ax1.plot(timestamps, edge, 'go', label='Edge', markersize=3)
+        ax1.plot(timestamps, accepted, 'bo', label='Accepted', markersize=3)
         ax1.set_title('TRB Rates - Asserted, Edge, Accepted', fontsize=12, fontweight='bold')
         ax1.set_ylabel('Rate', fontsize=10)
         ax1.legend()
@@ -1072,10 +1287,10 @@ def plot_all_trb_rates(message):
         ax1.tick_params(axis='x', rotation=45)
         
         # Plot 2: Multiplexers
-        ax2.plot(timestamps, m1, 'r-o', label='Multiplexer 1', linewidth=2, markersize=3)
-        ax2.plot(timestamps, m2, 'g-o', label='Multiplexer 2', linewidth=2, markersize=3)
-        ax2.plot(timestamps, m3, 'b-o', label='Multiplexer 3', linewidth=2, markersize=3)
-        ax2.plot(timestamps, m4, 'm-o', label='Multiplexer 4', linewidth=2, markersize=3)
+        ax2.plot(timestamps, m1, 'ro', label='Multiplexer 1', markersize=3)
+        ax2.plot(timestamps, m2, 'go', label='Multiplexer 2', markersize=3)
+        ax2.plot(timestamps, m3, 'bo', label='Multiplexer 3', markersize=3)
+        ax2.plot(timestamps, m4, 'mo', label='Multiplexer 4', markersize=3)
         ax2.set_title('TRB Rates - Multiplexers 1-4', fontsize=12, fontweight='bold')
         ax2.set_ylabel('Rate', fontsize=10)
         ax2.legend()
@@ -1084,10 +1299,10 @@ def plot_all_trb_rates(message):
         ax2.tick_params(axis='x', rotation=45)
         
         # Plot 3: Coincidence Planes
-        ax3.plot(timestamps, cm1, 'r-o', label='Coincidence Plane 1', linewidth=2, markersize=3)
-        ax3.plot(timestamps, cm2, 'g-o', label='Coincidence Plane 2', linewidth=2, markersize=3)
-        ax3.plot(timestamps, cm3, 'b-o', label='Coincidence Plane 3', linewidth=2, markersize=3)
-        ax3.plot(timestamps, cm4, 'm-o', label='Coincidence Plane 4', linewidth=2, markersize=3)
+        ax3.plot(timestamps, cm1, 'ro', label='Coincidence Plane 1', markersize=3)
+        ax3.plot(timestamps, cm2, 'go', label='Coincidence Plane 2', markersize=3)
+        ax3.plot(timestamps, cm3, 'bo', label='Coincidence Plane 3', markersize=3)
+        ax3.plot(timestamps, cm4, 'mo', label='Coincidence Plane 4', markersize=3)
         ax3.set_title('TRB Rates - Coincidence Planes 1-4', fontsize=12, fontweight='bold')
         ax3.set_xlabel('Time', fontsize=10)
         ax3.set_ylabel('Rate', fontsize=10)
@@ -1116,6 +1331,23 @@ def plot_all_trb_rates(message):
 
 @bot.message_handler(func=lambda message: True)
 def echo_all(message):
+    request_key = (message.chat.id, message.from_user.id)
+    pending_plot = PENDING_PLOT_REQUESTS.get(request_key)
+    if pending_plot and message.text:
+        raw_days = message.text.strip()
+        try:
+            days = float(raw_days)
+        except ValueError:
+            days = None
+        if days is not None and math.isfinite(days) and 0 < days <= 3650:
+            original_message, renderer = PENDING_PLOT_REQUESTS.pop(request_key)
+            renderer(original_message, days)
+            return
+        if not raw_days.startswith("/"):
+            bot.send_message(message.chat.id, "Please reply with a number greater than 0 and at most 3650 days (for example, 0.5).")
+            return
+        PENDING_PLOT_REQUESTS.pop(request_key, None)
+
     if maybe_handle_terminal_message(message):
         return
     string = '''
@@ -1136,7 +1368,8 @@ def echo_all(message):
 
     Monitoring Commands (Text Reports):
     -------------------------------------
-    - /send_voltage: Get a report on the current high voltage.
+    - /send_voltage or /send_voltage_lip: Get the LIP global high voltage status.
+    - /send_voltage_caen: Get the status of all CAEN HV channels.
     - /send_gas_flow: Receive the latest gas flow values for each RPC.
     - /send_internal_environment: Get data from the internal environment sensors.
     - /send_external_environment: Get data from the external environment sensors.
@@ -1153,6 +1386,9 @@ def echo_all(message):
     - /plot_multiplexers: Plot the rates of all 4 multiplexers.
     - /plot_coincidence_planes: Plot the rates of all 4 coincidence planes.
     - /plot_all_trb_rates: View a comprehensive plot with all TRB rates in 3 subplots.
+    - /plot_hv_lip: Plot the LIP global HV log.
+    - /plot_hv_caen: Plot CAEN HV logs for all eight channels.
+    Each plot command asks for the number of days to include.
 
     -------------------------------------------
 
