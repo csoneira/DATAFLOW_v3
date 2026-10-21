@@ -14,6 +14,21 @@ spec.loader.exec_module(recovery)
 
 
 class RecoverySafetyTests(unittest.TestCase):
+    def test_repository_validation_is_independent_of_checkout_basename(self):
+        with tempfile.TemporaryDirectory(prefix='relocated-checkout-') as temp:
+            root = Path(temp) / 'different-name'
+            for relative in (
+                'CONFIG/CONTENTS/environment/dataflow.sh',
+                'CONFIG/SETUP/recovery.py',
+                'MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS',
+                'MINGO_DIGITAL_TWIN',
+                'OPERATIONS/OPERATIONS_RUNTIME',
+            ):
+                path = root / relative
+                path.mkdir(parents=True, exist_ok=True)
+            self.assertTrue(recovery.is_repository_root(root))
+            self.assertTrue(recovery.safe_repository_path(root))
+
     def test_pause_preserves_unrelated_jobs(self):
         unrelated = 'MAILTO=local-user\n15 * * * * /usr/local/bin/personal-backup\n'
         old = '* * * * * crontab $HOME/DATAFLOW_v3/CONFIG/add_to_crontab.info\n'

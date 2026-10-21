@@ -37,9 +37,20 @@ class RepoPaths:
     operations_runtime_root: Path
 
 
+def discover_repo_root(start_path: str | Path = __file__) -> Path:
+    """Find the checkout containing an analysis path utility or script."""
+    start = Path(start_path).resolve()
+    for parent in (start.parent, *start.parents):
+        if (
+            (parent / "CONFIG" / "config_paths.yaml").is_file()
+            and (parent / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS").is_dir()
+        ):
+            return parent
+    raise RuntimeError(f"Could not locate repository root from {start}")
+
+
 def _discover_repo_root() -> Path:
-    # MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/common/path_config.py -> DATAFLOW_v3
-    return Path(__file__).resolve().parents[3]
+    return discover_repo_root(__file__)
 
 
 def _resolve_config_path(config_path: str | Path | None = None) -> Path:
@@ -68,16 +79,14 @@ def load_repo_paths(config_path: str | Path | None = None) -> RepoPaths:
     config = _read_yaml_mapping(_resolve_config_path(config_path))
 
     configured_home = config.get("home_path")
-    home_path = Path(str(configured_home)).expanduser() if configured_home else discovered_root.parent
-
-    configured_repo_name = str(config.get("repo_name") or "").strip()
-    repo_name = configured_repo_name or discovered_root.name
+    home_path = Path(str(configured_home)).expanduser() if configured_home else Path.home()
+    repo_name = discovered_root.name
 
     configured_repo_root = config.get("repo_root")
     if configured_repo_root:
         repo_root = Path(str(configured_repo_root)).expanduser()
-    elif configured_home or configured_repo_name:
-        repo_root = home_path / repo_name
+        if not repo_root.is_absolute():
+            repo_root = discovered_root / repo_root
     else:
         repo_root = discovered_root
 

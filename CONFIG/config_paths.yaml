@@ -1,4 +1,3 @@
-# Canonical path configuration for DATAFLOW_v3.
-# Keep user-specific absolute paths defined only here.
+# Optional host-home override. The repository checkout is discovered from the
+# location of the path utility, so this setting never selects its basename.
 home_path: "~"
-repo_name: DATAFLOW_v3

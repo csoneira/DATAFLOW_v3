@@ -34,9 +34,9 @@ SCRIPT_PATH = Path(__file__).resolve()
 
 def detect_repo_root() -> Path:
     for parent in SCRIPT_PATH.parents:
-        if (parent / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS").is_dir() and (parent / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS").is_dir():
+        if (parent / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS").is_dir() and (parent / "CONFIG" / "config_paths.yaml").is_file():
             return parent
-    return Path.home() / "DATAFLOW_v3"
+    raise RuntimeError(f"Could not locate repository root from {SCRIPT_PATH}")
 
 
 REPO_ROOT = detect_repo_root()

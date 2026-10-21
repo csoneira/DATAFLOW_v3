@@ -35,6 +35,23 @@ END = '# END DATAFLOW MANAGED CRON'
 COMMANDS = 'bash python3 git tmux crontab ssh ssh-keygen ssh-copy-id rsync flock watch pgrep pkill ps nohup find xargs awk sed grep logger swapoff swapon sudo visudo readlink realpath date sort uniq cut head tail wc tr timeout sha256sum stat df du mktemp tar gzip gunzip bzip2 unzip wget curl jq octave tput'.split()
 
 
+def is_repository_root(root):
+    """Check required repository structure without depending on its basename."""
+    root = Path(root)
+    required = (
+        root / 'CONFIG/CONTENTS/environment/dataflow.sh',
+        root / 'CONFIG/SETUP/recovery.py',
+        root / 'MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS',
+        root / 'MINGO_DIGITAL_TWIN',
+        root / 'OPERATIONS/OPERATIONS_RUNTIME',
+    )
+    return root.is_dir() and all(path.exists() for path in required)
+
+
+def safe_repository_path(root):
+    return not re.search(r'[^/a-zA-Z0-9_.-]', str(Path(root)))
+
+
 def run(args, *, timeout=30, env=None, input=None, cwd=ROOT):
     try:
         return subprocess.run([str(x) for x in args], text=True, input=input,
@@ -249,8 +266,8 @@ def inspect_secrets(report, network):
 def doctor(args):
     report = Report()
     report.check(os.getuid() != 0 and HOME == Path(pwd.getpwuid(os.getuid()).pw_dir), 'Run as the pipeline user with its real HOME')
-    report.check(ROOT == HOME / 'DATAFLOW_v3', f'Canonical checkout is {HOME}/DATAFLOW_v3')
-    report.check(not re.search(r'[^/a-zA-Z0-9_.-]', str(ROOT)), 'Repository path is safe for legacy unquoted shell paths')
+    report.check(is_repository_root(ROOT), f'Repository structure is valid at {ROOT}')
+    report.check(safe_repository_path(ROOT), 'Repository path has no shell-unsafe characters')
     report.check(Path('/etc/debian_version').exists(), 'Debian/Ubuntu host')
     for cmd in COMMANDS:
         report.check(shutil.which(cmd, path=cron_env()['PATH']) is not None, f'Executable {cmd} in cron PATH')
@@ -500,8 +517,8 @@ def setup(args):
     if args.check: return doctor(argparse.Namespace(offline=args.offline, prerequisites=False))
     if os.getuid() == 0 or HOME != Path(pwd.getpwuid(os.getuid()).pw_dir):
         raise RuntimeError('Run as the pipeline user, not sudo setup.sh')
-    if args.apply and (ROOT != HOME / 'DATAFLOW_v3' or re.search(r'[^/a-zA-Z0-9_.-]', str(ROOT))):
-        raise RuntimeError('Legacy scripts require the canonical checkout at $HOME/DATAFLOW_v3 with a shell-safe path')
+    if args.apply and (not is_repository_root(ROOT) or not safe_repository_path(ROOT)):
+        raise RuntimeError('Setup requires a structurally complete checkout at a shell-safe path')
     if not Path('/etc/debian_version').exists(): raise RuntimeError('Supported bootstrap target: Debian/Ubuntu')
     if args.dry_run or not args.apply:
         print('DRY RUN: no writes, package installs, network probes, cron changes, or key generation.')

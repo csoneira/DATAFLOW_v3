@@ -22,9 +22,9 @@ log = logging.getLogger("compare_task4_efficiency")
 
 def _find_repo_root(script_path: Path) -> Path:
     for candidate in script_path.resolve().parents:
-        if (candidate / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS").is_dir() and (candidate / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_STATIONS").is_dir():
+        if (candidate / "CONFIG" / "config_paths.yaml").is_file() and (candidate / "MINGO_ANALYSIS" / "MINGO_ANALYSIS_SCRIPTS").is_dir():
             return candidate
-    raise RuntimeError(f"Could not locate DATAFLOW_v3 repo root from {script_path}")
+    raise RuntimeError(f"Could not locate repository root from {script_path}")
 
 
 REPO_ROOT = _find_repo_root(Path(__file__))
