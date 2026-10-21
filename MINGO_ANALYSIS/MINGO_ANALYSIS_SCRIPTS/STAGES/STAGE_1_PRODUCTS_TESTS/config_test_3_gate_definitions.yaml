@@ -364,7 +364,7 @@ gates:
 
   # Strip 2 in every responding plane; allow at most one 0000 plane so the
   # corresponding 3-of-4 events can be used to measure plane efficiency.
-  - enabled: false
+  - enabled: true
     name: "topology_0100_with_up_to_one_empty_plane"
     short_label: "0100_3of4"
     condition:
@@ -384,7 +384,7 @@ gates:
               - {all: [{column: "p3_strip_topology", op: "eq", value: "0000"}, {column: "p4_strip_topology", op: "eq", value: "0000"}]}
 
   # Strip 3 in every responding plane, again allowing at most one 0000 plane.
-  - enabled: false
+  - enabled: true
     name: "topology_0010_with_up_to_one_empty_plane"
     short_label: "0010_3of4"
     condition:
@@ -397,7 +397,7 @@ gates:
 
   # In every responding plane accept strip 2, strips 2+3, or strip 3, with at
   # most one 0000 plane.
-  - enabled: false
+  - enabled: true
     name: "topology_0100_or_0110_or_0010_with_up_to_one_empty_plane"
     short_label: "MID_3of4"
     condition:
@@ -410,7 +410,7 @@ gates:
 
   # Every plane has cluster size 0 or 1, and at least three planes have one
   # active strip. This accepts 3-of-4 and 4-of-4 events but rejects 2-of-4.
-  - enabled: false
+  - enabled: true
     name: "cluster_size_zero_or_one_all_planes_three_or_four_planes"
     short_label: "CS01_3of4"
     condition:
@@ -428,7 +428,7 @@ gates:
   # As in no_disjoint_plane_topology, reject disjoint two-strip patterns.
   # Additionally allow only cluster sizes 0, 1, or 2 and require at least
   # three responding planes (cluster size 1 or 2).
-  - enabled: false
+  - enabled: true
     name: "no_disjoint_plane_topology_cluster_size_zero_to_two_three_or_four_planes"
     short_label: "NG_CS02_3of4"
     condition:
@@ -473,7 +473,7 @@ gates:
   # Three- or four-plane fitted tracks whose projected crossing is inside a
   # centered fiducial circle at every plane. The projection also evaluates the
   # crossing at the missing plane in a three-plane event.
-  - enabled: false
+  - enabled: true
     name: "fiducial_track_three_or_four_planes"
     short_label: "FID_3of4"
     condition:

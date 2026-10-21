@@ -11774,10 +11774,9 @@ _need_slewing_observables = slewing_correction or any(
 )
 _need_slewing_fit = False
 _defer_tsum_calibration_until_late_slot = True
-_need_time_pair_residuals = (
-    (not _defer_tsum_calibration_until_late_slot)
-    and (calculate_T_sum_calibration or _need_slewing_observables)
-)
+# These observables describe the pre-offset calibration sample. Build their
+# residuals when requested even though applying T_sum offsets is deferred.
+_need_time_pair_residuals = _need_slewing_observables
 
 y_lookup = {
     1: y_pos_T[0],
@@ -11807,7 +11806,7 @@ if _need_time_pair_residuals:
             "Saving pair-level T_sum residual and charge data for future slewing studies."
         )
 
-if (not _defer_tsum_calibration_until_late_slot) and _need_slewing_observables:
+if _need_slewing_observables:
 
     print("----------------------------------------------------------------------")
     if slewing_correction:
