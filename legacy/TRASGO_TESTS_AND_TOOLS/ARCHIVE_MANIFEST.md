@@ -17,7 +17,6 @@ The following source snapshots are retained in this archive. The SHA column is t
 | `Neutrons_tests/pyscript/neutrons.py` | `92577311bfc6e429027329454c41e5f0aa303a2f` | Neutron energy/rate analysis |
 | `PID/naive_deltas.py` | `df0de4f2962b757a31526ad87d7ae18b171547d6` | PID exploratory analysis |
 | `PSD/pseudoPSA.py` | `1674a670598c9b3ea569e65969bc0aa5a380859f` | Pulse-shape / charge analysis |
-| `Phi distribution study/phi_peaks_study.py` | `e35806db36740644f2b43141daed33116acad8fb` | Phi/azimuth distribution study |
 | `Pressure NMDB study/pressure_CALMA.py` | `15ebe61c4bcfb80983270e0e160e52fef40fcc99` | Pressure-coefficient study |
 | `Giffers and a GUI/new_GUI.py` | `6e6e026f6f90dd8ed9c9b71b1f904f86022b0851` | Historical GUI prototype |
 | `SCIMIN/position_study_in_scint.py` | `57e4024c8d470b189bec0606f28fbf37decacaca` | SiPM position reconstruction |
