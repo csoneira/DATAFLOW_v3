@@ -202,36 +202,6 @@ def _build_temp_pdf_path(target_path: Path) -> Path:
     return candidate
 
 
-def _write_task0_pdf_from_pngs(plot_paths: list[Path], pdf_path: Path, figure_directory: Path) -> None:
-    valid_plot_paths = [path for path in plot_paths if path.exists()]
-    if not valid_plot_paths:
-        return
-
-    import matplotlib.pyplot as plt
-
-    pdf_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_pdf_path = _build_temp_pdf_path(pdf_path)
-    try:
-        with PdfPages(temp_pdf_path) as pdf:
-            for png_path in valid_plot_paths:
-                img = Image.open(png_path)
-                fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
-                ax.imshow(img)
-                ax.axis("off")
-                pdf_save_rasterized_page(pdf, fig, bbox_inches="tight")
-                plt.close(fig)
-        os.replace(temp_pdf_path, pdf_path)
-    finally:
-        if temp_pdf_path.exists():
-            temp_pdf_path.unlink()
-
-    for png_path in valid_plot_paths:
-        try:
-            png_path.unlink()
-        except OSError as exc:
-            print(f"Error removing temporary Task 0 PNG '{png_path}': {exc}", force=True)
-    if figure_directory.exists():
-        shutil.rmtree(figure_directory)
 
 
 def _resolve_station_conf_value(
@@ -627,11 +597,8 @@ if create_debug_plots and task0_plot_enabled("debug_suite"):
         force=True,
     )
 
-if create_pdf and saved_plot_paths and figure_directory is not None:
-    save_pdf_filename = f"mingo{str(station).zfill(2)}_task0_{basename_no_ext}_{date_execution}.pdf"
-    save_pdf_path = directories["pdf"] / save_pdf_filename
-    print(f"Creating Task 0 PDF with all plots in {save_pdf_path}", force=True)
-    _write_task0_pdf_from_pngs(saved_plot_paths, save_pdf_path, figure_directory)
+# Runtime PDF branch removed: runtime plots are PNG-only.
+pass
 
 coincidence_df = read_df.loc[coincidence_mask].copy()
 self_trigger_df = read_df.loc[self_trigger_mask].copy()

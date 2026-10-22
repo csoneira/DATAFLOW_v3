@@ -803,3 +803,28 @@
 #     else:
 #         print("Task 1 acquisition-rate-by-task-tt plot skipped: no valid tt_task0_raw/datetime rows.")
 
+# ============================================================================
+# ARCHIVED FROM: script_1_raw_to_clean.py
+# REASON: runtime PDF branch disabled by the PNG-only runtime plotting contract
+# ============================================================================
+#     if globals().get("create_pdf", False) and direct_pdf_path:
+#         if _direct_pdf_pages is None:
+#             _direct_pdf_target_path = str(direct_pdf_path)
+#             _direct_pdf_temp_path = _build_temp_pdf_path(_direct_pdf_target_path)
+#             _direct_pdf_pages = PdfPages(_direct_pdf_temp_path)
+#         pdf_kwargs = dict(savefig_kwargs)
+#         dpi = int(pdf_kwargs.pop("dpi", 150))
+#         pdf_kwargs.pop("format", None)
+#         pdf_save_rasterized_page(_direct_pdf_pages, target_fig, dpi=dpi, **pdf_kwargs)
+#         _direct_pdf_page_count += 1
+#         return
+
+# ============================================================================
+# ARCHIVED FROM: script_1_raw_to_clean.py
+# REASON: runtime PDF branch disabled by the PNG-only runtime plotting contract
+# ============================================================================
+#     if not create_pdf:
+#         if os.path.exists(figure_directory):
+#             shutil.rmtree(figure_directory)
+#         return
+

@@ -553,17 +553,8 @@ def save_plot_figure(
         return
     target_fig = fig if fig is not None else plt.gcf()
     direct_pdf_path = globals().get("save_pdf_path")
-    if globals().get("create_pdf", False) and direct_pdf_path:
-        if _direct_pdf_pages is None:
-            _direct_pdf_target_path = str(direct_pdf_path)
-            _direct_pdf_temp_path = _build_temp_pdf_path(_direct_pdf_target_path)
-            _direct_pdf_pages = PdfPages(_direct_pdf_temp_path)
-        pdf_kwargs = dict(savefig_kwargs)
-        dpi = int(pdf_kwargs.pop("dpi", 150))
-        pdf_kwargs.pop("format", None)
-        pdf_save_rasterized_page(_direct_pdf_pages, target_fig, dpi=dpi, **pdf_kwargs)
-        _direct_pdf_page_count += 1
-        return
+    # Runtime PDF branch removed: runtime plots are PNG-only.
+    pass
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     target_fig.savefig(save_path, **savefig_kwargs)
 
@@ -3121,35 +3112,8 @@ pass
 
 _finalize_stage_t0 = _t_sec
 figure_directory = base_directories["figure_directory"]
-if create_pdf:
-    print(f"Creating PDF with all plots in {save_pdf_path}")
-    existing_pngs = collect_saved_plot_paths(plot_list, figure_directory)
-
-    if _direct_pdf_pages is not None:
-        # Direct PDF mode already wrote each page incrementally via save_plot_figure.
-        close_direct_pdf_writer()
-    elif existing_pngs:
-        temp_pdf_path = _build_temp_pdf_path(save_pdf_path)
-        try:
-            with PdfPages(temp_pdf_path) as pdf:
-                for png in existing_pngs:
-                    img = Image.open(png)
-                    fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
-                    ax.imshow(img)
-                    ax.axis('off')
-                    pdf_save_rasterized_page(pdf, fig, bbox_inches='tight')
-                    plt.close(fig)
-            os.replace(temp_pdf_path, save_pdf_path)
-        finally:
-            if os.path.exists(temp_pdf_path):
-                os.remove(temp_pdf_path)
-
-    # Remove PNG files after creating the PDF (or after direct PDF append path).
-    for png in existing_pngs:
-        try:
-            os.remove(png)
-        except OSError as e:
-            print(f"Error: {e.filename} - {e.strerror}.")
+# Runtime PDF branch removed: runtime plots are PNG-only.
+pass
 
 if os.path.exists(figure_directory):
     shutil.rmtree(figure_directory)

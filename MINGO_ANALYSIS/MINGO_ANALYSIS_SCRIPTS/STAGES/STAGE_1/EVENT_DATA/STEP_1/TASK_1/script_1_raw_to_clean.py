@@ -332,17 +332,8 @@ def save_plot_figure(save_path: str, fig: mpl.figure.Figure | None = None, **sav
     global _direct_pdf_pages, _direct_pdf_page_count, _direct_pdf_target_path, _direct_pdf_temp_path
     target_fig = fig if fig is not None else plt.gcf()
     direct_pdf_path = globals().get("save_pdf_path")
-    if globals().get("create_pdf", False) and direct_pdf_path:
-        if _direct_pdf_pages is None:
-            _direct_pdf_target_path = str(direct_pdf_path)
-            _direct_pdf_temp_path = _build_temp_pdf_path(_direct_pdf_target_path)
-            _direct_pdf_pages = PdfPages(_direct_pdf_temp_path)
-        pdf_kwargs = dict(savefig_kwargs)
-        dpi = int(pdf_kwargs.pop("dpi", 150))
-        pdf_kwargs.pop("format", None)
-        pdf_save_rasterized_page(_direct_pdf_pages, target_fig, dpi=dpi, **pdf_kwargs)
-        _direct_pdf_page_count += 1
-        return
+    # Runtime PDF branch removed: runtime plots are PNG-only.
+    pass
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     target_fig.savefig(save_path, **savefig_kwargs)
 
@@ -364,10 +355,8 @@ def close_direct_pdf_writer() -> None:
 
 def finalize_saved_plots_to_pdf() -> None:
     figure_directory = base_directories["figure_directory"]
-    if not create_pdf:
-        if os.path.exists(figure_directory):
-            shutil.rmtree(figure_directory)
-        return
+    # Runtime PDF branch removed: runtime plots are PNG-only.
+    pass
 
     print(f"Creating PDF with all plots in {save_pdf_path}")
     existing_pngs = collect_saved_plot_paths(plot_list, figure_directory)

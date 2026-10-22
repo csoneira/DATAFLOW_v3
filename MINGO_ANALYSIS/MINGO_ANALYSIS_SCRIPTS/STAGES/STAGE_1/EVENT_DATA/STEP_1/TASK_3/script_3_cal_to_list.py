@@ -283,11 +283,9 @@ def load_task3_plot_catalog(catalog_path: Path) -> dict[str, str]:
 
     missing_aliases = [alias for alias in TASK3_PLOT_ALIASES if alias not in catalog]
     for alias in missing_aliases:
-        warnings.warn(
-            f"Task 3 plot alias {alias!r} is not listed in {catalog_path.name}; defaulting to 'usual'.",
-            RuntimeWarning,
-        )
-        catalog[alias] = "usual"
+        # Known aliases missing from the runtime catalog are intentionally not
+        # runtime plots; FINAL aliases live in config_final_plots_task_3.yaml.
+        catalog[alias] = "none"
     return catalog
 
 
@@ -315,161 +313,7 @@ def task3_any_plot_enabled(*aliases: str) -> bool:
     return any(task3_plot_enabled(alias) for alias in aliases)
 
 
-def plot_task3_filtered_rpc_tsum_vs_qsum(
-    df_input: pd.DataFrame,
-    fig_idx_value: int,
-    *,
-    plot_kind: str,
-    charge_threshold: float,
-    figure_directory: str,
-    show_plots: bool,
-    save_plots: bool,
-    plot_list: list[str],
-) -> int:
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-    axes = np.asarray(axes).reshape(2, 2)
 
-    for i_plane in range(1, 5):
-        ax = axes.flat[i_plane - 1]
-        t_sum_col = f"p{i_plane}_tsum"
-        t_dif_col = f"p{i_plane}_tdif"
-        q_sum_col = f"p{i_plane}_qsum"
-        q_dif_col = f"p{i_plane}_qdif"
-        y_col = f"p{i_plane}_ypos"
-        required_cols = [t_sum_col, t_dif_col, q_sum_col, q_dif_col, y_col]
-
-        if not all(col in df_input.columns for col in required_cols):
-            ax.set_visible(False)
-            continue
-
-        valid_rows = df_input[required_cols].replace(0, np.nan).dropna()
-        filtered_rows = valid_rows.loc[valid_rows[q_sum_col] < charge_threshold]
-        t_sum = filtered_rows[t_sum_col]
-        q_sum = filtered_rows[q_sum_col]
-        title = f"Plane {i_plane}: {t_sum_col} vs {q_sum_col}"
-
-        if plot_kind == "hexbin":
-            _task3_plot_quantile_hexbin(ax, t_sum, q_sum, title, gridsize=50, cmap="turbo")
-        else:
-            _task3_plot_quantile_scatter(ax, t_sum, q_sum, title)
-
-        ax.set_xlabel(t_sum_col)
-        ax.set_ylabel(q_sum_col)
-        ax.grid(True, alpha=0.25)
-
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.92)
-    plt.suptitle(f"Filtered RPC T_sum vs Q_sum by plane ({plot_kind})", fontsize=18)
-
-    if save_plots:
-        name_of_file = f"filtered_rpc_tsum_vs_qsum_{plot_kind}"
-        final_filename = f"{fig_idx_value}_{name_of_file}.png"
-        fig_idx_value += 1
-        save_fig_path = os.path.join(figure_directory, final_filename)
-        plot_list.append(save_fig_path)
-        save_plot_figure(save_fig_path, format="png")
-
-    if show_plots:
-        plt.show()
-    plt.close(fig)
-    return fig_idx_value
-
-def plot_task3_filtered_rpc_tsum_vs_qsum_per_combination(
-    df_input: pd.DataFrame,
-    fig_idx_value: int,
-    *,
-    charge_threshold: float,
-    figure_directory: str,
-    show_plots: bool,
-    save_plots: bool,
-    plot_list: list[str],
-    basename: str,
-) -> int:
-    tt_column = "tt_task3_list" if "tt_task3_list" in df_input.columns else "tt_task2_cal"
-    if tt_column not in df_input.columns:
-        print(
-            "Warning: cannot create filtered_rpc_tsum_vs_qsum_scatter_per_combination "
-            "because neither 'tt_task3_list' nor 'tt_task2_cal' exists."
-        )
-        return fig_idx_value
-
-    target_tt_labels = ["1234", "123", "234", "12", "23", "34"]
-    tt_labels = df_input[tt_column].map(normalize_tt_label)
-    fig, axes = plt.subplots(
-        len(target_tt_labels),
-        4,
-        figsize=(20, 24),
-        sharex=False,
-        sharey=False,
-        squeeze=False,
-    )
-
-    for row_idx, tt_label in enumerate(target_tt_labels):
-        tt_mask = tt_labels == tt_label
-        for col_idx, i_plane in enumerate(range(1, 5)):
-            ax = axes[row_idx, col_idx]
-            t_sum_col = f"p{i_plane}_tsum"
-            t_dif_col = f"p{i_plane}_tdif"
-            q_sum_col = f"p{i_plane}_qsum"
-            q_dif_col = f"p{i_plane}_qdif"
-            y_col = f"p{i_plane}_ypos"
-            required_cols = [t_sum_col, t_dif_col, q_sum_col, q_dif_col, y_col]
-
-            if not all(col in df_input.columns for col in required_cols):
-                ax.text(
-                    0.5,
-                    0.5,
-                    "Missing columns",
-                    ha="center",
-                    va="center",
-                    transform=ax.transAxes,
-                )
-                ax.set_title(f"TT={tt_label}, P{i_plane}, N=0")
-                ax.grid(True, alpha=0.25)
-                continue
-
-            valid_rows = df_input.loc[tt_mask, required_cols].replace(0, np.nan).dropna()
-            filtered_rows = valid_rows.loc[valid_rows[q_sum_col] < charge_threshold]
-            t_sum = pd.to_numeric(filtered_rows[t_sum_col], errors="coerce")
-            q_sum = pd.to_numeric(filtered_rows[q_sum_col], errors="coerce")
-            valid = np.isfinite(t_sum) & np.isfinite(q_sum)
-            t_sum = t_sum[valid]
-            q_sum = q_sum[valid]
-            n_points = int(len(t_sum))
-            title = f"TT={tt_label}, P{i_plane}, N={n_points}"
-
-            if n_points == 0:
-                ax.text(
-                    0.5,
-                    0.5,
-                    "No valid events",
-                    ha="center",
-                    va="center",
-                    transform=ax.transAxes,
-                )
-                ax.set_title(title)
-            else:
-                _task3_plot_quantile_scatter(ax, t_sum, q_sum, title)
-
-            if row_idx == len(target_tt_labels) - 1:
-                ax.set_xlabel("T_sum")
-            if col_idx == 0:
-                ax.set_ylabel("Q_sum")
-            ax.grid(True, alpha=0.25)
-
-    fig.suptitle(
-        f"Filtered RPC T_sum vs Q_sum per {tt_column} - {basename}",
-        fontsize=16,
-    )
-    fig.tight_layout(rect=[0, 0, 1, 0.96])
-
-    # FINAL plot block moved out of the runtime flow: filtered_rpc_tsum_vs_qsum_scatter_per_combination
-    pass
-
-    if show_plots:
-        plt.show()
-    plt.close(fig)
-    return fig_idx_value
 
 
 def _track_figure(fig: mpl.figure.Figure) -> mpl.figure.Figure:
@@ -520,17 +364,8 @@ def save_plot_figure(save_path: str, fig: mpl.figure.Figure | None = None, **sav
     global _direct_pdf_pages, _direct_pdf_page_count, _direct_pdf_target_path, _direct_pdf_temp_path
     target_fig = fig if fig is not None else plt.gcf()
     direct_pdf_path = globals().get("save_pdf_path")
-    if globals().get("create_pdf", False) and direct_pdf_path:
-        if _direct_pdf_pages is None:
-            _direct_pdf_target_path = str(direct_pdf_path)
-            _direct_pdf_temp_path = _build_temp_pdf_path(_direct_pdf_target_path)
-            _direct_pdf_pages = PdfPages(_direct_pdf_temp_path)
-        pdf_kwargs = dict(savefig_kwargs)
-        dpi = int(pdf_kwargs.pop("dpi", 150))
-        pdf_kwargs.pop("format", None)
-        pdf_save_rasterized_page(_direct_pdf_pages, target_fig, dpi=dpi, **pdf_kwargs)
-        _direct_pdf_page_count += 1
-        return
+    # Runtime PDF branch removed: runtime plots are PNG-only.
+    pass
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     target_fig.savefig(save_path, **savefig_kwargs)
 
@@ -553,11 +388,8 @@ def close_direct_pdf_writer() -> None:
 
 def finalize_saved_plots_to_pdf() -> None:
     figure_directory = base_directories["figure_directory"]
-    if not create_pdf:
-        close_direct_pdf_writer()
-        if os.path.exists(figure_directory):
-            shutil.rmtree(figure_directory)
-        return
+    # Runtime PDF branch removed: runtime plots are PNG-only.
+    pass
 
     if _direct_pdf_pages is not None:
         print(f"Finalizing PDF with all plots in {save_pdf_path}")
@@ -1092,63 +924,6 @@ def compute_source_tt_min_charge(df: pd.DataFrame, source_tt: object) -> pd.Seri
     charge_df = df.loc[:, cols].apply(pd.to_numeric, errors="coerce")
     return charge_df.min(axis=1, skipna=False)
 
-def plot_population_table(
-    counts_df: pd.DataFrame,
-    title: str,
-    filename_suffix: str,
-    fig_idx: int,
-    base_dir: str,
-    *,
-    row_label: str = "Charge-filtered plane combination",
-    col_label: str = "Charge threshold",
-    colorbar_label: str = "log10(count + 1)",
-    show_plots: bool = False,
-    save_plots: bool = False,
-    plot_list: list[str] | None = None,
-) -> int:
-    """Render an annotated heatmap-style table for threshold population counts."""
-    if counts_df.empty:
-        return fig_idx
-
-    display_values = counts_df.to_numpy(dtype=float)
-    color_values = np.log10(display_values + 1.0)
-    fig_width = max(7.0, 1.35 * counts_df.shape[1] + 2.5)
-    fig_height = max(4.0, 0.45 * counts_df.shape[0] + 1.8)
-    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
-
-    im = ax.imshow(color_values, cmap="turbo", aspect="auto")
-    ax.set_xticks(np.arange(counts_df.shape[1]))
-    ax.set_yticks(np.arange(counts_df.shape[0]))
-    ax.set_xticklabels(counts_df.columns)
-    ax.set_yticklabels(counts_df.index.astype(str))
-    ax.set_xlabel(col_label)
-    ax.set_ylabel(row_label)
-    ax.set_title(title)
-
-    max_color = float(np.nanmax(color_values)) if color_values.size else 0.0
-    for i_row in range(counts_df.shape[0]):
-        for j_col in range(counts_df.shape[1]):
-            value = int(display_values[i_row, j_col])
-            if value <= 0:
-                continue
-            color_value = float(color_values[i_row, j_col])
-            text_color = "black" if max_color > 0 and color_value > 0.55 * max_color else "white"
-            ax.text(j_col, i_row, f"{value}", ha="center", va="center", color=text_color)
-
-    cbar = fig.colorbar(im, ax=ax, pad=0.02)
-    cbar.set_label(colorbar_label)
-    fig.tight_layout()
-
-    if save_plots:
-        final_filename = f"{fig_idx}_{filename_suffix}.png"
-        save_fig_path = os.path.join(base_dir, final_filename)
-        if plot_list is not None:
-            plot_list.append(save_fig_path)
-        save_plot_figure(save_fig_path, fig=fig, format="png", dpi=150)
-    if show_plots:
-        plt.show()
-    plt.close(fig)
-    return fig_idx + 1
 
 def select_task3_streamer_threshold(
     df: pd.DataFrame,
@@ -6850,72 +6625,6 @@ if all(col in working_df.columns for col in [*tsum_cols, *qsum_cols]):
 
 _prof["s_rpc_vars_core_s"] = round(time.perf_counter() - _t_rpc_vars_core, 2)
 
-def _plot_task3_rpc_variables_hexbin(
-    plot_source_df: pd.DataFrame,
-    *,
-    title: str,
-    filename_stem: str,
-) -> None:
-    global fig_idx
-    fig, axes = plt.subplots(4, 10, figsize=(40, 20))  # 10 combinations per plane
-    axes = axes.flatten()
-
-    for i_plane in range(1, 5):
-        # Column names
-        t_sum_col = f'p{i_plane}_tsum'
-        t_dif_col = f'p{i_plane}_tdif'
-        q_sum_col = f'p{i_plane}_qsum'
-        q_dif_col = f'p{i_plane}_qdif'
-        y_col = f'p{i_plane}_ypos'
-
-        required_columns = [t_sum_col, t_dif_col, q_sum_col, q_dif_col, y_col]
-        if not all(col in plot_source_df.columns for col in required_columns):
-            continue
-
-        # Filter valid rows (non-zero)
-        valid_rows = plot_source_df[required_columns].replace(0, np.nan).dropna()
-
-        # Extract variables and filter low charge
-        cond = valid_rows[q_sum_col] < charge_per_plane_plot_threshold
-        t_sum  = valid_rows.loc[cond, t_sum_col]
-        t_diff = valid_rows.loc[cond, t_dif_col]
-        q_sum  = valid_rows.loc[cond, q_sum_col]
-        q_diff = valid_rows.loc[cond, q_dif_col]
-        y      = valid_rows.loc[cond, y_col]
-
-        base_idx = (i_plane - 1) * 10  # 10 plots per plane
-
-        plot_pairs = [
-            (t_sum,  t_diff, f'{t_sum_col} vs {t_dif_col}'),
-            (t_sum,  q_sum,  f'{t_sum_col} vs {q_sum_col}'),
-            (t_sum,  y,      f'{t_sum_col} vs {y_col}'),
-            (t_diff, q_sum,  f'{t_dif_col} vs {q_sum_col}'),
-            (t_diff, y,      f'{t_dif_col} vs {y_col}'),
-            (q_sum,  y,      f'{q_sum_col} vs {y_col}'),
-            (t_sum,  q_diff, f'{t_sum_col} vs {q_dif_col}'),
-            (t_diff, q_diff, f'{t_dif_col} vs {q_dif_col}'),
-            (q_diff, y,      f'{q_dif_col} vs {y_col}'),
-            (q_sum,  q_diff, f'{q_sum_col} vs {q_dif_col}')
-        ]
-
-        for offset, (x, yv, subplot_title) in enumerate(plot_pairs):
-            ax = axes[base_idx + offset]
-            _task3_plot_quantile_hexbin(ax, x, yv, subplot_title, gridsize=50, cmap="turbo")
-
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.92)
-    plt.suptitle(title, fontsize=18)
-
-    if save_plots:
-        final_filename = f'{fig_idx}_{filename_stem}.png'
-        fig_idx += 1
-
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        save_plot_figure(save_fig_path, fig=fig, format='png')
-
-    if show_plots: plt.show()
-    plt.close(fig)
 
 
 # FINAL plot block moved out of the runtime flow: rpc_variables_hexbin

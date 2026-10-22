@@ -337,3 +337,53 @@
 #     else:
 #         print(f"Task 5 acquisition-rate-by-task-tt plot skipped: no valid {POST_TT_COLUMN}/datetime rows.")
 
+# ============================================================================
+# ARCHIVED FROM: script_5_fit_to_post.py
+# REASON: runtime PDF branch disabled by the PNG-only runtime plotting contract
+# ============================================================================
+#     if globals().get("create_pdf", False) and direct_pdf_path:
+#         if _direct_pdf_pages is None:
+#             _direct_pdf_target_path = str(direct_pdf_path)
+#             _direct_pdf_temp_path = _build_temp_pdf_path(_direct_pdf_target_path)
+#             _direct_pdf_pages = PdfPages(_direct_pdf_temp_path)
+#         pdf_kwargs = dict(savefig_kwargs)
+#         dpi = int(pdf_kwargs.pop("dpi", 150))
+#         pdf_kwargs.pop("format", None)
+#         pdf_save_rasterized_page(_direct_pdf_pages, target_fig, dpi=dpi, **pdf_kwargs)
+#         _direct_pdf_page_count += 1
+#         return
+
+# ============================================================================
+# ARCHIVED FROM: script_5_fit_to_post.py
+# REASON: runtime PDF branch disabled by the PNG-only runtime plotting contract
+# ============================================================================
+# if create_pdf:
+#     print(f"Creating PDF with all plots in {save_pdf_path}")
+#     existing_pngs = collect_saved_plot_paths(plot_list, figure_directory)
+#
+#     if _direct_pdf_pages is not None:
+#         # Direct PDF mode already wrote each page incrementally via save_plot_figure.
+#         close_direct_pdf_writer()
+#     elif existing_pngs:
+#         temp_pdf_path = _build_temp_pdf_path(save_pdf_path)
+#         try:
+#             with PdfPages(temp_pdf_path) as pdf:
+#                 for png in existing_pngs:
+#                     img = Image.open(png)
+#                     fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
+#                     ax.imshow(img)
+#                     ax.axis('off')
+#                     pdf_save_rasterized_page(pdf, fig, bbox_inches='tight')
+#                     plt.close(fig)
+#             os.replace(temp_pdf_path, save_pdf_path)
+#         finally:
+#             if os.path.exists(temp_pdf_path):
+#                 os.remove(temp_pdf_path)
+#
+#     # Remove PNG files after creating the PDF (or after direct PDF append path).
+#     for png in existing_pngs:
+#         try:
+#             os.remove(png)
+#         except OSError as e:
+#             print(f"Error: {e.filename} - {e.strerror}.")
+

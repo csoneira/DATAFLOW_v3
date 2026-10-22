@@ -2463,3 +2463,521 @@
 #     else:
 #         print("Task 4 acquisition-rate-by-task-tt plot skipped: no valid tt_task4_fit/datetime rows.")
 
+# ============================================================================
+# ARCHIVED FROM: script_4_list_to_fit.py
+# REASON: runtime PDF branch disabled by the PNG-only runtime plotting contract
+# ============================================================================
+#     if globals().get("create_pdf", False) and direct_pdf_path:
+#         if _direct_pdf_pages is None:
+#             _direct_pdf_target_path = str(direct_pdf_path)
+#             _direct_pdf_temp_path = _build_temp_pdf_path(_direct_pdf_target_path)
+#             _direct_pdf_pages = PdfPages(_direct_pdf_temp_path)
+#         pdf_kwargs = dict(savefig_kwargs)
+#         dpi = int(pdf_kwargs.pop("dpi", 150))
+#         pdf_kwargs.pop("format", None)
+#         pdf_save_rasterized_page(_direct_pdf_pages, target_fig, dpi=dpi, **pdf_kwargs)
+#         _direct_pdf_page_count += 1
+#         return
+
+# ============================================================================
+# ARCHIVED FROM: script_4_list_to_fit.py
+# REASON: runtime PDF branch disabled by the PNG-only runtime plotting contract
+# ============================================================================
+# if create_pdf:
+#     print(f"Creating PDF with all plots in {save_pdf_path}")
+#     existing_pngs = collect_saved_plot_paths(plot_list, figure_directory)
+#
+#     if _direct_pdf_pages is not None:
+#         # Direct PDF mode already wrote each page incrementally via save_plot_figure.
+#         close_direct_pdf_writer()
+#     elif existing_pngs:
+#         temp_pdf_path = _build_temp_pdf_path(save_pdf_path)
+#         try:
+#             with PdfPages(temp_pdf_path) as pdf:
+#                 for png in existing_pngs:
+#                     img = Image.open(png)
+#                     fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
+#                     ax.imshow(img)
+#                     ax.axis('off')
+#                     pdf_save_rasterized_page(pdf, fig, bbox_inches='tight')
+#                     plt.close(fig)
+#             os.replace(temp_pdf_path, save_pdf_path)
+#         finally:
+#             if os.path.exists(temp_pdf_path):
+#                 os.remove(temp_pdf_path)
+#
+#         # Remove PNG files after creating the PDF
+#         for png in existing_pngs:
+#             try:
+#                 os.remove(png)
+#             except OSError as e:
+#                 print(f"Error: {e.filename} - {e.strerror}.")
+
+# ============================================================================
+# ARCHIVED FROM: script_4_list_to_fit.py
+# REASON: unreferenced plotting helper after runtime/FINAL separation: plot_histograms_and_gaussian
+# ============================================================================
+# def plot_histograms_and_gaussian(df, columns, title, figure_number, quantile=0.99, fit_gaussian=False):
+#     global fig_idx
+#     nrows, ncols = (2, 3) if figure_number == 1 else (3, 4)
+#     fig, axs = plt.subplots(nrows, ncols, figsize=(20, 5 * nrows), constrained_layout=True)
+#     axs = axs.flatten()
+#     def gaussian(x, mu, sigma, amplitude):
+#         return amplitude * np.exp(-((x - mu) ** 2) / (2 * sigma ** 2))
+#
+#     # Precompute quantiles for faster filtering
+#     if fit_gaussian:
+#         quantile_bounds = {}
+#         for col in columns:
+#             data = df[col].values
+#             data = data[data != 0]
+#             if len(data) > 0:
+#                 quantile_bounds[col] = np.quantile(data, [(1 - quantile), quantile])
+#
+#     # Plot histograms and fit Gaussian if needed
+#     for i, col in enumerate(columns):
+#
+#         data = df[col].values
+#         data = data[data != 0]  # Filter out zero values
+#
+#         if len(data) == 0:  # Skip if no data
+#             axs[i].text(0.5, 0.5, "No data", transform=axs[i].transAxes, ha='center', va='center', color='gray')
+#             continue
+#
+#         # Example color map per column type
+#         color_map = {
+#             "theta": "blue",
+#             "phi": "green",
+#             "x": "darkorange",
+#             "y": "darkorange",
+#             "det_y": "darkorange",
+#             "s": "purple",
+#             "det_s": "purple",
+#             "th_chi": "red",
+#             "res_ystr": "teal",
+#             "res_tsum": "brown",
+#             "res_tdif": "purple",
+#             "t0": "black"
+#         }
+#
+#         # Set default in case no match is found
+#         selected_col = 'gray'
+#
+#         if "theta" in col:
+#             left, right = theta_left_filter, theta_right_filter
+#             selected_col = color_map["theta"]
+#
+#         elif "phi" in col:
+#             left, right = phi_left_filter, phi_right_filter
+#             selected_col = color_map["phi"]
+#
+#         elif col in ["x", "det_x", "y", "det_y"]:
+#             left, right = -pos_filter, pos_filter
+#             selected_col = color_map["x"]
+#
+#         elif col in ["s", "det_s"]:
+#             left, right = slowness_filter_left, slowness_filter_right
+#             selected_col = color_map["s"]
+#
+#         elif "th_chi" in col:
+#             left, right = 0, 10
+#             selected_col = color_map["th_chi"]
+#
+#         elif "res_ystr" in col:
+#             left, right = -res_ystr_filter, res_ystr_filter
+#             selected_col = color_map["res_ystr"]
+#
+#         elif "res_tsum" in col:
+#             left, right = -res_tsum_filter, res_tsum_filter
+#             selected_col = color_map["res_tsum"]
+#
+#         elif "res_tdif" in col:
+#             left, right = -res_tdif_filter, res_tdif_filter
+#             selected_col = color_map["res_tdif"]
+#
+#         elif "t0" in col:
+#             left, right = t0_left_filter, t0_right_filter
+#             selected_col = color_map["t0"]
+#
+#         # Plot histogram
+#         cond = (data > left) & (data < right)
+#         hist_data, bin_edges, _ = axs[i].hist(data, bins=50, alpha=0.7, label='Data', color=selected_col)
+#
+#         axs[i].set_title(col)
+#         axs[i].set_xlabel('Value')
+#         axs[i].set_ylabel('Frequency')
+#
+#         axs[i].set_xlim([left, right])
+#
+#         # Fit Gaussian if enabled and data is sufficient
+#         if fit_gaussian and len(data) >= 10:
+#             try:
+#                 # Use precomputed quantile bounds
+#                 if col in quantile_bounds:
+#                     lower_bound, upper_bound = quantile_bounds[col]
+#                     filt_data = data[(data >= lower_bound) & (data <= upper_bound)]
+#                 else:
+#                     lower_bound, upper_bound = left, right
+#                     filt_data = data[(data >= lower_bound) & (data <= upper_bound)]
+#
+#                 if len(filt_data) < 2:
+#                     axs[i].text(0.5, 0.5, "Not enough data to fit", transform=axs[i].transAxes, ha='center', va='center', color='gray')
+#                     continue
+#
+#                 # Fit Gaussian to the histogram data
+#                 bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+#                 popt, _ = _curve_fit_checked(
+#                     gaussian,
+#                     bin_centers,
+#                     hist_data,
+#                     p0=[np.mean(filt_data), np.std(filt_data), max(hist_data)],
+#                 )
+#                 mu, sigma, amplitude = popt
+#
+#                 # Plot Gaussian fit
+#                 x = np.linspace(lower_bound, upper_bound, 1000)
+#                 axs[i].plot(x, gaussian(x, mu, sigma, amplitude), 'r-', label=f'Gaussian Fit\nμ={mu:.2g}, σ={sigma:.2g}')
+#                 axs[i].legend()
+#             except (RuntimeError, ValueError):
+#                 axs[i].text(0.5, 0.5, "Fit failed", transform=axs[i].transAxes, ha='center', va='center', color='red')
+#
+#     # Remove unused subplots
+#     for j in range(i + 1, len(axs)):
+#         fig.delaxes(axs[j])
+#
+#     plt.suptitle(title, fontsize=16)
+#     if save_plots:
+#         safe_title = re.sub(r'[\\\\/]+', '_', title).replace(' ', '_')
+#         final_filename = f'{fig_idx}_{safe_title}.png'
+#         fig_idx += 1
+#         save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
+#         plot_list.append(save_fig_path)
+#         save_plot_figure(save_fig_path, format='png')
+#     if show_plots:
+#         plt.show()
+#     plt.close()
+
+# ============================================================================
+# ARCHIVED FROM: script_4_list_to_fit.py
+# REASON: unreferenced plotting helper after runtime/FINAL separation: plot_tt_correlation
+# ============================================================================
+# def plot_tt_correlation(df, row_label, col_label, title, filename_suffix, fig_idx, base_dir, show_plots=False, save_plots=False, plot_list=None):
+#
+#     analysis_data = df[[row_label, col_label]]
+#     counts = analysis_data.groupby([row_label, col_label]).size().unstack(fill_value=0)
+#
+#     row_order = sorted(analysis_data[row_label].unique(), reverse=True)
+#     col_unique = analysis_data[col_label].unique()
+#     col_order = list(row_order) + [x for x in col_unique if x not in row_order]
+#     counts = counts.reindex(index=row_order, columns=col_order, fill_value=0)
+#
+#     fig, ax = plt.subplots(figsize=(10, 8))
+#     ax.set_xticks(np.arange(len(counts.columns)))
+#     ax.set_yticks(np.arange(len(counts.index)))
+#     ax.set_xticklabels(counts.columns)
+#     ax.set_yticklabels(counts.index)
+#
+#     ax.set_xlabel(col_label)
+#     ax.set_ylabel(row_label)
+#     ax.set_title(title)
+#
+#     im = ax.imshow(counts, cmap='plasma', origin='lower')
+#     total = counts.values.sum()
+#
+#     for i in range(len(counts.index)):
+#         for j in range(len(counts.columns)):
+#             value = counts.iloc[i, j]
+#             if value > 0:
+#                 pct = 100 * value / total
+#                 if pct > 1:
+#                     ax.text(j, i, f"{pct:.1f}%",
+#                             ha="center", va="center",
+#                             color="black" if value > counts.values.max() * 0.5 else "white")
+#
+#     plt.tight_layout()
+#     if save_plots:
+#         final_filename = f'{fig_idx}_{filename_suffix}.png'
+#         save_fig_path = os.path.join(base_dir, final_filename)
+#         if plot_list is not None:
+#             plot_list.append(save_fig_path)
+#         save_plot_figure(save_fig_path, format='png')
+#     if show_plots:
+#         plt.show()
+#     plt.close()
+#
+#     return fig_idx + 1
+
+# ============================================================================
+# ARCHIVED FROM: script_4_list_to_fit.py
+# REASON: unreferenced plotting helper after runtime/FINAL separation: _plot_track_efficiency_curve_panel
+# ============================================================================
+# def _plot_track_efficiency_curve_panel(
+#     axis,
+#     *,
+#     axis_payload,
+#     axis_payload_full,
+#     n_denom,
+#     n_denom_full,
+#     overall_eff,
+#     overall_eff_full,
+#     representative_eff,
+#     representative_label,
+#     sim_eff_percent,
+#     plane_color,
+#     xlabel,
+#     xlim,
+#     x_reference_values=(),
+#     label_fontsize=8,
+#     legend_fontsize=7,
+# ):
+#     centers = np.asarray(axis_payload.get("centers", []), dtype=float)
+#     eff_vals = np.asarray(axis_payload.get("eff", []), dtype=float)
+#     unc_vals = np.asarray(axis_payload.get("unc", []), dtype=float)
+#     den_vals = np.asarray(axis_payload.get("den", []), dtype=float)
+#     valid = np.isfinite(eff_vals) & (den_vals > 0)
+#
+#     centers_full = np.asarray(axis_payload_full.get("centers", []), dtype=float)
+#     eff_vals_full = np.asarray(axis_payload_full.get("eff", []), dtype=float)
+#     unc_vals_full = np.asarray(axis_payload_full.get("unc", []), dtype=float)
+#     den_vals_full = np.asarray(axis_payload_full.get("den", []), dtype=float)
+#     valid_full = np.isfinite(eff_vals_full) & (den_vals_full > 0)
+#
+#     if np.any(valid_full):
+#         axis.errorbar(
+#             centers_full[valid_full],
+#             eff_vals_full[valid_full],
+#             yerr=unc_vals_full[valid_full],
+#             fmt="o--",
+#             ms=3.5,
+#             color="0.45",
+#             alpha=0.80,
+#             label=(
+#                 f"no fid  (n={int(n_denom_full)}, "
+#                 f"{_format_task4_percent_label(overall_eff_full)})"
+#             ),
+#         )
+#     if np.any(valid):
+#         axis.errorbar(
+#             centers[valid],
+#             eff_vals[valid],
+#             yerr=unc_vals[valid],
+#             fmt="o-",
+#             ms=4,
+#             color=plane_color,
+#             alpha=0.85,
+#             label=f"fiducial  (n={int(n_denom)}, {_format_task4_percent_label(overall_eff)})",
+#         )
+#     if np.isfinite(representative_eff):
+#         _representative_line = axis.axhline(
+#             float(representative_eff),
+#             color=plane_color,
+#             lw=2.0,
+#             ls=_TRACK_EFF_REPRESENTATIVE_LINESTYLE,
+#             alpha=0.95,
+#             zorder=4,
+#             label=f"{representative_label}  {_format_task4_percent_label(representative_eff)}",
+#         )
+#         _representative_line.set_path_effects(
+#             [
+#                 path_effects.Stroke(linewidth=4.2, foreground="white", alpha=0.95),
+#                 path_effects.Normal(),
+#             ]
+#         )
+#     for x_reference in x_reference_values:
+#         if np.isfinite(x_reference):
+#             axis.axvline(float(x_reference), color="lightgray", lw=0.9, ls="--", alpha=0.8)
+#     if np.isfinite(sim_eff_percent):
+#         axis.axhline(
+#             float(sim_eff_percent) / 100.0,
+#             color="black",
+#             lw=1.0,
+#             ls=_TRACK_EFF_SIMULATION_LINESTYLE,
+#             alpha=0.75,
+#             zorder=3,
+#             label=f"simulation  {_format_task4_percent_label(sim_eff_percent)}",
+#         )
+#     axis.set_ylim(0, 1.08)
+#     axis.set_xlim(*xlim)
+#     axis.set_xlabel(xlabel, fontsize=label_fontsize)
+#     axis.set_ylabel("Efficiency", fontsize=label_fontsize)
+#     axis.grid(True, alpha=0.3)
+#     handles, labels = axis.get_legend_handles_labels()
+#     if handles:
+#         axis.legend(fontsize=legend_fontsize)
+
+# ============================================================================
+# ARCHIVED FROM: script_4_list_to_fit.py
+# REASON: unreferenced plotting helper after runtime/FINAL separation: _plot_offender_cumulative_hist_panel
+# ============================================================================
+# def _plot_offender_cumulative_hist_panel(
+#     ax: plt.Axes,
+#     observable_values: np.ndarray,
+#     offender_counts: np.ndarray,
+#     thresholds: Iterable[int],
+#     bins: np.ndarray,
+#     *,
+#     x_label: str,
+#     panel_title: str = "",
+#     show_legend: bool = False,
+# ) -> None:
+#     observable = np.asarray(observable_values, dtype=float)
+#     counts = np.asarray(offender_counts, dtype=float)
+#     valid = np.isfinite(observable) & np.isfinite(counts)
+#
+#     threshold_values = sorted({max(0, int(value)) for value in thresholds})
+#     if not threshold_values:
+#         threshold_values = [0]
+#     colors = plt.cm.viridis(np.linspace(0.10, 0.92, len(threshold_values)))
+#
+#     plotted = False
+#     selected_at_max = 0
+#     for idx, threshold in enumerate(threshold_values):
+#         selected = valid & (counts <= float(threshold))
+#         values = observable[selected]
+#         if values.size == 0:
+#             continue
+#         ax.hist(
+#             values,
+#             bins=bins,
+#             density=True,
+#             histtype="step",
+#             lw=1.45,
+#             color=colors[idx],
+#             label=f"<= {threshold} (n={values.size:,})",
+#         )
+#         ax.axvline(float(np.median(values)), color=colors[idx], lw=0.9, ls="--", alpha=0.65)
+#         plotted = True
+#         if threshold == threshold_values[-1]:
+#             selected_at_max = int(values.size)
+#
+#     if not plotted:
+#         ax.text(
+#             0.5,
+#             0.5,
+#             "No data",
+#             transform=ax.transAxes,
+#             ha="center",
+#             va="center",
+#             fontsize=8,
+#             color="0.45",
+#         )
+#
+#     total_count = int(np.count_nonzero(valid))
+#     summary_lines = [f"n={total_count:,}"]
+#     if total_count > 0:
+#         summary_lines.append(
+#             f"<= {threshold_values[-1]}: {100.0 * float(selected_at_max) / float(total_count):.1f}%"
+#         )
+#     ax.text(
+#         0.02,
+#         0.98,
+#         "\n".join(summary_lines),
+#         transform=ax.transAxes,
+#         va="top",
+#         ha="left",
+#         fontsize=7,
+#         bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.75, "edgecolor": "0.8"},
+#     )
+#
+#     if panel_title:
+#         ax.set_title(panel_title, fontsize=9)
+#     ax.set_xlim(float(bins[0]), float(bins[-1]))
+#     ax.set_xlabel(x_label, fontsize=8)
+#     ax.set_ylabel("density", fontsize=8)
+#     ax.grid(True, alpha=0.25)
+#     ax.tick_params(labelsize=7)
+#     if show_legend:
+#         ax.legend(fontsize=7, loc="upper right")
+
+# ============================================================================
+# ARCHIVED FROM: script_4_list_to_fit.py
+# REASON: unreferenced plotting helper after runtime/FINAL separation: _plot_offender_hist_panel
+# ============================================================================
+# def _plot_offender_hist_panel(
+#     ax: plt.Axes,
+#     zero_values: np.ndarray,
+#     nonzero_values: np.ndarray,
+#     bins: np.ndarray,
+#     *,
+#     x_label: str,
+#     panel_title: str = "",
+#     show_legend: bool = False,
+# ) -> None:
+#     zero_values = np.asarray(zero_values, dtype=float)
+#     nonzero_values = np.asarray(nonzero_values, dtype=float)
+#     zero_values = zero_values[np.isfinite(zero_values)]
+#     nonzero_values = nonzero_values[np.isfinite(nonzero_values)]
+#
+#     plotted = False
+#     for values, color, label in (
+#         (zero_values, _OFFENDER_ZERO_COLOR, "0 offenders"),
+#         (nonzero_values, _OFFENDER_NONZERO_COLOR, ">0 offenders"),
+#     ):
+#         if values.size == 0:
+#             continue
+#         ax.hist(
+#             values,
+#             bins=bins,
+#             density=True,
+#             histtype="stepfilled",
+#             alpha=0.16,
+#             color=color,
+#         )
+#         ax.hist(
+#             values,
+#             bins=bins,
+#             density=True,
+#             histtype="step",
+#             lw=1.6,
+#             color=color,
+#             label=f"{label} (n={values.size:,})",
+#         )
+#         ax.axvline(float(np.median(values)), color=color, lw=1.0, ls="--", alpha=0.75)
+#         plotted = True
+#
+#     if not plotted:
+#         ax.text(
+#             0.5,
+#             0.5,
+#             "No data",
+#             transform=ax.transAxes,
+#             ha="center",
+#             va="center",
+#             fontsize=8,
+#             color="0.45",
+#         )
+#
+#     total_count = int(zero_values.size + nonzero_values.size)
+#     nonzero_fraction = (
+#         100.0 * float(nonzero_values.size) / float(total_count)
+#         if total_count > 0
+#         else float("nan")
+#     )
+#     summary_lines = [f"n={total_count:,}"]
+#     if total_count > 0:
+#         summary_lines.append(f">0={nonzero_fraction:.1f}%")
+#     if zero_values.size > 0:
+#         summary_lines.append(f"m0={float(np.median(zero_values)):.2f}")
+#     if nonzero_values.size > 0:
+#         summary_lines.append(f"m>0={float(np.median(nonzero_values)):.2f}")
+#     ax.text(
+#         0.02,
+#         0.98,
+#         "\n".join(summary_lines),
+#         transform=ax.transAxes,
+#         va="top",
+#         ha="left",
+#         fontsize=7,
+#         bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.75, "edgecolor": "0.8"},
+#     )
+#
+#     if panel_title:
+#         ax.set_title(panel_title, fontsize=9)
+#     ax.set_xlim(float(bins[0]), float(bins[-1]))
+#     ax.set_xlabel(x_label, fontsize=8)
+#     ax.set_ylabel("density", fontsize=8)
+#     ax.grid(True, alpha=0.25)
+#     ax.tick_params(labelsize=7)
+#     if show_legend:
+#         ax.legend(fontsize=7, loc="upper right")
+
