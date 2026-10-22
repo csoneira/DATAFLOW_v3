@@ -828,3 +828,107 @@
 #             shutil.rmtree(figure_directory)
 #         return
 
+# ============================================================================
+# ARCHIVED FROM: script_1_raw_to_clean.py
+# REASON: dead runtime PDF helper after PNG-only split: _build_temp_pdf_path
+# ============================================================================
+# def _build_temp_pdf_path(target_path: str) -> str:
+#     """Return a non-colliding temporary PDF path near the final target."""
+#     base = f"{target_path}.tmp.{os.getpid()}"
+#     candidate = base
+#     counter = 1
+#     while os.path.exists(candidate):
+#         candidate = f"{base}.{counter}"
+#         counter += 1
+#     return candidate
+
+# ============================================================================
+# ARCHIVED FROM: script_1_raw_to_clean.py
+# REASON: dead runtime PDF helper after PNG-only split: close_direct_pdf_writer
+# ============================================================================
+# def close_direct_pdf_writer() -> None:
+#     global _direct_pdf_pages, _direct_pdf_page_count, _direct_pdf_target_path, _direct_pdf_temp_path
+#     if _direct_pdf_pages is not None:
+#         _direct_pdf_pages.close()
+#         _direct_pdf_pages = None
+#
+#     if _direct_pdf_temp_path and os.path.exists(_direct_pdf_temp_path):
+#         if _direct_pdf_page_count > 0 and _direct_pdf_target_path:
+#             os.replace(_direct_pdf_temp_path, _direct_pdf_target_path)
+#         else:
+#             os.remove(_direct_pdf_temp_path)
+#
+#     _direct_pdf_page_count = 0
+#     _direct_pdf_target_path = None
+#     _direct_pdf_temp_path = None
+
+# ============================================================================
+# ARCHIVED FROM: script_1_raw_to_clean.py
+# REASON: dead runtime PDF helper after PNG-only split: finalize_saved_plots_to_pdf
+# ============================================================================
+# def finalize_saved_plots_to_pdf() -> None:
+#     figure_directory = base_directories["figure_directory"]
+#     # Runtime PDF branch removed: runtime plots are PNG-only.
+#     pass
+#
+#     print(f"Creating PDF with all plots in {save_pdf_path}")
+#     existing_pngs = collect_saved_plot_paths(plot_list, figure_directory)
+#
+#     if _direct_pdf_pages is not None:
+#         # Direct PDF mode already wrote each page incrementally via save_plot_figure.
+#         close_direct_pdf_writer()
+#     elif existing_pngs:
+#         temp_pdf_path = _build_temp_pdf_path(save_pdf_path)
+#         try:
+#             with PdfPages(temp_pdf_path) as pdf:
+#                 for png in existing_pngs:
+#                     img = Image.open(png)
+#                     fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
+#                     ax.imshow(img)
+#                     ax.axis('off')
+#                     pdf_save_rasterized_page(pdf, fig, bbox_inches='tight')
+#                     plt.close(fig)
+#             os.replace(temp_pdf_path, save_pdf_path)
+#         finally:
+#             if os.path.exists(temp_pdf_path):
+#                 os.remove(temp_pdf_path)
+#
+#     for png in existing_pngs:
+#         try:
+#             os.remove(png)
+#         except OSError as e:
+#             print(f"Error: {e.filename} - {e.strerror}.")
+#
+#     if os.path.exists(figure_directory):
+#         shutil.rmtree(figure_directory)
+
+# ============================================================================
+# ARCHIVED FROM: script_1_raw_to_clean.py
+# REASON: dead runtime PDF state after PNG-only split
+# ============================================================================
+# _direct_pdf_pages: PdfPages | None = None
+
+# ============================================================================
+# ARCHIVED FROM: script_1_raw_to_clean.py
+# REASON: dead runtime PDF state after PNG-only split
+# ============================================================================
+# _direct_pdf_page_count = 0
+
+# ============================================================================
+# ARCHIVED FROM: script_1_raw_to_clean.py
+# REASON: dead runtime PDF state after PNG-only split
+# ============================================================================
+# _direct_pdf_target_path: str | None = None
+
+# ============================================================================
+# ARCHIVED FROM: script_1_raw_to_clean.py
+# REASON: dead runtime PDF state after PNG-only split
+# ============================================================================
+# _direct_pdf_temp_path: str | None = None
+
+# ============================================================================
+# ARCHIVED FROM: script_1_raw_to_clean.py
+# REASON: dead runtime PDF atexit registration after PNG-only split
+# ============================================================================
+# atexit.register(close_direct_pdf_writer)
+

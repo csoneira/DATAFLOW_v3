@@ -20,8 +20,6 @@ import sys
 import time
 
 import pandas as pd
-from matplotlib.backends.backend_pdf import PdfPages
-from PIL import Image
 
 CURRENT_PATH = Path(__file__).resolve()
 REPO_ROOT = None
@@ -49,7 +47,6 @@ from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.reprocessing_utils import (
     filter_filenames_by_qa_retry_basenames,
     load_active_qa_retry_basenames,
 )
-from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.plot_utils import pdf_save_rasterized_page
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.selection_config import load_selection_for_paths, station_is_selected
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.simulated_data_utils import resolve_simulated_z_positions
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.status_csv import (
@@ -192,14 +189,6 @@ def build_task0_gate_test_metadata(
     return metadata
 
 
-def _build_temp_pdf_path(target_path: Path) -> Path:
-    base = Path(f"{target_path}.tmp.{os.getpid()}")
-    candidate = base
-    counter = 1
-    while candidate.exists():
-        candidate = Path(f"{base}.{counter}")
-        counter += 1
-    return candidate
 
 
 
@@ -597,8 +586,6 @@ if create_debug_plots and task0_plot_enabled("debug_suite"):
         force=True,
     )
 
-# Runtime PDF branch removed: runtime plots are PNG-only.
-pass
 
 coincidence_df = read_df.loc[coincidence_mask].copy()
 self_trigger_df = read_df.loc[self_trigger_mask].copy()

@@ -99,3 +99,16 @@
 #     if figure_directory.exists():
 #         shutil.rmtree(figure_directory)
 
+# ============================================================================
+# ARCHIVED FROM: script_0_acq_to_raw.py
+# REASON: dead runtime PDF helper after PNG-only split: _build_temp_pdf_path
+# ============================================================================
+# def _build_temp_pdf_path(target_path: Path) -> Path:
+#     base = Path(f"{target_path}.tmp.{os.getpid()}")
+#     candidate = base
+#     counter = 1
+#     while candidate.exists():
+#         candidate = Path(f"{base}.{counter}")
+#         counter += 1
+#     return candidate
+

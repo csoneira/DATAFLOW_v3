@@ -28,7 +28,6 @@ for the fitting stages. It also manages plotting artefacts, metadata logs, and
 file movements so subsequent tasks receive consistent inputs.
 """
 # Standard Library
-import atexit
 import builtins
 from datetime import datetime
 import hashlib
@@ -56,12 +55,10 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
 from mpl_toolkits.mplot3d import Axes3D
 import seaborn as sns
 
 # Image Processing
-from PIL import Image
 
 import yaml
 
@@ -94,11 +91,7 @@ from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.path_config import (
     get_repo_root,
     resolve_home_path_from_config,
 )
-from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.plot_utils import (
-    collect_saved_plot_paths,
-    ensure_plot_state,
-    pdf_save_rasterized_page,
-)
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.plot_utils import ensure_plot_state
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.selection_config import load_selection_for_paths, station_is_selected
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.step1_rate_plots import create_rate_vs_time_by_task_tt_with_histograms
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.status_csv import (
@@ -349,90 +342,15 @@ def _guarded_close(*args, **kwargs):
     return result
 
 
-def _build_temp_pdf_path(target_path: str) -> str:
-    """Return a non-colliding temporary PDF path near the final target."""
-    base = f"{target_path}.tmp.{os.getpid()}"
-    candidate = base
-    counter = 1
-    while os.path.exists(candidate):
-        candidate = f"{base}.{counter}"
-        counter += 1
-    return candidate
 
 def save_plot_figure(save_path: str, fig: mpl.figure.Figure | None = None, **savefig_kwargs) -> None:
-    """Save a figure to PNG or directly append it to the task PDF."""
-    global _direct_pdf_pages, _direct_pdf_page_count, _direct_pdf_target_path, _direct_pdf_temp_path
+    """Save one runtime plot as PNG."""
     target_fig = fig if fig is not None else plt.gcf()
-    direct_pdf_path = globals().get("save_pdf_path")
-    # Runtime PDF branch removed: runtime plots are PNG-only.
-    pass
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     target_fig.savefig(save_path, **savefig_kwargs)
 
-def close_direct_pdf_writer() -> None:
-    global _direct_pdf_pages, _direct_pdf_page_count, _direct_pdf_target_path, _direct_pdf_temp_path
-    if _direct_pdf_pages is not None:
-        _direct_pdf_pages.close()
-        _direct_pdf_pages = None
-
-    if _direct_pdf_temp_path and os.path.exists(_direct_pdf_temp_path):
-        if _direct_pdf_page_count > 0 and _direct_pdf_target_path:
-            os.replace(_direct_pdf_temp_path, _direct_pdf_target_path)
-        else:
-            os.remove(_direct_pdf_temp_path)
-
-    _direct_pdf_page_count = 0
-    _direct_pdf_target_path = None
-    _direct_pdf_temp_path = None
 
 
-def finalize_saved_plots_to_pdf() -> None:
-    figure_directory = base_directories["figure_directory"]
-    # Runtime PDF branch removed: runtime plots are PNG-only.
-    pass
-
-    if _direct_pdf_pages is not None:
-        print(f"Finalizing PDF with all plots in {save_pdf_path}")
-        close_direct_pdf_writer()
-        if os.path.exists(figure_directory):
-            shutil.rmtree(figure_directory)
-        return
-
-    existing_pngs = collect_saved_plot_paths(plot_list, figure_directory)
-    if not existing_pngs:
-        print(
-            "Warning: Plotting is enabled for Task 3 but no plot pages were generated "
-            f"for {basename_no_ext}; skipping PDF creation: {save_pdf_path}"
-        )
-        if os.path.exists(figure_directory):
-            shutil.rmtree(figure_directory)
-        return
-
-    print(f"Creating PDF with all plots in {save_pdf_path}")
-
-    temp_pdf_path = _build_temp_pdf_path(save_pdf_path)
-    try:
-        with PdfPages(temp_pdf_path) as pdf:
-            for png in existing_pngs:
-                img = Image.open(png)
-                fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
-                ax.imshow(img)
-                ax.axis('off')
-                pdf_save_rasterized_page(pdf, fig, bbox_inches='tight')
-                plt.close(fig)
-        os.replace(temp_pdf_path, save_pdf_path)
-    finally:
-        if os.path.exists(temp_pdf_path):
-            os.remove(temp_pdf_path)
-
-    for png in existing_pngs:
-        try:
-            os.remove(png)
-        except OSError as e:
-            print(f"Error: {e.filename} - {e.strerror}.")
-
-    if os.path.exists(figure_directory):
-        shutil.rmtree(figure_directory)
 
 
 def _exit_without_status_row(message: str) -> None:
@@ -2738,11 +2656,6 @@ plt.figure = _guarded_figure
 plt.subplots = _guarded_subplots
 plt.close = _guarded_close
 
-_direct_pdf_pages: PdfPages | None = None
-_direct_pdf_page_count = 0
-_direct_pdf_target_path: str | None = None
-_direct_pdf_temp_path: str | None = None
-atexit.register(close_direct_pdf_writer)
 # Warning Filters
 warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
 

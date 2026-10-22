@@ -29,7 +29,6 @@ directory bookkeeping are kept in sync so the pipeline can hand off cleanly to
 the correction stage.
 """
 # Standard Library
-import atexit
 import builtins
 from datetime import datetime
 import gc
@@ -61,14 +60,12 @@ matplotlib.use("Agg")
 import matplotlib as mpl
 import matplotlib.patheffects as path_effects
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.gridspec import GridSpec
 from matplotlib.lines import Line2D
 from matplotlib.patches import Ellipse
 from mpl_toolkits.mplot3d import Axes3D
 
 # Image Processing
-from PIL import Image
 
 # Progress Bar
 from tqdm import tqdm
@@ -102,11 +99,7 @@ from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.path_config import (
     get_repo_root,
     resolve_home_path_from_config,
 )
-from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.plot_utils import (
-    collect_saved_plot_paths,
-    ensure_plot_state,
-    pdf_save_rasterized_page,
-)
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.plot_utils import ensure_plot_state
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.selection_config import load_selection_for_paths, station_is_selected
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.step1_rate_plots import create_rate_vs_time_by_task_tt_with_histograms
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.status_csv import (
@@ -285,15 +278,6 @@ def _guarded_close(*args, **kwargs):
     return result
 
 
-def _build_temp_pdf_path(target_path: str) -> str:
-    """Return a non-colliding temporary PDF path near the final target."""
-    base = f"{target_path}.tmp.{os.getpid()}"
-    candidate = base
-    counter = 1
-    while os.path.exists(candidate):
-        candidate = f"{base}.{counter}"
-        counter += 1
-    return candidate
 
 def save_plot_figure(
     save_path: str,
@@ -301,33 +285,14 @@ def save_plot_figure(
     alias: str | None = None,
     **savefig_kwargs,
 ) -> None:
-    """Save a figure to PNG or directly append it to the task PDF."""
-    global _direct_pdf_pages, _direct_pdf_page_count, _direct_pdf_target_path, _direct_pdf_temp_path
+    """Save one runtime plot as PNG."""
     plot_alias = resolve_task4_plot_alias(save_path, alias=alias)
     if plot_alias is not None and not task4_plot_enabled(plot_alias):
         return
     target_fig = fig if fig is not None else plt.gcf()
-    direct_pdf_path = globals().get("save_pdf_path")
-    # Runtime PDF branch removed: runtime plots are PNG-only.
-    pass
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     target_fig.savefig(save_path, **savefig_kwargs)
 
-def close_direct_pdf_writer() -> None:
-    global _direct_pdf_pages, _direct_pdf_page_count, _direct_pdf_target_path, _direct_pdf_temp_path
-    if _direct_pdf_pages is not None:
-        _direct_pdf_pages.close()
-        _direct_pdf_pages = None
-
-    if _direct_pdf_temp_path and os.path.exists(_direct_pdf_temp_path):
-        if _direct_pdf_page_count > 0 and _direct_pdf_target_path:
-            os.replace(_direct_pdf_temp_path, _direct_pdf_target_path)
-        else:
-            os.remove(_direct_pdf_temp_path)
-
-    _direct_pdf_page_count = 0
-    _direct_pdf_target_path = None
-    _direct_pdf_temp_path = None
 
 
 def _resolve_task4_total_event_charge_series(
@@ -4342,11 +4307,6 @@ plt.figure = _guarded_figure
 plt.subplots = _guarded_subplots
 plt.close = _guarded_close
 
-_direct_pdf_pages: PdfPages | None = None
-_direct_pdf_page_count = 0
-_direct_pdf_target_path: str | None = None
-_direct_pdf_temp_path: str | None = None
-atexit.register(close_direct_pdf_writer)
 # Warning Filters
 warnings.filterwarnings("ignore", message=".*Data has no positive values, and therefore cannot be log-scaled.*")
 
@@ -8002,8 +7962,6 @@ if create_plots or create_essential_plots:
 _finalize_stage_t0 = _t_sec
 
 figure_directory = base_directories["figure_directory"]
-# Runtime PDF branch removed: runtime plots are PNG-only.
-pass
 
 if os.path.exists(figure_directory):
     print("Removing figure directory...")
