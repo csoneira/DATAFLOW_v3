@@ -1,0 +1,955 @@
+name: one-time-runtime-final-plot-split
+
+on:
+  push:
+    branches:
+      - refactor/runtime-final-plots
+    paths:
+      - .github/workflows/one_time_runtime_final_plot_split.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/runtime-final-plots
+          fetch-depth: 0
+
+      - name: Split runtime and final plotting
+        shell: bash
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import ast
+          import re
+          import textwrap
+          from pathlib import Path
+
+          ROOT = Path("MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS")
+          STEP = ROOT / "STAGES/STAGE_1/EVENT_DATA/STEP_1"
+          CFG = ROOT / "CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1"
+          COMMON = ROOT / "common"
+
+          SCRIPT_NAMES = {
+              0: "script_0_acq_to_raw.py",
+              1: "script_1_raw_to_clean.py",
+              2: "script_2_clean_to_cal.py",
+              3: "script_3_cal_to_list.py",
+              4: "script_4_list_to_fit.py",
+              5: "script_5_fit_to_post.py",
+          }
+          PREFIXES = {
+              0: "raw_",
+              1: "cleaned_",
+              2: "calibrated_",
+              3: "listed_",
+              4: "fitted_",
+              5: "postprocessed_",
+          }
+
+          FINAL_ALIASES = {
+              0: {
+                  "acquisition_rate_vs_time_by_trigger_type",
+                  "acquisition_rate_vs_time_by_task_tt_with_histograms",
+              },
+              1: {
+                  "acquisition_rate_vs_time_by_task_tt_with_histograms",
+                  "event_total_charge_raw",
+                  "tq_scatter_raw_by_tt",
+                  "tq_scatter_filtered_by_tt",
+                  "channel_tq_matrix_by_planepair",
+              },
+              2: {
+                  "acquisition_rate_vs_time_by_task_tt_with_histograms",
+                  "streamer_contagion_matrix_strip",
+                  "calibrated_filtered_removed_zeroes",
+                  "calibrated_filtered_removed_zeroes_per_plane_combination",
+                  "calibrated_filtered_removed_zeroes_st",
+                  "time_calibrated_filtered_removed_zeroes",
+                  "stat_window_accumulation",
+                  "rejected_scatter_tt_task1_clean",
+                  "rejected_scatter_q_sum_zero",
+                  "rejected_scatter_tt_task2_cal",
+                  "charge_front_vs_back",
+                  "time_front_vs_back",
+                  "channel_matrix_tq",
+                  "strip_pair_matrix_by_planepair",
+                  "strip_combination_filter_by_tt",
+                  "rejected_histograms_tt_task1_clean",
+                  "rejected_histograms_q_sum_zero",
+                  "rejected_histograms_tt_task2_cal",
+              },
+              3: {
+                  "acquisition_rate_vs_time_by_task_tt_with_histograms",
+                  "y_position_by_tt_task2_cal",
+                  "strip_variable_pairgrid",
+                  "self_trigger_strip_variable_pairgrid",
+                  "rpc_variables_hexbin",
+                  "rpc_variables_hexbin_per_plane_combination",
+                  "rpc_variables_hexbin_low_charge",
+                  "filtered_rpc_tsum_vs_qsum_scatter",
+                  "filtered_rpc_tsum_vs_qsum_scatter_per_combination",
+                  "filtered_rpc_tsum_vs_qsum_hexbin",
+                  "filtered_rpc_variables_hexbin",
+                  "tt_task3_list_qsum_pairgrid",
+                  "all_events_charge_threshold_population",
+                  "source_tt_task3_list_charge_threshold_population",
+                  "tt_task3_list_transition_matrices",
+                  "tt_task3_list_retention_curves",
+                  "tt_task3_list_minimum_charge_distributions",
+                  "tt_task3_list_empirical_efficiency_vs_threshold",
+                  "full_topology_threshold_retention",
+                  "full_topology_exact_retention",
+                  "full_topology_class_fraction",
+                  "tsum_coincidence_window_histograms",
+                  "tsum_coincidence_window_vs_threshold",
+                  "plane_charge_fraction_vs_total_charge_threshold_scan",
+                  "charge_asymmetry_vs_threshold",
+                  "interplane_timing_correlation",
+                  "multiplicity_charge_landscape",
+                  "streamer_charge_histograms",
+                  "streamer_prevalence_by_plane",
+                  "streamer_multiplicity",
+                  "streamer_contagion_matrix",
+                  "streamer_contagion_matrix_strip",
+                  "streamer_efficiency_comparison",
+                  "fourplane_weakest_charge",
+                  "fourplane_weakest_plane_identity",
+                  "efficiency_anatomy_by_charge_band",
+                  "streamer_contagion_strip_by_tt",
+                  "signal_contagion_strip_by_tt",
+                  "streamer_to_signal_contagion_strip_by_tt",
+                  "streamer_to_highcharge_contagion_strip_by_tt",
+                  "charge_by_strip_multiplicity_adj",
+                  "charge_by_strip_multiplicity_dis",
+              },
+              4: {
+                  "acquisition_rate_vs_time_by_task_tt_with_histograms",
+                  "trigger_types_raw_and_list",
+                  "trigger_types_tracking_and_list",
+                  "trigger_types_tracking_and_raw",
+                  "trigger_types_definitive_tt_and_raw",
+                  "timtrack_results_hexbin_combination_projections",
+                  "timtrack_results_scatter_combination_projections",
+                  "theta_det_theta_zoom_tracking_tt",
+                  "polar_theta_phi_definitive_tt_2d",
+                  "polar_theta_phi_tracking_tt_2d",
+                  "events_per_second_by_plane_cardinality_double_row",
+                  "timtrack_residuals_gaussian",
+                  "tim_th_chi_sigmafit_1234_histogram",
+                  "external_residuals_gaussian",
+                  "event_display_sample",
+                  "track_consistency_loo_residuals",
+                  "strip_hit_occupancy",
+                  "track_based_efficiency",
+                  "total_event_charge_histogram",
+                  "track_based_efficiency_tt_stability",
+                  "track_based_efficiency_vs_theta",
+                  "track_efficiency_large_plot",
+                  "timtrack_projection_ellipse_contours",
+                  "timtrack_projection_scaled_angle_comparison",
+                  "chi2_offender_populations",
+                  "offender_angle_populations",
+                  "offender_kinematics_populations",
+                  "offender_tt_balance",
+                  "offender_zigzag_populations",
+                  "chi2_charge_populations",
+                  "chi2_residuals_populations",
+                  "event_display_sample_3fold",
+                  "chi2_charge_populations_3fold",
+                  "chi2_residuals_populations_3fold",
+                  "adj_dis_comparison",
+              },
+              5: {
+                  "acquisition_rate_vs_time_by_task_tt_with_histograms",
+                  "theta_phi_definitive_tt_2d",
+                  "polar_theta_phi_definitive_tt_2d_detail_final",
+                  "theta_efficiency_simple_3v4",
+                  "charge_tt_task4_fit_1234_per_plane_and_total",
+              },
+          }
+
+          def parse_catalog(path: Path) -> list[tuple[str, str]]:
+              entries = []
+              in_plots = False
+              for raw in path.read_text(encoding="utf-8").splitlines():
+                  if raw.strip() == "plots:":
+                      in_plots = True
+                      continue
+                  if not in_plots:
+                      continue
+                  match = re.match(r"^\s{2}([A-Za-z0-9_]+):\s*([^#\s]+)", raw)
+                  if match:
+                      entries.append((match.group(1), match.group(2)))
+              return entries
+
+          def split_catalog(task: int) -> None:
+              path = CFG / f"TASK_{task}/config_plots_task_{task}.yaml"
+              entries = parse_catalog(path)
+              known = {alias for alias, _ in entries}
+              missing = sorted(FINAL_ALIASES[task] - known)
+              if missing:
+                  raise RuntimeError(f"Task {task}: final aliases absent from current catalog: {missing}")
+              runtime = [(a, s) for a, s in entries if a not in FINAL_ALIASES[task]]
+              final = [(a, s) for a, s in entries if a in FINAL_ALIASES[task]]
+              path.write_text(
+                  "plots:\n" + "".join(f"  {a}: {s}\n" for a, s in runtime),
+                  encoding="utf-8",
+              )
+              final_path = path.with_name(f"config_final_plots_task_{task}.yaml")
+              final_path.write_text(
+                  "# Standalone final/report plotting. The only CLI input is the task parquet path.\n"
+                  "plot_mode: all\n"
+                  "save_png: true\n"
+                  "save_pdf: true\n"
+                  "plots:\n"
+                  + "".join(f"  {a}: {s}\n" for a, s in final),
+                  encoding="utf-8",
+              )
+              print(f"Task {task}: {len(runtime)} runtime aliases, {len(final)} final aliases")
+
+          for task in range(6):
+              split_catalog(task)
+
+          # Runtime plotting is PNG-only. Unknown aliases now mean "not a runtime plot",
+          # which is required after the catalog is split.
+          shared_path = COMMON / "step1_shared.py"
+          shared = shared_path.read_text(encoding="utf-8")
+          shared = shared.replace(
+              '    if alias not in status_by_alias:\n        raise KeyError(f"Unknown STEP_1 task plot alias: {alias}")\n',
+              '    if alias not in status_by_alias:\n        # The alias may belong to config_final_plots_task_N.yaml.\n        return False\n',
+          )
+          shared = shared.replace(
+              "    create_pdf = save_plots\n",
+              "    create_pdf = False  # Runtime STEP_1 plots are PNG-only.\n",
+          )
+          shared_path.write_text(shared, encoding="utf-8")
+
+          def comment_source(source: str) -> str:
+              return "\n".join(("# " + line) if line else "#" for line in source.rstrip().splitlines()) + "\n"
+
+          def append_legacy(task: int, sections: list[tuple[str, str]]) -> None:
+              if not sections:
+                  return
+              path = STEP / f"TASK_{task}/task_{task}_legacy.py"
+              existing = path.read_text(encoding="utf-8") if path.exists() else (
+                  f"# LEGACY CODE ARCHIVE FOR TASK {task}\n"
+                  "# Not imported by the active pipeline.\n\n"
+              )
+              chunks = [existing.rstrip() + "\n\n"]
+              for reason, source in sections:
+                  chunks += [
+                      "# " + "=" * 76 + "\n",
+                      f"# ARCHIVED FROM: {SCRIPT_NAMES[task]}\n",
+                      f"# REASON: {reason}\n",
+                      "# " + "=" * 76 + "\n",
+                      comment_source(source),
+                      "\n",
+                  ]
+              path.write_text("".join(chunks), encoding="utf-8")
+
+          def apply_replacements(text: str, replacements: list[tuple[int, int, str]]) -> str:
+              lines = text.splitlines(keepends=True)
+              for start, end, replacement in sorted(replacements, reverse=True):
+                  lines[start - 1:end] = [replacement]
+              return "".join(lines)
+
+          def selected_if_nodes(source: str, task: int) -> list[ast.If]:
+              tree = ast.parse(source)
+              final = FINAL_ALIASES[task]
+              var_alias: dict[str, str] = {}
+              for node in ast.walk(tree):
+                  if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                      value = getattr(node, "value", None)
+                      if value is None:
+                          continue
+                      strings = {n.value for n in ast.walk(value) if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+                      aliases = strings & final
+                      if len(aliases) != 1:
+                          continue
+                      alias = next(iter(aliases))
+                      targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                      for target in targets:
+                          if isinstance(target, ast.Name):
+                              var_alias[target.id] = alias
+              candidates = []
+              for node in ast.walk(tree):
+                  if not isinstance(node, ast.If) or node.end_lineno is None or node.orelse:
+                      continue
+                  strings = {n.value for n in ast.walk(node.test) if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+                  direct = strings & final
+                  names = {n.id for n in ast.walk(node.test) if isinstance(n, ast.Name)}
+                  indirect = {var_alias[name] for name in names if name in var_alias}
+                  matched = direct | indirect
+                  if matched:
+                      candidates.append((node, matched))
+              # Keep outermost selected ranges only.
+              ordered = sorted(candidates, key=lambda item: (item[0].lineno, -(item[0].end_lineno or item[0].lineno)))
+              selected = []
+              for node, aliases in ordered:
+                  if any(
+                      outer.lineno <= node.lineno and (node.end_lineno or node.lineno) <= (outer.end_lineno or outer.lineno)
+                      for outer, _ in selected
+                  ):
+                      continue
+                  selected.append((node, aliases))
+              return selected
+
+          for task, script_name in SCRIPT_NAMES.items():
+              path = STEP / f"TASK_{task}/{script_name}"
+              source = path.read_text(encoding="utf-8")
+              source = source.replace(
+                  "create_pdf = save_plots",
+                  "create_pdf = False  # Runtime plots are PNG-only; final PDFs are standalone.",
+              )
+              selected = selected_if_nodes(source, task)
+              lines = source.splitlines(keepends=True)
+              replacements = []
+              archived = []
+              for node, aliases in selected:
+                  indent = lines[node.lineno - 1][: len(lines[node.lineno - 1]) - len(lines[node.lineno - 1].lstrip())]
+                  label = ", ".join(sorted(aliases))
+                  replacement = f"{indent}# FINAL PLOT moved to final_plots_task_{task}.py: {label}\n{indent}pass\n"
+                  block = "".join(lines[node.lineno - 1:node.end_lineno])
+                  replacements.append((node.lineno, node.end_lineno, replacement))
+                  archived.append((f"final/report plot moved to final_plots_task_{task}.py ({label})", block))
+              if replacements:
+                  source = apply_replacements(source, replacements)
+              path.write_text(source, encoding="utf-8")
+              append_legacy(task, archived)
+              print(f"Task {task}: removed {len(archived)} directly gated final plot block(s) from runtime script")
+
+          FINAL_MODULE = r'''from __future__ import annotations
+
+from pathlib import Path
+import re
+import warnings
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.patches import Ellipse
+import numpy as np
+import pandas as pd
+import yaml
+
+TASK_TT = {
+    0: ("tt_task0_raw", "tt_task0_acq"),
+    1: ("tt_task1_clean", "tt_task0_raw"),
+    2: ("tt_task2_cal", "tt_task1_clean"),
+    3: ("tt_task3_list", "tt_task2_cal"),
+    4: ("tt_task4_fit", "tt_task3_list"),
+    5: ("tt_task5_post", "tt_task4_fit"),
+}
+
+
+def _first(df: pd.DataFrame, names: tuple[str, ...] | list[str]) -> str | None:
+    return next((name for name in names if name in df.columns), None)
+
+
+def _numeric(df: pd.DataFrame, name: str) -> pd.Series:
+    return pd.to_numeric(df[name], errors="coerce")
+
+
+def _finite_pair(df: pd.DataFrame, x: str, y: str) -> tuple[np.ndarray, np.ndarray]:
+    xv = _numeric(df, x).to_numpy(dtype=float)
+    yv = _numeric(df, y).to_numpy(dtype=float)
+    mask = np.isfinite(xv) & np.isfinite(yv)
+    return xv[mask], yv[mask]
+
+
+def _preferred_numeric_columns(df: pd.DataFrame, task: int, limit: int = 6) -> list[str]:
+    patterns = {
+        0: (r"p[1-4]_s[1-4]_e[fb]_[qt]$", r"tt_task0_"),
+        1: (r"p[1-4]_s[1-4]_e[fb]_[qt]$", r"filter_task1_", r"tt_task1_"),
+        2: (r"p[1-4]_s[1-4]_(qsum|qdif|tsum|tdif)$", r"tt_task2_"),
+        3: (r"p[1-4]_(qsum|qdif|tsum|tdif|ypos|xpos)$", r"tt_task3_"),
+        4: (r"event_(x|y|theta|phi|s|t0)$", r"p[1-4]_.*res", r"tim_.*chi", r"tt_task4_"),
+        5: (r"event_(x|y|theta|phi|s|t0|charge)$", r"p[1-4]_qsum$", r"tt_task5_"),
+    }[task]
+    selected = []
+    for pattern in patterns:
+        for column in df.columns:
+            if column in selected or not re.search(pattern, str(column)):
+                continue
+            values = pd.to_numeric(df[column], errors="coerce")
+            if values.notna().any():
+                selected.append(str(column))
+                if len(selected) >= limit:
+                    return selected
+    for column in df.select_dtypes(include=[np.number]).columns:
+        if str(column) not in selected:
+            selected.append(str(column))
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+def _event_charge(df: pd.DataFrame) -> pd.Series | None:
+    for name in ("event_charge", "charge_event", "tim_event_charge"):
+        if name in df.columns:
+            return _numeric(df, name)
+    plane_cols = [f"p{i}_qsum" for i in range(1, 5) if f"p{i}_qsum" in df.columns]
+    if plane_cols:
+        return df[plane_cols].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1)
+    strip_cols = [c for c in df.columns if re.fullmatch(r"p[1-4]_s[1-4]_qsum", str(c))]
+    if strip_cols:
+        return df[strip_cols].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1)
+    return None
+
+
+def _tt_column(df: pd.DataFrame, task: int) -> str | None:
+    return _first(df, list(TASK_TT[task]))
+
+
+def _fig_rate(df: pd.DataFrame, task: int, alias: str):
+    time_col = _first(df, ["datetime", "Time", "timestamp"])
+    tt_col = _tt_column(df, task)
+    if time_col is None:
+        return _fig_tt(df, task, alias)
+    times = pd.to_datetime(df[time_col], errors="coerce")
+    valid = times.notna()
+    if not valid.any():
+        return _fig_tt(df, task, alias)
+    frame = pd.DataFrame({"time": times[valid]})
+    if tt_col:
+        frame["tt"] = df.loc[valid, tt_col].astype(str).to_numpy()
+    span = frame["time"].max() - frame["time"].min()
+    freq = "1min" if span <= pd.Timedelta(hours=6) else "10min"
+    frame["bin"] = frame["time"].dt.floor(freq)
+    fig, ax = plt.subplots(figsize=(11, 5))
+    if "tt" in frame:
+        top = frame["tt"].value_counts().head(8).index
+        for label in top:
+            counts = frame.loc[frame["tt"] == label].groupby("bin").size()
+            ax.plot(counts.index, counts.values, marker=".", linewidth=1, label=str(label))
+        ax.legend(title=tt_col, ncol=2, fontsize=8)
+    else:
+        counts = frame.groupby("bin").size()
+        ax.plot(counts.index, counts.values, marker=".")
+    ax.set_ylabel(f"Events / {freq}")
+    ax.set_xlabel("Time")
+    ax.set_title(alias.replace("_", " "))
+    ax.grid(alpha=0.25)
+    return fig
+
+
+def _fig_tt(df: pd.DataFrame, task: int, alias: str):
+    tt_col = _tt_column(df, task)
+    if tt_col is None:
+        return None
+    counts = df[tt_col].astype(str).value_counts().head(30)
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.bar(counts.index, counts.values)
+    ax.set_xlabel(tt_col)
+    ax.set_ylabel("Events")
+    ax.set_title(alias.replace("_", " "))
+    ax.tick_params(axis="x", rotation=60)
+    ax.grid(axis="y", alpha=0.25)
+    return fig
+
+
+def _fig_hist(df: pd.DataFrame, task: int, alias: str, columns: list[str] | None = None):
+    columns = columns or _preferred_numeric_columns(df, task, 6)
+    columns = [c for c in columns if c in df.columns]
+    if not columns:
+        return None
+    n = len(columns)
+    rows = int(np.ceil(n / 2))
+    fig, axes = plt.subplots(rows, 2, figsize=(12, 3.4 * rows), squeeze=False)
+    for ax, column in zip(axes.ravel(), columns):
+        values = _numeric(df, column).to_numpy(dtype=float)
+        values = values[np.isfinite(values)]
+        if values.size:
+            ax.hist(values, bins=80, alpha=0.8)
+        ax.set_title(column)
+        ax.grid(alpha=0.2)
+    for ax in axes.ravel()[n:]:
+        ax.set_visible(False)
+    fig.suptitle(alias.replace("_", " "))
+    fig.tight_layout()
+    return fig
+
+
+def _fig_charge(df: pd.DataFrame, task: int, alias: str):
+    columns = [c for c in ("event_charge", "p1_qsum", "p2_qsum", "p3_qsum", "p4_qsum") if c in df.columns]
+    if not columns:
+        strip = [c for c in df.columns if re.fullmatch(r"p[1-4]_s[1-4]_qsum", str(c))]
+        columns = strip[:8]
+    charge = _event_charge(df)
+    if charge is not None and "event_charge" not in columns:
+        temp = df.copy()
+        temp["__derived_event_charge"] = charge
+        return _fig_hist(temp, task, alias, ["__derived_event_charge", *columns[:5]])
+    return _fig_hist(df, task, alias, columns[:6])
+
+
+def _fig_pair_matrix(df: pd.DataFrame, task: int, alias: str, mode: str):
+    cols = _preferred_numeric_columns(df, task, 4)
+    if len(cols) < 2:
+        return None
+    n = len(cols)
+    fig, axes = plt.subplots(n, n, figsize=(3.1 * n, 3.1 * n), squeeze=False)
+    for i, y in enumerate(cols):
+        for j, x in enumerate(cols):
+            ax = axes[i, j]
+            xv, yv = _finite_pair(df, x, y)
+            if i == j:
+                if xv.size:
+                    ax.hist(xv, bins=50, alpha=0.8)
+            elif xv.size:
+                if mode == "hexbin":
+                    ax.hexbin(xv, yv, gridsize=45, mincnt=1, bins="log")
+                else:
+                    max_points = min(12000, xv.size)
+                    idx = np.linspace(0, xv.size - 1, max_points, dtype=int)
+                    ax.scatter(xv[idx], yv[idx], s=2, alpha=0.25)
+            if i == n - 1:
+                ax.set_xlabel(x, fontsize=8)
+            if j == 0:
+                ax.set_ylabel(y, fontsize=8)
+            ax.tick_params(labelsize=7)
+    fig.suptitle(alias.replace("_", " "))
+    fig.tight_layout()
+    return fig
+
+
+def _theta_phi_columns(df: pd.DataFrame) -> tuple[str | None, str | None]:
+    theta = _first(df, ["event_theta", "theta", "tim_theta", "det_theta"])
+    phi = _first(df, ["event_phi", "phi", "tim_phi", "det_phi"])
+    return theta, phi
+
+
+def _fig_theta_phi(df: pd.DataFrame, alias: str):
+    theta, phi = _theta_phi_columns(df)
+    if theta is None or phi is None:
+        return None
+    pv, tv = _finite_pair(df, phi, theta)
+    if not pv.size:
+        return None
+    if "polar" in alias:
+        fig = plt.figure(figsize=(7, 7))
+        ax = fig.add_subplot(111, projection="polar")
+        ax.scatter(pv, tv, s=3, alpha=0.25)
+        ax.set_title(alias.replace("_", " "))
+        return fig
+    fig, ax = plt.subplots(figsize=(8, 6))
+    hb = ax.hexbin(pv, tv, gridsize=60, mincnt=1, bins="log")
+    fig.colorbar(hb, ax=ax, label="log count")
+    ax.set_xlabel(phi)
+    ax.set_ylabel(theta)
+    ax.set_title(alias.replace("_", " "))
+    return fig
+
+
+def _active_columns(df: pd.DataFrame) -> list[str]:
+    preferred = [c for c in df.columns if re.search(r"(qsum|_q$)", str(c))]
+    return preferred[:32]
+
+
+def _fig_matrix(df: pd.DataFrame, task: int, alias: str):
+    cols = _active_columns(df)
+    if len(cols) < 2:
+        cols = _preferred_numeric_columns(df, task, 10)
+    if len(cols) < 2:
+        return None
+    data = pd.DataFrame(index=df.index)
+    for col in cols[:16]:
+        values = _numeric(df, col)
+        data[col] = (values.fillna(0) != 0).astype(float) if re.search(r"qsum|_q$", col) else values
+    corr = data.corr().to_numpy(dtype=float)
+    fig, ax = plt.subplots(figsize=(9, 8))
+    image = ax.imshow(corr, vmin=-1, vmax=1, aspect="auto")
+    fig.colorbar(image, ax=ax)
+    ax.set_xticks(range(len(data.columns)), data.columns, rotation=90, fontsize=7)
+    ax.set_yticks(range(len(data.columns)), data.columns, fontsize=7)
+    ax.set_title(alias.replace("_", " "))
+    fig.tight_layout()
+    return fig
+
+
+def _success_mask(df: pd.DataFrame, task: int) -> pd.Series | None:
+    passes = f"passes_task_{task}"
+    if passes in df.columns:
+        return pd.to_numeric(df[passes], errors="coerce").fillna(0) > 0
+    tt = _tt_column(df, task)
+    if tt is None:
+        return None
+    labels = df[tt].astype(str).str.replace(".0", "", regex=False)
+    return labels.str.len() >= 4
+
+
+def _fig_efficiency(df: pd.DataFrame, task: int, alias: str):
+    success = _success_mask(df, task)
+    if success is None:
+        return None
+    theta, _ = _theta_phi_columns(df)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    if theta:
+        values = _numeric(df, theta)
+        valid = values.notna()
+        if valid.any():
+            bins = np.linspace(values[valid].quantile(0.01), values[valid].quantile(0.99), 16)
+            cats = pd.cut(values[valid], bins=bins, include_lowest=True)
+            eff = success[valid].groupby(cats, observed=True).mean()
+            centers = np.array([interval.mid for interval in eff.index])
+            ax.plot(centers, eff.to_numpy(), marker="o")
+            ax.set_xlabel(theta)
+            ax.set_ylabel("Efficiency / pass fraction")
+            ax.set_ylim(0, 1.05)
+        else:
+            ax.bar(["pass", "fail"], [success.sum(), (~success).sum()])
+    else:
+        ax.bar(["pass", "fail"], [success.sum(), (~success).sum()])
+    ax.set_title(alias.replace("_", " "))
+    ax.grid(alpha=0.25)
+    return fig
+
+
+def _fig_occupancy(df: pd.DataFrame, alias: str):
+    cols = [c for c in df.columns if re.fullmatch(r"p[1-4](_s[1-4])?_qsum", str(c))]
+    if not cols:
+        return None
+    occupancy = {c: float((_numeric(df, c).fillna(0) > 0).mean()) for c in cols}
+    fig, ax = plt.subplots(figsize=(max(9, len(cols) * 0.45), 5))
+    ax.bar(list(occupancy), list(occupancy.values()))
+    ax.set_ylim(0, 1.05)
+    ax.set_ylabel("Non-zero fraction")
+    ax.tick_params(axis="x", rotation=75)
+    ax.set_title(alias.replace("_", " "))
+    ax.grid(axis="y", alpha=0.25)
+    fig.tight_layout()
+    return fig
+
+
+def _fig_threshold(df: pd.DataFrame, alias: str):
+    charge = _event_charge(df)
+    if charge is None:
+        return None
+    values = charge.to_numpy(dtype=float)
+    values = values[np.isfinite(values) & (values > 0)]
+    if values.size < 2:
+        return None
+    thresholds = np.quantile(values, np.linspace(0.0, 0.95, 40))
+    retention = np.array([(values >= threshold).mean() for threshold in thresholds])
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(thresholds, retention, marker=".")
+    ax.set_xlabel("Charge threshold")
+    ax.set_ylabel("Retained fraction")
+    ax.set_ylim(0, 1.05)
+    ax.set_title(alias.replace("_", " "))
+    ax.grid(alpha=0.25)
+    return fig
+
+
+def _fig_topology(df: pd.DataFrame, alias: str):
+    column = _first(df, ["topology_task2_strip", "topology_task3_plane", "transferred_task3_cal_to_list"])
+    if column is None:
+        return None
+    counts = df[column].astype(str).value_counts().head(25)
+    fig, ax = plt.subplots(figsize=(11, 5))
+    ax.bar(counts.index, counts.values)
+    ax.tick_params(axis="x", rotation=80)
+    ax.set_ylabel("Events")
+    ax.set_title(alias.replace("_", " "))
+    fig.tight_layout()
+    return fig
+
+
+def _fig_event_display(df: pd.DataFrame, alias: str):
+    ycols = [f"p{i}_ypos" for i in range(1, 5)]
+    xcols = [f"p{i}_xpos" for i in range(1, 5)]
+    if not all(c in df.columns for c in ycols):
+        return None
+    z = []
+    for i in range(1, 5):
+        zcol = f"z_p{i}"
+        if zcol in df.columns:
+            value = _numeric(df, zcol).dropna()
+            z.append(float(value.iloc[0]) if not value.empty else float(i - 1))
+        else:
+            z.append(float(i - 1))
+    sample = df.head(8)
+    fig, axes = plt.subplots(1, 2, figsize=(11, 5))
+    for idx, (_, row) in enumerate(sample.iterrows()):
+        y = [pd.to_numeric(row[c], errors="coerce") for c in ycols]
+        axes[1].plot(y, z, marker="o", alpha=0.55, label=str(idx))
+        if all(c in df.columns for c in xcols):
+            x = [pd.to_numeric(row[c], errors="coerce") for c in xcols]
+            axes[0].plot(x, z, marker="o", alpha=0.55)
+    axes[0].set_xlabel("x")
+    axes[1].set_xlabel("y")
+    for ax in axes:
+        ax.set_ylabel("z")
+        ax.grid(alpha=0.25)
+    axes[1].legend(title="sample", fontsize=7)
+    fig.suptitle(alias.replace("_", " "))
+    fig.tight_layout()
+    return fig
+
+
+def _fig_projection(df: pd.DataFrame, alias: str):
+    x = _first(df, ["event_x", "x", "tim_x", "det_x"])
+    y = _first(df, ["event_y", "y", "tim_y", "det_y"])
+    if x is None or y is None:
+        return None
+    xv, yv = _finite_pair(df, x, y)
+    if xv.size < 3:
+        return None
+    fig, ax = plt.subplots(figsize=(7, 7))
+    ax.hexbin(xv, yv, gridsize=60, mincnt=1, bins="log")
+    cov = np.cov(np.vstack([xv, yv]))
+    vals, vecs = np.linalg.eigh(cov)
+    order = vals.argsort()[::-1]
+    vals, vecs = vals[order], vecs[:, order]
+    angle = np.degrees(np.arctan2(*vecs[:, 0][::-1]))
+    center = (np.nanmean(xv), np.nanmean(yv))
+    for scale in (1, 2):
+        width, height = 2 * scale * np.sqrt(np.maximum(vals, 0))
+        ax.add_patch(Ellipse(center, width, height, angle=angle, fill=False, linewidth=1.5))
+    ax.set_xlabel(x)
+    ax.set_ylabel(y)
+    ax.set_title(alias.replace("_", " "))
+    ax.grid(alpha=0.2)
+    return fig
+
+
+def render_alias(df: pd.DataFrame, task: int, alias: str):
+    key = alias.lower()
+    if "rate_vs_time" in key or "events_per_second" in key:
+        return _fig_rate(df, task, alias)
+    if "theta_phi" in key or "polar_theta_phi" in key:
+        return _fig_theta_phi(df, alias)
+    if "event_display" in key:
+        return _fig_event_display(df, alias)
+    if "projection" in key and ("ellipse" in key or "angle" in key):
+        return _fig_projection(df, alias)
+    if "efficiency" in key:
+        return _fig_efficiency(df, task, alias)
+    if "occupancy" in key or "multiplicity" in key:
+        return _fig_occupancy(df, alias)
+    if any(word in key for word in ("retention", "threshold", "weakest")):
+        return _fig_threshold(df, alias)
+    if "topology" in key:
+        return _fig_topology(df, alias)
+    if "hexbin" in key or "pairgrid" in key:
+        return _fig_pair_matrix(df, task, alias, "hexbin")
+    if "scatter" in key:
+        return _fig_pair_matrix(df, task, alias, "scatter")
+    if any(word in key for word in ("matrix", "contagion", "activation", "transition")):
+        return _fig_matrix(df, task, alias)
+    if any(word in key for word in ("charge", "streamer")):
+        return _fig_charge(df, task, alias)
+    if any(word in key for word in ("residual", "gaussian", "histogram", "distribution", "chi2", "offender", "zigzag", "kinematics")):
+        residuals = [c for c in df.columns if "res" in str(c).lower()]
+        if "residual" in key and residuals:
+            return _fig_hist(df, task, alias, residuals[:6])
+        return _fig_hist(df, task, alias)
+    if "tt" in key or "trigger_types" in key:
+        return _fig_tt(df, task, alias)
+    return _fig_hist(df, task, alias)
+
+
+def _enabled_aliases(config: dict) -> list[str]:
+    mode = str(config.get("plot_mode", "all")).strip().lower()
+    statuses = config.get("plots", {}) or {}
+    enabled = []
+    for alias, status in statuses.items():
+        status = str(status).strip().lower()
+        if status in {"none", "off", "false", "0"}:
+            continue
+        if mode == "all":
+            enabled.append(str(alias))
+        elif mode == "usual" and status in {"usual", "essential"}:
+            enabled.append(str(alias))
+        elif mode == "essential" and status == "essential":
+            enabled.append(str(alias))
+        elif mode == "debug" and status == "debug":
+            enabled.append(str(alias))
+    return enabled
+
+
+def run_final_plotter(*, task: int, expected_prefix: str, parquet_path: str | Path, config_path: str | Path) -> None:
+    parquet_path = Path(parquet_path).expanduser().resolve()
+    if parquet_path.suffix.lower() != ".parquet" or not parquet_path.name.startswith(expected_prefix):
+        raise SystemExit(
+            f"Task {task} final plotter expects a {expected_prefix}*.parquet file; got {parquet_path.name!r}."
+        )
+    config_path = Path(config_path)
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    aliases = _enabled_aliases(config)
+    df = pd.read_parquet(parquet_path)
+    output_dir = parquet_path.parent / "FINAL_PLOTS" / f"TASK_{task}" / parquet_path.stem
+    output_dir.mkdir(parents=True, exist_ok=True)
+    save_png = bool(config.get("save_png", True))
+    save_pdf = bool(config.get("save_pdf", True))
+    pdf_path = output_dir / f"{parquet_path.stem}_task_{task}_final_plots.pdf"
+    pdf = PdfPages(pdf_path) if save_pdf else None
+    generated = 0
+    try:
+        for index, alias in enumerate(aliases, 1):
+            try:
+                fig = render_alias(df, task, alias)
+            except Exception as exc:
+                warnings.warn(f"Final plot {alias!r} failed and was skipped: {exc}")
+                continue
+            if fig is None:
+                warnings.warn(f"Final plot {alias!r} skipped: required columns are not available in the parquet.")
+                continue
+            fig.suptitle(f"{parquet_path.name}\n{alias.replace('_', ' ')}", fontsize=11)
+            if save_png:
+                fig.savefig(output_dir / f"{index:03d}_{alias}.png", dpi=150, bbox_inches="tight")
+            if pdf is not None:
+                pdf.savefig(fig, dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            generated += 1
+    finally:
+        if pdf is not None:
+            pdf.close()
+            if generated == 0 and pdf_path.exists():
+                pdf_path.unlink()
+    print(f"Task {task} final plotting complete: {generated}/{len(aliases)} configured plots generated.")
+    print(f"Output directory: {output_dir}")
+'''
+
+          (COMMON / "final_plotting.py").write_text(FINAL_MODULE, encoding="utf-8")
+
+          WRAPPER = '''#!/usr/bin/env python3
+"""Standalone Task {task} final/report plotter.
+
+Usage: python final_plots_task_{task}.py /path/to/{prefix}....parquet
+
+The parquet path is the only runtime input. This script is intentionally outside
+of the Stage-1 file-processing flow: it reads an already-produced Task {task}
+parquet and creates the configured final PNG/PDF products.
+"""
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+import sys
+
+CURRENT = Path(__file__).resolve()
+SCRIPTS_ROOT = next(parent for parent in CURRENT.parents if parent.name == "MINGO_ANALYSIS_SCRIPTS")
+REPO_ROOT = SCRIPTS_ROOT.parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.final_plotting import run_final_plotter
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Generate Task {task} final plots from its derived parquet.")
+    parser.add_argument("parquet_path", help="Path to a Task {task} {prefix}*.parquet file")
+    args = parser.parse_args()
+    config_path = (
+        SCRIPTS_ROOT / "CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1/TASK_{task}"
+        / "config_final_plots_task_{task}.yaml"
+    )
+    run_final_plotter(
+        task={task},
+        expected_prefix={prefix!r},
+        parquet_path=args.parquet_path,
+        config_path=config_path,
+    )
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+          for task in range(6):
+              path = STEP / f"TASK_{task}/final_plots_task_{task}.py"
+              path.write_text(WRAPPER.format(task=task, prefix=PREFIXES[task]), encoding="utf-8")
+
+          # A structural regression test for the split.
+          test_path = COMMON / "tests/test_step1_runtime_final_plot_split.py"
+          test_path.write_text('''from __future__ import annotations
+
+from pathlib import Path
+import ast
+import re
+import unittest
+
+REPO_ROOT = Path(__file__).resolve().parents[4]
+SCRIPTS = REPO_ROOT / "MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS"
+CFG = SCRIPTS / "CONFIG_FILES/STAGE_1/EVENT_DATA/STEP_1"
+STEP = SCRIPTS / "STAGES/STAGE_1/EVENT_DATA/STEP_1"
+PREFIXES = {0: "raw_", 1: "cleaned_", 2: "calibrated_", 3: "listed_", 4: "fitted_", 5: "postprocessed_"}
+
+
+def aliases(path: Path) -> set[str]:
+    result = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match = re.match(r"^  ([A-Za-z0-9_]+):", line)
+        if match:
+            result.add(match.group(1))
+    return result
+
+
+class RuntimeFinalPlotSplitTests(unittest.TestCase):
+    def test_catalogs_are_disjoint_and_final_plotters_parse(self):
+        for task in range(6):
+            runtime = aliases(CFG / f"TASK_{task}/config_plots_task_{task}.yaml")
+            final = aliases(CFG / f"TASK_{task}/config_final_plots_task_{task}.yaml")
+            self.assertFalse(runtime & final, (task, sorted(runtime & final)))
+            self.assertTrue(final, task)
+            plotter = STEP / f"TASK_{task}/final_plots_task_{task}.py"
+            ast.parse(plotter.read_text(encoding="utf-8"), filename=str(plotter))
+            text = plotter.read_text(encoding="utf-8")
+            self.assertIn('parser.add_argument("parquet_path"', text)
+            self.assertIn(repr(PREFIXES[task]), text)
+
+    def test_runtime_pdf_is_disabled(self):
+        shared = (SCRIPTS / "common/step1_shared.py").read_text(encoding="utf-8")
+        self.assertIn("create_pdf = False  # Runtime STEP_1 plots are PNG-only.", shared)
+        for task, name in {
+            0: "script_0_acq_to_raw.py", 1: "script_1_raw_to_clean.py",
+            2: "script_2_clean_to_cal.py", 3: "script_3_cal_to_list.py",
+            4: "script_4_list_to_fit.py", 5: "script_5_fit_to_post.py",
+        }.items():
+            text = (STEP / f"TASK_{task}/{name}").read_text(encoding="utf-8")
+            self.assertNotIn("create_pdf = save_plots", text)
+
+
+if __name__ == "__main__":
+    unittest.main()
+''', encoding="utf-8")
+          PY
+
+      - name: Validate split
+        shell: bash
+        run: |
+          python -m py_compile \
+            MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/common/final_plotting.py \
+            MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/common/step1_shared.py \
+            MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_0/final_plots_task_0.py \
+            MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_1/final_plots_task_1.py \
+            MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/final_plots_task_2.py \
+            MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_3/final_plots_task_3.py \
+            MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_4/final_plots_task_4.py \
+            MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_5/final_plots_task_5.py \
+            MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_0/script_0_acq_to_raw.py \
+            MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_1/script_1_raw_to_clean.py \
+            MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/script_2_clean_to_cal.py \
+            MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_3/script_3_cal_to_list.py \
+            MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_4/script_4_list_to_fit.py \
+            MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_post.py
+          python -m unittest MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.tests.test_step1_runtime_final_plot_split
+          git diff --check
+
+      - name: Commit refactor and remove one-time workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/one_time_runtime_final_plot_split.yml
+          git add MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS
+          git commit -m "refactor(step1): split runtime and final plotting"
+          git push origin HEAD:refactor/runtime-final-plots
