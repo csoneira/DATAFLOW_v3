@@ -1,0 +1,58 @@
+name: one-time-remove-dead-runtime-pdf-scaffolding
+
+on:
+  push:
+    branches:
+      - refactor/runtime-final-plots-v2
+    paths:
+      - .github/workflows/one_time_remove_dead_runtime_pdf_scaffolding.yml
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/runtime-final-plots-v2
+          fetch-depth: 0
+
+      - name: Remove dead runtime PDF scaffolding
+        run: python .github/scripts/remove_dead_runtime_pdf_scaffolding.py
+
+      - name: Validate cleanup
+        shell: bash
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          root = Path('MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1')
+          scripts = {
+              0: 'script_0_acq_to_raw.py', 1: 'script_1_raw_to_clean.py',
+              2: 'script_2_clean_to_cal.py', 3: 'script_3_cal_to_list.py',
+              4: 'script_4_list_to_fit.py', 5: 'script_5_fit_to_post.py',
+          }
+          forbidden = ('PdfPages(', 'pdf_save_rasterized_page(', 'close_direct_pdf_writer(', '_direct_pdf_pages')
+          for task, name in scripts.items():
+              path = root / f'TASK_{task}/{name}'
+              source = path.read_text(encoding='utf-8')
+              ast.parse(source, filename=str(path))
+              for marker in forbidden:
+                  if marker in source:
+                      raise SystemExit(f'Task {task}: stale runtime PDF marker remains: {marker}')
+          PY
+          python -m unittest MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.tests.test_step1_runtime_final_plot_split
+          git diff --check
+
+      - name: Commit cleanup
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/one_time_remove_dead_runtime_pdf_scaffolding.yml
+          git rm .github/scripts/remove_dead_runtime_pdf_scaffolding.py
+          git add MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS
+          git commit -m "refactor(step1): remove dead runtime PDF scaffolding"
+          git push origin HEAD:refactor/runtime-final-plots-v2
