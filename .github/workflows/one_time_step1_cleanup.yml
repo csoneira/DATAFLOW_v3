@@ -58,13 +58,24 @@ jobs:
                   chunks.append("\n")
               legacy_path.write_text("".join(chunks), encoding="utf-8")
 
+          def outermost_ranges(items: list[tuple[int, int, str, str]]) -> list[tuple[int, int, str, str]]:
+              """Drop ranges wholly contained in another selected range."""
+              selected: list[tuple[int, int, str, str]] = []
+              for item in sorted(items, key=lambda value: (value[0], -value[1])):
+                  start, end, _, _ = item
+                  if any(existing_start <= start and end <= existing_end for existing_start, existing_end, _, _ in selected):
+                      continue
+                  selected.append(item)
+              return selected
+
           def remove_ranges(text: str, ranges: list[tuple[int, int]]) -> str:
               lines = text.splitlines(keepends=True)
               for start, end in sorted(ranges, reverse=True):
                   del lines[start - 1:end]
               return "".join(lines)
 
-          # Literal top-level `if False:` blocks are unconditionally unreachable.
+          # Literal `if False:` blocks are unconditionally unreachable wherever
+          # they occur. Archive only outermost selected blocks to avoid overlap.
           for task_number, script_name in (
               (0, "script_0_acq_to_raw.py"),
               (1, "script_1_raw_to_clean.py"),
@@ -78,20 +89,37 @@ jobs:
               original = script_path.read_text(encoding="utf-8")
               tree = ast.parse(original)
               lines = original.splitlines(keepends=True)
-              ranges: list[tuple[int, int]] = []
-              sections: list[tuple[str, str]] = []
-              for node in tree.body:
-                  if isinstance(node, ast.If) and isinstance(node.test, ast.Constant) and node.test.value is False:
-                      assert node.end_lineno is not None
+              candidates: list[tuple[int, int, str, str]] = []
+              for node in ast.walk(tree):
+                  if (
+                      isinstance(node, ast.If)
+                      and isinstance(node.test, ast.Constant)
+                      and node.test.value is False
+                      and node.end_lineno is not None
+                  ):
                       source = "".join(lines[node.lineno - 1:node.end_lineno])
-                      sections.append(("literal top-level `if False:` block; unconditionally unreachable", source))
-                      ranges.append((node.lineno, node.end_lineno))
-              if ranges:
-                  script_path.write_text(remove_ranges(original, ranges), encoding="utf-8")
-                  append_legacy(task_dir, task_number, script_name, sections)
+                      candidates.append((
+                          node.lineno,
+                          node.end_lineno,
+                          "literal `if False:` block; unconditionally unreachable",
+                          source,
+                      ))
+              selected = outermost_ranges(candidates)
+              if selected:
+                  script_path.write_text(
+                      remove_ranges(original, [(start, end) for start, end, _, _ in selected]),
+                      encoding="utf-8",
+                  )
+                  append_legacy(
+                      task_dir,
+                      task_number,
+                      script_name,
+                      [(reason, source) for _, _, reason, source in selected],
+                  )
 
           # Task 2 has two additional branches made unconditionally unreachable by
-          # constants assigned immediately before them in the active script.
+          # constants set in the active script. They are identified from the AST
+          # condition source so nested/multiline formatting does not matter.
           task_number = 2
           task_dir = root / "TASK_2"
           script_name = "script_2_clean_to_cal.py"
@@ -99,26 +127,35 @@ jobs:
           original = script_path.read_text(encoding="utf-8")
           tree = ast.parse(original)
           lines = original.splitlines(keepends=True)
-          ranges: list[tuple[int, int]] = []
-          sections: list[tuple[str, str]] = []
+          candidates: list[tuple[int, int, str, str]] = []
 
-          target_if_prefixes = {
-              "if _need_slewing_fit:": "`_need_slewing_fit` is hard-set to False; legacy regression/fit block is unreachable",
-              "if (not _defer_tsum_calibration_until_late_slot) and time_calibration_mode is not None:": "`_defer_tsum_calibration_until_late_slot` is hard-set to True; superseded early T_sum branch is unreachable",
-          }
-          for node in tree.body:
+          found_slewing_fit = False
+          found_deferred_tsum = False
+          for node in ast.walk(tree):
               if not isinstance(node, ast.If) or node.end_lineno is None:
                   continue
-              first_line = lines[node.lineno - 1].strip()
-              reason = target_if_prefixes.get(first_line)
-              if reason is None:
+              test_source = (ast.get_source_segment(original, node.test) or "").strip()
+              if test_source == "_need_slewing_fit":
+                  reason = "`_need_slewing_fit` is hard-set to False; legacy regression/fit block is unreachable"
+                  found_slewing_fit = True
+              elif (
+                  "_defer_tsum_calibration_until_late_slot" in test_source
+                  and "time_calibration_mode" in test_source
+              ):
+                  reason = "`_defer_tsum_calibration_until_late_slot` is hard-set to True; superseded early T_sum branch is unreachable"
+                  found_deferred_tsum = True
+              else:
                   continue
               source = "".join(lines[node.lineno - 1:node.end_lineno])
-              sections.append((reason, source))
-              ranges.append((node.lineno, node.end_lineno))
+              candidates.append((node.lineno, node.end_lineno, reason, source))
 
-          # Archive and remove the two hard-setting assignments as well; once the
-          # unreachable branches are gone, the flags have no active purpose.
+          if not found_slewing_fit:
+              raise RuntimeError("Task 2 legacy cleanup could not locate the `_need_slewing_fit` block")
+          if not found_deferred_tsum:
+              raise RuntimeError("Task 2 legacy cleanup could not locate the deferred T_sum block")
+
+          # Archive/remove the hard-setting assignments as well, after their only
+          # consumers have been selected for removal.
           assignment_targets = {
               "_need_slewing_fit = False": "hard-setting for removed unreachable slewing-fit block",
               "_defer_tsum_calibration_until_late_slot = True": "hard-setting for removed superseded early T_sum branch",
@@ -127,16 +164,19 @@ jobs:
               stripped = line.strip()
               reason = assignment_targets.get(stripped)
               if reason is not None:
-                  sections.append((reason, line))
-                  ranges.append((lineno, lineno))
+                  candidates.append((lineno, lineno, reason, line))
 
-          if not any(reason.startswith("`_need_slewing_fit`") for reason, _ in sections):
-              raise RuntimeError("Task 2 legacy cleanup could not locate the `_need_slewing_fit` block")
-          if not any(reason.startswith("`_defer_tsum_calibration_until_late_slot`") for reason, _ in sections):
-              raise RuntimeError("Task 2 legacy cleanup could not locate the deferred T_sum block")
-
-          script_path.write_text(remove_ranges(original, ranges), encoding="utf-8")
-          append_legacy(task_dir, task_number, script_name, sections)
+          selected = outermost_ranges(candidates)
+          script_path.write_text(
+              remove_ranges(original, [(start, end) for start, end, _, _ in selected]),
+              encoding="utf-8",
+          )
+          append_legacy(
+              task_dir,
+              task_number,
+              script_name,
+              [(reason, source) for _, _, reason, source in selected],
+          )
           PY
 
       - name: Verify syntax and diff hygiene
