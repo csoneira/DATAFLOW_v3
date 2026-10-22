@@ -1,0 +1,168 @@
+name: one-time-step1-legacy-cleanup-v2
+
+on:
+  push:
+    branches:
+      - cleanup/step1-legacy-pass
+    paths:
+      - .github/workflows/one_time_step1_cleanup_v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cleanup/step1-legacy-pass
+          fetch-depth: 0
+
+      - name: Archive clearly unreachable Step 1 code
+        shell: bash
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+          import ast
+          from pathlib import Path
+
+          root = Path("MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1")
+
+          def comment_source(text: str) -> str:
+              return "\n".join(("# " + line) if line else "#" for line in text.rstrip("\n").splitlines()) + "\n"
+
+          def append_legacy(task_dir: Path, task_number: int, source_name: str, sections: list[tuple[str, str]]) -> None:
+              if not sections:
+                  return
+              legacy_path = task_dir / f"task_{task_number}_legacy.py"
+              if legacy_path.exists():
+                  existing = legacy_path.read_text(encoding="utf-8").rstrip() + "\n\n"
+              else:
+                  existing = (
+                      f"# LEGACY CODE ARCHIVE FOR TASK {task_number}\n"
+                      "#\n"
+                      "# This file stores code deliberately removed from the active task script.\n"
+                      "# It is not imported by the pipeline and is not expected to execute.\n"
+                      "# Dependencies and surrounding runtime context may be missing.\n"
+                      "# Preserve archived blocks substantially verbatim for historical reference.\n\n"
+                  )
+              chunks = [existing]
+              for reason, source in sections:
+                  chunks += [
+                      "# " + "=" * 76 + "\n",
+                      f"# ARCHIVED FROM: {source_name}\n",
+                      f"# REASON: {reason}\n",
+                      "# " + "=" * 76 + "\n",
+                      comment_source(source),
+                      "\n",
+                  ]
+              legacy_path.write_text("".join(chunks), encoding="utf-8")
+
+          def outermost(items):
+              selected = []
+              for item in sorted(items, key=lambda value: (value[0], -value[1])):
+                  start, end, _, _ = item
+                  if any(a <= start and end <= b for a, b, _, _ in selected):
+                      continue
+                  selected.append(item)
+              return selected
+
+          def remove_ranges(text: str, ranges: list[tuple[int, int]]) -> str:
+              lines = text.splitlines(keepends=True)
+              for start, end in sorted(ranges, reverse=True):
+                  del lines[start - 1:end]
+              return "".join(lines)
+
+          scripts = (
+              (0, "script_0_acq_to_raw.py"),
+              (1, "script_1_raw_to_clean.py"),
+              (2, "script_2_clean_to_cal.py"),
+              (3, "script_3_cal_to_list.py"),
+              (4, "script_4_list_to_fit.py"),
+              (5, "script_5_fit_to_post.py"),
+          )
+
+          # Pass 1: literal if False blocks anywhere in each script.
+          for task_number, script_name in scripts:
+              task_dir = root / f"TASK_{task_number}"
+              script_path = task_dir / script_name
+              original = script_path.read_text(encoding="utf-8")
+              tree = ast.parse(original)
+              lines = original.splitlines(keepends=True)
+              candidates = []
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.If) and isinstance(node.test, ast.Constant) and node.test.value is False and node.end_lineno is not None:
+                      source = "".join(lines[node.lineno - 1:node.end_lineno])
+                      candidates.append((node.lineno, node.end_lineno, "literal `if False:` block; unconditionally unreachable", source))
+              selected = outermost(candidates)
+              if selected:
+                  script_path.write_text(remove_ranges(original, [(a, b) for a, b, _, _ in selected]), encoding="utf-8")
+                  append_legacy(task_dir, task_number, script_name, [(reason, source) for _, _, reason, source in selected])
+
+          # Pass 2: two Task 2 branches whose controlling flags are hard constants.
+          task_number = 2
+          task_dir = root / "TASK_2"
+          script_name = "script_2_clean_to_cal.py"
+          script_path = task_dir / script_name
+          original = script_path.read_text(encoding="utf-8")
+          tree = ast.parse(original)
+          lines = original.splitlines(keepends=True)
+          candidates = []
+          found_slewing_fit = False
+          found_deferred_tsum = False
+
+          for node in ast.walk(tree):
+              if not isinstance(node, ast.If) or node.end_lineno is None:
+                  continue
+              test_source = (ast.get_source_segment(original, node.test) or "").strip()
+              if test_source == "_need_slewing_fit":
+                  found_slewing_fit = True
+                  reason = "`_need_slewing_fit` is hard-set to False; legacy regression/fit block is unreachable"
+              elif "_defer_tsum_calibration_until_late_slot" in test_source and "time_calibration_mode" in test_source:
+                  found_deferred_tsum = True
+                  reason = "`_defer_tsum_calibration_until_late_slot` is hard-set to True; superseded early T_sum branch is unreachable"
+              else:
+                  continue
+              candidates.append((node.lineno, node.end_lineno, reason, "".join(lines[node.lineno - 1:node.end_lineno])))
+
+          if not found_slewing_fit:
+              raise RuntimeError("Task 2: `_need_slewing_fit` branch not found")
+          if not found_deferred_tsum:
+              raise RuntimeError("Task 2: deferred old T_sum branch not found")
+
+          assignment_targets = {
+              "_need_slewing_fit = False": "hard-setting for removed unreachable slewing-fit block",
+              "_defer_tsum_calibration_until_late_slot = True": "hard-setting for removed superseded early T_sum branch",
+          }
+          for lineno, line in enumerate(lines, 1):
+              reason = assignment_targets.get(line.strip())
+              if reason:
+                  candidates.append((lineno, lineno, reason, line))
+
+          selected = outermost(candidates)
+          script_path.write_text(remove_ranges(original, [(a, b) for a, b, _, _ in selected]), encoding="utf-8")
+          append_legacy(task_dir, task_number, script_name, [(reason, source) for _, _, reason, source in selected])
+          PY
+
+      - name: Verify syntax and diff hygiene
+        shell: bash
+        run: |
+          python -m py_compile \
+            MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_0/script_0_acq_to_raw.py \
+            MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_1/script_1_raw_to_clean.py \
+            MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_2/script_2_clean_to_cal.py \
+            MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_3/script_3_cal_to_list.py \
+            MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_4/script_4_list_to_fit.py \
+            MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_5/script_5_fit_to_post.py
+          git diff --check
+
+      - name: Commit cleanup and remove one-time workflows
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/one_time_step1_cleanup.yml .github/workflows/one_time_step1_cleanup_v2.yml
+          git add MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1
+          git commit -m "refactor(step1): archive clearly unused task code"
+          git push origin HEAD:cleanup/step1-legacy-pass
