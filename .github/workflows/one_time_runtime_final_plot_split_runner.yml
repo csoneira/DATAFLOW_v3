@@ -1,0 +1,56 @@
+name: one-time-runtime-final-plot-split-runner
+
+on:
+  push:
+    branches:
+      - refactor/runtime-final-plots
+    paths:
+      - .github/workflows/one_time_runtime_final_plot_split_runner.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/runtime-final-plots
+          fetch-depth: 0
+
+      - name: Extract and run refactor program
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          source = Path('.github/workflows/one_time_runtime_final_plot_split.yml').read_text()
+          start = source.index("          python - <<'PY'") + len("          python - <<'PY'\n")
+          end = source.index("\n          PY\n", start)
+          lines = source[start:end].splitlines()
+          program = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines) + '\n'
+          Path('/tmp/runtime_final_plot_split.py').write_text(program)
+          PY
+          python /tmp/runtime_final_plot_split.py
+
+      - name: Validate refactor
+        shell: bash
+        run: |
+          python -m py_compile MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/common/final_plotting.py
+          python -m py_compile MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/common/step1_shared.py
+          for task in 0 1 2 3 4 5; do
+            python -m py_compile MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1/TASK_${task}/final_plots_task_${task}.py
+          done
+          python -m unittest MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.tests.test_step1_runtime_final_plot_split
+          git diff --check
+
+      - name: Commit refactor
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/one_time_runtime_final_plot_split.yml
+          git rm .github/workflows/one_time_runtime_final_plot_split_runner.yml
+          git add MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS
+          git commit -m "refactor(step1): split runtime and final plotting"
+          git push origin HEAD:refactor/runtime-final-plots
