@@ -3497,25 +3497,8 @@ time_sum_reference = np.array([
     [0.33586385, 1.08329847, 0.91410244, 0.58815813]
 ])
 
-if False:
-    print('Working in fast mode.')
 
-if False:
-    print('Working in debug mode.')
 
-if False:
-    T_F_left_pre_cal = T_side_left_pre_cal_debug
-    T_F_right_pre_cal = T_side_right_pre_cal_debug
-
-    T_B_left_pre_cal = T_side_left_pre_cal_debug
-    T_B_right_pre_cal = T_side_right_pre_cal_debug
-
-else:
-    T_F_left_pre_cal = T_side_left_pre_cal_default  #-130
-    T_F_right_pre_cal = T_side_right_pre_cal_default
-
-    T_B_left_pre_cal = T_side_left_pre_cal_default
-    T_B_right_pre_cal = T_side_right_pre_cal_default
 
 T_F_left_pre_cal_ST = T_side_left_pre_cal_ST  #-115
 T_F_right_pre_cal_ST = T_side_right_pre_cal_ST
@@ -3540,18 +3523,6 @@ nplan = n_planes_timtrack
 lenx  = strip_length
 anc_sx = tdiff_to_x * anc_std # 2 cm
 
-if False:
-    T_clip_min = T_clip_min_debug
-    T_clip_max = T_clip_max_debug
-    Q_clip_min = Q_clip_min_debug
-    Q_clip_max = Q_clip_max_debug
-    num_bins = num_bins_debug
-else:
-    T_clip_min = T_clip_min_default
-    T_clip_max = T_clip_max_default
-    Q_clip_min = Q_clip_min_default
-    Q_clip_max = Q_clip_max_default
-    num_bins = num_bins_default
 
 T_clip_min_ST = T_clip_min_ST
 T_clip_max_ST = T_clip_max_ST
@@ -4119,25 +4090,8 @@ time_sum_reference = np.array([
     [0.33586385, 1.08329847, 0.91410244, 0.58815813]
 ])
 
-if False:
-    print('Working in fast mode.')
 
-if False:
-    print('Working in debug mode.')
 
-if False:
-    T_F_left_pre_cal = T_side_left_pre_cal_debug
-    T_F_right_pre_cal = T_side_right_pre_cal_debug
-
-    T_B_left_pre_cal = T_side_left_pre_cal_debug
-    T_B_right_pre_cal = T_side_right_pre_cal_debug
-
-else:
-    T_F_left_pre_cal = T_side_left_pre_cal_default  #-130
-    T_F_right_pre_cal = T_side_right_pre_cal_default
-
-    T_B_left_pre_cal = T_side_left_pre_cal_default
-    T_B_right_pre_cal = T_side_right_pre_cal_default
 
 T_F_left_pre_cal_ST = T_side_left_pre_cal_ST  #-115
 T_F_right_pre_cal_ST = T_side_right_pre_cal_ST
@@ -4162,18 +4116,6 @@ nplan = n_planes_timtrack
 lenx  = strip_length
 anc_sx = tdiff_to_x * anc_std # 2 cm
 
-if False:
-    T_clip_min = T_clip_min_debug
-    T_clip_max = T_clip_max_debug
-    Q_clip_min = Q_clip_min_debug
-    Q_clip_max = Q_clip_max_debug
-    num_bins = num_bins_debug
-else:
-    T_clip_min = T_clip_min_default
-    T_clip_max = T_clip_max_default
-    Q_clip_min = Q_clip_min_default
-    Q_clip_max = Q_clip_max_default
-    num_bins = num_bins_default
 
 T_clip_min_ST = T_clip_min_ST
 T_clip_max_ST = T_clip_max_ST
@@ -4630,25 +4572,8 @@ time_sum_reference = np.array([
     [0.33586385, 1.08329847, 0.91410244, 0.58815813]
 ])
 
-if False:
-    print('Working in fast mode.')
 
-if False:
-    print('Working in debug mode.')
 
-if False:
-    T_F_left_pre_cal = T_side_left_pre_cal_debug
-    T_F_right_pre_cal = T_side_right_pre_cal_debug
-
-    T_B_left_pre_cal = T_side_left_pre_cal_debug
-    T_B_right_pre_cal = T_side_right_pre_cal_debug
-
-else:
-    T_F_left_pre_cal = T_side_left_pre_cal_default  #-130
-    T_F_right_pre_cal = T_side_right_pre_cal_default
-
-    T_B_left_pre_cal = T_side_left_pre_cal_default
-    T_B_right_pre_cal = T_side_right_pre_cal_default
 
 T_F_left_pre_cal_ST = T_side_left_pre_cal_ST  #-115
 T_F_right_pre_cal_ST = T_side_right_pre_cal_ST
@@ -4671,18 +4596,6 @@ nplan = n_planes_timtrack
 lenx  = strip_length
 anc_sx = tdiff_to_x * anc_std # 2 cm
 
-if False:
-    T_clip_min = T_clip_min_debug
-    T_clip_max = T_clip_max_debug
-    Q_clip_min = Q_clip_min_debug
-    Q_clip_max = Q_clip_max_debug
-    num_bins = num_bins_debug
-else:
-    T_clip_min = T_clip_min_default
-    T_clip_max = T_clip_max_default
-    Q_clip_min = Q_clip_min_default
-    Q_clip_max = Q_clip_max_default
-    num_bins = num_bins_default
 
 T_clip_min_ST = T_clip_min_ST
 T_clip_max_ST = T_clip_max_ST
