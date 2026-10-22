@@ -20,7 +20,10 @@ jobs:
           fetch-depth: 0
 
       - name: Apply split
-        run: python .github/scripts/runtime_final_plot_split.py
+        shell: bash
+        run: |
+          python .github/scripts/runtime_final_plot_split.py
+          python .github/scripts/strip_runtime_final_plot_split_whitespace.py
 
       - name: Validate syntax and structure
         shell: bash
@@ -53,6 +56,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm .github/workflows/one_time_runtime_final_plot_split_v2.yml
           git rm .github/scripts/runtime_final_plot_split.py
+          git rm .github/scripts/strip_runtime_final_plot_split_whitespace.py
           git add MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS
           git commit -m "refactor(step1): split runtime and final plotting"
           git push origin HEAD:refactor/runtime-final-plots-v2
