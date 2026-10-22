@@ -1917,7 +1917,7 @@ def resolve_step1_plot_options(
     create_debug_plots = plot_mode in {"debug", "all"}
     create_essential_plots = plot_mode in {"usual", "essential", "all"}
     save_plots = plot_mode != "none"
-    create_pdf = save_plots
+    create_pdf = False  # Runtime STEP_1 plots are strictly PNG-only.
     show_plots = False
     return (
         plot_mode,
@@ -2059,10 +2059,9 @@ def load_step1_task_plot_catalog(
 
     for alias in plot_aliases:
         if alias not in catalog:
-            log_fn(
-                f"{task_label} plot alias {alias!r} missing in {catalog_path.name}; defaulting to 'usual'."
-            )
-            catalog[alias] = "usual"
+            # A known task alias absent from the runtime catalog is intentionally
+            # not a runtime plot (it may live in config_final_plots_task_N.yaml).
+            catalog[alias] = "none"
 
     return catalog
 

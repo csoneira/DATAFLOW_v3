@@ -1,10 +1,9 @@
+# Runtime plots: PNG-only diagnostics created while the task is executing.
 plots:
   debug_suite: debug
   usual_suite: usual
   essential_suite: essential
-  acquisition_rate_vs_time_by_task_tt_with_histograms: usual
   strip_activation_matrix_before_after: usual
-  streamer_contagion_matrix_strip: usual
   cumulative_distribution_q_ch_before_calibration: usual
   new_calibration: usual
   scatter_new_calibration: usual
@@ -33,9 +32,6 @@ plots:
   calibrated_filtered: usual
   calibration_subsample_uncalibrated_removed_zeroes: usual
   calibration_subsample_calibrated_removed_zeroes: usual
-  calibrated_filtered_removed_zeroes: essential
-  calibrated_filtered_removed_zeroes_per_plane_combination: usual
-  calibrated_filtered_removed_zeroes_st: usual
   dx_vs_tsum: usual
   dx_vs_travel_time: usual
   slewing: usual
@@ -53,17 +49,4 @@ plots:
   model_validation_simple: usual
   positions_travel_time_tzeros: usual
   r2_scores: usual
-  time_calibrated_filtered_removed_zeroes: usual
   tsum_pair_charge_correlations: usual
-  stat_window_accumulation: usual
-  rejected_scatter_tt_task1_clean: usual
-  rejected_scatter_q_sum_zero: usual
-  rejected_scatter_tt_task2_cal: usual
-  charge_front_vs_back: usual
-  time_front_vs_back: usual
-  channel_matrix_tq: usual
-  strip_pair_matrix_by_planepair: usual
-  strip_combination_filter_by_tt: usual
-  rejected_histograms_tt_task1_clean: usual
-  rejected_histograms_q_sum_zero: usual
-  rejected_histograms_tt_task2_cal: usual

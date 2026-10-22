@@ -1,0 +1,23 @@
+# FINAL plots: standalone post-task analysis from the derived parquet only.
+plot_mode: all
+save_png: true
+save_pdf: true
+plots:
+  acquisition_rate_vs_time_by_task_tt_with_histograms: usual
+  streamer_contagion_matrix_strip: usual
+  calibrated_filtered_removed_zeroes: essential
+  calibrated_filtered_removed_zeroes_per_plane_combination: usual
+  calibrated_filtered_removed_zeroes_st: usual
+  time_calibrated_filtered_removed_zeroes: usual
+  stat_window_accumulation: usual
+  rejected_scatter_tt_task1_clean: usual
+  rejected_scatter_q_sum_zero: usual
+  rejected_scatter_tt_task2_cal: usual
+  charge_front_vs_back: usual
+  time_front_vs_back: usual
+  channel_matrix_tq: usual
+  strip_pair_matrix_by_planepair: usual
+  strip_combination_filter_by_tt: usual
+  rejected_histograms_tt_task1_clean: usual
+  rejected_histograms_q_sum_zero: usual
+  rejected_histograms_tt_task2_cal: usual

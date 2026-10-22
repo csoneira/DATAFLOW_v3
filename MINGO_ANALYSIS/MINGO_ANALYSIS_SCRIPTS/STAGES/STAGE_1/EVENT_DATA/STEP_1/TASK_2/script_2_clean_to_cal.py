@@ -300,7 +300,7 @@ def apply_task2_plot_catalog_modes() -> None:
     create_essential_plots = create_essential_plots and task2_plot_enabled("essential_suite")
     create_debug_plots = create_debug_plots and task2_plot_enabled("debug_suite")
     save_plots = bool(create_plots or create_essential_plots or create_debug_plots)
-    create_pdf = save_plots
+    create_pdf = False  # Runtime plots are strictly PNG-only; FINAL PDFs are standalone.
 
 
 def _coerce_config_value(value, value_type, default):
@@ -3035,13 +3035,8 @@ def plot_task2_strip_combination_filter_by_tt(
             fontsize=11,
             y=0.94,
         )
-        if save_plots:
-            final_filename = f"{fig_idx_value}_strip_combination_filter_by_tt_{relation_label}_TT_{tt_label}.png"
-            fig_idx_value += 1
-            save_fig_path = os.path.join(base_dir, final_filename)
-            if plot_list is not None:
-                plot_list.append(save_fig_path)
-            save_plot_figure(save_fig_path, fig=fig, alias="strip_combination_filter_by_tt", format="png", dpi=150)
+        # FINAL plot block moved out of the runtime flow: strip_combination_filter_by_tt
+        pass
         if show_plots:
             plt.show()
         plt.close(fig)
@@ -3495,22 +3490,8 @@ def plot_task2_strip_pair_matrix_by_planepair(
                 )
                 plt.subplots_adjust(wspace=0.08, hspace=0.08, left=0.10, right=0.97, top=0.92, bottom=0.09)
 
-                if save_plots:
-                    file_name = (
-                        f"{figure_index:03d}_strip_pair_matrix_P{plane_i}P{plane_j}_"
-                        f"s{strip_i}_s{strip_j}.png"
-                    )
-                    figure_index += 1
-                    save_path = os.path.join(base_directories["figure_directory"], file_name)
-                    plot_list.append(save_path)
-                    save_plot_figure(
-                        save_path,
-                        fig=fig,
-                        alias="strip_pair_matrix_by_planepair",
-                        format="png",
-                        dpi=strip_pair_fig_dpi,
-                        bbox_inches="tight",
-                    )
+                # FINAL plot block moved out of the runtime flow: strip_pair_matrix_by_planepair
+                pass
                 if show_plots:
                     plt.show()
                 plt.close(fig)
@@ -3903,19 +3884,19 @@ def plot_task2_filtered_streamer_matrix(
 def process_file(source_path, dest_path):
     print("Source path:", source_path)
     print("Destination path:", dest_path)
-    
+
     if source_path == dest_path:
         return True
-    
+
     if os.path.exists(dest_path):
         print(f"File already exists at destination (removing...)")
         os.remove(dest_path)
         # return False
-    
+
     print("**********************************************************************")
     print(f"Moving\n'{source_path}'\nto\n'{dest_path}'...")
     print("**********************************************************************")
-    
+
     safe_move(source_path, dest_path)
     now = time.time()
     os.utime(dest_path, (now, now))
@@ -4080,10 +4061,10 @@ def calibrate_strip_T_diff(T_F, T_B, self_trigger_mode = False):
 
     # Calculate histogram
     counts, bin_edges = np.histogram(T_diff, bins='auto')
-    
+
     # Calculate the nunber of counts of the bin that has the most counts
     max_counts = np.max(counts)
-    
+
     # Find bins with at least one count
     th = T_rel_th * max_counts
     if th < abs_th:
@@ -4114,10 +4095,10 @@ def calibrate_strip_T_diff(T_F, T_B, self_trigger_mode = False):
     # Reject edge-only/single-bin plateaus: they are unstable calibration anchors.
     if max_length < 2 or start_index == 0 or end_index == (len(non_empty_bins) - 1):
         return robust_center
-    
+
     plateau_left = bin_edges[start_index]
     plateau_right = bin_edges[end_index + 1]
-    
+
     # Calculate the offset using the mean of the filtered values
     offset = ( plateau_left + plateau_right ) / 2
     if not np.isfinite(offset):
@@ -4377,12 +4358,12 @@ def _compute_histogram_pedestal_offset(Q_values: np.ndarray) -> float:
     return float(np.min(finite_values))
 
 def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
-    
+
     global index_of_cal_plot
 
     translate_charge_cal = calibrate_strip_Q_pedestal_translate_charge_cal
     percentile = calibrate_strip_Q_pedestal_percentile
-    
+
     rel_th = calibrate_strip_Q_pedestal_rel_th
     rel_th_cal = calibrate_strip_Q_pedestal_rel_th_cal
     abs_th = calibrate_strip_Q_pedestal_abs_th
@@ -4421,9 +4402,9 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
             "Warning: charge pedestal calibration did not find a finite offset; "
             "using 0.0 fallback."
         )
-    
+
     # -----------------------------------------------------------------------------------------
-    
+
     if create_plots:
         # Histogram accumulated distribution of Q_ch
 
@@ -4557,7 +4538,7 @@ def calibrate_strip_Q_pedestal(Q_ch, T_ch, Q_other, self_trigger_mode = False):
                         format="png",
                     )
                 plt.close()
-    
+
     print(f"Charge pedestal applied: {pedestal} ({pedestal_source})")
     return pedestal
 
@@ -4566,28 +4547,28 @@ def polynomial(x, *coeffs):
 
 def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
     global fig_idx
-    
+
     ydat_translated = ydat
 
     xdat_plot = xdat[(xdat < distance_sum_charges_plot) & (xdat > -distance_sum_charges_plot) & (ydat_translated < distance_sum_charges_plot) & (ydat_translated > -distance_sum_charges_plot)]
     ydat_plot = ydat_translated[(xdat < distance_sum_charges_plot) & (xdat > -distance_sum_charges_plot) & (ydat_translated < distance_sum_charges_plot) & (ydat_translated > -distance_sum_charges_plot)]
     xdat_pre_fit = xdat[(xdat < distance_sum_charges_right_fit) & (xdat > distance_sum_charges_left_fit) & (ydat_translated < distance_dif_charges_up_fit) & (ydat_translated > distance_dif_charges_low_fit)]
     ydat_pre_fit = ydat_translated[(xdat < distance_sum_charges_right_fit) & (xdat > distance_sum_charges_left_fit) & (ydat_translated < distance_dif_charges_up_fit) & (ydat_translated > distance_dif_charges_low_fit)]
-    
+
     # Fit a polynomial of specified degree using curve_fit
     initial_guess = [1] * (degree_of_polynomial + 1)
     coeffs, _ = curve_fit(polynomial, xdat_pre_fit, ydat_pre_fit, p0=initial_guess)
     y_pre_fit = polynomial(xdat_pre_fit, *coeffs)
-    
+
     # Filter data for fitting based on residues
     threshold = front_back_fit_threshold  # Set your desired threshold here
     residues = np.abs(ydat_pre_fit - y_pre_fit)  # Calculate residues
     xdat_fit = xdat_pre_fit[residues < threshold]
     ydat_fit = ydat_pre_fit[residues < threshold]
-    
+
     # Perform fit on filtered data
     coeffs, _ = curve_fit(polynomial, xdat_fit, ydat_fit, p0=initial_guess)
-    
+
     y_mean = np.mean(ydat_fit)
     y_check = polynomial(xdat_fit, *coeffs)
     ss_res = np.sum((ydat_fit - y_check)**2)
@@ -4595,21 +4576,21 @@ def scatter_2d_and_fit_new(xdat, ydat, title, x_label, y_label, name_of_file):
     r_squared = 1 - (ss_res / ss_tot)
     if r_squared < 0.5:
         print(f"---> R**2 in {name_of_file[0:4]}: {r_squared:.2g}")
-    
-    
+
+
     if create_plots:
         x_fit = np.linspace(min(xdat_fit), max(xdat_fit), 100)
         y_fit = polynomial(x_fit, *coeffs)
         x_final = xdat_plot
         y_final = ydat_plot - polynomial(xdat_plot, *coeffs)
         plt.close()
-        
+
         if article_format:
             ww = (10.84, 4) # (16,6) was very nice
         else:
             ww = (13.33, 5)
-            
-        plt.figure(figsize=ww)  # Use plt.subplots() to create figure and axis    
+
+        plt.figure(figsize=ww)  # Use plt.subplots() to create figure and axis
         plt.scatter(xdat_plot, ydat_plot, s=1, label="Original data points")
         # plt.scatter(xdat_pre_fit, ydat_pre_fit, s=1, color="magenta", label="Points for prefitting")
         plt.scatter(xdat_fit, ydat_fit, s=1, color="orange", label="Points for fitting")
@@ -4646,7 +4627,7 @@ def interpolate_fast_charge(width):
         # Keep zero values unchanged
         result = np.where(width == 0, 0, cs(width))
         return result
-    
+
 
 def summary(vector):
     # The T_sum calibration sample is defined upstream. Do not trim it again
@@ -8465,7 +8446,7 @@ input_file_config_path = os.path.join(config_file_directory, f"input_file_mingo0
 
 if os.path.exists(input_file_config_path):
     print("Searching input configuration file:", input_file_config_path)
-    
+
     # It is a csv
     try:
         input_file = pd.read_csv(input_file_config_path, skiprows=1)
@@ -8479,10 +8460,10 @@ if os.path.exists(input_file_config_path):
     else:
         print("Input configuration file is empty.")
         exists_input_file = False
-    
+
     # Print the head
     # print(input_file.head())
-    
+
 else:
     exists_input_file = False
     print("Input configuration file does not exist.")
@@ -8529,7 +8510,7 @@ metadata_directory = os.path.join(raw_to_list_working_directory, "METADATA")
 if task_number == 1:
     raw_directory = "STAGE_0_TO_1"
     raw_working_directory = os.path.join(station_directory, raw_directory)
-    
+
 else:
     raw_directory = f"STEP_1/TASK_{task_number - 1}/OUTPUT_FILES"
     raw_working_directory = os.path.join(base_directory, raw_directory)
@@ -8549,30 +8530,30 @@ else:
 # Define directory paths relative to base_directory
 base_directories = {
     "stratos_list_events_directory": os.path.join(home_directory, "STRATOS_XY_DIRECTORY"),
-    
+
     "base_plots_directory": os.path.join(raw_to_list_working_directory, "PLOTS"),
-    
+
     "pdf_directory": os.path.join(raw_to_list_working_directory, "PLOTS/PDF_DIRECTORY"),
     "base_figure_directory": os.path.join(raw_to_list_working_directory, "PLOTS/FIGURE_DIRECTORY"),
     "figure_directory": os.path.join(raw_to_list_working_directory, f"PLOTS/FIGURE_DIRECTORY/FIGURES_EXEC_ON_{date_execution}"),
-    
+
     "ancillary_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY"),
-    
+
     "empty_files_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY/EMPTY_FILES"),
     "rejected_files_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY/REJECTED_FILES"),
     "temp_files_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY/TEMP_FILES"),
     "tracking_directory": os.path.join(raw_to_list_working_directory, "ANCILLARY/TRACKING"),
-    
+
     "unprocessed_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/UNPROCESSED_DIRECTORY"),
     "out_of_date_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/OUT_OF_DATE_DIRECTORY"),
     "error_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/ERROR_DIRECTORY"),
     "processing_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/PROCESSING_DIRECTORY"),
     "completed_directory": os.path.join(raw_to_list_working_directory, "INPUT_FILES/COMPLETED_DIRECTORY"),
-    
+
     "output_directory": output_location,
 
     "raw_directory": os.path.join(raw_working_directory, "."),
-    
+
     "metadata_directory": metadata_directory,
 }
 
@@ -8715,14 +8696,14 @@ for directory in [raw_directory, unprocessed_directory, processing_directory, co
         if os.path.getsize(file_empty) == 0:
             # Ensure the empty files directory exists
             os.makedirs(empty_files_directory, exist_ok=True)
-            
+
             # Define the destination path for the file
             empty_destination_path = os.path.join(empty_files_directory, file)
-            
+
             # Remove the destination file if it already exists
             if os.path.exists(empty_destination_path):
                 os.remove(empty_destination_path)
-            
+
             print("Moving empty file:", file)
             safe_move(file_empty, empty_destination_path)
             now = time.time()
@@ -9369,7 +9350,7 @@ T_B_left_pre_cal_ST = T_side_left_pre_cal_ST
 T_B_right_pre_cal_ST = T_side_right_pre_cal_ST
 
 # Y ---------------------------------------------------------------------------
-y_widths = [np.array([wide_strip, wide_strip, wide_strip, narrow_strip]), 
+y_widths = [np.array([wide_strip, wide_strip, wide_strip, narrow_strip]),
             np.array([narrow_strip, wide_strip, wide_strip, wide_strip])]
 
 y_pos_T = [y_pos(y_widths[0]), y_pos(y_widths[1])]
@@ -10630,7 +10611,7 @@ if apply_charge_side:
                 mask = calibration_df[f'p{plane}_s{strip}_eb_q'] != 0
                 charge_test.loc[mask, f'p{plane}_s{strip}_eb_q'] -= QB_pedestal[plane - 1][strip - 1]
 
-    
+
     if validate_charge_pedestal_calibration:
 
         print("Validating charge pedestal calibration.")
@@ -10647,41 +10628,41 @@ if apply_charge_side:
                     col_B = f'p{plane}_s{strip}_eb_q'
                     y_F = charge_test[col_F]
                     y_B = charge_test[col_B]
-                    
+
                     # Plot histograms with Q-specific clipping and bins
-                    axes_Q[panel_idx].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
+                    axes_Q[panel_idx].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)],
                                         bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
-                    axes_Q[panel_idx].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
+                    axes_Q[panel_idx].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)],
                                         bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
                     axes_Q[panel_idx].set_title(f'{col_F} vs {col_B}')
                     axes_Q[panel_idx].legend()
-                    
+
                     if log_scale:
                         axes_Q[panel_idx].set_yscale('log')  # For Q values
 
             plt.tight_layout()
             plt.subplots_adjust(top=0.9)
             plt.suptitle(f"Grand Figure for pedestal substracted values, mingo0{station}\n{start_time}", fontsize=16)
-            
+
             if save_plots:
                 final_filename = f'{fig_idx}_grand_figure_Q_pedestal.png'
                 fig_idx += 1
-                
+
                 save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                 plot_list.append(save_fig_path)
                 save_plot_figure(save_fig_path, format='png')
-            
+
             if show_plots: plt.show()
             plt.close(fig_Q)
-            
-            
+
+
         if task2_plot_enabled("grand_figure_q_pedestal_zoom"):
-        
+
             # ZOOOOOOOOOOOOOOOOOOOM ------------------------------------------------
             # Create the grand figure for Q values
             fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
             axes_Q = axes_Q.flatten()
-            
+
             for plane in range(1, 5):
                 for strip in range(1, 5):
                     panel_idx = (plane - 1) * 4 + (strip - 1)
@@ -10689,14 +10670,14 @@ if apply_charge_side:
                     col_B = f'p{plane}_s{strip}_eb_q'
                     y_F = charge_test[col_F]
                     y_B = charge_test[col_B]
-                    
+
                     Q_clip_min = pedestal_left
                     Q_clip_max = pedestal_right * 5
-                    
+
                     # Plot histograms with Q-specific clipping and bins
-                    axes_Q[panel_idx].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
+                    axes_Q[panel_idx].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)],
                                         bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
-                    axes_Q[panel_idx].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
+                    axes_Q[panel_idx].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)],
                                         bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
                     axes_Q[panel_idx].set_title(f'{col_F} vs {col_B}')
                     axes_Q[panel_idx].legend()
@@ -10705,31 +10686,31 @@ if apply_charge_side:
             # Display a vertical green dashed, alpha = 0.5 line at 0
             for ax in axes_Q:
                 ax.axvline(0, color='green', linestyle='--', alpha=0.5)
-            
+
             plt.tight_layout()
             plt.subplots_adjust(top=0.9)
             plt.suptitle(f"Grand Figure for pedestal substracted values (zoom), mingo0{station}\n{start_time}", fontsize=16)
-            
+
             if save_plots:
                 final_filename = f'{fig_idx}_grand_figure_Q_pedestal_zoom.png'
                 fig_idx += 1
-                
+
                 save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                 plot_list.append(save_fig_path)
                 save_plot_figure(save_fig_path, format='png')
-            
+
             if show_plots: plt.show()
             plt.close(fig_Q)
-        
+
         # sys.exit("DEBUG plot")
-        
+
         if task2_plot_requested("grand_figure_q_pedestal_less_zoom", essential=True):
-        
+
             # ZOOOOOOOOOOOOOM ------------------------------------------------
             # Create the grand figure for Q values
             fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
             axes_Q = axes_Q.flatten()
-            
+
             for plane in range(1, 5):
                 for strip in range(1, 5):
                     panel_idx = (plane - 1) * 4 + (strip - 1)
@@ -10737,14 +10718,14 @@ if apply_charge_side:
                     col_B = f'p{plane}_s{strip}_eb_q'
                     y_F = charge_test[col_F]
                     y_B = charge_test[col_B]
-                    
+
                     Q_clip_min = pedestal_left * 2
                     Q_clip_max = pedestal_right * 12
-                    
+
                     # Plot histograms with Q-specific clipping and bins
-                    axes_Q[panel_idx].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
+                    axes_Q[panel_idx].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)],
                                         bins=num_bins, alpha=0.5, label=f'{col_F} (F)')
-                    axes_Q[panel_idx].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)], 
+                    axes_Q[panel_idx].hist(y_B[(y_B != 0) & (y_B > Q_clip_min) & (y_B < Q_clip_max)],
                                         bins=num_bins, alpha=0.5, label=f'{col_B} (B)')
                     axes_Q[panel_idx].set_title(f'{col_F} vs {col_B}')
                     axes_Q[panel_idx].legend()
@@ -10753,19 +10734,19 @@ if apply_charge_side:
             # Display a vertical green dashed, alpha = 0.5 line at 0
             for ax in axes_Q:
                 ax.axvline(0, color='green', linestyle='--', alpha=0.5)
-            
+
             plt.tight_layout()
             plt.subplots_adjust(top=0.9)
             plt.suptitle(f"Grand Figure for pedestal substracted values (zoom), mingo0{station}\n{start_time}", fontsize=16)
-            
+
             if save_plots:
                 final_filename = f'{fig_idx}_grand_figure_Q_pedestal_less_zoom.png'
                 fig_idx += 1
-                
+
                 save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                 plot_list.append(save_fig_path)
                 save_plot_figure(save_fig_path, format='png')
-            
+
             if show_plots: plt.show()
             plt.close(fig_Q)
 
@@ -10802,7 +10783,7 @@ if apply_charge_side:
         # Create a cubic spline interpolator
         cs = CubicSpline(width_table, fast_charge_table, bc_type='natural')
 
-        
+
 
         # --- Calibrate and store new columns in working_df ---
         for plane in range(1, 5):
@@ -10817,12 +10798,12 @@ if apply_charge_side:
                         charge_test.loc[mask, col_fC] = interpolate_fast_charge(raw[mask])
 
         if create_plots:
-            
+
             Q_clip_min = interpolate_fast_charge_Q_clip_min
             Q_clip_max = interpolate_fast_charge_Q_clip_max
             num_bins = interpolate_fast_charge_num_bins
             log_scale = interpolate_fast_charge_log_scale
-            
+
             fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))
             axes_Q = axes_Q.flatten()
 
@@ -10940,39 +10921,39 @@ if apply_T_dif_calibration:
                 mask = pos_test[tdif_col] != 0
                 pos_test.loc[mask, tdif_col] -= Tdiff_cal[plane - 1][strip - 1]
 
-        
+
         if create_plots:
             # Create the grand figure for Q values
             fig_Q, axes_Q = plt.subplots(4, 4, figsize=(20, 10))  # Adjust the layout as necessary
             axes_Q = axes_Q.flatten()
-            
+
             for plane in range(1, 5):
                 for strip in range(1, 5):
                     panel_idx = (plane - 1) * 4 + (strip - 1)
                     col_F = f'p{plane}_s{strip}_tdif'
                     y_F = pos_test[col_F]
-                    
+
                     Q_clip_min = -2
                     Q_clip_max = 2
-                    
+
                     # Plot histograms with Q-specific clipping and bins
-                    axes_Q[panel_idx].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)], 
+                    axes_Q[panel_idx].hist(y_F[(y_F != 0) & (y_F > Q_clip_min) & (y_F < Q_clip_max)],
                                         bins=num_bins, alpha=0.5, label=f'{col_F}')
                     axes_Q[panel_idx].set_title(f'{col_F}')
                     axes_Q[panel_idx].legend()
                     axes_Q[panel_idx].set_xlabel('T_diff / ns')
                     axes_Q[panel_idx].set_xlim([Q_clip_min, Q_clip_max])
-                    
+
                     # if log_scale:
                     #     axes_Q[panel_idx].set_yscale('log')  # For Q values
-                    
+
                 for ax in axes_Q:
                     ax.axvline(0, color='green', linestyle='--', alpha=0.5)
-                
+
             plt.tight_layout()
             plt.subplots_adjust(top=0.9)
             plt.suptitle(f"Grand Figure for position calibration, new method, mingo0{station}\n{start_time}", fontsize=16)
-            
+
             if save_plots:
                 final_filename = f'{fig_idx}_grand_figure_T_dif_cal.png'
                 fig_idx += 1
@@ -11799,7 +11780,7 @@ if _need_slewing_observables:
     ]
     if _requested_slewing_aliases:
         print("Requested slewing plot aliases:", ", ".join(_requested_slewing_aliases))
-    
+
     slew_df = calibration_time_pair_residuals_df
 
     if _plot_timing_summary:
@@ -11975,13 +11956,13 @@ if _need_slewing_observables:
             if show_plots:
                 plt.show()
             plt.close(fig)
-    
-    
+
+
     # -------------------------------------------------------------------
     # dx vs Time Differences
     # -------------------------------------------------------------------
-    
-    
+
+
     if _plot_dx_vs_tsum:
 
         pair_labels = [
@@ -12057,12 +12038,12 @@ if _need_slewing_observables:
                 plt.show()
             plt.close()
 
-    
+
     # -------------------------------------------------------------------
     # dx vs Travel Time
     # -------------------------------------------------------------------
-    
-    
+
+
     if _plot_dx_vs_travel_time:
         pair_labels = [
             (p1, s1, p2, s2)
@@ -12075,7 +12056,7 @@ if _need_slewing_observables:
         # Parameters
         batch_size = 4  # number of pairs per batch
         num_batches = int(np.ceil(len(pair_labels) / batch_size))
-        
+
         for batch in range(num_batches):
             start_idx = batch * batch_size
             end_idx = min((batch + 1) * batch_size, len(pair_labels))
@@ -12113,10 +12094,10 @@ if _need_slewing_observables:
             # Hide unused subplots
             for col in range(len(current_pairs), batch_size):
                 axes[col].set_visible(False)
-            
+
             fig.tight_layout(rect=[0, 0, 1, 0.95])  # leave space at the top (5%)
             fig.suptitle(f"Batch {batch + 1}/{num_batches} — dx vs Travel Time", fontsize=16)  # increase font size
-            
+
             if save_plots:
                 name_of_file = 'dx_vs_travel_time'
                 final_filename = f'{fig_idx}_{name_of_file}.png'
@@ -12214,10 +12195,10 @@ if _need_slewing_observables:
     # -------------------------------------------------------------------
     # Slewing histograms
     # -------------------------------------------------------------------
-    
-    
+
+
     if _plot_slewing_histograms:
-        
+
         pair_labels = [
             (p1, s1, p2, s2)
             for p1 in range(1, 5)
@@ -12274,7 +12255,7 @@ if _need_slewing_observables:
 
             fig.tight_layout(rect=[0, 0, 1, 0.95])  # leave space at the top (5%)
             fig.suptitle(f"Batch {batch + 1}/{num_batches} — Histograms per Plane/Strip Pair", fontsize=16)  # increase font size
-            
+
             if save_plots:
                 name_of_file = 'slewing'
                 final_filename = f'{fig_idx}_{name_of_file}.png'
@@ -12283,19 +12264,19 @@ if _need_slewing_observables:
                 save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
                 plot_list.append(save_fig_path)
                 save_plot_figure(save_fig_path, format='png')
-        
-            if show_plots: 
+
+            if show_plots:
                 plt.show()
             plt.close()
-            
-    
+
+
     # -------------------------------------------------------------------
     # 3D Slewing Observables
     # -------------------------------------------------------------------
-    
-    
+
+
     if _plot_slewing_3d:
-        
+
         pair_labels = [
             (p1, s1, p2, s2)
             for p1 in range(1, 5)
@@ -12307,7 +12288,7 @@ if _need_slewing_observables:
         # Parameters
         batch_size = 4  # number of pairs per batch
         num_batches = int(np.ceil(len(pair_labels) / batch_size))
-        
+
         for batch in range(num_batches):
             start_idx = batch * batch_size
             end_idx = min((batch + 1) * batch_size, len(pair_labels))
@@ -12342,7 +12323,7 @@ if _need_slewing_observables:
                 ax3d.set_xlabel('ΔT corrected (ns)')
                 ax3d.set_ylabel('Q_sum_1')
                 ax3d.set_zlabel('Q_sum_2')
-                
+
 
                 ax3d.set_xlim([delta_t_left, delta_t_right])
                 ax3d.set_ylim([q_sum_left, q_sum_right])
@@ -13446,124 +13427,8 @@ working_df = _append_or_replace_dataframe_columns(working_df, task2_combined_fil
 filter_total_problematic_offender_count_counts = (
     filter_total_problematic_offender_count.value_counts().sort_index()
 )
-if _plot_strip_combination_filter_by_tt:
-    strip_combination_self_hist_after = collect_task2_strip_combination_histogram_payload(
-        working_df,
-        strip_combination_tt_original,
-        relation_type="strip",
-    )
-    strip_combination_same_plane_hist_after = collect_task2_strip_combination_histogram_payload(
-        working_df,
-        strip_combination_tt_original,
-        relation_type="plane",
-    )
-    strip_combination_any_hist_after = collect_task2_strip_combination_histogram_payload(
-        working_df,
-        strip_combination_tt_original,
-        relation_type="detector",
-    )
-    strip_combination_self_limits = {
-        "q_sum_sum": (
-            task2_strip_combination_limits_by_relation["same_strip"]["q_sum_sum_left"],
-            task2_strip_combination_limits_by_relation["same_strip"]["q_sum_sum_right"],
-        ),
-        "q_dif_sum": (
-            -abs(task2_strip_combination_limits_by_relation["same_strip"]["q_dif_sum_threshold"]),
-            abs(task2_strip_combination_limits_by_relation["same_strip"]["q_dif_sum_threshold"]),
-        ),
-        "t_sum_sum": (
-            task2_strip_combination_limits_by_relation["same_strip"]["t_sum_sum_left"],
-            task2_strip_combination_limits_by_relation["same_strip"]["t_sum_sum_right"],
-        ),
-        "t_dif_sum": (
-            -abs(task2_strip_combination_limits_by_relation["same_strip"]["t_dif_sum_threshold"]),
-            abs(task2_strip_combination_limits_by_relation["same_strip"]["t_dif_sum_threshold"]),
-        ),
-    }
-    strip_combination_same_plane_limits = {
-        "q_sum_sum": (
-            task2_strip_combination_limits_by_relation["same_plane"]["q_sum_sum_left"],
-            task2_strip_combination_limits_by_relation["same_plane"]["q_sum_sum_right"],
-        ),
-        "q_sum_dif": (
-            -abs(task2_strip_combination_limits_by_relation["same_plane"]["q_sum_dif_threshold"]),
-            abs(task2_strip_combination_limits_by_relation["same_plane"]["q_sum_dif_threshold"]),
-        ),
-        "q_dif_sum": (
-            -abs(task2_strip_combination_limits_by_relation["same_plane"]["q_dif_sum_threshold"]),
-            abs(task2_strip_combination_limits_by_relation["same_plane"]["q_dif_sum_threshold"]),
-        ),
-        "q_dif_dif": (
-            -abs(task2_strip_combination_limits_by_relation["same_plane"]["q_dif_dif_threshold"]),
-            abs(task2_strip_combination_limits_by_relation["same_plane"]["q_dif_dif_threshold"]),
-        ),
-        "t_sum_sum": (
-            task2_strip_combination_limits_by_relation["same_plane"]["t_sum_sum_left"],
-            task2_strip_combination_limits_by_relation["same_plane"]["t_sum_sum_right"],
-        ),
-        "t_sum_dif": (
-            -abs(task2_strip_combination_limits_by_relation["same_plane"]["t_sum_dif_threshold"]),
-            abs(task2_strip_combination_limits_by_relation["same_plane"]["t_sum_dif_threshold"]),
-        ),
-        "t_dif_sum": (
-            -abs(task2_strip_combination_limits_by_relation["same_plane"]["t_dif_sum_threshold"]),
-            abs(task2_strip_combination_limits_by_relation["same_plane"]["t_dif_sum_threshold"]),
-        ),
-        "t_dif_dif": (
-            -abs(task2_strip_combination_limits_by_relation["same_plane"]["t_dif_dif_threshold"]),
-            abs(task2_strip_combination_limits_by_relation["same_plane"]["t_dif_dif_threshold"]),
-        ),
-    }
-    strip_combination_any_limits = {
-        "q_sum_sum": (strip_combination_q_sum_sum_left, strip_combination_q_sum_sum_right),
-        "q_sum_dif": (-abs(strip_combination_q_sum_dif_threshold), abs(strip_combination_q_sum_dif_threshold)),
-        "q_dif_sum": (-abs(strip_combination_q_dif_sum_threshold), abs(strip_combination_q_dif_sum_threshold)),
-        "q_dif_dif": (-abs(strip_combination_q_dif_dif_threshold), abs(strip_combination_q_dif_dif_threshold)),
-        "t_sum_sum": (strip_combination_t_sum_sum_left, strip_combination_t_sum_sum_right),
-        "t_sum_dif": (-abs(strip_combination_t_sum_dif_threshold), abs(strip_combination_t_sum_dif_threshold)),
-        "t_dif_sum": (-abs(strip_combination_t_dif_sum_threshold), abs(strip_combination_t_dif_sum_threshold)),
-        "t_dif_dif": (-abs(strip_combination_t_dif_dif_threshold), abs(strip_combination_t_dif_dif_threshold)),
-    }
-    fig_idx = plot_task2_strip_combination_filter_by_tt(
-        strip_combination_self_hist_original,
-        strip_combination_self_hist_original,
-        strip_combination_self_hist_after,
-        basename_no_ext,
-        fig_idx,
-        base_directories["figure_directory"],
-        show_plots=show_plots,
-        save_plots=save_plots,
-        plot_list=plot_list,
-        limits_by_observable=strip_combination_self_limits,
-        relation_label="strip",
-        observable_definitions=TASK2_STRIP_COMBINATION_SELF_OBSERVABLES,
-    )
-    fig_idx = plot_task2_strip_combination_filter_by_tt(
-        strip_combination_same_plane_hist_original,
-        strip_combination_same_plane_hist_original,
-        strip_combination_same_plane_hist_after,
-        basename_no_ext,
-        fig_idx,
-        base_directories["figure_directory"],
-        show_plots=show_plots,
-        save_plots=save_plots,
-        plot_list=plot_list,
-        limits_by_observable=strip_combination_same_plane_limits,
-        relation_label="plane",
-    )
-    fig_idx = plot_task2_strip_combination_filter_by_tt(
-        strip_combination_any_hist_original,
-        strip_combination_any_hist_original,
-        strip_combination_any_hist_after,
-        basename_no_ext,
-        fig_idx,
-        base_directories["figure_directory"],
-        show_plots=show_plots,
-        save_plots=save_plots,
-        plot_list=plot_list,
-        limits_by_observable=strip_combination_any_limits,
-        relation_label="detector",
-    )
+# FINAL plot block moved out of the runtime flow: strip_combination_filter_by_tt
+pass
 _prof["s_strip_combination_filter_s"] = round(time.perf_counter() - _t_sec, 2)
 _t_sec = time.perf_counter()
 
@@ -13581,7 +13446,7 @@ print(f"Analysis date and time: {analysis_date}")
 for i, plane in enumerate(['P1', 'P2', 'P3', 'P4']):
     for j in range(4):
         strip = j + 1
-        
+
         if apply_charge_side:
             q_sum = (QF_pedestal[i][j] + QB_pedestal[i][j]) / 2
         else:
@@ -13839,282 +13704,8 @@ _diag_requested = {
     "rejected_histograms_q_sum_zero": task2_plot_requested("rejected_histograms_q_sum_zero"),
     "rejected_histograms_tt_task2_cal": task2_plot_requested("rejected_histograms_tt_task2_cal"),
 }
-if any(_diag_requested[a] for a in _DIAG_ALIASES):
-    _DIAG_MAX_PTS = 5000
-    _diag_q_sum_cols = sorted(
-        c for c in unzeroed_plot_snapshot_df.columns if re.match(r"^Q\d+_Q_sum_\d+$", c)
-    )
-    _diag_t_sum_cols = sorted(
-        c for c in unzeroed_plot_snapshot_df.columns if re.match(r"^T\d+_T_sum_\d+$", c)
-    )
-
-    def _diag_total_charge(df: pd.DataFrame) -> pd.Series:
-        cols = [c for c in _diag_q_sum_cols if c in df.columns]
-        return df[cols].fillna(0).sum(axis=1) if cols else pd.Series(0.0, index=df.index)
-
-    def _diag_mean_tsum(df: pd.DataFrame) -> pd.Series:
-        cols = [c for c in _diag_t_sum_cols if c in df.columns]
-        if not cols:
-            return pd.Series(np.nan, index=df.index)
-        return df[cols].replace(0, np.nan).mean(axis=1)
-
-    def _diag_sample(df: pd.DataFrame) -> pd.DataFrame:
-        return df.sample(n=_DIAG_MAX_PTS, random_state=42) if len(df) > _DIAG_MAX_PTS else df
-
-    # ── Plot A: rejected-event scatter (mean T_sum vs total Q_sum) ────────────
-    _rej_groups = [
-        ("rejected_scatter_tt_task1_clean",  _diag_rejected_tt_task1_clean_idx, "tt_task1_clean NaN"),
-        ("rejected_scatter_q_sum_zero", _diag_rejected_q_sum_idx,   "Q_sum all-zero"),
-        ("rejected_scatter_tt_task2_cal",    _diag_rejected_tt_task2_cal_idx,   "tt_task2_cal < 10"),
-    ]
-    for _alias, _rej_idx, _reason in _rej_groups:
-        if not _diag_requested.get(_alias, False):
-            continue
-        _rej_sub = _diag_sample(unzeroed_plot_snapshot_df.loc[_rej_idx]) if len(_rej_idx) else pd.DataFrame(columns=unzeroed_plot_snapshot_df.columns)
-        _acc_sub = _diag_sample(unzeroed_plot_snapshot_df.drop(index=_rej_idx, errors="ignore"))
-        _fig, _ax = plt.subplots(figsize=(8, 6))
-        _ax.scatter(
-            _diag_total_charge(_acc_sub), _diag_mean_tsum(_acc_sub),
-            s=3, alpha=0.15, color="steelblue", rasterized=True,
-            label=f"Accepted ({len(unzeroed_plot_snapshot_df) - len(_rej_idx)})",
-        )
-        if not _rej_sub.empty:
-            _ax.scatter(
-                _diag_total_charge(_rej_sub), _diag_mean_tsum(_rej_sub),
-                s=4, alpha=0.4, color="tomato", rasterized=True,
-                label=f"Rejected – {_reason} ({len(_rej_idx)})",
-            )
-        _ax.set_xlabel("Total Q_sum [ADC]")
-        _ax.set_ylabel("Mean T_sum [ADC]")
-        _ax.set_title(
-            f"Rejection diagnostic: {_reason}\n"
-            f"Station {station} · {basename_no_ext}"
-        )
-        _ax.legend(markerscale=3, fontsize=8)
-        plt.tight_layout()
-        _sp = os.path.join(base_directories["figure_directory"], f"{fig_idx:03d}_{_alias}.png")
-        plot_list.append(_sp)
-        save_plot_figure(_sp, fig=_fig, alias=_alias, format="png", dpi=150)
-        plt.close(_fig)
-        fig_idx += 1
-
-    # ── Plot B: front vs back (Q and T) ──────────────────────────────────────
-    _fb_pattern_q = re.compile(r"^Q(\d+)_F_(\d+)$")
-    _fb_raw_q_f = {
-        (int(m.group(1)), int(m.group(2))): c
-        for c in unzeroed_plot_snapshot_df.columns
-        if (m := _fb_pattern_q.match(c))
-    }
-    _fb_raw_q_b = {
-        (int(m.group(1)), int(m.group(2))): c
-        for c in unzeroed_plot_snapshot_df.columns
-        if (m := re.match(r"^Q(\d+)_B_(\d+)$", c))
-    }
-    _fb_pattern_t = re.compile(r"^T(\d+)_F_(\d+)$")
-    _fb_raw_t_f = {
-        (int(m.group(1)), int(m.group(2))): c
-        for c in unzeroed_plot_snapshot_df.columns
-        if (m := _fb_pattern_t.match(c))
-    }
-    _fb_raw_t_b = {
-        (int(m.group(1)), int(m.group(2))): c
-        for c in unzeroed_plot_snapshot_df.columns
-        if (m := re.match(r"^T(\d+)_B_(\d+)$", c))
-    }
-
-    for _fb_alias, _f_map, _b_map, _sum_cols, _dif_cols, _label, _unit in [
-        (
-            "charge_front_vs_back", _fb_raw_q_f, _fb_raw_q_b,
-            _diag_q_sum_cols,
-            sorted(c for c in unzeroed_plot_snapshot_df.columns if re.match(r"^Q\d+_Q_dif_\d+$", c)),
-            "Q", "ADC",
-        ),
-        (
-            "time_front_vs_back", _fb_raw_t_f, _fb_raw_t_b,
-            _diag_t_sum_cols,
-            sorted(c for c in unzeroed_plot_snapshot_df.columns if re.match(r"^T\d+_T_dif_\d+$", c)),
-            "T", "ADC",
-        ),
-    ]:
-        if not _diag_requested.get(_fb_alias, False):
-            continue
-        _matched_keys = sorted(set(_f_map) & set(_b_map))
-        _use_raw = bool(_matched_keys)
-        if not _use_raw:
-            # Reconstruct F = (sum+dif)/2, B = (sum-dif)/2 from sum/dif pairs
-            _dif_set = set(_dif_cols)
-            _matched_keys = []
-            _sum_to_dif: dict[str, str] = {}
-            for _sc in _sum_cols:
-                _dc = _sc.replace("_Q_sum_", "_Q_dif_").replace("_T_sum_", "_T_dif_")
-                if _dc in _dif_set:
-                    _matched_keys.append(_sc)
-                    _sum_to_dif[_sc] = _dc
-        if not _matched_keys:
-            continue
-        _df_fb = _diag_sample(unzeroed_plot_snapshot_df)
-        n_pairs = len(_matched_keys)
-        n_cols_fb = min(4, n_pairs)
-        n_rows_fb = (n_pairs + n_cols_fb - 1) // n_cols_fb
-        _fig, _axes = plt.subplots(
-            n_rows_fb, n_cols_fb,
-            figsize=(4 * n_cols_fb, 3.5 * n_rows_fb),
-            squeeze=False,
-        )
-        for _pi, _key in enumerate(_matched_keys):
-            _r, _c = divmod(_pi, n_cols_fb)
-            _ax = _axes[_r][_c]
-            if _use_raw:
-                _xa = _df_fb[_f_map[_key]].fillna(0)
-                _xb = _df_fb[_b_map[_key]].fillna(0)
-                _xl = _f_map[_key].replace("_", " ")
-                _yl = _b_map[_key].replace("_", " ")
-            else:
-                _s = _df_fb[_key].fillna(0)
-                _d = _df_fb[_sum_to_dif[_key]].fillna(0)
-                _xa = (_s + _d) / 2.0
-                _xb = (_s - _d) / 2.0
-                _base = _key.replace("_Q_sum_", " ").replace("_T_sum_", " ").replace("_", " ")
-                _xl = f"{_base} F"
-                _yl = f"{_base} B"
-            _ax.scatter(_xa, _xb, s=2, alpha=0.15, rasterized=True)
-            _ax.set_xlabel(_xl, fontsize=7)
-            _ax.set_ylabel(_yl, fontsize=7)
-            _ax.tick_params(labelsize=6)
-        for _pi in range(n_pairs, n_rows_fb * n_cols_fb):
-            _r, _c = divmod(_pi, n_cols_fb)
-            _axes[_r][_c].set_visible(False)
-        _fig.suptitle(
-            f"{_label}: Front vs Back (unzeroed, N≤{_DIAG_MAX_PTS})\n"
-            f"Station {station} · {basename_no_ext}",
-            fontsize=9,
-        )
-        plt.tight_layout()
-        _sp = os.path.join(base_directories["figure_directory"], f"{fig_idx:03d}_{_fb_alias}.png")
-        plot_list.append(_sp)
-        save_plot_figure(_sp, fig=_fig, alias=_fb_alias, format="png", dpi=150)
-        plt.close(_fig)
-        fig_idx += 1
-
-    # ── Plot C: channel matrix (Q_sum per-strip, per plane pair) ─────────────
-    if _diag_requested.get("channel_matrix_tq", False):
-        _df_cm = _diag_sample(unzeroed_plot_snapshot_df)
-        for _pi_idx in range(1, 5):
-            for _pj_idx in range(_pi_idx + 1, 5):
-                _ci_cols = [
-                    f"p{_pi_idx}_s{s}_qsum" for s in range(1, 5)
-                    if f"p{_pi_idx}_s{s}_qsum" in _df_cm.columns
-                ]
-                _cj_cols = [
-                    f"p{_pj_idx}_s{s}_qsum" for s in range(1, 5)
-                    if f"p{_pj_idx}_s{s}_qsum" in _df_cm.columns
-                ]
-                if not _ci_cols or not _cj_cols:
-                    continue
-                _ni, _nj = len(_ci_cols), len(_cj_cols)
-                _fig, _axes = plt.subplots(
-                    _nj, _ni,
-                    figsize=(3 * _ni, 3 * _nj),
-                    squeeze=False,
-                )
-                for _si, _ci in enumerate(_ci_cols):
-                    for _sj, _cj in enumerate(_cj_cols):
-                        _ax = _axes[_sj][_si]
-                        _both = (_df_cm[_ci] != 0) & (_df_cm[_cj] != 0)
-                        _ax.scatter(
-                            _df_cm.loc[_both, _ci], _df_cm.loc[_both, _cj],
-                            s=2, alpha=0.2, rasterized=True,
-                        )
-                        _ax.set_xlabel(_ci.replace("_", " "), fontsize=6)
-                        _ax.set_ylabel(_cj.replace("_", " "), fontsize=6)
-                        _ax.tick_params(labelsize=5)
-                _combo = f"P{_pi_idx}_P{_pj_idx}"
-                _fig.suptitle(
-                    f"Channel matrix Q_sum: Plane {_pi_idx} vs Plane {_pj_idx}\n"
-                    f"(unzeroed, co-fired strips, N≤{_DIAG_MAX_PTS})\n"
-                    f"Station {station} · {basename_no_ext}",
-                    fontsize=8,
-                )
-                plt.tight_layout()
-                _sp = os.path.join(
-                    base_directories["figure_directory"],
-                    f"{fig_idx:03d}_channel_matrix_tq_{_combo}.png",
-                )
-                plot_list.append(_sp)
-                save_plot_figure(_sp, fig=_fig, alias="channel_matrix_tq", format="png", dpi=120)
-                plt.close(_fig)
-                fig_idx += 1
-
-    if _diag_requested.get("strip_pair_matrix_by_planepair", False):
-        if not track_removed_rows_task2:
-            print("Task 2 strip-pair removed-row overlay disabled (track_removed_rows_task2=False).")
-        removed_plot_df = diagnostic_removed_rows_df if track_removed_rows_task2 else diagnostic_removed_rows_df.iloc[0:0].copy()
-        fig_idx = plot_task2_strip_pair_matrix_by_planepair(
-            working_df,
-            removed_plot_df,
-            basename_no_ext,
-            fig_idx,
-        )
-
-    # ── Plot D: rejected-event per-plane histograms (Q_sum and T_sum) ────────
-    _hist_rej_groups = [
-        ("rejected_histograms_tt_task1_clean",  _diag_rejected_tt_task1_clean_idx,  "tt_task1_clean NaN"),
-        ("rejected_histograms_q_sum_zero", _diag_rejected_q_sum_idx,    "Q_sum all-zero"),
-        ("rejected_histograms_tt_task2_cal",    _diag_rejected_tt_task2_cal_idx,    "tt_task2_cal < 10"),
-    ]
-    for _halias, _rej_idx, _reason in _hist_rej_groups:
-        if not _diag_requested.get(_halias, False):
-            continue
-        _rej_rows = unzeroed_plot_snapshot_df.loc[_rej_idx] if len(_rej_idx) else pd.DataFrame(columns=unzeroed_plot_snapshot_df.columns)
-        _acc_rows = unzeroed_plot_snapshot_df.drop(index=_rej_idx, errors="ignore")
-        _fig, _axes = plt.subplots(4, 2, figsize=(10, 12))
-        for _p in range(1, 5):
-            _q_cols = [f"p{_p}_s{s}_qsum" for s in range(1, 5) if f"p{_p}_s{s}_qsum" in unzeroed_plot_snapshot_df.columns]
-            _t_cols = [f"p{_p}_s{s}_tsum" for s in range(1, 5) if f"p{_p}_s{s}_tsum" in unzeroed_plot_snapshot_df.columns]
-            _ax_q = _axes[_p - 1][0]
-            _ax_t = _axes[_p - 1][1]
-            if _q_cols:
-                _acc_q = _acc_rows[_q_cols].fillna(0).sum(axis=1)
-                _rej_q = _rej_rows[_q_cols].fillna(0).sum(axis=1) if not _rej_rows.empty else pd.Series(dtype=float)
-                _q_all = pd.concat([_acc_q, _rej_q])
-                _qmin, _qmax = float(_q_all.min()), float(_q_all.max())
-                _bins_q = np.linspace(_qmin, _qmax, 50) if _qmin < _qmax else 10
-                _ax_q.hist(_acc_q, bins=_bins_q, alpha=0.6, color="steelblue",
-                           label=f"Accepted (N={len(_acc_q)})", histtype="stepfilled")
-                if len(_rej_q) > 0:
-                    _ax_q.hist(_rej_q, bins=_bins_q, alpha=0.85, color="tomato",
-                               label=f"Rejected (N={len(_rej_q)})", histtype="step", linewidth=1.5)
-            _ax_q.set_xlabel(f"P{_p} Q_sum total [ADC]", fontsize=8)
-            _ax_q.set_ylabel("Counts", fontsize=8)
-            _ax_q.set_yscale("log", nonpositive="clip")
-            _ax_q.legend(fontsize=6)
-            _ax_q.tick_params(labelsize=7)
-            if _t_cols:
-                _acc_t = _acc_rows[_t_cols].replace(0, np.nan).mean(axis=1).dropna()
-                _rej_t = _rej_rows[_t_cols].replace(0, np.nan).mean(axis=1).dropna() if not _rej_rows.empty else pd.Series(dtype=float)
-                _t_all = pd.concat([_acc_t, _rej_t])
-                _tmin, _tmax = float(_t_all.min()), float(_t_all.max())
-                _bins_t = np.linspace(_tmin, _tmax, 50) if _tmin < _tmax else 10
-                _ax_t.hist(_acc_t, bins=_bins_t, alpha=0.6, color="steelblue",
-                           label=f"Accepted (N={len(_acc_t)})", histtype="stepfilled")
-                if len(_rej_t) > 0:
-                    _ax_t.hist(_rej_t, bins=_bins_t, alpha=0.85, color="tomato",
-                               label=f"Rejected (N={len(_rej_t)})", histtype="step", linewidth=1.5)
-            _ax_t.set_xlabel(f"P{_p} T_sum mean [ADC]", fontsize=8)
-            _ax_t.set_ylabel("Counts", fontsize=8)
-            _ax_t.set_yscale("log", nonpositive="clip")
-            _ax_t.legend(fontsize=6)
-            _ax_t.tick_params(labelsize=7)
-        _fig.suptitle(
-            f"Rejected event shape – {_reason}\nStation {station} · {basename_no_ext}",
-            fontsize=10,
-        )
-        plt.tight_layout()
-        _sp = os.path.join(base_directories["figure_directory"], f"{fig_idx:03d}_{_halias}.png")
-        plot_list.append(_sp)
-        save_plot_figure(_sp, fig=_fig, alias=_halias, format="png", dpi=150)
-        plt.close(_fig)
-        fig_idx += 1
+# FINAL plot block moved out of the runtime flow: channel_matrix_tq, charge_front_vs_back, rejected_histograms_q_sum_zero, rejected_histograms_tt_task1_clean, rejected_histograms_tt_task2_cal, rejected_scatter_q_sum_zero, rejected_scatter_tt_task1_clean, rejected_scatter_tt_task2_cal, strip_pair_matrix_by_planepair, time_front_vs_back
+pass
 
     # Plot E (channel per-planepair matrix) removed: 64x64/sector plotting deprecated and deleted.
 
@@ -14253,84 +13844,14 @@ def _plot_task2_calibrated_filtered_removed_zeroes(
     )
 
 
-if task2_plot_requested("calibrated_filtered_removed_zeroes", essential=True):
-    _plot_task2_calibrated_filtered_removed_zeroes(
-        working_df,
-        title="Calibrated filtered data (removed zeroes)",
-        filename_stem="calibrated_filtered_removed_zeroes",
-        alias="calibrated_filtered_removed_zeroes",
-    )
+# FINAL plot block moved out of the runtime flow: calibrated_filtered_removed_zeroes
+pass
 
-if task2_plot_requested("calibrated_filtered_removed_zeroes_per_plane_combination", essential=True):
-    if "tt_task2_cal" not in working_df.columns:
-        print("Skipping calibrated_filtered_removed_zeroes_per_plane_combination: tt_task2_cal column is missing.")
-    else:
-        tt_values = pd.to_numeric(working_df["tt_task2_cal"], errors="coerce")
-        generated_per_tt_figures = 0
-        for tt_value in sorted(tt_values[np.isfinite(tt_values)].unique()):
-            tt_mask = tt_values.eq(tt_value)
-            if not bool(tt_mask.any()):
-                continue
-            tt_label = normalize_tt_label(tt_value)
-            _plot_task2_calibrated_filtered_removed_zeroes(
-                working_df.loc[tt_mask],
-                title=f"Calibrated filtered data (removed zeroes), tt_task2_cal={tt_label}",
-                filename_stem=f"calibrated_filtered_removed_zeroes_per_plane_combination_tt_{tt_label}",
-                alias="calibrated_filtered_removed_zeroes_per_plane_combination",
-            )
-            generated_per_tt_figures += 1
-        print(
-            "calibrated_filtered_removed_zeroes_per_plane_combination: "
-            f"generated {generated_per_tt_figures} figures."
-        )
+# FINAL plot block moved out of the runtime flow: calibrated_filtered_removed_zeroes_per_plane_combination
+pass
 
-if task2_plot_requested("time_calibrated_filtered_removed_zeroes", essential=True):
-    time_plot_columns = [
-        col
-        for col in working_df.columns
-        if "T_sum" in col or "T_dif" in col
-    ]
-    if time_plot_columns:
-        plot_df = working_df.loc[:, time_plot_columns]
-        cols_per_row = 8
-        num_columns = len(time_plot_columns)
-        num_rows = max(1, (num_columns + cols_per_row - 1) // cols_per_row)
-        fig, axes = plt.subplots(
-            num_rows,
-            cols_per_row,
-            figsize=(20, num_rows * 2),
-            sharex="col",
-        )
-        axes = np.atleast_1d(axes).flatten()
-
-        for i, col in enumerate(time_plot_columns):
-            y = pd.to_numeric(plot_df[col], errors="coerce")
-            color = T_sum_color if "T_sum" in col else T_dif_color
-            y_nonzero = y[(y != 0) & np.isfinite(y)]
-            axes[i].hist(y_nonzero, bins=100, alpha=0.6, color=color)
-            axes[i].set_title(col)
-
-        for j in range(i + 1, len(axes)):
-            fig.delaxes(axes[j])
-
-        fig.tight_layout(rect=[0, 0, 1, 0.95])
-        fig.suptitle("Time-calibrated filtered data (removed zeroes)", fontsize=20)
-
-        if save_plots:
-            final_filename = f"{fig_idx}_time_calibrated_filtered_removed_zeroes.png"
-            fig_idx += 1
-            save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-            plot_list.append(save_fig_path)
-            save_plot_figure(
-                save_fig_path,
-                fig=fig,
-                alias="time_calibrated_filtered_removed_zeroes",
-                format="png",
-            )
-        if show_plots:
-            plt.show()
-        plt.close(fig)
-        del plot_df
+# FINAL plot block moved out of the runtime flow: time_calibrated_filtered_removed_zeroes
+pass
 
 # Data purity
 data_purity = final_number_of_events / original_number_of_events * 100
@@ -14348,7 +13869,7 @@ total_execution_time_minutes = execution_time_minutes
 param_hash_value = str(simulated_param_hash) if simulated_param_hash else str(global_variables.get("param_hash", ""))
 global_variables["param_hash"] = param_hash_value
 
- 
+
 # -------------------------------------------------------------------------------
 # Filter metadata (ancillary) ---------------------------------------------------
 # -------------------------------------------------------------------------------
@@ -14702,33 +14223,8 @@ if track_removed_rows_task2:
     print(f"Original-column snapshot parquet saved to: {original_cols_base}.parquet")
 
 # Final task-rate plot from the same dataframe population saved by Task 2.
-if save_plots and task2_plot_enabled("acquisition_rate_vs_time_by_task_tt_with_histograms"):
-    rate_fig = create_rate_vs_time_by_task_tt_with_histograms(
-        working_df,
-        tt_column="tt_task2_cal",
-        title=(
-            f"Task 2 acquisition rate by tt_task2_cal, {basename_no_ext} "
-            f"(files processed={len(joined_input_records)})"
-        ),
-        accumulation_window_seconds=config.get("acquisition_rate_accumulation_window_seconds", 60),
-        rate_histogram_bins=config.get("acquisition_rate_task_tt_histogram_bins", 80),
-        y_limit_left=config.get("acquisition_rate_task_tt_ylim_left", 0),
-        y_limit_right=config.get("acquisition_rate_task_tt_ylim_right", 4),
-    )
-    if rate_fig is not None:
-        final_filename = f"{fig_idx}_acquisition_rate_vs_time_by_task_tt_with_histograms.png"
-        fig_idx += 1
-        save_fig_path = os.path.join(base_directories["figure_directory"], final_filename)
-        plot_list.append(save_fig_path)
-        save_plot_figure(
-            save_fig_path,
-            fig=rate_fig,
-            alias="acquisition_rate_vs_time_by_task_tt_with_histograms",
-            dpi=140,
-        )
-        plt.close(rate_fig)
-    else:
-        print("Task 2 acquisition-rate-by-task-tt plot skipped: no valid tt_task2_cal/datetime rows.")
+# FINAL plot block moved out of the runtime flow: acquisition_rate_vs_time_by_task_tt_with_histograms
+pass
 
 # Ensure no figure handles remain open before persistence/final move.
 plt.close("all")

@@ -1,0 +1,7 @@
+# FINAL plots: standalone post-task analysis from the derived parquet only.
+plot_mode: all
+save_png: true
+save_pdf: true
+plots:
+  acquisition_rate_vs_time_by_trigger_type: usual
+  acquisition_rate_vs_time_by_task_tt_with_histograms: essential
