@@ -22,7 +22,6 @@ The following source snapshots are retained in this archive. The SHA column is t
 | `Giffers and a GUI/new_GUI.py` | `6e6e026f6f90dd8ed9c9b71b1f904f86022b0851` | Historical GUI prototype |
 | `SCIMIN/position_study_in_scint.py` | `57e4024c8d470b189bec0606f28fbf37decacaca` | SiPM position reconstruction |
 | `SCIMIN/NN_position_scint.py` | `7ca35f35166ee2d013daba512d1fa2830aa65329` | Neural-network position reconstruction |
-| `Slewing correction/slewing_correction.py` | `9e71038f57601bcac18498563246b9740cbd382f` | Slewing correction |
 | `Waiting time - Mistaken analysis/fixed_waiting.py` | `15b723e030dd9e2739ef23b785d9b19855c3be5a` | Waiting-time / Poisson-process investigation |
 | `Y position studies/strip_width_simulation.py` | `abf0f7f6ddd29bac51ce32dae4172707b0f0a76f` | Strip-width and position-resolution simulation |
 
