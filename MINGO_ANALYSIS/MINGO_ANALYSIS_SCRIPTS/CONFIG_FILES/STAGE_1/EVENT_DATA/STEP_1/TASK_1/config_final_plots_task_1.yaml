@@ -1,0 +1,10 @@
+# FINAL plots: standalone post-task analysis from the derived parquet only.
+plot_mode: all
+save_png: true
+save_pdf: true
+plots:
+  acquisition_rate_vs_time_by_task_tt_with_histograms: essential
+  event_total_charge_raw: usual
+  tq_scatter_raw_by_tt: usual
+  tq_scatter_filtered_by_tt: essential
+  channel_tq_matrix_by_planepair: usual

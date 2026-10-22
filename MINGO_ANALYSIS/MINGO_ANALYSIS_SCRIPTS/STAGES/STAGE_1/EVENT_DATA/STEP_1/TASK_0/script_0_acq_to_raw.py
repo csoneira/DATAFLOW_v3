@@ -20,8 +20,6 @@ import sys
 import time
 
 import pandas as pd
-from matplotlib.backends.backend_pdf import PdfPages
-from PIL import Image
 
 CURRENT_PATH = Path(__file__).resolve()
 REPO_ROOT = None
@@ -49,7 +47,6 @@ from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.reprocessing_utils import (
     filter_filenames_by_qa_retry_basenames,
     load_active_qa_retry_basenames,
 )
-from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.plot_utils import pdf_save_rasterized_page
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.selection_config import load_selection_for_paths, station_is_selected
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.simulated_data_utils import resolve_simulated_z_positions
 from MINGO_ANALYSIS.MINGO_ANALYSIS_SCRIPTS.common.status_csv import (
@@ -192,46 +189,8 @@ def build_task0_gate_test_metadata(
     return metadata
 
 
-def _build_temp_pdf_path(target_path: Path) -> Path:
-    base = Path(f"{target_path}.tmp.{os.getpid()}")
-    candidate = base
-    counter = 1
-    while candidate.exists():
-        candidate = Path(f"{base}.{counter}")
-        counter += 1
-    return candidate
 
 
-def _write_task0_pdf_from_pngs(plot_paths: list[Path], pdf_path: Path, figure_directory: Path) -> None:
-    valid_plot_paths = [path for path in plot_paths if path.exists()]
-    if not valid_plot_paths:
-        return
-
-    import matplotlib.pyplot as plt
-
-    pdf_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_pdf_path = _build_temp_pdf_path(pdf_path)
-    try:
-        with PdfPages(temp_pdf_path) as pdf:
-            for png_path in valid_plot_paths:
-                img = Image.open(png_path)
-                fig, ax = plt.subplots(figsize=(img.width / 100, img.height / 100), dpi=100)
-                ax.imshow(img)
-                ax.axis("off")
-                pdf_save_rasterized_page(pdf, fig, bbox_inches="tight")
-                plt.close(fig)
-        os.replace(temp_pdf_path, pdf_path)
-    finally:
-        if temp_pdf_path.exists():
-            temp_pdf_path.unlink()
-
-    for png_path in valid_plot_paths:
-        try:
-            png_path.unlink()
-        except OSError as exc:
-            print(f"Error removing temporary Task 0 PNG '{png_path}': {exc}", force=True)
-    if figure_directory.exists():
-        shutil.rmtree(figure_directory)
 
 
 def _resolve_station_conf_value(
@@ -591,50 +550,11 @@ read_df = add_topology_task1_channel(read_df)
 
 saved_plot_paths: list[Path] = []
 figure_directory: Path | None = None
-if save_plots and task0_plot_enabled("acquisition_rate_vs_time_by_trigger_type"):
-    figure_directory = (
-        task_directory
-        / "PLOTS"
-        / "FIGURE_DIRECTORY"
-        / f"FIGURES_EXEC_ON_{date_execution}"
-    )
-    plot_path = figure_directory / f"acquisition_rate_vs_time_by_trigger_type_{basename_no_ext}.png"
-    plotted = plot_acquisition_rate_vs_time_by_trigger_type(
-        read_df,
-        plot_path,
-        title=f"Task 0 acquisition rate by trigger type, {basename_no_ext}",
-        accumulation_window_seconds=acquisition_rate_accumulation_window_seconds,
-    )
-    if plotted:
-        print(f"Task 0 acquisition-rate plot saved: {plot_path}", force=True)
-        saved_plot_paths.append(plot_path)
-    else:
-        print("Task 0 acquisition-rate plot skipped: no valid datetime rows.", force=True)
+# FINAL plot block moved out of the runtime flow: acquisition_rate_vs_time_by_trigger_type
+pass
 
-if save_plots and task0_plot_enabled("acquisition_rate_vs_time_by_task_tt_with_histograms"):
-    if figure_directory is None:
-        figure_directory = (
-            task_directory
-            / "PLOTS"
-            / "FIGURE_DIRECTORY"
-            / f"FIGURES_EXEC_ON_{date_execution}"
-        )
-    plot_path = figure_directory / f"acquisition_rate_vs_time_by_task_tt_with_histograms_{basename_no_ext}.png"
-    plotted = plot_acquisition_rate_vs_time_by_task_tt_with_histograms(
-        read_df,
-        plot_path,
-        title=f"Task 0 acquisition rate by tt_task0_acq, {basename_no_ext} (files processed=1)",
-        tt_column="tt_task0_acq",
-        accumulation_window_seconds=acquisition_rate_accumulation_window_seconds,
-        rate_histogram_bins=acquisition_rate_task_tt_histogram_bins,
-        y_limit_left=config.get("acquisition_rate_task_tt_ylim_left", 0),
-        y_limit_right=config.get("acquisition_rate_task_tt_ylim_right", 4),
-    )
-    if plotted:
-        print(f"Task 0 acquisition-rate-by-task-tt plot saved: {plot_path}", force=True)
-        saved_plot_paths.append(plot_path)
-    else:
-        print("Task 0 acquisition-rate-by-task-tt plot skipped: no valid tt_task0_acq/datetime rows.", force=True)
+# FINAL plot block moved out of the runtime flow: acquisition_rate_vs_time_by_task_tt_with_histograms
+pass
 
 if create_debug_plots and task0_plot_enabled("debug_suite"):
     if figure_directory is None:
@@ -666,11 +586,6 @@ if create_debug_plots and task0_plot_enabled("debug_suite"):
         force=True,
     )
 
-if create_pdf and saved_plot_paths and figure_directory is not None:
-    save_pdf_filename = f"mingo{str(station).zfill(2)}_task0_{basename_no_ext}_{date_execution}.pdf"
-    save_pdf_path = directories["pdf"] / save_pdf_filename
-    print(f"Creating Task 0 PDF with all plots in {save_pdf_path}", force=True)
-    _write_task0_pdf_from_pngs(saved_plot_paths, save_pdf_path, figure_directory)
 
 coincidence_df = read_df.loc[coincidence_mask].copy()
 self_trigger_df = read_df.loc[self_trigger_mask].copy()

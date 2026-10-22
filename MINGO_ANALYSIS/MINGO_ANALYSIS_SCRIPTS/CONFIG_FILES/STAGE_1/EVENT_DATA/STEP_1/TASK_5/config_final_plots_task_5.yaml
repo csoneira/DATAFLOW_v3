@@ -1,0 +1,10 @@
+# FINAL plots: standalone post-task analysis from the derived parquet only.
+plot_mode: all
+save_png: true
+save_pdf: true
+plots:
+  acquisition_rate_vs_time_by_task_tt_with_histograms: essential
+  theta_phi_definitive_tt_2d: usual
+  polar_theta_phi_definitive_tt_2d_detail_final: usual
+  theta_efficiency_simple_3v4: usual
+  charge_tt_task4_fit_1234_per_plane_and_total: usual

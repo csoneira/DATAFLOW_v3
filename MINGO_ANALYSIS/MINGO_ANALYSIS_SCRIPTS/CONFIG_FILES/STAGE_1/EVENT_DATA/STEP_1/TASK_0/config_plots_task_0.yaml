@@ -1,4 +1,3 @@
+# Runtime plots: PNG-only diagnostics created while the task is executing.
 plots:
   debug_suite: debug
-  acquisition_rate_vs_time_by_trigger_type: usual
-  acquisition_rate_vs_time_by_task_tt_with_histograms: essential
