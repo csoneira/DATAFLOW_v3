@@ -11,6 +11,10 @@ This archive contains dated development and research notes. Notebook entries are
 
 ## 2026
 
+### October
+
+- [2026-10-22 — Muon TOF energy reconstruction](2026/10_OCTOBER/2026_10_22_notebook.md)
+
 ### July
 
 - [2026-07-30 — entry 2](2026/07_JULY/2026_07_30_entry_2_notebook.md)
