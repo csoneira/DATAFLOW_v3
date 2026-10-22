@@ -1,0 +1,263 @@
+name: one-time-step1-legacy-cleanup-v3
+
+on:
+  push:
+    branches:
+      - cleanup/step1-legacy-pass-v3
+    paths:
+      - .github/workflows/one_time_step1_cleanup_v3.yml
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cleanup/step1-legacy-pass-v3
+          fetch-depth: 0
+
+      - name: Archive only unreachable code
+        shell: bash
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import ast
+          from pathlib import Path
+          import textwrap
+
+          root = Path("MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1")
+          scripts = (
+              (0, "script_0_acq_to_raw.py"),
+              (1, "script_1_raw_to_clean.py"),
+              (2, "script_2_clean_to_cal.py"),
+              (3, "script_3_cal_to_list.py"),
+              (4, "script_4_list_to_fit.py"),
+              (5, "script_5_fit_to_post.py"),
+          )
+
+          def comment_source(text: str) -> str:
+              return "\n".join(("# " + line) if line else "#" for line in text.rstrip("\n").splitlines()) + "\n"
+
+          def append_legacy(task_dir: Path, task_number: int, source_name: str, sections: list[tuple[str, str]]) -> None:
+              if not sections:
+                  return
+              legacy_path = task_dir / f"task_{task_number}_legacy.py"
+              if legacy_path.exists():
+                  existing = legacy_path.read_text(encoding="utf-8").rstrip() + "\n\n"
+              else:
+                  existing = (
+                      f"# LEGACY CODE ARCHIVE FOR TASK {task_number}\n"
+                      "#\n"
+                      "# This file stores code deliberately removed from the active task script.\n"
+                      "# It is not imported by the pipeline and is not expected to execute.\n"
+                      "# Dependencies and surrounding runtime context may be missing.\n"
+                      "# Removed blocks are preserved substantially verbatim for historical reference.\n\n"
+                  )
+              chunks = [existing]
+              for reason, source in sections:
+                  chunks += [
+                      "# " + "=" * 76 + "\n",
+                      f"# ARCHIVED FROM: {source_name}\n",
+                      f"# REASON: {reason}\n",
+                      "# " + "=" * 76 + "\n",
+                      comment_source(source),
+                      "\n",
+                  ]
+              legacy_path.write_text("".join(chunks), encoding="utf-8")
+
+          def indentation_of(line: str) -> str:
+              return line[: len(line) - len(line.lstrip())]
+
+          def promote_orelse(lines: list[str], node: ast.If) -> str:
+              """Return an always-active else body at the original if indentation."""
+              if not node.orelse:
+                  return ""
+              if isinstance(node.orelse[0], ast.If):
+                  raise RuntimeError(
+                      f"Refusing to simplify an if/elif chain at line {node.lineno}; review manually."
+                  )
+              first = node.orelse[0].lineno
+              assert node.end_lineno is not None
+              raw = "".join(lines[first - 1 : node.end_lineno])
+              dedented = textwrap.dedent(raw)
+              target_indent = indentation_of(lines[node.lineno - 1])
+              promoted = "".join(
+                  (target_indent + line if line.strip() else line)
+                  for line in dedented.splitlines(keepends=True)
+              )
+              return promoted
+
+          def unreachable_if_source(lines: list[str], node: ast.If) -> str:
+              """Preserve the false condition and unreachable body, not its live else body."""
+              assert node.body
+              body_end = node.body[-1].end_lineno
+              assert body_end is not None
+              return "".join(lines[node.lineno - 1 : body_end])
+
+          def apply_replacements(text: str, replacements: list[tuple[int, int, str]]) -> str:
+              lines = text.splitlines(keepends=True)
+              for start, end, replacement in sorted(replacements, reverse=True):
+                  lines[start - 1 : end] = [replacement] if replacement else []
+              return "".join(lines)
+
+          def keep_outermost(nodes: list[ast.If]) -> list[ast.If]:
+              ranged = sorted(
+                  nodes,
+                  key=lambda node: (node.lineno, -(node.end_lineno or node.lineno)),
+              )
+              selected: list[ast.If] = []
+              for node in ranged:
+                  assert node.end_lineno is not None
+                  if any(
+                      outer.lineno <= node.lineno
+                      and node.end_lineno <= (outer.end_lineno or outer.lineno)
+                      for outer in selected
+                  ):
+                      continue
+                  selected.append(node)
+              return selected
+
+          # Pass 1: literal `if False:` branches. Only the false side is legacy;
+          # any live else body is promoted in place.
+          for task_number, script_name in scripts:
+              task_dir = root / f"TASK_{task_number}"
+              script_path = task_dir / script_name
+              original = script_path.read_text(encoding="utf-8")
+              tree = ast.parse(original)
+              lines = original.splitlines(keepends=True)
+              nodes = [
+                  node
+                  for node in ast.walk(tree)
+                  if isinstance(node, ast.If)
+                  and isinstance(node.test, ast.Constant)
+                  and node.test.value is False
+                  and node.end_lineno is not None
+              ]
+              nodes = keep_outermost(nodes)
+              if not nodes:
+                  continue
+
+              replacements = []
+              legacy_sections = []
+              for node in nodes:
+                  assert node.end_lineno is not None
+                  replacements.append((node.lineno, node.end_lineno, promote_orelse(lines, node)))
+                  legacy_sections.append((
+                      "literal `if False:` branch; condition is unconditionally false",
+                      unreachable_if_source(lines, node),
+                  ))
+              script_path.write_text(apply_replacements(original, replacements), encoding="utf-8")
+              append_legacy(task_dir, task_number, script_name, legacy_sections)
+              print(f"Task {task_number}: archived {len(nodes)} literal if-False branch(es).")
+
+          # Pass 2: Task 2 contains two non-literal conditions controlled by hard
+          # constants in the active source. Their false branches are equally
+          # unreachable. Preserve/promote a live else body where one exists.
+          task_number = 2
+          task_dir = root / "TASK_2"
+          script_name = "script_2_clean_to_cal.py"
+          script_path = task_dir / script_name
+          original = script_path.read_text(encoding="utf-8")
+          tree = ast.parse(original)
+          lines = original.splitlines(keepends=True)
+          target_nodes: list[tuple[ast.If, str]] = []
+
+          for node in ast.walk(tree):
+              if not isinstance(node, ast.If) or node.end_lineno is None:
+                  continue
+              test_source = (ast.get_source_segment(original, node.test) or "").strip()
+              if test_source == "_need_slewing_fit":
+                  target_nodes.append((
+                      node,
+                      "`_need_slewing_fit` is hard-set to False; old regression/fit branch is unreachable",
+                  ))
+              elif (
+                  "_defer_tsum_calibration_until_late_slot" in test_source
+                  and "time_calibration_mode" in test_source
+              ):
+                  target_nodes.append((
+                      node,
+                      "`_defer_tsum_calibration_until_late_slot` is hard-set to True; superseded early T_sum branch is unreachable",
+                  ))
+
+          if not any("_need_slewing_fit" in reason for _, reason in target_nodes):
+              raise RuntimeError("Task 2: `_need_slewing_fit` branch not found")
+          if not any("_defer_tsum_calibration_until_late_slot" in reason for _, reason in target_nodes):
+              raise RuntimeError("Task 2: deferred old T_sum branch not found")
+
+          replacements = []
+          legacy_sections = []
+          for node, reason in target_nodes:
+              assert node.end_lineno is not None
+              replacements.append((node.lineno, node.end_lineno, promote_orelse(lines, node)))
+              legacy_sections.append((reason, unreachable_if_source(lines, node)))
+
+          assignment_targets = {
+              "_need_slewing_fit = False": "hard-setting for removed unreachable slewing-fit branch",
+              "_defer_tsum_calibration_until_late_slot = True": "hard-setting for removed superseded early T_sum branch",
+          }
+          for lineno, line in enumerate(lines, 1):
+              reason = assignment_targets.get(line.strip())
+              if reason:
+                  replacements.append((lineno, lineno, ""))
+                  legacy_sections.append((reason, line))
+
+          script_path.write_text(apply_replacements(original, replacements), encoding="utf-8")
+          append_legacy(task_dir, task_number, script_name, legacy_sections)
+          print(f"Task 2: archived {len(target_nodes)} hard-disabled branch(es).")
+          PY
+
+      - name: Verify active source
+        shell: bash
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          root = Path("MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1")
+          scripts = [
+              root / "TASK_0/script_0_acq_to_raw.py",
+              root / "TASK_1/script_1_raw_to_clean.py",
+              root / "TASK_2/script_2_clean_to_cal.py",
+              root / "TASK_3/script_3_cal_to_list.py",
+              root / "TASK_4/script_4_list_to_fit.py",
+              root / "TASK_5/script_5_fit_to_post.py",
+          ]
+          for path in scripts:
+              ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+          # The former `else:` defaults must remain active after simplification.
+          task1 = (root / "TASK_1/script_1_raw_to_clean.py").read_text(encoding="utf-8")
+          task3 = (root / "TASK_3/script_3_cal_to_list.py").read_text(encoding="utf-8")
+          required = (
+              "T_F_left_pre_cal = T_side_left_pre_cal_default",
+              "T_clip_min = T_clip_min_default",
+          )
+          for marker in required:
+              if marker not in task1:
+                  raise RuntimeError(f"Task 1 active default lost during cleanup: {marker}")
+              if marker not in task3:
+                  raise RuntimeError(f"Task 3 active default lost during cleanup: {marker}")
+
+          task2 = (root / "TASK_2/script_2_clean_to_cal.py").read_text(encoding="utf-8")
+          if "_need_slewing_fit = False" in task2 or "if _need_slewing_fit:" in task2:
+              raise RuntimeError("Task 2 old hard-disabled slewing-fit branch remains active source")
+          if "_defer_tsum_calibration_until_late_slot = True" in task2:
+              raise RuntimeError("Task 2 obsolete deferral flag remains active source")
+          if "Deferring T_sum pair residual table construction" not in task2:
+              raise RuntimeError("Task 2 live deferred-T_sum else behavior was lost")
+          PY
+          git diff --check
+
+      - name: Commit validated cleanup and remove workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/one_time_step1_cleanup_v3.yml
+          git add MINGO_ANALYSIS/MINGO_ANALYSIS_SCRIPTS/STAGES/STAGE_1/EVENT_DATA/STEP_1
+          git commit -m "refactor(step1): archive clearly unused task code"
+          git push origin HEAD:cleanup/step1-legacy-pass-v3
