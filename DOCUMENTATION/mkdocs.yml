@@ -4,64 +4,29 @@ repo_name: csoneira/mingo-computing
 repo_url: https://github.com/csoneira/mingo-computing
 
 nav:
-  - Overview:
-      - Home: index.md
-      - Getting Started: getting-started/index.md
-      - Reader Guide: getting-started/reader-guide.md
-  - Project Dossier:
-      - project/index.md
-      - Scientific Case: project/scientific-case.md
-      - Work Packages: project/work-packages.md
-      - Quality Assurance Plan: project/quality-assurance.md
-      - Governance and Sites: project/governance-and-sites.md
-      - Milestones, Deliverables, and Risk: project/milestones-deliverables-risk.md
-  - Collaborators:
-      - collaborators/index.md
-  - Software:
-      - software/index.md
-      - 5-Minute System Model: software/system-model.md
-      - Software Invariants: software/invariants.md
-      - Analysis (Software): software/operational-pipeline.md
-      - Simulation (Digital Twin): software/simulation-pipeline.md
-      - Dictionary-Based Inference: software/inference-and-dictionary.md
-      - Real Data Trace: software/trace-real-data.md
-      - Simulated Data Trace: software/trace-simulated-data.md
-      - Change Impact Matrix: software/change-impact-matrix.md
-      - Architecture Overview: software/architecture.md
-      - Code Structure Reference: software/code-structure.md
-  - Hardware:
-      - hardware/index.md
-      - Detector Stations: hardware/detector-stations.md
-      - DAQ and Infrastructure: hardware/daq-and-infrastructure.md
-      - Maintenance and Calibration: hardware/maintenance.md
-  - Operational Notes:
-      - operations/index.md
-      - Pipelines and Dataflow: operations/pipelines-and-dataflow.md
-      - Cron, Locks, and Maintenance: operations/cron-and-maintenance.md
-  - Troubleshooting and FAQs:
-      - troubleshooting/index.md
-      - Common Issues: troubleshooting/common-issues.md
-      - FAQ: troubleshooting/faq.md
-  - Conventions and Standards:
-      - standards/index.md
-      - Conventions and Governance: standards/conventions-and-governance.md
-      - Determinism and Provenance: standards/determinism-and-provenance.md
-      - Documentation Lifecycle: standards/documentation-lifecycle.md
-      - Documentation Quality Checklist: standards/documentation-quality-checklist.md
-      - Script Header Standard: standards/script-header-standard.md
-  - Publications and References:
-      - references/index.md
-      - Publications and Reports: references/publications-and-reports.md
-      - Repository Source Documents: references/source-documents.md
-      - Figure Gallery and Provenance: references/figure-gallery.md
-  - Appendices:
-      - appendices/index.md
-      - Data Dictionaries: appendices/data-dictionaries.md
-      - Contracts and Interfaces: appendices/contracts-and-interfaces.md
-      - Glossary: appendices/glossary.md
-      - Contact List: appendices/contact-list.md
-  - Legacy miniTRASGO Pages:
-      - legacy/index.md
+  - Home: index.md
+  - Detector Operations:
+      - Overview: ESSENTIAL/index.md
+      - Configuration: ESSENTIAL/configuration.md
+      - Calibration: ESSENTIAL/calibration.md
+      - Measuring: ESSENTIAL/measuring.md
+      - Monitoring: ESSENTIAL/monitoring.md
+  - Hardware and DAQ:
+      - Hardware: ESSENTIAL/hardware.md
+      - DAQ and Infrastructure: ESSENTIAL/daq-and-infrastructure.md
+      - HLD Structure: ESSENTIAL/hld_structure.md
+  - Collaboration and Publications:
+      - Collaborators: ESSENTIAL/collaborators.md
+      - Publications: ESSENTIAL/publications.md
+      - Publications and Reports: ESSENTIAL/publications-and-reports.md
+  - Reference:
+      - Glossary: ESSENTIAL/glossary.md
+      - Script Header Standard: ESSENTIAL/script-header-standard.md
+      - Help: ESSENTIAL/help.md
+      - Legacy To-do: ESSENTIAL/todo.md
+  - Research Notebooks:
+      - Notebook Archive: NOTEBOOKS/README.md
+      - Notebook Template: NOTEBOOKS/YYYY_MM_DD_notebook.md
 
 theme:
   name: material
